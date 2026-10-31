@@ -377,9 +377,22 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
      behind `/v1/forge/{issue,pr,comment,review}` and the MCP tools.
    - **Not done:** there are no `run_start`/`run_end` MCP tools; the CLI
      is the primary path.
-3. The agent CLI (`run start/end`, `whoami`, `issue`, `pr`, `comment`,
+3. ~~The agent CLI (`run start/end`, `whoami`, `issue`, `pr`, `comment`,
    `review submit`, `api`), resolving the actor and run from the working
-   directory.
+   directory.~~ Done (2026-10-31):
+   - **Finding the run:** agent commands use `$BOTTOWN_RUN_FILE` (launched
+     runs), else the actor worktree they run in. They ignore instance
+     resolution errors, since they talk to the server their run points at.
+   - **`run start implement|verify N`:** refuses a dirty or busy worktree.
+     It self-starts the run with the worktree's read key, checks out
+     `issue/<n>` (or detaches at the PR head), records the key in
+     `<gitdir>/bottown/run.json`, sets `bottown.run`, and prints the goal
+     prompt.
+   - **`run end`:** posts the handover from stdin or `--summary`, revokes
+     the key and clears `bottown.run`.
+   - **Prompts are CLI-first,** with the absolute path of `bottown` and the
+     right remote. Claude's batch allowlist includes `Bash(bottown:*)` and
+     the absolute path.
 4. `/bottown-implement` and `/bottown-verify` commands for claude, then agy.
 5. `bottown run implement/verify` from `main`, leasing permanent worktrees
    (`--no-launch`, batch, `-I`). `run ls` reads the worktrees' state.

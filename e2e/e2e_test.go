@@ -687,6 +687,113 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("agent CLI in actor worktrees", func(t *testing.T) {
+		cw, aw := filepath.Join(fam, "claude"), filepath.Join(fam, "agy")
+		// Agent commands find their actor from the worktree, not $BOTTOWN_INSTANCE.
+		agent := func(dir string, stdin string, args ...string) (string, error) {
+			c := exec.Command(bin, args...)
+			for _, e := range a.env() {
+				if !strings.HasPrefix(e, "BOTTOWN_INSTANCE=") {
+					c.Env = append(c.Env, e)
+				}
+			}
+			c.Dir, c.Stdin = dir, strings.NewReader(stdin)
+			b, err := c.CombinedOutput()
+			return string(b), err
+		}
+		must := func(dir, stdin string, args ...string) string {
+			t.Helper()
+			out, err := agent(dir, stdin, args...)
+			if err != nil {
+				t.Fatalf("bottown %s in %s: %v\n%s", strings.Join(args, " "), filepath.Base(dir), err, out)
+			}
+			return out
+		}
+		if out, err := agent(demo, "", "whoami"); err == nil || !strings.Contains(out, "not an actor worktree") {
+			t.Errorf("agent CLI in main: %v %s", err, out)
+		}
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "actor claude") || !strings.Contains(out, "no active run") {
+			t.Errorf("idle whoami: %s", out)
+		}
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "agent cli", "body": "add agent.txt"}, &issue)
+		n := fmt.Sprint(issue.Number)
+
+		os.WriteFile(filepath.Join(cw, "stray.txt"), []byte("x"), 0o644)
+		if out, err := agent(cw, "", "run", "start", "implement", n); err == nil || !strings.Contains(out, "uncommitted") {
+			t.Errorf("run start in a dirty worktree: %v %s", err, out)
+		}
+		os.Remove(filepath.Join(cw, "stray.txt"))
+
+		prompt := must(cw, "", "run", "start", "implement", n)
+		if !strings.Contains(prompt, "issue show") || !strings.Contains(prompt, "run end --summary-file -") || !strings.Contains(prompt, "add agent.txt") {
+			t.Fatalf("implement prompt:\n%s", prompt)
+		}
+		if got := git(t, cw, "rev-parse", "--abbrev-ref", "HEAD"); got != "issue/"+n {
+			t.Errorf("worktree branch %s", got)
+		}
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "implement issue #"+n) {
+			t.Errorf("whoami in run: %s", out)
+		}
+		if out, err := agent(cw, "", "run", "start", "implement", n); err == nil || !strings.Contains(out, "already in run") {
+			t.Errorf("second run start: %v %s", err, out)
+		}
+		if out := must(cw, "", "issue", "show"); !strings.Contains(out, "agent cli") {
+			t.Errorf("issue show: %s", out)
+		}
+
+		os.WriteFile(filepath.Join(cw, "agent.txt"), []byte("agent\n"), 0o644)
+		git(t, cw, "add", "agent.txt")
+		git(t, cw, "commit", "-q", "-m", "agent change")
+		if out, err := exec.Command("git", "-C", cw, "push", "-q", "bottown-"+a.name, "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("push from actor worktree in a run: %v %s", err, out)
+		}
+		out := must(cw, "what changed: agent.txt", "pr", "create", "--title", "agent cli PR", "--body-file", "-")
+		var prn int64
+		if _, err := fmt.Sscanf(out, "opened !%d", &prn); err != nil {
+			t.Fatalf("pr create: %s", out)
+		}
+		if out, err := agent(cw, "", "review", "submit", "--event", "APPROVED", "--commit", "x", "--body", "x"); err == nil || !strings.Contains(out, "verify run") {
+			t.Errorf("review from implement run: %v %s", err, out)
+		}
+		if out := must(cw, "implemented agent.txt", "run", "end", "--summary-file", "-"); !strings.Contains(out, "succeeded; key revoked") {
+			t.Errorf("run end: %s", out)
+		}
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "no active run") {
+			t.Errorf("whoami after end: %s", out)
+		}
+		if b, err := exec.Command("git", "-C", cw, "push", "bottown-"+a.name, "HEAD:refs/heads/after-end").CombinedOutput(); err == nil {
+			t.Errorf("push after run end succeeded: %s", b)
+		}
+
+		// agy verifies from its own worktree.
+		vp := must(aw, "", "run", "start", "verify", fmt.Sprint(prn))
+		sha := git(t, aw, "rev-parse", "HEAD")
+		if !strings.Contains(vp, "review submit --commit "+sha) {
+			t.Fatalf("verify prompt lacks the pinned commit %s:\n%s", sha, vp)
+		}
+		if out := must(aw, "", "pr", "show", "--diff"); !strings.Contains(out, "agent.txt") || !strings.Contains(out, "by claude") {
+			t.Errorf("pr show --diff: %s", out)
+		}
+		if out := must(aw, "looks right", "review", "submit", "--event", "APPROVED", "--commit", sha, "--body-file", "-"); !strings.Contains(out, "APPROVED by agy") || !strings.Contains(out, "official true") {
+			t.Errorf("review submit: %s", out)
+		}
+		if out, err := agent(aw, "", "api", "POST", fmt.Sprintf("/repos/bottown/demo/pulls/%d/merge", prn), "--data", `{"Do":"merge"}`); err == nil {
+			t.Errorf("api merge from verify run succeeded: %s", out)
+		}
+		must(aw, "", "run", "end", "--summary", "approved")
+
+		var comments []struct {
+			User struct{ Login string }
+			Body string
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), nil, &comments)
+		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "implemented agent.txt") {
+			t.Errorf("implement handover on the issue: %+v", comments)
+		}
+	})
+
 	t.Run("mcp whoami", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

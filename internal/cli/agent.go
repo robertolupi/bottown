@@ -1,0 +1,463 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/server"
+)
+
+// The agent CLI: commands agents run in their worktree to work with the
+// forge. They hold no forge token; the server enforces the run's role,
+// repository and commit pin.
+
+// agentCtx is who an agent command acts as.
+type agentCtx struct {
+	Actor     string
+	ServerURL string
+	Key       string
+	RunID     string // empty outside a run
+	Worktree  string // actor worktree top, if any
+	KeyDir    string // <gitdir>/bottown of the actor worktree, if any
+	Remote    string // the bottown remote name in this worktree
+}
+
+// resolveAgent finds the run or actor worktree a command acts for:
+// $BOTTOWN_RUN_FILE (set by `bottown run implement/verify` launches), else
+// the actor worktree containing the working directory.
+func resolveAgent() (*agentCtx, error) {
+	if f := os.Getenv("BOTTOWN_RUN_FILE"); f != "" {
+		rec, err := runs.LoadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		if rec.Key == "" {
+			return nil, fmt.Errorf("run %s has ended", rec.ID)
+		}
+		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: "origin"}, nil
+	}
+	top, err := git(".", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, errors.New("not inside a git checkout")
+	}
+	actor, _ := git(top, "config", "--worktree", "--get", gitActorKey)
+	if actor == "" {
+		return nil, errors.New("not an actor worktree (run `bottown actor setup <actor>` in the main checkout), and no run in $BOTTOWN_RUN_FILE")
+	}
+	gitDir, err := git(top, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, err
+	}
+	a := &agentCtx{Actor: actor, Worktree: top, KeyDir: filepath.Join(gitDir, "bottown")}
+	if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json")); err == nil && rec.Key != "" {
+		a.ServerURL, a.Key, a.RunID = rec.ServerURL, rec.Key, rec.ID
+	} else if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "actor.json")); err == nil && rec.Key != "" {
+		a.ServerURL, a.Key = rec.ServerURL, rec.Key
+	} else {
+		return nil, fmt.Errorf("actor worktree %s has no key; run `bottown actor setup %s` in the main checkout", top, actor)
+	}
+	inst, _ := git(top, "config", "--get", gitInstanceKey)
+	if inst == "" {
+		inst = config.DefaultInstance
+	}
+	a.Remote = config.Instance{Name: inst}.Remote()
+	return a, nil
+}
+
+// call makes a JSON request to the bottown server with the agent's key.
+func (a *agentCtx) call(method, path string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, a.ServerURL+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.Key)
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	if err != nil {
+		return fmt.Errorf("bottown server unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		var e struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(raw, &e) == nil && (e.Error != "" || e.Message != "") {
+			return errors.New(e.Error + e.Message)
+		}
+		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+// readBody returns --body, or the contents of --body-file ("-" is stdin).
+func readBody(cmd *cobra.Command, body, file string) (string, error) {
+	switch {
+	case body != "" && file != "":
+		return "", errors.New("--body and --body-file are mutually exclusive")
+	case file == "-":
+		b, err := io.ReadAll(cmd.InOrStdin())
+		return string(b), err
+	case file != "":
+		b, err := os.ReadFile(file)
+		return string(b), err
+	}
+	return body, nil
+}
+
+func printJSON(cmd *cobra.Command, v any) error {
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func newWhoami() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "whoami",
+		Short: "Show which actor and run this worktree acts as",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			var who struct {
+				Actor    string          `json:"actor"`
+				Instance string          `json:"instance"`
+				RunRaw   json.RawMessage `json:"run"`
+			}
+			if err := a.call("GET", "/v1/whoami", nil, &who); err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, map[string]any{"actor": who.Actor, "instance": who.Instance, "run": who.RunRaw, "worktree": a.Worktree})
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "actor %s on instance %s\n", who.Actor, who.Instance)
+			var run struct {
+				ID, Kind, Repo, Branch, SHA string
+				Issue, PR                   int64
+			}
+			if len(who.RunRaw) > 0 && string(who.RunRaw) != "null" && json.Unmarshal(who.RunRaw, &run) == nil {
+				target := fmt.Sprintf("issue #%d", run.Issue)
+				if run.PR > 0 {
+					target = fmt.Sprintf("PR !%d at %s", run.PR, run.SHA[:min(10, len(run.SHA))])
+				}
+				fmt.Fprintf(out, "run %s: %s %s in %s\n", run.ID, run.Kind, target, run.Repo)
+			} else {
+				fmt.Fprintln(out, "no active run (read-only; start one with `bottown run start implement|verify N`)")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+func targetQuery(repo string, n int64, extra url.Values) string {
+	q := url.Values{}
+	if repo != "" {
+		q.Set("repo", repo)
+	}
+	if n > 0 {
+		q.Set("number", fmt.Sprint(n))
+	}
+	for k, v := range extra {
+		q[k] = v
+	}
+	if len(q) == 0 {
+		return ""
+	}
+	return "?" + q.Encode()
+}
+
+func optNumber(args []string) (int64, error) {
+	if len(args) == 0 {
+		return 0, nil
+	}
+	return parseNumber(args[0])
+}
+
+func newIssue() *cobra.Command {
+	issue := &cobra.Command{Use: "issue", Short: "Read issues (agent CLI)"}
+	var repo string
+	var asJSON bool
+	show := &cobra.Command{
+		Use:   "show [N]",
+		Short: "Show an issue and its comments (default: the run's issue)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			n, err := optNumber(args)
+			if err != nil {
+				return err
+			}
+			var is server.IssueOut
+			if err := a.call("GET", "/v1/forge/issue"+targetQuery(repo, n, nil), nil, &is); err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, is)
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "#%d %s [%s] by %s", is.Number, is.Title, is.State, is.Author)
+			if len(is.Labels) > 0 {
+				fmt.Fprintf(out, " (%s)", strings.Join(is.Labels, ", "))
+			}
+			fmt.Fprintf(out, "\n\n%s\n", strings.TrimSpace(is.Body))
+			for _, c := range is.Comments {
+				fmt.Fprintf(out, "\n--- %s, %s\n%s\n", c.Author, c.Created.Local().Format(time.DateTime), strings.TrimSpace(c.Body))
+			}
+			return nil
+		},
+	}
+	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	issue.AddCommand(show)
+	return issue
+}
+
+func newPR() *cobra.Command {
+	pr := &cobra.Command{Use: "pr", Short: "Read and open pull requests (agent CLI)"}
+	var repo string
+	var asJSON, diff bool
+	show := &cobra.Command{
+		Use:   "show [N]",
+		Short: "Show a pull request: head, reviews, and with --diff the diff (default: the run's PR)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			n, err := optNumber(args)
+			if err != nil {
+				return err
+			}
+			extra := url.Values{}
+			if diff {
+				extra.Set("diff", "1")
+			}
+			var p server.PROut
+			if err := a.call("GET", "/v1/forge/pr"+targetQuery(repo, n, extra), nil, &p); err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, p)
+			}
+			out := cmd.OutOrStdout()
+			state := p.State
+			if p.Merged {
+				state = "merged"
+			}
+			fmt.Fprintf(out, "!%d %s [%s] by %s\n%s -> %s at %s, mergeable %v\n\n%s\n", p.Number, p.Title, state, p.Author,
+				p.HeadBranch, p.BaseBranch, p.HeadSHA, p.Mergeable, strings.TrimSpace(p.Body))
+			for _, r := range p.Reviews {
+				flags := ""
+				if r.Stale {
+					flags += " stale"
+				}
+				if r.Dismissed {
+					flags += " dismissed"
+				}
+				fmt.Fprintf(out, "\n--- review %s by %s at %s%s\n%s\n", r.State, r.Reviewer, r.CommitID[:min(10, len(r.CommitID))], flags, strings.TrimSpace(r.Body))
+			}
+			if diff {
+				fmt.Fprintf(out, "\n%s", p.Diff)
+				if p.DiffTruncated {
+					fmt.Fprintln(out, "\n[diff truncated]")
+				}
+			}
+			return nil
+		},
+	}
+	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	show.Flags().BoolVar(&diff, "diff", false, "include the diff")
+
+	var title, body, bodyFile string
+	create := &cobra.Command{
+		Use:   "create --title T [--body B | --body-file F|-]",
+		Short: "Open a pull request from this implement run's branch (push it first)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			b, err := readBody(cmd, body, bodyFile)
+			if err != nil {
+				return err
+			}
+			var out server.PRCreateOut
+			if err := a.call("POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b}, &out); err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, out)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "opened !%d (%s -> %s): %s\n", out.Number, out.Head, out.Base, out.URL)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&title, "title", "", "title (required)")
+	create.Flags().StringVar(&body, "body", "", "description")
+	create.Flags().StringVar(&bodyFile, "body-file", "", "read the description from a file, or - for stdin")
+	create.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	_ = create.MarkFlagRequired("title")
+	pr.AddCommand(show, create)
+	return pr
+}
+
+func newComment() *cobra.Command {
+	var repo, body, bodyFile string
+	cmd := &cobra.Command{
+		Use:   "comment [N] (--body B | --body-file F|-)",
+		Short: "Comment on an issue or PR (default: the run's issue, or PR for verify runs)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			n, err := optNumber(args)
+			if err != nil {
+				return err
+			}
+			b, err := readBody(cmd, body, bodyFile)
+			if err != nil {
+				return err
+			}
+			var out server.CommentOut
+			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Target: server.Target{Repo: repo, Number: n}, Body: b}, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "commented (id %d) as %s\n", out.ID, out.Author)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	cmd.Flags().StringVar(&body, "body", "", "comment text")
+	cmd.Flags().StringVar(&bodyFile, "body-file", "", "read the comment from a file, or - for stdin")
+	return cmd
+}
+
+func newReview() *cobra.Command {
+	review := &cobra.Command{Use: "review", Short: "Submit reviews (agent CLI, verify runs)"}
+	var event, commit, body, bodyFile string
+	submit := &cobra.Command{
+		Use:   "submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA (--body B | --body-file F|-)",
+		Short: "Submit this verify run's verdict, pinned to the commit you verified",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			b, err := readBody(cmd, body, bodyFile)
+			if err != nil {
+				return err
+			}
+			var out server.ReviewOut
+			if err := a.call("POST", "/v1/forge/review", server.ReviewIn{Event: event, Body: b, CommitID: commit}, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "review %s by %s at %s (official %v)\n", out.State, out.Reviewer, out.CommitID, out.Official)
+			return nil
+		},
+	}
+	submit.Flags().StringVar(&event, "event", "", "APPROVED, REQUEST_CHANGES or COMMENT (required)")
+	submit.Flags().StringVar(&commit, "commit", "", "the SHA you verified (required)")
+	submit.Flags().StringVar(&body, "body", "", "the verdict and its reasons")
+	submit.Flags().StringVar(&bodyFile, "body-file", "", "read the verdict from a file, or - for stdin")
+	_ = submit.MarkFlagRequired("event")
+	_ = submit.MarkFlagRequired("commit")
+	review.AddCommand(submit)
+	return review
+}
+
+func newAPI() *cobra.Command {
+	var data string
+	cmd := &cobra.Command{
+		Use:   "api METHOD PATH [--data JSON]",
+		Short: "Call any Forgejo API endpoint below /api/v1 as yourself, under bottown's policy",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			if !strings.HasPrefix(args[1], "/") {
+				return errors.New("PATH must start with /, e.g. /repos/bottown/x/issues")
+			}
+			var body io.Reader
+			if data != "" {
+				if data == "-" {
+					b, err := io.ReadAll(cmd.InOrStdin())
+					if err != nil {
+						return err
+					}
+					data = string(b)
+				}
+				if !json.Valid([]byte(data)) {
+					return errors.New("--data must be JSON")
+				}
+				body = strings.NewReader(data)
+			}
+			req, err := http.NewRequest(strings.ToUpper(args[0]), a.ServerURL+"/forgejo/api/v1"+args[1], body)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Authorization", "Bearer "+a.Key)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			var buf bytes.Buffer
+			if json.Indent(&buf, raw, "", "  ") == nil {
+				raw = buf.Bytes()
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", bytes.TrimSpace(raw))
+			if resp.StatusCode >= 300 {
+				return fmt.Errorf("%s", resp.Status)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&data, "data", "", "JSON request body, or - for stdin")
+	return cmd
+}

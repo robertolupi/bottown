@@ -26,6 +26,9 @@ type PromptData struct {
 	Title, Body                string
 	Branch, Base, SHA, Author  string
 	AllowSameFamily            bool
+	Bottown                    string // absolute path of the bottown CLI
+	Remote                     string // the bottown remote in the worktree
+	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 }
 
 // Prompt renders the goal prompt for kind ("implement" or "verify").
@@ -114,7 +117,7 @@ func RunEnv(l Launch) []string {
 // defaultAllowed are the tools a batch claude run may use without asking:
 // bottown's MCP tools, file tools, and common build/test/git commands.
 var defaultAllowed = []string{
-	"mcp__bottown", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite",
+	"mcp__bottown", "Bash(bottown:*)", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite",
 	"Bash(git:*)", "Bash(go:*)", "Bash(gofmt:*)", "Bash(make:*)",
 	"Bash(npm:*)", "Bash(npx:*)", "Bash(cargo:*)", "Bash(python3:*)",
 	"Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)",
@@ -165,10 +168,14 @@ var claudeIsolation = []string{
 }
 
 func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
+	allowed := append([]string{}, defaultAllowed...)
+	if self, err := os.Executable(); err == nil {
+		allowed = append(allowed, "Bash("+self+":*)") // the agent CLI, by absolute path
+	}
 	args := append([]string{"--mcp-config", l.MCPConfig}, claudeIsolation...)
 	args = append(args,
 		"--permission-mode", "acceptEdits",
-		"--allowedTools", strings.Join(append(append([]string{}, defaultAllowed...), l.Allow...), ","),
+		"--allowedTools", strings.Join(append(allowed, l.Allow...), ","),
 		"-n", "bottown "+l.RunID,
 	)
 	if !l.Interactive {

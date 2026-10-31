@@ -20,7 +20,8 @@ const gitInstanceKey = "bottown.instance"
 //  2. the one configured instance that a remote URL points at;
 //  3. prod.
 func resolveInstance(dir string) (name, source string, err error) {
-	if out, err := exec.Command("git", "-C", dir, "config", "--local", "--get", gitInstanceKey).Output(); err == nil {
+	// Repository or worktree config (an actor worktree carries its own).
+	if out, err := exec.Command("git", "-C", dir, "config", "--get", gitInstanceKey).Output(); err == nil {
 		name := strings.TrimSpace(string(out))
 		if err := config.ValidInstance(name); err != nil {
 			return "", "", fmt.Errorf("git config %s: %w", gitInstanceKey, err)

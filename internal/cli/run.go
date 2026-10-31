@@ -63,6 +63,7 @@ the actor's git identity, and a key limited to the role and this repository.`,
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
 	run.AddCommand(implement, verify, newRunLs(g), newRunShow(g), newRunGC(g))
+	run.AddCommand(agentCmds(newRunStart(), newRunEnd())...)
 	return run
 }
 
@@ -284,8 +285,17 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run) (string,
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
+		Bottown: selfPath(), Remote: "origin",
 	})
 	return p, base, err
+}
+
+func selfPath() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "bottown"
+	}
+	return p
 }
 
 func askOutcome(cmd *cobra.Command, def string) string {
@@ -315,18 +325,24 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 	if run.Kind == policy.Verify {
 		n = run.PR
 	}
+	path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", run.Org, run.Repo, n)
+	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": handoverText(rec, status, code, summary)}, nil)
+}
+
+// handoverText is the handover comment for a finished run.
+func handoverText(rec runs.Record, status string, code int, summary string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**bottown run `%s`** · %s · %s (%s) · %s · **%s**", run.ID, run.Kind, run.Actor, run.Family, rec.Mode(), status)
+	fmt.Fprintf(&b, "**bottown run `%s`** · %s · %s (%s) · %s · **%s**", rec.ID, rec.Kind, rec.Actor, rec.Family, rec.Mode(), status)
 	if code != 0 {
 		fmt.Fprintf(&b, " (exit %d)", code)
 	}
 	b.WriteString("\n\n")
-	if run.Kind == policy.Implement {
+	if rec.Kind == policy.Implement {
 		if head, err := runs.Git(rec.Worktree, nil, "rev-parse", "--short", "HEAD"); err == nil {
-			fmt.Fprintf(&b, "Branch `%s` at `%s`.\n\n", run.Branch, head)
+			fmt.Fprintf(&b, "Branch `%s` at `%s`.\n\n", rec.Branch, head)
 		}
 	} else {
-		fmt.Fprintf(&b, "Verified at `%s`.\n\n", run.SHA)
+		fmt.Fprintf(&b, "Verified at `%s`.\n\n", rec.SHA)
 	}
 	if rec.Interactive {
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")
@@ -342,8 +358,7 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 		}
 		b.WriteString(s + "\n")
 	}
-	path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", run.Org, run.Repo, n)
-	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": b.String()}, nil)
+	return b.String()
 }
 
 func newRunLs(g *globals) *cobra.Command {

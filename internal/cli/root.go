@@ -29,6 +29,15 @@ func Execute(ctx context.Context) int {
 	return 0
 }
 
+// agentCmds marks the agent CLI commands, which act for the run or actor
+// worktree they are run in rather than for an instance.
+func agentCmds(cmds ...*cobra.Command) []*cobra.Command {
+	for _, c := range cmds {
+		c.Annotations = map[string]string{"agent": "true"}
+	}
+	return cmds
+}
+
 func newRoot() *cobra.Command {
 	g := &globals{}
 	root := &cobra.Command{
@@ -46,6 +55,11 @@ func newRoot() *cobra.Command {
 				// Infer from the checkout the command runs in.
 				name, source, err := resolveInstance(".")
 				if err != nil {
+					// Agent commands talk to the server their worktree or
+					// run points at; they do not need an instance.
+					if cmd.Annotations["agent"] == "true" || cmd.Parent() != nil && cmd.Parent().Annotations["agent"] == "true" {
+						return nil
+					}
 					return err
 				}
 				g.instance, g.source = name, source
@@ -69,5 +83,6 @@ func newRoot() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 	)
+	root.AddCommand(agentCmds(newWhoami(), newIssue(), newPR(), newComment(), newReview(), newAPI())...)
 	return root
 }
