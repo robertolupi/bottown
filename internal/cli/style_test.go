@@ -24,7 +24,7 @@ func TestPrintWhoami(t *testing.T) {
 	t.Run("NonInteractiveNoRun", func(t *testing.T) {
 		var buf bytes.Buffer
 		r := lipgloss.NewRenderer(&buf)
-		printWhoami(&buf, r, "agy", "prod", nil)
+		printWhoami(&buf, r, "agy", "prod", nil, nil, nil)
 		got := buf.String()
 		want := "actor agy on instance prod\nno active run (read-only; start one with `bottown run start implement|verify N`)\n"
 		if got != want {
@@ -44,7 +44,7 @@ func TestPrintWhoami(t *testing.T) {
 			Repo:  "bottown/bottown",
 			Issue: 11,
 		}
-		printWhoami(&buf, r, "agy", "prod", run)
+		printWhoami(&buf, r, "agy", "prod", run, nil, nil)
 		got := buf.String()
 
 		if !strings.Contains(got, "\x1b[") {
@@ -70,12 +70,29 @@ func TestPrintWhoami(t *testing.T) {
 			PR:   5,
 			SHA:  "abcdef123456",
 		}
-		printWhoami(&buf, r, "claude", "prod", run)
+		printWhoami(&buf, r, "claude", "prod", run, nil, nil)
 		got := buf.String()
 		stripped := stripANSI(got)
 		wantStripped := "actor claude on instance prod\nrun r-12345678: verify PR !5 at abcdef1234 in bottown/bottown\n"
 		if stripped != wantStripped {
 			t.Fatalf("stripped mismatch:\ngot:\n%s\nwant:\n%s", stripped, wantStripped)
+		}
+	})
+
+	t.Run("LastRunAndHead", func(t *testing.T) {
+		last := &runs.Record{ID: "r-1", Kind: policy.Implement, Repo: "bottown/bottown", Issue: 9, Status: runs.StatusSucceeded}
+		head := &headInfo{SHA: "c260e1c", Base: "bottown/main", Behind: 2, Fetched: true}
+		want := "actor claude on instance prod\nno active run (read-only; start one with `bottown run start implement|verify N`)\n" +
+			"last run r-1: implement issue #9 in bottown/bottown, succeeded\nHEAD c260e1c (detached), 2 commits behind bottown/main\n"
+		var plain bytes.Buffer
+		printWhoami(&plain, lipgloss.NewRenderer(&plain), "claude", "prod", nil, last, head)
+		if plain.String() != want {
+			t.Fatalf("plain:\ngot:  %q\nwant: %q", plain.String(), want)
+		}
+		var buf bytes.Buffer
+		printWhoami(&buf, newInteractiveRenderer(&buf), "claude", "prod", nil, last, head)
+		if !strings.Contains(buf.String(), "\x1b[") || stripANSI(buf.String()) != want {
+			t.Fatalf("interactive: %q", buf.String())
 		}
 	})
 }

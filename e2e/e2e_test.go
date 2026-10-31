@@ -759,7 +759,8 @@ func TestE2E(t *testing.T) {
 		if out, err := agent(demo, "", "whoami"); err == nil || !strings.Contains(out, "not an actor worktree") {
 			t.Errorf("agent CLI in main: %v %s", err, out)
 		}
-		if out := must(cw, "", "whoami"); !strings.Contains(out, "actor claude") || !strings.Contains(out, "no active run") {
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "actor claude") || !strings.Contains(out, "no active run") ||
+			strings.Contains(out, "last run") || !strings.Contains(out, "(detached), ") || !strings.Contains(out, " bottown-"+a.name+"/main") {
 			t.Errorf("idle whoami: %s", out)
 		}
 
@@ -841,7 +842,9 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "implemented agent.txt", "run", "end", "--summary-file", "-"); !strings.Contains(out, "succeeded; key revoked") {
 			t.Errorf("run end: %s", out)
 		}
-		if out := must(cw, "", "whoami"); !strings.Contains(out, "no active run") {
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "no active run") ||
+			!strings.Contains(out, "implement issue #"+n+" in bottown/demo, succeeded") ||
+			!strings.Contains(out, "on issue/"+n+", 1 commit ahead of bottown-"+a.name+"/main") {
 			t.Errorf("whoami after end: %s", out)
 		}
 		if out := must(cw, "", "issue", "list"); !strings.Contains(out, "follow-up from a run") {
