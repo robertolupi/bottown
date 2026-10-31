@@ -25,7 +25,8 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 ## Done means
 
 1. The change is implemented, with tests where the repository has them, and
-   the repository's checks pass locally.
+   the repository's checks pass locally: the ones its AGENTS.md (or README)
+   names.
 2. The branch is pushed and a pull request is open (`pr create`), whose
    description says what changed and how you checked it.
 {{- if .SelfEnd}}

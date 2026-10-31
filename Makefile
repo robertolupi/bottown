@@ -1,4 +1,4 @@
-.PHONY: build install test e2e vet
+.PHONY: build install test e2e vet check
 
 VERSION ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/robertolupi/bottown/internal/cli.Version=$(VERSION)
@@ -22,6 +22,12 @@ vet:
 
 test:
 	go test ./...
+
+# The repository's checks, run before a PR and by verifiers: gofmt clean,
+# go.mod/go.sum tidy, vet (incl. the e2e build tag) and the unit tests.
+check: vet test
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+	go mod tidy -diff
 
 # Needs Docker. Uses throwaway e2e-* instances; never touches prod or dev.
 e2e:

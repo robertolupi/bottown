@@ -30,7 +30,8 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
 ## Done means
 
 1. You have read the diff, built the code, and run the repository's checks
-   at `{{.SHA}}`.
+   at `{{.SHA}}`: the ones its AGENTS.md (or README) names, the same ones
+   the implementer ran.
 2. You have submitted exactly one verdict:
    `{{.Bottown}} review submit --commit {{.SHA}} --event EVENT --body-file -`,
    with EVENT set to:

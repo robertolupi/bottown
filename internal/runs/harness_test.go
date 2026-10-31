@@ -89,3 +89,17 @@ func TestClaudeIsolationAndEnv(t *testing.T) {
 		t.Errorf("env lost a variable it should keep")
 	}
 }
+
+// Implementer and verifier must mean the same checks: both prompts point at
+// where the repository defines them.
+func TestPromptsNameWhereChecksAre(t *testing.T) {
+	for _, kind := range []string{"implement", "verify"} {
+		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(p, "repository's checks") || !strings.Contains(p, "AGENTS.md (or README)") {
+			t.Errorf("%s prompt does not say where the checks are:\n%s", kind, p)
+		}
+	}
+}
