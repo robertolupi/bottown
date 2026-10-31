@@ -393,7 +393,22 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
    - **Prompts are CLI-first,** with the absolute path of `bottown` and the
      right remote. Claude's batch allowlist includes `Bash(bottown:*)` and
      the absolute path.
-4. `/bottown-implement` and `/bottown-verify` commands for claude, then agy.
+4. ~~`/bottown-implement` and `/bottown-verify` commands for claude, then
+   agy.~~ Done (2026-10-31): `bottown harness setup [claude|agy]` installs
+   them globally, naming `bottown` by absolute path.
+   - **claude:** `~/.claude/commands/bottown-{implement,verify}.md`. The
+     command itself runs `` !`bottown run start <kind> $ARGUMENTS` ``, which
+     inlines the goal prompt, with `allowed-tools: Bash(bottown:*)`.
+   - **agy:** `~/.gemini/config/global_workflows/bottown-{implement,verify}.md`.
+     A workflow cannot run commands itself, so it tells the agent to run
+     `bottown run start <kind> <number>` and follow its output.
+   - **Arguments:** `run start` accepts what users type,
+     `/bottown-implement issue #12` as well as `12`.
+   - **Safe re-runs:** re-running refreshes the files; a same-named file
+     bottown did not write is left alone unless `--force`.
+   - **Fallback for other harnesses:** a skill or instructions file that
+     tells the agent which `bottown` commands to run. Every harness has a
+     shell, so this works without harness-specific command support.
 5. `bottown run implement/verify` from `main`, leasing permanent worktrees
    (`--no-launch`, batch, `-I`). `run ls` reads the worktrees' state.
 6. e2e: a scripted run through the CLI and an actor-started run; check that

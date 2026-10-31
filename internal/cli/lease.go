@@ -22,15 +22,29 @@ import (
 
 func newRunStart() *cobra.Command {
 	return &cobra.Command{
-		Use:   "start implement|verify N",
+		Use:   "start implement|verify [issue|pr] N",
 		Short: "Start a run for this actor worktree and print its goal prompt (agent CLI)",
-		Args:  cobra.ExactArgs(2),
+		Long: `Start a run for this actor worktree and print its goal prompt. The number may
+be written 12, #12 or !12, optionally after "issue", "pr" or "pull request", so
+slash commands can pass what the user typed: /bottown-implement issue 12.`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind := args[0]
 			if kind != policy.Implement && kind != policy.Verify {
 				return fmt.Errorf("kind must be %s or %s", policy.Implement, policy.Verify)
 			}
-			n, err := parseNumber(args[1])
+			var rest []string
+			for _, w := range args[1:] {
+				switch strings.ToLower(w) {
+				case "issue", "pr", "pull", "request":
+				default:
+					rest = append(rest, w)
+				}
+			}
+			if len(rest) != 1 {
+				return fmt.Errorf("give one issue or pull request number, e.g. `run start %s 12`", kind)
+			}
+			n, err := parseNumber(rest[0])
 			if err != nil {
 				return err
 			}

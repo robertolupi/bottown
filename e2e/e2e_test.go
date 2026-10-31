@@ -726,7 +726,8 @@ func TestE2E(t *testing.T) {
 		}
 		os.Remove(filepath.Join(cw, "stray.txt"))
 
-		prompt := must(cw, "", "run", "start", "implement", n)
+		// As a slash command passes it: /bottown-implement issue #N.
+		prompt := must(cw, "", "run", "start", "implement", "issue", "#"+n)
 		if !strings.Contains(prompt, "issue show") || !strings.Contains(prompt, "run end --summary-file -") || !strings.Contains(prompt, "add agent.txt") {
 			t.Fatalf("implement prompt:\n%s", prompt)
 		}
