@@ -95,7 +95,10 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   harness commands and credential helpers use.
 - **Tests:** `make test` runs the unit tests. `make e2e` needs Docker and
   starts throwaway `e2e-*` instances; it never touches prod or dev.
-- **Before a PR:** `make vet`, `make test` and `make e2e` pass. New
+- **Checks:** `make check` is what "the repository's checks" means to
+  implementers and verifiers: `gofmt -l` clean, `go mod tidy -diff` clean,
+  `make vet` (including `-tags e2e`) and `make test`.
+- **Before a PR:** `make check` and `make e2e` pass. New
   behaviour gets a test. Keep the docs in `docs/` true to the code.
 - **Style:** match the surrounding code, comment density included. Commit
   messages say what changed and why.
