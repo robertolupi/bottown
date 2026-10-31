@@ -214,28 +214,9 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, run)
 }
 
-// endRun ends a run and deletes its key. If query parameter purge=true is
-// set, the run record itself is deleted from the store (owner only).
-// Body: {"status": "succeeded" | "failed" | "revoked"} (default "revoked").
+// endRun ends a run and deletes its key. Body: {"status": "succeeded" |
+// "failed" | "revoked"} (default "revoked").
 func (s *Server) endRun(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if r.URL.Query().Get("purge") == "true" || r.URL.Query().Get("purge") == "1" {
-		if p := Who(r.Context()); p.Actor != s.Owner {
-			writeError(w, http.StatusForbidden, "only the owner can purge runs")
-			return
-		}
-		ok, err := s.Store.DeleteRun(id)
-		switch {
-		case err != nil:
-			writeError(w, http.StatusInternalServerError, err.Error())
-		case !ok:
-			writeError(w, http.StatusNotFound, "no such run")
-		default:
-			s.Log.Info("run purged", "run", id)
-			writeJSON(w, http.StatusOK, map[string]any{"purged": true, "id": id})
-		}
-		return
-	}
 	body := struct {
 		Status string `json:"status"`
 	}{Status: "revoked"}

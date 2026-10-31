@@ -170,24 +170,6 @@ func (s *Store) NewRun(run Run) (string, error) {
 	return key, nil
 }
 
-// DeleteRun removes a run record and any associated keys from the store.
-// It reports whether the run existed.
-func (s *Store) DeleteRun(id string) (bool, error) {
-	var ok bool
-	err := s.Update(func(st *State) error {
-		if _, ok = st.Runs[id]; ok {
-			delete(st.Runs, id)
-		}
-		for h, k := range st.Keys {
-			if k.RunID == id {
-				delete(st.Keys, h)
-			}
-		}
-		return nil
-	})
-	return ok, err
-}
-
 // EndRun marks a run ended with status and deletes its key. It reports
 // false if the run does not exist.
 func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {

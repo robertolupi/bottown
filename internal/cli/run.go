@@ -386,14 +386,8 @@ func newRunLs(g *globals) *cobra.Command {
 			if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?repo="+rc.repo, nil, &remote); err != nil {
 				return err
 			}
-			var activeRemote []secrets.Run
-			for _, sr := range remote {
-				if serverKeyState(sr) == "live" {
-					activeRemote = append(activeRemote, sr)
-				}
-			}
 			out := cmd.OutOrStdout()
-			return printRunLs(out, lipgloss.NewRenderer(out), local, activeRemote)
+			return printRunLs(out, lipgloss.NewRenderer(out), local, remote)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list the server's runs for every repository on the instance")
@@ -447,6 +441,9 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 	}
 	for _, sr := range remote {
 		if seen[sr.ID] {
+			continue
+		}
+		if sr.Ended != nil {
 			continue
 		}
 		mode := "batch"
