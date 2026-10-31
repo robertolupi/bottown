@@ -12,7 +12,7 @@ import (
 // host over `docker exec`.
 type OwnerCredentials struct {
 	Login    string `json:"login"`
-	Password string `json:"password,omitempty"` // only until forgotten
+	Password string `json:"password,omitempty"`
 	APIKey   string `json:"api_key"`
 }
 
@@ -24,10 +24,9 @@ func newAdmin() *cobra.Command {
 		Short:  "Container-side administration (run via docker exec)",
 		Hidden: true,
 	}
-	var forget bool
 	owner := &cobra.Command{
 		Use:   "owner-credentials",
-		Short: "Mint an owner API key and print the pending initial password",
+		Short: "Mint an owner API key and print the owner's Forgejo password",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			e, err := readContainerEnv()
@@ -37,9 +36,6 @@ func newAdmin() *cobra.Command {
 			store, err := secrets.Open(e.Data)
 			if err != nil {
 				return err
-			}
-			if forget {
-				return store.Update(func(s *secrets.State) error { s.OwnerPassword = ""; return nil })
 			}
 			st, err := store.Read()
 			if err != nil {
@@ -54,7 +50,6 @@ func newAdmin() *cobra.Command {
 			})
 		},
 	}
-	owner.Flags().BoolVar(&forget, "forget-password", false, "drop the pending initial password once the host has stored it")
 
 	var label string
 	actorKey := &cobra.Command{

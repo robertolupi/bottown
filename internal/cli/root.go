@@ -17,6 +17,7 @@ var Version = "dev"
 
 type globals struct {
 	instance string
+	source   string // how instance was chosen, for messages
 }
 
 // Execute runs the bottown command.
@@ -36,6 +37,19 @@ func newRoot() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			switch {
+			case cmd.Flags().Changed("instance"):
+				g.source = "--instance"
+			case os.Getenv("BOTTOWN_INSTANCE") != "":
+				g.source = "$BOTTOWN_INSTANCE"
+			default:
+				// Infer from the checkout the command runs in.
+				name, source, err := resolveInstance(".")
+				if err != nil {
+					return err
+				}
+				g.instance, g.source = name, source
+			}
 			return config.ValidInstance(g.instance)
 		},
 	}
@@ -43,10 +57,11 @@ func newRoot() *cobra.Command {
 	if def == "" {
 		def = config.DefaultInstance
 	}
-	root.PersistentFlags().StringVarP(&g.instance, "instance", "i", def, "instance name ($BOTTOWN_INSTANCE)")
+	root.PersistentFlags().StringVarP(&g.instance, "instance", "i", def,
+		"instance name ($BOTTOWN_INSTANCE; otherwise inferred from the checkout's git config bottown.instance or remotes)")
 	root.AddCommand(
 		newUp(g), newDown(g), newStatus(g), newLogs(g), newImage(g),
-		newRepo(g), newCredential(g),
+		newRepo(g), newCredential(g), newWeb(g),
 		newServe(), newAdmin(),
 		&cobra.Command{
 			Use:   "version",

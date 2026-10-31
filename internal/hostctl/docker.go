@@ -87,6 +87,7 @@ type Container struct {
 	Exists  bool
 	Running bool
 	ImageID string
+	Labels  map[string]string
 }
 
 // Inspect returns the state of container name.
@@ -99,13 +100,14 @@ func (d Docker) Inspect(ctx context.Context, name string) (Container, error) {
 		return Container{}, err
 	}
 	var v []struct {
-		Image string
-		State struct{ Running bool }
+		Image  string
+		State  struct{ Running bool }
+		Config struct{ Labels map[string]string }
 	}
 	if err := json.Unmarshal([]byte(out), &v); err != nil || len(v) == 0 {
 		return Container{}, fmt.Errorf("parse docker inspect: %v", err)
 	}
-	return Container{Exists: true, Running: v[0].State.Running, ImageID: v[0].Image}, nil
+	return Container{Exists: true, Running: v[0].State.Running, ImageID: v[0].Image, Labels: v[0].Config.Labels}, nil
 }
 
 // RunSpec describes a detached container.

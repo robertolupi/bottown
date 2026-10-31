@@ -32,6 +32,14 @@ type Server struct {
 	Policy     policy.Policy
 	Log        *slog.Logger
 
+	// Browser sign-in (web.go). PublicForgejoURL is what the owner's
+	// browser uses; the cookie names are per instance because every
+	// instance shares the 127.0.0.1 cookie jar.
+	PublicForgejoURL string
+	ForgejoCookie    string
+	UICookie         string
+	web              webState
+
 	mu     sync.Mutex
 	health Health
 }
@@ -79,6 +87,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/mcp", s.ready(s.mcpHandler()))
 	mux.Handle("/forgejo/api/v1/", s.authed(http.HandlerFunc(s.apiProxy)))
 	mux.Handle("/git/", s.authed(http.HandlerFunc(s.gitProxy)))
+	mux.Handle("POST /v1/web/session", s.authed(s.ownerOnly(http.HandlerFunc(s.postWebSession))))
+	mux.Handle("GET /v1/web/login/{ticket}", s.ready(http.HandlerFunc(s.webLogin)))
+	mux.Handle("GET /web/forgejo", s.ready(s.uiAuthed(http.HandlerFunc(s.webForgejo))))
+	mux.Handle("GET /{$}", s.ready(s.uiAuthed(http.HandlerFunc(s.uiHome))))
 	return mux
 }
 

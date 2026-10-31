@@ -62,9 +62,9 @@ re-run with the previous commit.
    The volume is always kept.
 4. Waits until `/healthz` reports `reconciled: true`.
 5. Hand-off: if the host has no API key that works for the owner, it mints
-   one with `docker exec`. On first creation it also stores the owner's
-   initial Forgejo password in the Keychain, then tells the container to
-   forget the password.
+   one with `docker exec`. It also stores the owner's Forgejo password in the
+   Keychain. The container keeps its own copy, so `bottown web forgejo` can
+   sign you in.
 
 `bottown serve` in the container:
 1. Waits for Forgejo's `/api/healthz`.
@@ -117,6 +117,67 @@ enforced:
    needs the user's own basic auth. If an actor's scopes change, bottown mints
    a new token and logs a warning naming the old one.
 
+7. **The Forgejo 15 login form has no `_csrf` token.** Forgejo 15 checks the
+   `Origin`/`Sec-Fetch-Site` headers instead, and a server-side post without
+   them passes. Forgejo also has no API for minting a web session, so bottown
+   signs in through the form.
+
+## Which instance a command talks to
+
+Commands resolve the instance in this order:
+
+1. `-i`/`--instance`.
+2. `$BOTTOWN_INSTANCE`.
+3. `git config bottown.instance` in the current checkout. `repo add` sets it
+   if it is unset, so a repo hosted on both dev and prod keeps its first
+   choice.
+4. The one configured instance that one of the checkout's remotes points at
+   (`http://127.0.0.1:<sp>/git/…`).
+5. Otherwise `prod`.
+
+If remotes point at several instances and the key is unset, the command
+fails and asks you to pick. `bottown status` shows where the instance came
+from.
+
+## Browser sign-in
+
+`bottown web forgejo` opens Forgejo signed in as the owner. Inside a hosted
+checkout it opens that repo's page. `bottown web ui` opens bottown's own UI;
+for now that is a status page, until the Svelte UI exists. Neither needs a
+password copied.
+
+How the sign-in works:
+
+1. The CLI asks the server for a one-time login link, authenticating with the
+   owner's API key.
+2. bottown signs in to Forgejo's login form with the owner password it keeps
+   in the container.
+3. Opening the link in the browser redeems it: it works once and expires
+   after 60 s. bottown sets the session cookie and redirects.
+
+Cookies are scoped to the host, not the port, so a cookie set by
+`127.0.0.1:<sp>` reaches Forgejo on `127.0.0.1:<fp>`. For the same reason,
+every instance sets its own cookie names (`bottown_<instance>_forgejo`,
+`bottown_<instance>_ui`), so prod and dev sessions don't overwrite each other.
+
+If you change the owner password in Forgejo, run
+`bottown web forgejo --reset-password`. It sets a new random password through
+the admin CLI and updates the Keychain copy.
+
+`up` recreates the container when its run spec changes (env, ports), not only
+when the image changes. A hash of the spec is stored in the `io.bottown.spec`
+label.
+
+## Forgejo client
+
+REST calls go through the Forgejo Go SDK,
+`codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3`. What the SDK lacks lives in
+`internal/forgejo/extensions.go`: org labels with `exclusive`, and
+`apply_to_admins`. `adminclient.go` wraps the in-container `forgejo admin`
+CLI, which handles the first admin, minting tokens and password resets.
+`weblogin.go` creates browser sessions. The SDK's version gates are disabled,
+because Forgejo reports itself as `15.0.11+gitea-1.22.0`.
+
 ## Proxy policy (step 1 rules)
 
 The default is allow, because token scopes and team permissions already limit
@@ -143,12 +204,14 @@ The supervisor's timeline check on `mode/*` (§5.3) covers that.
 
 ```bash
 bottown up -i dev                      # build working tree, provision
-bottown -i dev credential password     # owner's Forgejo web password
+bottown -i dev web forgejo             # Forgejo in the browser, signed in
+bottown -i dev web ui                  # bottown's UI (status page for now)
+bottown -i dev credential password     # owner's Forgejo password, if needed
 bottown -i dev credential key implementer
 claude mcp add --transport http bottown http://127.0.0.1:3041/mcp \
   --header "Authorization: Bearer <key>"
 bottown -i dev repo add                # host the current checkout
-bottown -i dev status
+bottown status                         # inside it, the instance is inferred
 bottown -i dev down [--purge]
 ```
 

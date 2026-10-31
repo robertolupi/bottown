@@ -95,6 +95,14 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	if err := configureCredentialHelper(top, inst); err != nil {
 		return err
 	}
+	// Associate the checkout with this instance unless it already is with
+	// one (a repo can live on several; the first stays the default).
+	if _, err := git(top, "config", "--local", "--get", gitInstanceKey); err != nil {
+		if _, err := git(top, "config", "--local", gitInstanceKey, inst.Name); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "set git config %s = %s\n", gitInstanceKey, inst.Name)
+	}
 	push := exec.CommandContext(ctx, "git", "-C", top, "push", remote, branch)
 	push.Stdout, push.Stderr = out, os.Stderr
 	if err := push.Run(); err != nil {

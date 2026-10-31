@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +83,20 @@ func (in *instance) cmd(dir string, args ...string) (string, error) {
 	if dir != "" {
 		c.Dir = dir
 	}
+	out, err := c.CombinedOutput()
+	return string(out), err
+}
+
+// cmdResolved runs bottown without $BOTTOWN_INSTANCE, so the instance is
+// inferred from the checkout in dir.
+func (in *instance) cmdResolved(dir string, args ...string) (string, error) {
+	c := exec.Command(bin, args...)
+	for _, e := range in.env() {
+		if !strings.HasPrefix(e, "BOTTOWN_INSTANCE=") {
+			c.Env = append(c.Env, e)
+		}
+	}
+	c.Dir = dir
 	out, err := c.CombinedOutput()
 	return string(out), err
 }
@@ -249,6 +264,65 @@ func TestE2E(t *testing.T) {
 		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections/main", nil, &bp)
 		if bp.RequiredApprovals != 1 || !bp.DismissStaleApprovals || !bp.EnableMergeWhitelist {
 			t.Fatalf("protection = %+v", bp)
+		}
+	})
+
+	t.Run("a hosted checkout resolves its instance", func(t *testing.T) {
+		if got := git(t, demo, "config", "--local", "--get", "bottown.instance"); got != a.name {
+			t.Fatalf("bottown.instance = %q", got)
+		}
+		out, err := a.cmdResolved(demo, "status")
+		if err != nil || !strings.Contains(out, "instance  "+a.name+" (from git config bottown.instance)") {
+			t.Fatalf("status in checkout: %v\n%s", err, out)
+		}
+		// Without the config key, the remote alone identifies the instance.
+		git(t, demo, "config", "--local", "--unset", "bottown.instance")
+		out, err = a.cmdResolved(demo, "status")
+		git(t, demo, "config", "--local", "bottown.instance", a.name)
+		if err != nil || !strings.Contains(out, "(from git remote)") {
+			t.Fatalf("status by remote: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("web login links", func(t *testing.T) {
+		noFollow := func(jar http.CookieJar) *http.Client {
+			return &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		}
+		jar, _ := cookiejar.New(nil)
+		link := strings.TrimSpace(a.mustCmd(demo, "web", "forgejo", "--print"))
+		resp, err := noFollow(jar).Get(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if want := a.cfg.ForgejoURL() + "/bottown/demo"; resp.StatusCode != 303 || resp.Header.Get("Location") != want {
+			t.Fatalf("forgejo login: %d -> %s, want 303 -> %s", resp.StatusCode, resp.Header.Get("Location"), want)
+		}
+		// The cookie set by bottown's port is sent to Forgejo's port.
+		resp, err = noFollow(jar).Get(a.cfg.ForgejoURL() + "/user/settings")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("forgejo settings with session: %d (not signed in)", resp.StatusCode)
+		}
+		if resp, err := http.Get(link); err != nil || resp.StatusCode != 401 {
+			t.Fatalf("reused login link: %v %v", err, resp.StatusCode)
+		}
+
+		ui := strings.TrimSpace(a.mustCmd("", "web", "ui", "--print"))
+		resp, err = (&http.Client{Jar: jar}).Get(ui)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), "Signed in as owner") {
+			t.Fatalf("web ui page: %d %s", resp.StatusCode, b)
+		}
+		if resp, _ := http.Get(a.cfg.ServerURL() + "/"); resp.StatusCode != 401 {
+			t.Fatalf("web ui without session: %d", resp.StatusCode)
 		}
 	})
 

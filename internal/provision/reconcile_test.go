@@ -8,7 +8,7 @@ import (
 
 func TestWantProtectionHasNoDiffWithItself(t *testing.T) {
 	r := &Reconciler{Desired: config.DefaultDesired(), Owner: Owner{Login: "owner"}}
-	want := r.WantProtection("main")
+	want := r.WantProtection()
 	have := want
 	// Forgejo returns allow-lists in its own order.
 	have.MergeWhitelistUsernames = []string{"owner", "manager"}
@@ -23,9 +23,9 @@ func TestWantProtectionHasNoDiffWithItself(t *testing.T) {
 
 func TestOwnerAlwaysAllowListed(t *testing.T) {
 	r := &Reconciler{Desired: config.DefaultDesired(), Owner: Owner{Login: "owner"}}
-	p := r.WantProtection("main")
+	p := r.WantProtection()
 	for name, list := range map[string][]string{
-		"push": p.PushWhitelistUsernames, "merge": p.MergeWhitelistUsernames, "approvals": p.ApprovalsWhitelistUsers,
+		"push": p.PushWhitelistUsernames, "merge": p.MergeWhitelistUsernames, "approvals": p.ApprovalsWhitelistUsernames,
 	} {
 		found := false
 		for _, u := range list {

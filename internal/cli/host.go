@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,7 +121,7 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 		return err
 	}
 	switch {
-	case c.Exists && c.ImageID != imageID:
+	case c.Exists && (c.ImageID != imageID || c.Labels[specLabel] != containerSpec(inst).Labels[specLabel]):
 		fmt.Fprintf(out, "recreating %s on image %s (volume %s kept)\n", inst.Container(), image, inst.Volume())
 		if err := d.Remove(ctx, inst.Container()); err != nil {
 			return err
@@ -151,7 +153,7 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 	fmt.Fprintf(out, "  Forgejo  %s  login %s\n", inst.ForgejoURL(), inst.OwnerLogin)
 	fmt.Fprintf(out, "  bottown  %s  (MCP at /mcp)\n", inst.ServerURL())
 	if pwStored {
-		fmt.Fprintf(out, "  initial owner password stored; read it with: bottown -i %s credential password\n", inst.Name)
+		fmt.Fprintf(out, "  owner password stored; open Forgejo signed in with: bottown -i %s web forgejo\n", inst.Name)
 	}
 	if len(h.Changes) == 0 {
 		fmt.Fprintln(out, "  no provisioning changes")
@@ -202,8 +204,12 @@ func gitConfig(key string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func runContainer(ctx context.Context, d hostctl.Docker, inst config.Instance) error {
-	return d.Run(ctx, hostctl.RunSpec{
+// specLabel records a hash of the run spec, so `up` recreates the container
+// when the spec changes (new env, ports), not only when the image does.
+const specLabel = "io.bottown.spec"
+
+func containerSpec(inst config.Instance) hostctl.RunSpec {
+	spec := hostctl.RunSpec{
 		Name:  inst.Container(),
 		Image: inst.Image,
 		Ports: []string{
@@ -212,15 +218,29 @@ func runContainer(ctx context.Context, d hostctl.Docker, inst config.Instance) e
 		},
 		Volume: inst.Volume() + ":/data",
 		Env: map[string]string{
-			"FORGEJO__server__ROOT_URL": inst.ForgejoURL() + "/",
-			"FORGEJO__server__DOMAIN":   "127.0.0.1",
-			"BOTTOWN_INSTANCE":          inst.Name,
-			"BOTTOWN_OWNER_LOGIN":       inst.OwnerLogin,
-			"BOTTOWN_OWNER_EMAIL":       inst.OwnerEmail,
-			"BOTTOWN_OWNER_FULLNAME":    gitConfig("user.name"),
+			"FORGEJO__server__ROOT_URL":               inst.ForgejoURL() + "/",
+			"FORGEJO__server__DOMAIN":                 "127.0.0.1",
+			"FORGEJO__session__COOKIE_NAME":           config.ForgejoCookie(inst.Name),
+			"FORGEJO__security__COOKIE_REMEMBER_NAME": config.ForgejoCookie(inst.Name) + "_remember",
+			"BOTTOWN_INSTANCE":                        inst.Name,
+			"BOTTOWN_OWNER_LOGIN":                     inst.OwnerLogin,
+			"BOTTOWN_OWNER_EMAIL":                     inst.OwnerEmail,
+			"BOTTOWN_OWNER_FULLNAME":                  gitConfig("user.name"),
 		},
 		Labels: map[string]string{"io.bottown.instance": inst.Name},
-	})
+	}
+	b, _ := json.Marshal(struct {
+		Ports  []string
+		Volume string
+		Env    map[string]string
+	}{spec.Ports, spec.Volume, spec.Env})
+	sum := sha256.Sum256(b)
+	spec.Labels[specLabel] = hex.EncodeToString(sum[:8])
+	return spec
+}
+
+func runContainer(ctx context.Context, d hostctl.Docker, inst config.Instance) error {
+	return d.Run(ctx, containerSpec(inst))
 }
 
 func fetchHealth(ctx context.Context, inst config.Instance) (server.Health, error) {
@@ -296,13 +316,10 @@ func handOff(ctx context.Context, g *globals, d hostctl.Docker, inst config.Inst
 	if oc.Password == "" {
 		return false, nil
 	}
-	if err := sec.Set(hostctl.AccountPassword, oc.Password); err != nil {
-		return false, err
+	if have, ok, _ := sec.Get(hostctl.AccountPassword); ok && have == oc.Password {
+		return false, nil
 	}
-	if _, err := d.Exec(ctx, inst.Container(), "git", "bottown", "admin", "owner-credentials", "--forget-password"); err != nil {
-		return false, err
-	}
-	return true, nil
+	return true, sec.Set(hostctl.AccountPassword, oc.Password)
 }
 
 func whoami(ctx context.Context, inst config.Instance, key string) (string, error) {
@@ -481,8 +498,8 @@ func newStatus(g *globals) *cobra.Command {
 					state = "running"
 				}
 			}
-			fmt.Fprintf(out, "instance  %s\ncontainer %s (%s)\nimage     %s\nforgejo   %s\nbottown   %s\n",
-				inst.Name, inst.Container(), state, inst.Image, inst.ForgejoURL(), inst.ServerURL())
+			fmt.Fprintf(out, "instance  %s (from %s)\ncontainer %s (%s)\nimage     %s\nforgejo   %s\nbottown   %s\n",
+				inst.Name, g.source, inst.Container(), state, inst.Image, inst.ForgejoURL(), inst.ServerURL())
 			if c.Running {
 				h, err := fetchHealth(cmd.Context(), inst)
 				if err != nil {

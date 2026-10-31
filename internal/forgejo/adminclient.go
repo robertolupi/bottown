@@ -8,14 +8,16 @@ import (
 	"strings"
 )
 
-// AdminCLI runs `forgejo admin` in the same container as Forgejo. It is the
-// only way to create the first admin and to mint tokens for users whose
-// password bottown does not hold (the token API requires basic auth).
-type AdminCLI struct {
+// AdminClient performs site administration that the REST API cannot, by
+// running the `forgejo admin` CLI inside the Forgejo container: creating the
+// first admin, minting tokens for users whose password bottown does not hold
+// (the token API requires the user's own basic auth), and resetting
+// passwords. It is privileged by construction and only works in-container.
+type AdminClient struct {
 	Bin string // defaults to "forgejo"
 }
 
-func (a AdminCLI) run(ctx context.Context, args ...string) (string, error) {
+func (a AdminClient) run(ctx context.Context, args ...string) (string, error) {
 	bin := a.Bin
 	if bin == "" {
 		bin = "forgejo"
@@ -30,7 +32,7 @@ func (a AdminCLI) run(ctx context.Context, args ...string) (string, error) {
 }
 
 // CreateAdmin creates a site admin with the given password.
-func (a AdminCLI) CreateAdmin(ctx context.Context, username, email, password string) error {
+func (a AdminClient) CreateAdmin(ctx context.Context, username, email, password string) error {
 	_, err := a.run(ctx, "create",
 		"--username", username,
 		"--email", email,
@@ -41,7 +43,7 @@ func (a AdminCLI) CreateAdmin(ctx context.Context, username, email, password str
 }
 
 // GenerateToken mints an access token for username and returns its value.
-func (a AdminCLI) GenerateToken(ctx context.Context, username, name string, scopes []string) (string, error) {
+func (a AdminClient) GenerateToken(ctx context.Context, username, name string, scopes []string) (string, error) {
 	out, err := a.run(ctx, "generate-access-token",
 		"--username", username,
 		"--token-name", name,
@@ -53,4 +55,13 @@ func (a AdminCLI) GenerateToken(ctx context.Context, username, name string, scop
 	// --raw prints only the token, but tolerate log lines before it.
 	lines := strings.Split(out, "\n")
 	return strings.TrimSpace(lines[len(lines)-1]), nil
+}
+
+// ChangePassword sets username's password.
+func (a AdminClient) ChangePassword(ctx context.Context, username, password string) error {
+	_, err := a.run(ctx, "change-password",
+		"--username", username,
+		"--password", password,
+		"--must-change-password=false")
+	return err
 }

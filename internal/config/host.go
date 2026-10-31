@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -48,6 +49,15 @@ func (i Instance) Remote() string {
 	}
 	return "bottown-" + i.Name
 }
+
+// ForgejoCookie is Forgejo's session cookie name for this instance. Cookies
+// are scoped by host, not port, so instances on 127.0.0.1 need distinct names.
+func ForgejoCookie(instance string) string { return "bottown_" + cookieSafe(instance) + "_forgejo" }
+
+// UICookie is the bottown web UI session cookie name for this instance.
+func UICookie(instance string) string { return "bottown_" + cookieSafe(instance) + "_ui" }
+
+func cookieSafe(s string) string { return strings.ReplaceAll(s, "-", "_") }
 
 // ForgejoURL is the owner-facing Forgejo web URL.
 func (i Instance) ForgejoURL() string { return fmt.Sprintf("http://127.0.0.1:%d", i.ForgejoPort) }

@@ -9,11 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
+
+	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/forgejo"
@@ -30,10 +31,11 @@ type Owner struct {
 	FullName string
 }
 
-// Admin is the subset of the `forgejo admin` CLI the reconciler needs.
+// Admin is the subset of forgejo.AdminClient the reconciler needs.
 type Admin interface {
 	CreateAdmin(ctx context.Context, username, email, password string) error
 	GenerateToken(ctx context.Context, username, name string, scopes []string) (string, error)
+	ChangePassword(ctx context.Context, username, password string) error
 }
 
 // Report lists the writes a reconcile pass made.
@@ -54,35 +56,27 @@ type Reconciler struct {
 	Owner   Owner
 	Log     *slog.Logger
 
-	api *forgejo.Client
+	adminToken string
 }
 
-// WaitReady blocks until Forgejo's unauthenticated /api/healthz passes.
-// (/api/v1/version is not usable: REQUIRE_SIGNIN_VIEW makes it 403 for
-// anonymous callers.)
+// WaitReady blocks until Forgejo's /api/healthz passes.
 func (r *Reconciler) WaitReady(ctx context.Context) error {
-	hc := &http.Client{Timeout: 3 * time.Second}
 	var last error
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.BaseURL+"/api/healthz", nil)
-		if err != nil {
-			return err
+		if last = forgejo.Healthy(ctx, r.BaseURL); last == nil {
+			return nil
 		}
-		resp, err := hc.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-			err = fmt.Errorf("healthz: %s", resp.Status)
-		}
-		last = err
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("forgejo not ready: %w (last error: %v)", ctx.Err(), last)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// API returns an admin client bound to ctx; Bootstrap must have succeeded.
+func (r *Reconciler) API(ctx context.Context) *forgejo.Client {
+	return forgejo.New(ctx, r.BaseURL, r.adminToken)
 }
 
 // Bootstrap ensures bottown holds a working site-admin token. The first user
@@ -93,8 +87,8 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 		return err
 	}
 	if st.AdminToken != "" {
-		if _, err := forgejo.New(r.BaseURL, st.AdminToken).Self(ctx); err == nil {
-			r.api = forgejo.New(r.BaseURL, st.AdminToken)
+		if _, _, err := forgejo.New(ctx, r.BaseURL, st.AdminToken).GetMyUserInfo(); err == nil {
+			r.adminToken = st.AdminToken
 			return nil
 		}
 	}
@@ -113,13 +107,10 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 	if err := r.Store.Update(func(s *secrets.State) error { s.AdminToken = token; return nil }); err != nil {
 		return err
 	}
-	r.api = forgejo.New(r.BaseURL, token)
+	r.adminToken = token
 	rep.add("minted admin token for %s", AdminLogin)
 	return nil
 }
-
-// API returns the admin client; Bootstrap must have succeeded.
-func (r *Reconciler) API() *forgejo.Client { return r.api }
 
 // Run bootstraps and reconciles everything, including protection on every
 // non-empty org repository.
@@ -128,17 +119,18 @@ func (r *Reconciler) Run(ctx context.Context) (Report, error) {
 	if err := r.Bootstrap(ctx, &rep); err != nil {
 		return rep, err
 	}
-	steps := []func(context.Context, *Report) error{
+	api := r.API(ctx)
+	steps := []func(*forgejo.Client, *Report) error{
 		r.ensureOwner,
 		r.ensureBots,
 		r.ensureOrg,
 		r.ensureTeams,
 		r.ensureLabels,
-		r.ensureTokens,
+		func(api *forgejo.Client, rep *Report) error { return r.ensureTokens(ctx, rep) },
 		r.ensureAllRepos,
 	}
 	for _, step := range steps {
-		if err := step(ctx, &rep); err != nil {
+		if err := step(api, &rep); err != nil {
 			return rep, err
 		}
 	}
@@ -152,7 +144,7 @@ func (r *Reconciler) log() *slog.Logger {
 	return r.Log
 }
 
-func (r *Reconciler) ensureOwner(ctx context.Context, rep *Report) error {
+func (r *Reconciler) ensureOwner(api *forgejo.Client, rep *Report) error {
 	o := r.Owner
 	if o.Login == "" {
 		return errors.New("owner login is not set")
@@ -160,11 +152,11 @@ func (r *Reconciler) ensureOwner(ctx context.Context, rep *Report) error {
 	if o.Email == "" {
 		o.Email = o.Login + "@bottown.local"
 	}
-	u, err := r.api.GetUser(ctx, o.Login)
-	if forgejo.IsNotFound(err) {
+	u, resp, err := api.GetUserInfo(o.Login)
+	if forgejo.IsNotFound(resp, err) {
 		pw := secrets.RandomString(18)
 		no := false
-		if _, err := r.api.AdminCreateUser(ctx, forgejo.CreateUserOption{
+		if _, _, err := api.AdminCreateUser(sdk.CreateUserOption{
 			Username: o.Login, Email: o.Email, FullName: o.FullName,
 			Password: pw, MustChangePassword: &no,
 		}); err != nil {
@@ -174,14 +166,14 @@ func (r *Reconciler) ensureOwner(ctx context.Context, rep *Report) error {
 			return err
 		}
 		rep.add("created owner %s", o.Login)
-		u, err = r.api.GetUser(ctx, o.Login)
+		u, _, err = api.GetUserInfo(o.Login)
 	}
 	if err != nil {
 		return err
 	}
 	if !u.IsAdmin {
 		yes := true
-		if err := r.api.AdminEditUser(ctx, o.Login, forgejo.EditUserOption{LoginName: o.Login, Admin: &yes}); err != nil {
+		if _, err := api.AdminEditUser(o.Login, sdk.EditUserOption{LoginName: o.Login, Admin: &yes}); err != nil {
 			return err
 		}
 		rep.add("made owner %s a site admin", o.Login)
@@ -189,20 +181,20 @@ func (r *Reconciler) ensureOwner(ctx context.Context, rep *Report) error {
 	return nil
 }
 
-func (r *Reconciler) ensureBots(ctx context.Context, rep *Report) error {
+func (r *Reconciler) ensureBots(api *forgejo.Client, rep *Report) error {
 	for _, b := range r.Desired.Bots {
-		u, err := r.api.GetUser(ctx, b.Name)
-		if forgejo.IsNotFound(err) {
+		u, resp, err := api.GetUserInfo(b.Name)
+		if forgejo.IsNotFound(resp, err) {
 			no := false
 			// The password is discarded: bots are token-only.
-			if _, err := r.api.AdminCreateUser(ctx, forgejo.CreateUserOption{
+			if _, _, err := api.AdminCreateUser(sdk.CreateUserOption{
 				Username: b.Name, Email: b.Name + "@bottown.local", FullName: b.FullName,
 				Password: secrets.RandomString(24), MustChangePassword: &no,
 			}); err != nil {
 				return err
 			}
 			rep.add("created bot %s", b.Name)
-			u, err = r.api.GetUser(ctx, b.Name)
+			u, _, err = api.GetUserInfo(b.Name)
 		}
 		if err != nil {
 			return err
@@ -212,7 +204,7 @@ func (r *Reconciler) ensureBots(ctx context.Context, rep *Report) error {
 		// the web UI.
 		if u.ProhibitLogin || u.FullName != b.FullName {
 			full, no := b.FullName, false
-			if err := r.api.AdminEditUser(ctx, b.Name, forgejo.EditUserOption{
+			if _, err := api.AdminEditUser(b.Name, sdk.EditUserOption{
 				LoginName: b.Name, FullName: &full, ProhibitLogin: &no,
 			}); err != nil {
 				return err
@@ -223,10 +215,10 @@ func (r *Reconciler) ensureBots(ctx context.Context, rep *Report) error {
 	return nil
 }
 
-func (r *Reconciler) ensureOrg(ctx context.Context, rep *Report) error {
-	_, err := r.api.GetOrg(ctx, r.Desired.Org)
-	if forgejo.IsNotFound(err) {
-		if _, err := r.api.CreateOrg(ctx, r.Desired.Org); err != nil {
+func (r *Reconciler) ensureOrg(api *forgejo.Client, rep *Report) error {
+	_, resp, err := api.GetOrg(r.Desired.Org)
+	if forgejo.IsNotFound(resp, err) {
+		if _, _, err := api.CreateOrg(sdk.CreateOrgOption{Name: r.Desired.Org, Visibility: sdk.VisibleTypePrivate}); err != nil {
 			return err
 		}
 		rep.add("created org %s", r.Desired.Org)
@@ -253,22 +245,22 @@ func teamUnits(t config.Team) map[string]string {
 	return m
 }
 
-func teamPermission(units map[string]string) string {
+func teamPermission(units map[string]string) sdk.AccessMode {
 	for _, p := range units {
 		if p == "write" {
-			return "write"
+			return sdk.AccessModeWrite
 		}
 	}
-	return "read"
+	return sdk.AccessModeRead
 }
 
-func (r *Reconciler) ensureTeams(ctx context.Context, rep *Report) error {
+func (r *Reconciler) ensureTeams(api *forgejo.Client, rep *Report) error {
 	org := r.Desired.Org
-	teams, err := r.api.ListOrgTeams(ctx, org)
+	teams, _, err := api.ListOrgTeams(org, sdk.ListTeamsOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
 	if err != nil {
 		return err
 	}
-	byName := map[string]forgejo.Team{}
+	byName := map[string]*sdk.Team{}
 	for _, t := range teams {
 		byName[t.Name] = t
 	}
@@ -277,35 +269,34 @@ func (r *Reconciler) ensureTeams(ctx context.Context, rep *Report) error {
 	if !ok {
 		return fmt.Errorf("org %s has no Owners team", org)
 	}
-	if err := r.ensureMember(ctx, rep, owners, r.Owner.Login); err != nil {
+	if err := r.ensureMember(api, rep, owners, r.Owner.Login); err != nil {
 		return err
 	}
 	for _, dt := range r.Desired.Teams {
 		units := teamUnits(dt)
-		opt := forgejo.TeamOption{
-			Name:                    dt.Name,
-			Description:             "managed by bottown",
-			Permission:              teamPermission(units),
-			IncludesAllRepositories: true,
-			Units:                   slices.Sorted(maps.Keys(units)),
-			UnitsMap:                units,
-		}
+		desc, all, perm := "managed by bottown", true, teamPermission(units)
 		t, ok := byName[dt.Name]
 		if !ok {
-			t, err = r.api.CreateTeam(ctx, org, opt)
+			t, _, err = api.CreateTeam(org, sdk.CreateTeamOption{
+				Name: dt.Name, Description: desc, Permission: perm,
+				IncludesAllRepositories: all, UnitsMap: units,
+			})
 			if err != nil {
 				return err
 			}
 			rep.add("created team %s", dt.Name)
 		} else if !t.IncludesAllRepositories || !unitsEqual(t.UnitsMap, units) {
-			if err := r.api.EditTeam(ctx, t.ID, opt); err != nil {
+			if _, err := api.EditTeam(t.ID, sdk.EditTeamOption{
+				Name: dt.Name, Description: &desc, Permission: perm,
+				IncludesAllRepositories: &all, UnitsMap: units,
+			}); err != nil {
 				return err
 			}
 			rep.add("updated team %s", dt.Name)
 		}
 		for _, b := range r.Desired.Bots {
 			if b.Team == dt.Name {
-				if err := r.ensureMember(ctx, rep, t, b.Name); err != nil {
+				if err := r.ensureMember(api, rep, t, b.Name); err != nil {
 					return err
 				}
 			}
@@ -327,45 +318,45 @@ func unitsEqual(have, want map[string]string) bool {
 	return true
 }
 
-func (r *Reconciler) ensureMember(ctx context.Context, rep *Report, t forgejo.Team, login string) error {
-	members, err := r.api.ListTeamMembers(ctx, t.ID)
+func (r *Reconciler) ensureMember(api *forgejo.Client, rep *Report, t *sdk.Team, login string) error {
+	members, _, err := api.ListTeamMembers(t.ID, sdk.ListTeamMembersOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
 	if err != nil {
 		return err
 	}
 	for _, m := range members {
-		if m.Login == login {
+		if m.UserName == login {
 			return nil
 		}
 	}
-	if err := r.api.AddTeamMember(ctx, t.ID, login); err != nil {
+	if _, err := api.AddTeamMember(t.ID, login); err != nil {
 		return err
 	}
 	rep.add("added %s to team %s", login, t.Name)
 	return nil
 }
 
-func (r *Reconciler) ensureLabels(ctx context.Context, rep *Report) error {
+func (r *Reconciler) ensureLabels(api *forgejo.Client, rep *Report) error {
 	org := r.Desired.Org
-	have, err := r.api.ListOrgLabels(ctx, org)
+	have, err := api.ListOrgLabels(org)
 	if err != nil {
 		return err
 	}
-	byName := map[string]forgejo.Label{}
+	byName := map[string]forgejo.OrgLabel{}
 	for _, l := range have {
 		byName[l.Name] = l
 	}
 	for _, dl := range r.Desired.Labels {
-		want := forgejo.Label{Name: dl.Name, Color: dl.Color, Description: dl.Description, Exclusive: dl.Exclusive}
+		want := forgejo.OrgLabel{Name: dl.Name, Color: dl.Color, Description: dl.Description, Exclusive: dl.Exclusive}
 		l, ok := byName[dl.Name]
 		switch {
 		case !ok:
-			if err := r.api.CreateOrgLabel(ctx, org, want); err != nil {
+			if err := api.CreateOrgLabel(org, want); err != nil {
 				return err
 			}
 			rep.add("created label %s", dl.Name)
 		case strings.TrimPrefix(l.Color, "#") != strings.TrimPrefix(want.Color, "#") ||
 			l.Description != want.Description || l.Exclusive != want.Exclusive:
-			if err := r.api.EditOrgLabel(ctx, org, l.ID, want); err != nil {
+			if err := api.EditOrgLabel(org, l.ID, want); err != nil {
 				return err
 			}
 			rep.add("updated label %s", dl.Name)
@@ -377,15 +368,13 @@ func (r *Reconciler) ensureLabels(ctx context.Context, rep *Report) error {
 // ensureTokens mints a Forgejo token for every actor whose stored token is
 // missing, rejected, or minted with different scopes.
 func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
-	actors := []struct {
+	type actor struct {
 		login  string
 		scopes []string
-	}{{r.Owner.Login, r.Desired.OwnerScope}}
+	}
+	actors := []actor{{r.Owner.Login, r.Desired.OwnerScope}}
 	for _, b := range r.Desired.Bots {
-		actors = append(actors, struct {
-			login  string
-			scopes []string
-		}{b.Name, b.Scopes})
+		actors = append(actors, actor{b.Name, b.Scopes})
 	}
 	st, err := r.Store.Read()
 	if err != nil {
@@ -397,11 +386,11 @@ func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
 			scopes = []string{"all"}
 		}
 		if t, ok := st.Tokens[a.login]; ok && slices.Equal(t.Scopes, scopes) {
-			u, err := forgejo.New(r.BaseURL, t.Token).Self(ctx)
-			if err == nil && u.Login == a.login {
+			u, resp, err := forgejo.New(ctx, r.BaseURL, t.Token).GetMyUserInfo()
+			if err == nil && u.UserName == a.login {
 				continue
 			}
-			if err != nil && !forgejo.IsStatus(err, http.StatusUnauthorized) && !forgejo.IsStatus(err, http.StatusForbidden) {
+			if err != nil && !forgejo.StatusIs(resp, err, http.StatusUnauthorized) && !forgejo.StatusIs(resp, err, http.StatusForbidden) {
 				return err
 			}
 		}
@@ -429,77 +418,124 @@ func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
 	return nil
 }
 
-func (r *Reconciler) ensureAllRepos(ctx context.Context, rep *Report) error {
-	repos, err := r.api.ListOrgRepos(ctx, r.Desired.Org)
-	if err != nil {
-		return err
-	}
-	for _, repo := range repos {
-		if repo.Empty || repo.DefaultBranch == "" {
-			continue
-		}
-		if err := r.ensureProtection(ctx, rep, repo.Name, repo.DefaultBranch); err != nil {
+func (r *Reconciler) ensureAllRepos(api *forgejo.Client, rep *Report) error {
+	for page := 1; ; page++ {
+		repos, _, err := api.ListOrgRepos(r.Desired.Org, sdk.ListOrgReposOptions{ListOptions: sdk.ListOptions{Page: page, PageSize: 50}})
+		if err != nil {
 			return err
 		}
+		for _, repo := range repos {
+			if repo.Empty || repo.DefaultBranch == "" {
+				continue
+			}
+			if err := r.ensureProtection(api, rep, repo.Name, repo.DefaultBranch); err != nil {
+				return err
+			}
+		}
+		if len(repos) < 50 {
+			return nil
+		}
 	}
-	return nil
+}
+
+// Repo is what EnsureRepo reports about a repository.
+type Repo struct {
+	FullName      string
+	Empty         bool
+	DefaultBranch string
 }
 
 // EnsureRepo creates org/name if needed. Once the repository has content it
 // sets the default branch and applies protection to it.
-func (r *Reconciler) EnsureRepo(ctx context.Context, name, branch string) (forgejo.Repo, Report, error) {
+func (r *Reconciler) EnsureRepo(ctx context.Context, name, branch string) (Repo, Report, error) {
 	var rep Report
+	api := r.API(ctx)
 	org := r.Desired.Org
-	repo, err := r.api.GetRepo(ctx, org, name)
-	if forgejo.IsNotFound(err) {
-		repo, err = r.api.CreateOrgRepo(ctx, org, name, branch)
+	repo, resp, err := api.GetRepo(org, name)
+	if forgejo.IsNotFound(resp, err) {
+		repo, _, err = api.CreateOrgRepo(org, sdk.CreateRepoOption{Name: name, Private: true, DefaultBranch: branch})
 		if err != nil {
-			return repo, rep, err
+			return Repo{}, rep, err
 		}
 		rep.add("created repo %s/%s", org, name)
-		return repo, rep, nil
+		return Repo{FullName: repo.FullName, Empty: true, DefaultBranch: repo.DefaultBranch}, rep, nil
 	}
-	if err != nil || repo.Empty {
-		return repo, rep, err
+	if err != nil {
+		return Repo{}, rep, err
+	}
+	out := Repo{FullName: repo.FullName, Empty: repo.Empty, DefaultBranch: repo.DefaultBranch}
+	if repo.Empty {
+		return out, rep, nil
 	}
 	if branch != "" && repo.DefaultBranch != branch {
-		if err := r.api.SetDefaultBranch(ctx, org, name, branch); err != nil {
-			return repo, rep, err
+		if _, _, err := api.EditRepo(org, name, sdk.EditRepoOption{DefaultBranch: &branch}); err != nil {
+			return out, rep, err
 		}
 		rep.add("set default branch of %s to %s", name, branch)
-		repo.DefaultBranch = branch
+		out.DefaultBranch = branch
 	}
-	err = r.ensureProtection(ctx, &rep, name, repo.DefaultBranch)
-	return repo, rep, err
+	err = r.ensureProtection(api, &rep, name, out.DefaultBranch)
+	return out, rep, err
 }
 
-// WantProtection is the protection rule for branch derived from Desired.
-func (r *Reconciler) WantProtection(branch string) forgejo.BranchProtection {
+// Protection is the branch protection bottown manages, as one flat value
+// (the SDK's BranchProtection plus the apply_to_admins extension).
+type Protection struct {
+	EnablePush                  bool
+	EnablePushWhitelist         bool
+	PushWhitelistUsernames      []string
+	EnableMergeWhitelist        bool
+	MergeWhitelistUsernames     []string
+	EnableApprovalsWhitelist    bool
+	ApprovalsWhitelistUsernames []string
+	RequiredApprovals           int64
+	DismissStaleApprovals       bool
+	BlockOnRejectedReviews      bool
+	ApplyToAdmins               bool
+}
+
+// WantProtection is the protection rule derived from Desired. The owner is
+// always on the push, merge and approval allow-lists.
+func (r *Reconciler) WantProtection() Protection {
 	p := r.Desired.Protection
 	owner := r.Owner.Login
-	return forgejo.BranchProtection{
-		RuleName:                 branch,
-		EnablePush:               true,
-		EnablePushWhitelist:      true,
-		PushWhitelistUsernames:   []string{owner},
-		EnableMergeWhitelist:     true,
-		MergeWhitelistUsernames:  withOwner(p.MergeWhitelist, owner),
-		EnableApprovalsWhitelist: true,
-		ApprovalsWhitelistUsers:  withOwner(p.ApprovalsWhitelist, owner),
-		RequiredApprovals:        p.RequiredApprovals,
-		DismissStaleApprovals:    p.DismissStaleApprovals,
-		BlockOnRejectedReviews:   p.BlockOnRejectedReviews,
-		ApplyToAdmins:            p.ApplyToAdmins,
+	return Protection{
+		EnablePush:                  true,
+		EnablePushWhitelist:         true,
+		PushWhitelistUsernames:      []string{owner},
+		EnableMergeWhitelist:        true,
+		MergeWhitelistUsernames:     withOwner(p.MergeWhitelist, owner),
+		EnableApprovalsWhitelist:    true,
+		ApprovalsWhitelistUsernames: withOwner(p.ApprovalsWhitelist, owner),
+		RequiredApprovals:           p.RequiredApprovals,
+		DismissStaleApprovals:       p.DismissStaleApprovals,
+		BlockOnRejectedReviews:      p.BlockOnRejectedReviews,
+		ApplyToAdmins:               p.ApplyToAdmins,
 	}
 }
 
-func (r *Reconciler) ensureProtection(ctx context.Context, rep *Report, repo, branch string) error {
+func (r *Reconciler) ensureProtection(api *forgejo.Client, rep *Report, repo, branch string) error {
 	org := r.Desired.Org
-	want := r.WantProtection(branch)
-	have, err := r.api.GetBranchProtection(ctx, org, repo, branch)
-	if forgejo.IsNotFound(err) {
-		want.BranchName = branch
-		if err := r.api.CreateBranchProtection(ctx, org, repo, want); err != nil {
+	want := r.WantProtection()
+	bp, resp, err := api.GetBranchProtection(org, repo, branch)
+	if forgejo.IsNotFound(resp, err) {
+		if _, _, err := api.CreateBranchProtection(org, repo, sdk.CreateBranchProtectionOption{
+			BranchName:                  branch,
+			RuleName:                    branch,
+			EnablePush:                  want.EnablePush,
+			EnablePushWhitelist:         want.EnablePushWhitelist,
+			PushWhitelistUsernames:      want.PushWhitelistUsernames,
+			EnableMergeWhitelist:        want.EnableMergeWhitelist,
+			MergeWhitelistUsernames:     want.MergeWhitelistUsernames,
+			EnableApprovalsWhitelist:    want.EnableApprovalsWhitelist,
+			ApprovalsWhitelistUsernames: want.ApprovalsWhitelistUsernames,
+			RequiredApprovals:           want.RequiredApprovals,
+			DismissStaleApprovals:       want.DismissStaleApprovals,
+			BlockOnRejectedReviews:      want.BlockOnRejectedReviews,
+		}); err != nil {
+			return err
+		}
+		if err := api.SetApplyToAdmins(org, repo, branch, want.ApplyToAdmins); err != nil {
 			return err
 		}
 		rep.add("protected %s/%s:%s", org, repo, branch)
@@ -508,17 +544,52 @@ func (r *Reconciler) ensureProtection(ctx context.Context, rep *Report, repo, br
 	if err != nil {
 		return err
 	}
-	if diff := ProtectionDiff(have, want); len(diff) > 0 {
-		if err := r.api.EditBranchProtection(ctx, org, repo, branch, want); err != nil {
+	ata, err := api.ApplyToAdmins(org, repo, branch)
+	if err != nil {
+		return err
+	}
+	have := Protection{
+		EnablePush:                  bp.EnablePush,
+		EnablePushWhitelist:         bp.EnablePushWhitelist,
+		PushWhitelistUsernames:      bp.PushWhitelistUsernames,
+		EnableMergeWhitelist:        bp.EnableMergeWhitelist,
+		MergeWhitelistUsernames:     bp.MergeWhitelistUsernames,
+		EnableApprovalsWhitelist:    bp.EnableApprovalsWhitelist,
+		ApprovalsWhitelistUsernames: bp.ApprovalsWhitelistUsernames,
+		RequiredApprovals:           bp.RequiredApprovals,
+		DismissStaleApprovals:       bp.DismissStaleApprovals,
+		BlockOnRejectedReviews:      bp.BlockOnRejectedReviews,
+		ApplyToAdmins:               ata,
+	}
+	diff := ProtectionDiff(have, want)
+	if len(diff) == 0 {
+		return nil
+	}
+	if _, _, err := api.EditBranchProtection(org, repo, branch, sdk.EditBranchProtectionOption{
+		EnablePush:                  &want.EnablePush,
+		EnablePushWhitelist:         &want.EnablePushWhitelist,
+		PushWhitelistUsernames:      want.PushWhitelistUsernames,
+		EnableMergeWhitelist:        &want.EnableMergeWhitelist,
+		MergeWhitelistUsernames:     want.MergeWhitelistUsernames,
+		EnableApprovalsWhitelist:    &want.EnableApprovalsWhitelist,
+		ApprovalsWhitelistUsernames: want.ApprovalsWhitelistUsernames,
+		RequiredApprovals:           &want.RequiredApprovals,
+		DismissStaleApprovals:       &want.DismissStaleApprovals,
+		BlockOnRejectedReviews:      &want.BlockOnRejectedReviews,
+	}); err != nil {
+		return err
+	}
+	if have.ApplyToAdmins != want.ApplyToAdmins {
+		if err := api.SetApplyToAdmins(org, repo, branch, want.ApplyToAdmins); err != nil {
 			return err
 		}
-		rep.add("updated protection %s/%s:%s (%s)", org, repo, branch, strings.Join(diff, ", "))
 	}
+	rep.add("updated protection %s/%s:%s (%s)", org, repo, branch, strings.Join(diff, ", "))
 	return nil
 }
 
-// ProtectionDiff names the managed fields where have differs from want.
-func ProtectionDiff(have, want forgejo.BranchProtection) []string {
+// ProtectionDiff names the fields where have differs from want.
+func ProtectionDiff(have, want Protection) []string {
 	var d []string
 	chk := func(name string, eq bool) {
 		if !eq {
@@ -528,11 +599,10 @@ func ProtectionDiff(have, want forgejo.BranchProtection) []string {
 	chk("enable_push", have.EnablePush == want.EnablePush)
 	chk("enable_push_whitelist", have.EnablePushWhitelist == want.EnablePushWhitelist)
 	chk("push_whitelist_usernames", sameSet(have.PushWhitelistUsernames, want.PushWhitelistUsernames))
-	chk("enable_force_push", have.EnableForcePush == want.EnableForcePush)
 	chk("enable_merge_whitelist", have.EnableMergeWhitelist == want.EnableMergeWhitelist)
 	chk("merge_whitelist_usernames", sameSet(have.MergeWhitelistUsernames, want.MergeWhitelistUsernames))
 	chk("enable_approvals_whitelist", have.EnableApprovalsWhitelist == want.EnableApprovalsWhitelist)
-	chk("approvals_whitelist_username", sameSet(have.ApprovalsWhitelistUsers, want.ApprovalsWhitelistUsers))
+	chk("approvals_whitelist_username", sameSet(have.ApprovalsWhitelistUsernames, want.ApprovalsWhitelistUsernames))
 	chk("required_approvals", have.RequiredApprovals == want.RequiredApprovals)
 	chk("dismiss_stale_approvals", have.DismissStaleApprovals == want.DismissStaleApprovals)
 	chk("block_on_rejected_reviews", have.BlockOnRejectedReviews == want.BlockOnRejectedReviews)

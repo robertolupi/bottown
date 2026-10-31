@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -26,6 +27,7 @@ type containerEnv struct {
 	Data       string
 	Listen     string
 	ForgejoURL string
+	PublicURL  string // Forgejo as the owner's browser sees it
 	Owner      provision.Owner
 }
 
@@ -35,6 +37,7 @@ func readContainerEnv() (containerEnv, error) {
 		Data:       getenv("BOTTOWN_DATA", "/data/bottown"),
 		Listen:     getenv("BOTTOWN_LISTEN", ":8080"),
 		ForgejoURL: getenv("BOTTOWN_FORGEJO_URL", "http://127.0.0.1:3000"),
+		PublicURL:  strings.TrimRight(os.Getenv("FORGEJO__server__ROOT_URL"), "/"),
 		Owner: provision.Owner{
 			Login:    os.Getenv("BOTTOWN_OWNER_LOGIN"),
 			Email:    os.Getenv("BOTTOWN_OWNER_EMAIL"),
@@ -65,7 +68,7 @@ func newReconciler(e containerEnv, log *slog.Logger) (*provision.Reconciler, *se
 	}
 	return &provision.Reconciler{
 		BaseURL: e.ForgejoURL,
-		Admin:   forgejo.AdminCLI{},
+		Admin:   forgejo.AdminClient{},
 		Store:   store,
 		Desired: desired,
 		Owner:   e.Owner,
@@ -102,6 +105,9 @@ func serve(ctx context.Context) error {
 	srv := &server.Server{
 		Instance: e.Instance, Version: Version, ForgejoURL: fu, Owner: e.Owner.Login,
 		Store: store, Rec: rec, Desired: rec.Desired, Policy: policy.Default(e.Owner.Login), Log: log,
+		PublicForgejoURL: e.PublicURL,
+		ForgejoCookie:    config.ForgejoCookie(e.Instance),
+		UICookie:         config.UICookie(e.Instance),
 	}
 	hs := &http.Server{Addr: e.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
@@ -132,7 +138,7 @@ func reconcileLoop(ctx context.Context, rec *provision.Reconciler, srv *server.S
 		rep, err := rec.Run(ctx)
 		if err == nil {
 			// The version endpoint needs a signed-in caller.
-			v, _ := rec.API().Version(ctx)
+			v, _, _ := rec.API(ctx).ServerVersion()
 			log.Info("reconciled", "forgejo_version", v, "changes", len(rep.Changes))
 			for _, c := range rep.Changes {
 				log.Info("change", "what", c)
