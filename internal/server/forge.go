@@ -52,15 +52,22 @@ type Target struct {
 // resolveRepo resolves and confines a repository name for an actor/run.
 func (s *Server) resolveRepo(p secrets.Principal, repo string) (string, string, error) {
 	org := s.desired().Org
+	if o, r, ok := strings.Cut(repo, "/"); ok {
+		if strings.EqualFold(o, org) {
+			repo = r
+		}
+	}
 	if p.Run != nil {
 		if repo != "" && !strings.EqualFold(repo, p.Run.Repo) {
 			return "", "", ferr(http.StatusForbidden, "this run is confined to %s/%s", p.Run.Org, p.Run.Repo)
 		}
 		repo = p.Run.Repo
 	}
-	repo = strings.TrimPrefix(repo, org+"/")
 	if repo == "" {
 		return "", "", ferr(http.StatusBadRequest, "repo is required without a run")
+	}
+	if strings.Contains(repo, "/") {
+		return "", "", ferr(http.StatusNotFound, "repository %s not found", repo)
 	}
 	return org, repo, nil
 }
@@ -70,12 +77,12 @@ func (s *Server) resolve(p secrets.Principal, t Target, def int64) (string, stri
 	if p.Run != nil && t.Number == 0 {
 		t.Number = def
 	}
-	if t.Number <= 0 {
-		return "", "", 0, ferr(http.StatusBadRequest, "repo and number are required without a run")
-	}
 	org, repo, err := s.resolveRepo(p, t.Repo)
 	if err != nil {
 		return "", "", 0, err
+	}
+	if t.Number <= 0 {
+		return "", "", 0, ferr(http.StatusBadRequest, "number is required without a run")
 	}
 	return org, repo, t.Number, nil
 }
