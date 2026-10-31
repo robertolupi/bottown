@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 	_, file, _, _ := runtime.Caller(0)
 	src = filepath.Dir(filepath.Dir(file))
 	bin = filepath.Join(dir, "bottown")
-	if out, err := exec.Command("go", "build", "-o", bin, filepath.Join(src, "cmd", "bottown")).CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-buildvcs=false", "-o", bin, filepath.Join(src, "cmd", "bottown")).CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	home = filepath.Join(dir, "home")
