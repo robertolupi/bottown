@@ -5,6 +5,14 @@ Forgejo in a container is the control plane; coding agents ("actors") work
 issues through runs that bottown scopes and records. bottown is developed with
 itself: this repository is hosted on the prod instance as `bottown/bottown`.
 
+> [!IMPORTANT]
+> **Do not use `botfam` tools, CLI commands, or MCP servers.** `botfam` is the
+> predecessor project (v1) and is entirely obsolete. bottown replaces it.
+> Do NOT call `botfam` MCP tools (such as `orient`, `worktree_init`,
+> `worktree_sync`, or `forge_*`) or run `botfam` CLI commands. All coordination
+> and forge operations happen exclusively through the `bottown` CLI
+> (`~/.local/bin/bottown`) and the local Forgejo control plane.
+
 Read [docs/index.md](docs/index.md) first. The current plan and its status
 are in [docs/iteration-1.md](docs/iteration-1.md), and the bootstrap design,
 including Forgejo quirks we found, is in [docs/bootstrap.md](docs/bootstrap.md).
