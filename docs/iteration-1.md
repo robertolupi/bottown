@@ -275,8 +275,9 @@ hood, since a headless stream cannot be steered.
 
 Decided with rlupi on 2026-10-31, after the first live loop. The goal is to
 work in the agent harnesses' own UIs and start a run from inside one, with
-`/bottown-implement 12`. The ephemeral `.bottown/runs/` worktrees stay for
-e2e and dev.
+`/bottown-implement 12`. Ephemeral `.bottown/runs/` worktrees stay supported
+for normal use as well (e.g. running a verify while the actor's permanent
+worktree is busy), in addition to e2e and dev.
 
 ### Layout (the fam layout of `~/src/fams/botfam-new`)
 
@@ -319,9 +320,11 @@ worktree. Runs then lease it instead of creating a directory.
 - **`run_end`** (or `bottown run end`) ends the lease and revokes the key.
 - **Outside a run,** MCP allows reads and `run_start` only. Writes need a
   run, so role and repo scoping still hold.
-- **`bottown run implement -a <actor> N`** from `main` keeps working. It
-  leases that actor's permanent worktree, then launches the harness batch,
-  `-I`, or not at all (`--no-launch`, to open the UI yourself).
+- **`bottown run implement/verify -a <actor> N`** from `main` keeps working.
+  It can lease that actor's permanent worktree (then launching the harness
+  batch, `-I`, or `--no-launch` to open the UI yourself), or run in an
+  ephemeral worktree (`.bottown/runs/<id>/`) as an explicit option (default
+  or flag, the owner's call), at least for `run verify`.
 
 ### Agents use a CLI, not an MCP shim
 
@@ -424,8 +427,10 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
    - **Fallback for other harnesses:** a skill or instructions file that
      tells the agent which `bottown` commands to run. Every harness has a
      shell, so this works without harness-specific command support.
-5. `bottown run implement/verify` from `main`, leasing permanent worktrees
-   (`--no-launch`, batch, `-I`). `run ls` reads the worktrees' state.
+5. `bottown run implement/verify` from `main`: support leasing permanent
+   worktrees (`--no-launch`, batch, `-I`), while keeping ephemeral runs
+   supported as an explicit option (default or flag, the owner's call), at
+   least for `run verify`. `run ls` reads the worktrees' state.
 6. e2e: a scripted run through the CLI and an actor-started run; check that
    an owner-key push from an actor worktree is impossible.
 
