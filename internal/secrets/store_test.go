@@ -42,3 +42,43 @@ func TestRunKeyLifecycle(t *testing.T) {
 		t.Fatalf("read actor key = %+v %v", p, ok)
 	}
 }
+
+func TestPurgeRuns(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, r := range []Run{
+		{ID: "r-old", Repo: "demo", Created: now.Add(-3 * time.Hour), Expires: now.Add(time.Hour)},
+		{ID: "r-new", Repo: "demo", Created: now.Add(-time.Hour), Expires: now.Add(time.Hour)},
+		{ID: "r-other", Repo: "other", Created: now.Add(-3 * time.Hour), Expires: now.Add(time.Hour)},
+		{ID: "r-live", Repo: "demo", Created: now, Expires: now.Add(time.Hour)},
+		{ID: "r-stuck", Repo: "demo", Created: now.Add(-5 * time.Hour), Expires: now.Add(-time.Hour)},
+	} {
+		if _, err := s.NewRun(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.EndRun("r-old", "succeeded", now.Add(-2*time.Hour))
+	s.EndRun("r-new", "failed", now.Add(-time.Minute))
+	s.EndRun("r-other", "succeeded", now.Add(-2*time.Hour))
+
+	// Even a match-everything purge leaves runs that have not ended.
+	ids, err := s.PurgeRuns(func(r Run) bool { return r.Repo == "demo" && r.Ended.Before(now.Add(-time.Hour)) })
+	if err != nil || len(ids) != 1 || ids[0] != "r-old" {
+		t.Fatalf("purge old demo runs = %v, %v", ids, err)
+	}
+	ids, _ = s.PurgeRuns(func(Run) bool { return true })
+	if len(ids) != 2 || ids[0] != "r-new" || ids[1] != "r-other" {
+		t.Fatalf("purge all = %v", ids)
+	}
+	st, _ := s.Read()
+	if len(st.Runs) != 2 || st.Runs["r-live"].ID == "" || st.Runs["r-stuck"].ID == "" {
+		t.Fatalf("left: %+v", st.Runs)
+	}
+	// The live run's key survives; ended runs had theirs deleted by EndRun.
+	if len(st.Keys) != 2 {
+		t.Fatalf("keys left = %d, want 2 (r-live, r-stuck)", len(st.Keys))
+	}
+}

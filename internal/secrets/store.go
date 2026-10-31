@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 )
@@ -192,6 +193,30 @@ func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
 		return nil
 	})
 	return run, ok, err
+}
+
+// PurgeRuns deletes the ended runs for which match is true, with any keys
+// left for them, and returns their ids. Runs that have not ended (live, or
+// expired without ending) are never deleted.
+func (s *Store) PurgeRuns(match func(Run) bool) ([]string, error) {
+	var ids []string
+	err := s.Update(func(st *State) error {
+		for id, run := range st.Runs {
+			if run.Ended == nil || !match(run) {
+				continue
+			}
+			delete(st.Runs, id)
+			ids = append(ids, id)
+		}
+		for h, k := range st.Keys {
+			if k.RunID != "" && slices.Contains(ids, k.RunID) {
+				delete(st.Keys, h)
+			}
+		}
+		return nil
+	})
+	slices.Sort(ids)
+	return ids, err
 }
 
 // Principal is who an API key authenticates: an actor, and for run keys

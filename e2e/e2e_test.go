@@ -1149,17 +1149,40 @@ func TestE2E(t *testing.T) {
 				t.Errorf("run ls lacks %q:\n%s", want, out)
 			}
 		}
-		if out := a.mustCmd(demo, "run", "gc"); !strings.Contains(out, "removed 2 runs") {
+		// endedInDemo counts the server's ended runs of demo in `run ls --all`
+		// (RUN REPO KIND TARGET ACTOR FAMILY KEY ...), and whether kimi's is one.
+		endedInDemo := func() (n int, kimi bool) {
+			for _, l := range strings.Split(a.mustCmd(demo, "run", "ls", "--all"), "\n") {
+				if f := strings.Fields(l); len(f) > 6 && f[1] == "demo" && f[6] == "ended" {
+					n++
+					kimi = kimi || f[4] == "kimi"
+				}
+			}
+			return n, kimi
+		}
+		// Everything here ended moments ago: --older-than purges nothing.
+		if out := a.mustCmd(demo, "run", "gc", "--older-than", "1h"); !strings.Contains(out, "removed 2 runs, purged 0 ended runs") {
+			t.Errorf("gc --older-than: %s", out)
+		}
+		if n, _ := endedInDemo(); n < 2 {
+			t.Errorf("ended demo runs before purge: %d", n)
+		}
+		// gc purges the ended server records, actor-worktree runs included,
+		// but keeps kimi's: its failed run's files are kept for inspection.
+		if out := a.mustCmd(demo, "run", "gc"); !strings.Contains(out, "removed 0 runs, purged ") || strings.Contains(out, "purged 0 ") {
 			t.Errorf("gc: %s", out)
 		}
-		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs") {
+		if n, kimi := endedInDemo(); n != 1 || !kimi {
+			t.Errorf("after gc: %d ended demo runs (kimi %v), want only kimi's", n, kimi)
+		}
+		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs, purged 1 ended runs") {
 			t.Errorf("gc --failed: %s", out)
+		}
+		if n, _ := endedInDemo(); n != 0 {
+			t.Errorf("after gc --failed: %d ended demo runs, want 0", n)
 		}
 		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Contains(out, "kimi") {
 			t.Errorf("run ls after gc:\n%s", out)
-		}
-		if out := a.mustCmd(demo, "run", "ls", "--all"); !strings.Contains(out, "kimi") {
-			t.Errorf("run ls --all lacks kimi:\n%s", out)
 		}
 	})
 

@@ -150,8 +150,15 @@ bottown run implement -a <actor> [-I] <issue>
 bottown run verify -a <actor> [-I] [--allow-same-family] <pr>
 bottown run ls [--all]        # local run dirs merged with server records; flags orphans
 bottown run show <run-id>
-bottown run gc [--failed]     # remove finished runs (failed ones only with --failed)
+bottown run gc [--failed] [--older-than D]  # remove finished runs (failed ones only with --failed)
 ```
+
+`run gc` removes finished runs' local worktrees, then purges the server's
+records of the repository's ended runs, including those started in actor
+worktrees (`POST /v1/runs/purge`, owner only). A run whose local files are
+kept keeps its server record. Runs that have not ended, live or expired,
+are never purged, so a stuck run stays visible. `--older-than` keeps
+recently ended runs.
 
 `bottown run implement` and `run verify` follow this sequence:
 

@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.listRuns))))
 	mux.Handle("GET /v1/runs/{id}", s.authed(http.HandlerFunc(s.getRun)))
 	mux.Handle("DELETE /v1/runs/{id}", s.authed(http.HandlerFunc(s.endRun)))
+	mux.Handle("POST /v1/runs/purge", s.authed(s.ownerOnly(http.HandlerFunc(s.purgeRuns))))
 	s.forgeRoutes(mux)
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
 	mcpH := s.ready(s.specRead(s.mcpHandler()))

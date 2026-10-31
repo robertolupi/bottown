@@ -680,10 +680,17 @@ func truncate(s string, n int) string {
 
 func newRunGC(g *globals) *cobra.Command {
 	var failed bool
+	var olderThan time.Duration
 	cmd := &cobra.Command{
 		Use:   "gc",
 		Short: "Remove finished runs (succeeded and dead; with --failed also failed ones)",
-		Args:  cobra.NoArgs,
+		Long: `Remove finished runs: their local worktrees and files (succeeded and dead;
+with --failed also failed ones), then the server's records of this
+repository's ended runs, including those started in actor worktrees. A run
+whose local files are kept keeps its server record too. Runs that have not
+ended, live or expired, are never purged; --older-than keeps recently ended
+ones.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rc, err := openRunContext(g)
 			if err != nil {
@@ -694,12 +701,15 @@ func newRunGC(g *globals) *cobra.Command {
 				return err
 			}
 			removed := 0
+			var keep []string // local runs gc leaves, whose server record stays
 			for _, r := range recs {
 				switch r.Status {
 				case runs.StatusRunning:
+					keep = append(keep, r.ID)
 					continue
 				case runs.StatusFailed:
 					if !failed {
+						keep = append(keep, r.ID)
 						continue
 					}
 				case runs.StatusDead:
@@ -708,17 +718,27 @@ func newRunGC(g *globals) *cobra.Command {
 				}
 				if err := rc.ws.Remove(r.ID); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %v\n", r.ID, err)
+					keep = append(keep, r.ID)
 					continue
 				}
 				rc.ws.RemoveFiles(r.ID)
 				removed++
 			}
 			_, _ = runs.Git(rc.ws.Mirror, nil, "worktree", "prune")
-			fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs; .bottown is %s\n", removed, humanBytes(runs.DirSize(rc.ws.Dir)))
+			var purged struct {
+				Purged []string `json:"purged"`
+			}
+			req := server.PurgeRequest{Repo: rc.repo, EndedBefore: time.Now().Add(-olderThan), Keep: keep}
+			if err := callServer(cmd.Context(), rc.inst, rc.key, "POST", "/v1/runs/purge", req, &purged); err != nil {
+				return fmt.Errorf("removed %d runs; purging server records: %w", removed, err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
+				removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&failed, "failed", false, "also remove failed runs (kept by default for inspection)")
+	cmd.Flags().DurationVar(&olderThan, "older-than", 0, "purge only server records of runs that ended at least this long ago (e.g. 168h)")
 	return cmd
 }
 

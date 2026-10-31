@@ -200,6 +200,41 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
+// PurgeRequest asks to delete a repository's ended runs (POST
+// /v1/runs/purge, owner only), except those in Keep.
+type PurgeRequest struct {
+	Repo        string    `json:"repo"`
+	EndedBefore time.Time `json:"ended_before"`
+	Keep        []string  `json:"keep,omitempty"`
+}
+
+// purgeRuns deletes ended runs of one repository that ended before
+// EndedBefore. Runs that have not ended are never purged: the owner should
+// see a stuck run before it disappears.
+func (s *Server) purgeRuns(w http.ResponseWriter, r *http.Request) {
+	var req PurgeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Repo == "" || req.EndedBefore.IsZero() {
+		writeError(w, http.StatusBadRequest, "repo and ended_before are required")
+		return
+	}
+	ids, err := s.Store.PurgeRuns(func(run secrets.Run) bool {
+		return run.Repo == req.Repo && run.Ended.Before(req.EndedBefore) && !slices.Contains(req.Keep, run.ID)
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	s.Log.Info("runs purged", "repo", req.Repo, "count", len(ids))
+	writeJSON(w, http.StatusOK, map[string]any{"purged": ids})
+}
+
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Store.Read()
 	if err != nil {
