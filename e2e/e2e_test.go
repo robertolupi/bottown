@@ -32,6 +32,14 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Run inside a bottown run, the environment carries the run's key and
+	// prod's URLs (BOTTOWN_RUN_*, BOTTOWN_MCP_URL, ...). Every subprocess
+	// inherits os.Environ(), so clear them all: tests set what they need.
+	for _, e := range os.Environ() {
+		if k, _, _ := strings.Cut(e, "="); strings.HasPrefix(k, "BOTTOWN_") {
+			os.Unsetenv(k)
+		}
+	}
 	dir, err := os.MkdirTemp("", "bottown-e2e-")
 	if err != nil {
 		panic(err)
