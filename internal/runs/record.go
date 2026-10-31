@@ -128,7 +128,7 @@ func (w *Workspace) Records() ([]Record, error) {
 
 // RemoveFiles deletes a run's files (not its worktree).
 func (w *Workspace) RemoveFiles(id string) {
-	for _, s := range []string{".json", ".log", ".mcp.json", ".prompt.md"} {
+	for _, s := range []string{".json", ".log", ".agy.log", ".mcp.json", ".prompt.md"} {
 		_ = os.Remove(w.Path(id, s))
 	}
 }

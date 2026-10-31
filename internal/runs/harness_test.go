@@ -52,3 +52,16 @@ func TestAgyCommandKeepsPromptLast(t *testing.T) {
 		t.Fatalf("interactive args %v", c.Args)
 	}
 }
+
+func TestAgySummary(t *testing.T) {
+	log := `{"event":"init","conversation_id":"c"}
+{"event":"step_update","step_update":{"text_delta":"partial"}}
+{"event":"result","result":{"status":"SUCCESS","response":"Approved PR !4."}}
+`
+	if got := (agyHarness{}).Summary([]byte(log)); got != "Approved PR !4." {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := (agyHarness{}).Summary([]byte("plain text answer\n")); got != "plain text answer" {
+		t.Fatalf("text summary = %q", got)
+	}
+}

@@ -211,11 +211,26 @@ func (agyHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// Summary takes a stream-json "result" event if there is one, else the
-// last non-JSON output line.
+// Summary takes the response of agy's final stream-json event
+// ({"event":"result","result":{"response":...}}), else the last non-JSON
+// output line.
 func (agyHarness) Summary(log []byte) string {
-	if s := (claudeHarness{}).Summary(log); s != "" {
-		return s
+	var last string
+	sc := bufio.NewScanner(bytes.NewReader(log))
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		var ev struct {
+			Event  string `json:"event"`
+			Result struct {
+				Response string `json:"response"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(sc.Bytes(), &ev) == nil && ev.Event == "result" && ev.Result.Response != "" {
+			last = ev.Result.Response
+		}
+	}
+	if last != "" {
+		return last
 	}
 	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

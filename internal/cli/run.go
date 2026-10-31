@@ -331,6 +331,10 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 	if rec.Interactive {
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")
 	}
+	// Agents link files by absolute local path; on the forge, repo-relative
+	// paths are what make sense.
+	summary = strings.ReplaceAll(summary, "file://"+rec.Worktree+"/", "")
+	summary = strings.ReplaceAll(summary, rec.Worktree+"/", "")
 	if s := strings.TrimSpace(summary); s != "" {
 		const max = 4000
 		if len(s) > max {
