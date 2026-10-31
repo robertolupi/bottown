@@ -359,9 +359,24 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
      With no run, git finds no credentials, so even a fetch from bottown
      fails until step 2 adds read-only actor keys.
    - **Pushes:** every remote except bottown gets a blocked `pushurl`.
-2. Server: forge operations as shared functions behind REST `/v1/forge/...`
+2. ~~Server: forge operations as shared functions behind REST `/v1/forge/...`
    (MCP tools reuse them); run leases bound to permanent worktrees; actor
-   self-start (`run start`), and reads-only outside runs.
+   self-start (`run start`), and reads-only outside runs.~~ Done
+   (2026-10-31):
+   - **Key scopes:** actor keys are read-only by default (reads, git fetch,
+     starting runs). `credential key --full` mints the old full key, as an
+     owner escape hatch.
+   - **Worktree keys:** `actor setup` stores a read-only key at
+     `<gitdir>/bottown/actor.json`. The worktree's credential helper uses
+     the run key while a run is active, and this read key otherwise.
+   - **Self-start:** `POST /v1/runs` accepts an actor's own key, for itself
+     only. It refuses `allow_same_family` and a key that already belongs to
+     a run. Runs record `started_by`. An actor can read and end its own
+     runs. `disable_actor_self_start` turns self-start off.
+   - **One implementation:** forge operations live in `server/forge.go`,
+     behind `/v1/forge/{issue,pr,comment,review}` and the MCP tools.
+   - **Not done:** there are no `run_start`/`run_end` MCP tools; the CLI
+     is the primary path.
 3. The agent CLI (`run start/end`, `whoami`, `issue`, `pr`, `comment`,
    `review submit`, `api`), resolving the actor and run from the working
    directory.

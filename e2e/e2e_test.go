@@ -298,8 +298,12 @@ func TestE2E(t *testing.T) {
 		if out, err := push("origin"); err == nil || !strings.Contains(out, "bottown-blocked") {
 			t.Errorf("push to origin from actor worktree: %v\n%s", err, out)
 		}
-		if out, err := push("bottown-" + a.name); err == nil {
-			t.Errorf("push to bottown from actor worktree without a run succeeded:\n%s", out)
+		// Outside a run the worktree's read-only key can fetch, not push.
+		if out, err := exec.Command("git", "-C", wt, "fetch", "-q", "bottown-"+a.name).CombinedOutput(); err != nil {
+			t.Errorf("fetch from actor worktree: %v\n%s", err, out)
+		}
+		if out, err := push("bottown-" + a.name); err == nil || !strings.Contains(out, "403") {
+			t.Errorf("push to bottown from actor worktree without a run: %v\n%s", err, out)
 		}
 		// Re-running repairs, refuses non-actors, and ls lists both.
 		if out := a.mustCmd(demo, "actor", "setup", "claude"); !strings.Contains(out, "repairing claude's worktree") {
@@ -378,9 +382,9 @@ func TestE2E(t *testing.T) {
 
 	// claude implements and codex verifies; roles are per run (step 2), so
 	// here they are only how the test uses each actor.
-	impl := a.mustCmd("", "credential", "key", "claude")
+	impl := a.mustCmd("", "credential", "key", "claude", "--full")
 	impl = strings.TrimSpace(impl)
-	ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex"))
+	ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex", "--full"))
 
 	t.Run("policy and protection bound the bots", func(t *testing.T) {
 		head := git(t, demo, "rev-parse", "HEAD")
@@ -536,8 +540,8 @@ func TestE2E(t *testing.T) {
 		if code, _ := a.api(ik, "GET", "/repos/bottown/elsewhere", nil); code != 403 {
 			t.Errorf("implement run read other repo: %d, want 403", code)
 		}
-		if code, _ := runs(ik, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "claude", "repo": "demo", "issue": issue.Number}); code != 403 {
-			t.Errorf("run key creating runs: %d, want 403", code)
+		if code, _ := runs(ik, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "claude", "repo": "demo", "issue": issue.Number}); code != 409 {
+			t.Errorf("run key creating runs: %d, want 409 (end the current run first)", code)
 		}
 
 		// The implementer pushes its branch and opens a PR, but cannot review.
@@ -604,6 +608,82 @@ func TestE2E(t *testing.T) {
 		time.Sleep(1500 * time.Millisecond)
 		if code, _ := a.api(short["key"].(string), "GET", "/user", nil); code != 401 {
 			t.Errorf("expired run key: %d, want 401", code)
+		}
+	})
+
+	t.Run("read-only actor keys and actor self-start", func(t *testing.T) {
+		call := func(key, method, path string, body any) (int, map[string]any) {
+			t.Helper()
+			var r io.Reader
+			if body != nil {
+				b, _ := json.Marshal(body)
+				r = bytes.NewReader(b)
+			}
+			req, _ := http.NewRequest(method, a.cfg.ServerURL()+path, r)
+			req.Header.Set("Authorization", "Bearer "+key)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var m map[string]any
+			json.NewDecoder(resp.Body).Decode(&m)
+			return resp.StatusCode, m
+		}
+		// The read key actor setup stored in claude's worktree git dir.
+		gitDir := git(t, filepath.Join(fam, "claude"), "rev-parse", "--absolute-git-dir")
+		var stored struct{ Key string }
+		b, err := os.ReadFile(filepath.Join(gitDir, "bottown", "actor.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.Unmarshal(b, &stored)
+		rk := stored.Key
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "self-start"}, &issue)
+		if code, _ := a.api(rk, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", issue.Number), nil); code != 200 {
+			t.Errorf("read key GET issue: %d", code)
+		}
+		if code, _ := a.api(rk, "POST", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), map[string]string{"body": "x"}); code != 403 {
+			t.Errorf("read key POST comment via proxy: %d, want 403", code)
+		}
+		if code, _ := call(rk, "POST", "/v1/forge/comment", map[string]any{"repo": "demo", "number": issue.Number, "body": "x"}); code != 403 {
+			t.Errorf("read key POST /v1/forge/comment: %d, want 403", code)
+		}
+
+		// Self-start: only for itself, never with a same-family override.
+		if code, _ := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number}); code != 403 {
+			t.Errorf("starting a run for another actor: %d", code)
+		}
+		code, run := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "repo": "demo", "issue": issue.Number})
+		if code != 201 || run["actor"] != "claude" || run["started_by"] != "claude" {
+			t.Fatalf("self-start: %d %v", code, run)
+		}
+		runKey, runID := run["key"].(string), run["id"].(string)
+		if code, _ := call(runKey, "POST", "/v1/runs", map[string]any{"kind": "implement", "repo": "demo", "issue": issue.Number}); code != 409 {
+			t.Errorf("run key starting another run: %d, want 409", code)
+		}
+		code, got := call(runKey, "GET", "/v1/forge/issue", nil)
+		if code != 200 || got["title"] != "self-start" {
+			t.Errorf("GET /v1/forge/issue with run key: %d %v", code, got)
+		}
+		if code, got := call(runKey, "POST", "/v1/forge/comment", map[string]any{"body": "working on it"}); code != 200 || got["author"] != "claude" {
+			t.Errorf("POST /v1/forge/comment with run key: %d %v", code, got)
+		}
+		if code, _ := call(runKey, "POST", "/v1/forge/review", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "x"}); code != 403 {
+			t.Errorf("review from an implement run: %d, want 403", code)
+		}
+		// Ending: another actor cannot; the actor itself can.
+		other := strings.TrimSpace(a.mustCmd("", "credential", "key", "agy"))
+		if code, _ := call(other, "DELETE", "/v1/runs/"+runID, map[string]string{"status": "revoked"}); code != 404 {
+			t.Errorf("another actor ending the run: %d, want 404", code)
+		}
+		if code, m := call(rk, "DELETE", "/v1/runs/"+runID, map[string]string{"status": "succeeded"}); code != 200 || m["status"] != "succeeded" {
+			t.Errorf("actor ending its own run: %d %v", code, m)
+		}
+		if code, _ := call(runKey, "GET", "/v1/forge/issue", nil); code != 401 {
+			t.Errorf("ended run key: %d, want 401", code)
 		}
 	})
 

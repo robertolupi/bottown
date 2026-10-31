@@ -89,10 +89,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/whoami", s.authed(http.HandlerFunc(s.whoami)))
 	mux.Handle("GET /v1/actors", s.authed(http.HandlerFunc(s.listActors)))
 	mux.Handle("POST /v1/reconcile", s.authedNoSpec(s.ownerOnly(http.HandlerFunc(s.postReconcile))))
-	mux.Handle("POST /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.postRun))))
+	// Runs: the owner manages all; an actor may start runs for itself and
+	// end or read its own (runs.go).
+	mux.Handle("POST /v1/runs", s.authed(http.HandlerFunc(s.postRun)))
 	mux.Handle("GET /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.listRuns))))
-	mux.Handle("GET /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.getRun))))
-	mux.Handle("DELETE /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.endRun))))
+	mux.Handle("GET /v1/runs/{id}", s.authed(http.HandlerFunc(s.getRun)))
+	mux.Handle("DELETE /v1/runs/{id}", s.authed(http.HandlerFunc(s.endRun)))
+	s.forgeRoutes(mux)
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
 	mcpH := s.ready(s.specRead(s.mcpHandler()))
 	mux.Handle("/mcp", mcpH)
@@ -315,6 +318,9 @@ func (s *Server) apiProxy(w http.ResponseWriter, r *http.Request) {
 	if run := Who(r.Context()).Run; d.Allow && run != nil {
 		d = runScope(run).DecideAPI(r.Method, apiPath)
 	}
+	if p := Who(r.Context()); d.Allow && p.ReadOnly && p.Run == nil && r.Method != "GET" && r.Method != "HEAD" {
+		d = policy.Decision{Allow: false, Rule: "read-only-key"}
+	}
 	if !d.Allow {
 		s.audit(actor, r.Method, apiPath, "deny", d.Rule, http.StatusForbidden)
 		writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
@@ -337,6 +343,12 @@ func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
 	gitPath, ok := policy.Clean(strings.TrimPrefix(r.URL.Path, "/git"))
 	if !ok || r.URL.RawPath != "" {
 		writeError(w, http.StatusBadRequest, "path must be clean and unencoded")
+		return
+	}
+	if p := Who(r.Context()); p.ReadOnly && p.Run == nil &&
+		(r.URL.Query().Get("service") == "git-receive-pack" || strings.HasSuffix(gitPath, "/git-receive-pack")) {
+		s.audit(actor, r.Method, gitPath, "deny", "read-only-key", http.StatusForbidden)
+		writeError(w, http.StatusForbidden, "read-only outside a run: start one with `bottown run start`")
 		return
 	}
 	if run := Who(r.Context()).Run; run != nil {

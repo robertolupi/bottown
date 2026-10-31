@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -194,7 +196,10 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 	if err := set("credential.helper", ""); err != nil {
 		return err
 	}
-	helper := fmt.Sprintf("!%q credential --run-file %q", self, filepath.Join(keyDir, "run.json"))
+	if err := ensureActorKey(cmd, g, inst, name, path, keyDir); err != nil {
+		return err
+	}
+	helper := fmt.Sprintf("!%q credential --key-dir %q", self, keyDir)
 	if _, err := git(path, "config", "--worktree", "--add", "credential.helper", helper); err != nil {
 		return err
 	}
@@ -220,6 +225,27 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 	}
 	fmt.Fprintln(out)
 	return nil
+}
+
+// ensureActorKey keeps a read-only actor key in the worktree's git dir
+// (<gitdir>/bottown/actor.json, 0600), so the worktree can read and start
+// runs outside a run. A key that no longer works is replaced.
+func ensureActorKey(cmd *cobra.Command, g *globals, inst config.Instance, actor, path, keyDir string) error {
+	file := filepath.Join(keyDir, "actor.json")
+	if rec, err := runs.LoadFile(file); err == nil && rec.Key != "" {
+		if who, err := whoami(cmd.Context(), inst, rec.Key); err == nil && who == actor {
+			return nil
+		}
+	}
+	key, err := g.docker().Exec(cmd.Context(), inst.Container(), "git", "bottown", "admin", "actor-key", actor, "--label", "worktree "+path)
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(runs.Record{Actor: actor, Instance: inst.Name, Key: strings.TrimSpace(key), ServerURL: inst.ServerURL()}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(file, b, 0o600)
 }
 
 // urlScopedHelpers lists credential.<url>.helper keys visible in dir (from

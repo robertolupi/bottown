@@ -27,6 +27,9 @@ type Desired struct {
 	Labels      []Label    `toml:"labels"`
 	Protection  Protection `toml:"protection"`
 	OwnerScope  []string   `toml:"owner_token_scopes"`
+	// DisableActorSelfStart stops actors from starting runs for themselves
+	// (from inside a harness); only the owner can then start runs.
+	DisableActorSelfStart bool `toml:"disable_actor_self_start"`
 }
 
 // Team is an organization team covering all repositories.

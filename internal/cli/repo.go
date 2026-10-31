@@ -195,7 +195,7 @@ func ownerKey(g *globals) (string, error) {
 }
 
 func newCredential(g *globals) *cobra.Command {
-	var runFile string
+	var runFile, keyDir string
 	cred := &cobra.Command{
 		Use:   "credential (get|store|erase)",
 		Short: "git credential helper for the instance's git remote",
@@ -212,6 +212,14 @@ that run's key, as the run's actor.`,
 			for sc.Scan() {
 				if k, v, ok := strings.Cut(sc.Text(), "="); ok {
 					attrs[k] = v
+				}
+			}
+			if keyDir != "" {
+				// An actor worktree: the active run's key, else the
+				// worktree's read-only actor key.
+				runFile = filepath.Join(keyDir, "run.json")
+				if rec, err := runs.LoadFile(runFile); err != nil || rec.Key == "" {
+					runFile = filepath.Join(keyDir, "actor.json")
 				}
 			}
 			if runFile != "" {
@@ -264,16 +272,21 @@ that run's key, as the run's actor.`,
 		},
 	})
 	var label string
+	var full bool
 	key := &cobra.Command{
 		Use:   "key ACTOR",
-		Short: "Mint a bottown API key for an actor (e.g. for `claude mcp add`)",
+		Short: "Mint an actor key: read-only (reads, starting runs) unless --full",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			inst, err := g.loadInstance()
 			if err != nil {
 				return err
 			}
-			k, err := g.docker().Exec(cmd.Context(), inst.Container(), "git", "bottown", "admin", "actor-key", args[0], "--label", label)
+			execArgs := []string{"bottown", "admin", "actor-key", args[0], "--label", label}
+			if full {
+				execArgs = append(execArgs, "--full")
+			}
+			k, err := g.docker().Exec(cmd.Context(), inst.Container(), "git", execArgs...)
 			if err != nil {
 				return err
 			}
@@ -282,7 +295,9 @@ that run's key, as the run's actor.`,
 		},
 	}
 	key.Flags().StringVar(&label, "label", "", "note stored with the key")
+	key.Flags().BoolVar(&full, "full", false, "full actor access, unscoped by any run (owner escape hatch)")
 	cred.AddCommand(key)
 	cred.Flags().StringVar(&runFile, "run-file", "", "answer with the key of the run recorded in this file")
+	cred.Flags().StringVar(&keyDir, "key-dir", "", "an actor worktree's key directory: its run key, else its read-only actor key")
 	return cred
 }

@@ -14,6 +14,11 @@ actor_team = "actors"
 # Forgejo gates PR reviews on write:repository, so every actor needs it.
 actor_token_scopes = ["write:repository", "write:issue", "read:user", "read:organization", "read:notification"]
 
+# Actors may start runs for themselves (e.g. `/bottown-implement 12` inside a
+# harness), with the same checks as owner-started runs; they can never grant
+# themselves a same-family review. Set to true to allow owner-started runs only.
+disable_actor_self_start = false
+
 # Accounts that existed in earlier designs. They are disabled (prohibit_login,
 # which also rejects their tokens) but kept, so their history stays attributed.
 retired = ["implementer", "verifier"]

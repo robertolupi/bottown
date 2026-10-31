@@ -35,9 +35,12 @@ type ActorToken struct {
 // A run key also names its run, which bounds what the key may do and for
 // how long.
 type APIKey struct {
-	Actor   string    `json:"actor"`
-	Label   string    `json:"label,omitempty"`
-	RunID   string    `json:"run_id,omitempty"`
+	Actor string `json:"actor"`
+	Label string `json:"label,omitempty"`
+	RunID string `json:"run_id,omitempty"`
+	// Scope is ScopeRead for keys that may only read and start runs;
+	// empty means full access for the actor.
+	Scope   string    `json:"scope,omitempty"`
 	Created time.Time `json:"created"`
 }
 
@@ -60,11 +63,13 @@ type Run struct {
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
 	// Interactive runs are steered by the owner in the harness's TUI, so
 	// their result is partly the owner's work.
-	Interactive bool       `json:"interactive,omitempty"`
-	Created     time.Time  `json:"created"`
-	Expires     time.Time  `json:"expires"`
-	Ended       *time.Time `json:"ended,omitempty"`
-	Status      string     `json:"status,omitempty"` // set when ended: succeeded | failed | revoked
+	Interactive bool `json:"interactive,omitempty"`
+	// StartedBy is the owner's login, or the actor's for self-started runs.
+	StartedBy string     `json:"started_by,omitempty"`
+	Created   time.Time  `json:"created"`
+	Expires   time.Time  `json:"expires"`
+	Ended     *time.Time `json:"ended,omitempty"`
+	Status    string     `json:"status,omitempty"` // set when ended: succeeded | failed | revoked
 }
 
 // Active reports whether the run's key is usable at t.
@@ -121,15 +126,19 @@ func (s *Store) Update(fn func(*State) error) error {
 	})
 }
 
-// NewAPIKey creates and stores a new API key for actor and returns it. The
-// plain key is never stored; only its hash.
-func (s *Store) NewAPIKey(actor, label string) (string, error) {
+// ScopeRead marks a key that may read and start runs, but not write.
+const ScopeRead = "read"
+
+// NewAPIKey creates and stores a new API key for actor with scope ("" for
+// full, or ScopeRead) and returns it. The plain key is never stored; only
+// its hash.
+func (s *Store) NewAPIKey(actor, label, scope string) (string, error) {
 	key := KeyPrefix + RandomString(32)
 	err := s.Update(func(st *State) error {
 		if st.Keys == nil {
 			st.Keys = map[string]APIKey{}
 		}
-		st.Keys[HashKey(key)] = APIKey{Actor: actor, Label: label, Created: time.Now().UTC()}
+		st.Keys[HashKey(key)] = APIKey{Actor: actor, Label: label, Scope: scope, Created: time.Now().UTC()}
 		return nil
 	})
 	if err != nil {
@@ -190,6 +199,9 @@ func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
 type Principal struct {
 	Actor string
 	Run   *Run
+	// ReadOnly principals (read-scoped keys outside a run) may only read and
+	// start runs.
+	ReadOnly bool
 }
 
 // Lookup resolves key. Run keys whose run has ended or expired do not
@@ -204,7 +216,7 @@ func (s *Store) Lookup(key string, now time.Time) (Principal, bool, error) {
 		return Principal{}, false, nil
 	}
 	if k.RunID == "" {
-		return Principal{Actor: k.Actor}, true, nil
+		return Principal{Actor: k.Actor, ReadOnly: k.Scope == ScopeRead}, true, nil
 	}
 	run, ok := st.Runs[k.RunID]
 	if !ok || !run.Active(now) {

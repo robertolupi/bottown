@@ -55,6 +55,25 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	p := Who(r.Context())
+	if p.Actor != s.Owner {
+		// An actor starting a run for itself, e.g. /bottown-implement 12.
+		switch {
+		case s.desired().DisableActorSelfStart:
+			writeError(w, http.StatusForbidden, "actors may not start their own runs on this instance")
+			return
+		case p.Run != nil:
+			writeError(w, http.StatusConflict, "this key belongs to run "+p.Run.ID+"; end it before starting another")
+			return
+		case req.Actor != "" && req.Actor != p.Actor:
+			writeError(w, http.StatusForbidden, "an actor can only start runs for itself")
+			return
+		case req.AllowSameFamily:
+			writeError(w, http.StatusForbidden, "only the owner can allow a same-family review")
+			return
+		}
+		req.Actor = p.Actor
+	}
 	run, err := s.newRun(r, req)
 	if err != nil {
 		if re, ok := err.(*runError); ok {
@@ -64,6 +83,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	run.StartedBy = p.Actor
 	key, err := s.Store.NewRun(run)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -71,7 +91,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "repo", run.Org+"/"+run.Repo,
 		"issue", run.Issue, "pr", run.PR, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
-		"interactive", run.Interactive)
+		"interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
 }
 
@@ -187,7 +207,7 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := st.Runs[r.PathValue("id")]
-	if !ok {
+	if p := Who(r.Context()); !ok || (p.Actor != s.Owner && p.Actor != run.Actor) {
 		writeError(w, http.StatusNotFound, "no such run")
 		return
 	}
@@ -209,6 +229,18 @@ func (s *Server) endRun(w http.ResponseWriter, r *http.Request) {
 	if !slices.Contains([]string{"succeeded", "failed", "revoked"}, body.Status) {
 		writeError(w, http.StatusBadRequest, "status must be succeeded, failed or revoked")
 		return
+	}
+	// The owner ends any run; an actor only its own.
+	if p := Who(r.Context()); p.Actor != s.Owner {
+		st, err := s.Store.Read()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if run, ok := st.Runs[r.PathValue("id")]; !ok || run.Actor != p.Actor {
+			writeError(w, http.StatusNotFound, "no such run")
+			return
+		}
 	}
 	run, ok, err := s.Store.EndRun(r.PathValue("id"), body.Status, time.Now().UTC())
 	switch {

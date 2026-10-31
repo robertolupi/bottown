@@ -42,7 +42,7 @@ func newAdmin() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			key, err := store.NewAPIKey(e.Owner.Login, "owner")
+			key, err := store.NewAPIKey(e.Owner.Login, "owner", "")
 			if err != nil {
 				return err
 			}
@@ -53,9 +53,10 @@ func newAdmin() *cobra.Command {
 	}
 
 	var label string
+	var full bool
 	actorKey := &cobra.Command{
 		Use:   "actor-key ACTOR",
-		Short: "Mint a bottown API key for an actor",
+		Short: "Mint a bottown API key for an actor (read-only unless --full)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := readContainerEnv()
@@ -73,7 +74,11 @@ func newAdmin() *cobra.Command {
 			case !ok:
 				return fmt.Errorf("unknown actor %q (actors: %s)", args[0], strings.Join(rec.Desired.ActorNames(), ", "))
 			}
-			key, err := store.NewAPIKey(b.Name, label)
+			scope := secrets.ScopeRead
+			if full {
+				scope = ""
+			}
+			key, err := store.NewAPIKey(b.Name, label, scope)
 			if err != nil {
 				return err
 			}
@@ -82,6 +87,7 @@ func newAdmin() *cobra.Command {
 		},
 	}
 	actorKey.Flags().StringVar(&label, "label", "", "free-form note stored with the key")
+	actorKey.Flags().BoolVar(&full, "full", false, "full actor access instead of read-only (reads and starting runs)")
 	admin.AddCommand(owner, actorKey)
 	return admin
 }

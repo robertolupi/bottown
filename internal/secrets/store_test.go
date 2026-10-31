@@ -33,8 +33,12 @@ func TestRunKeyLifecycle(t *testing.T) {
 		t.Fatalf("after end: %+v keys=%d", st.Runs["r-1"], len(st.Keys))
 	}
 	// A plain actor key has no run.
-	k2, _ := s.NewAPIKey("codex", "manual")
-	if p, ok, _ := s.Lookup(k2, now); !ok || p.Run != nil {
-		t.Fatalf("actor key = %+v %v", p, ok)
+	k2, _ := s.NewAPIKey("codex", "manual", "")
+	if p, ok, _ := s.Lookup(k2, now); !ok || p.Run != nil || p.ReadOnly {
+		t.Fatalf("full actor key = %+v %v", p, ok)
+	}
+	k3, _ := s.NewAPIKey("codex", "worktree", ScopeRead)
+	if p, ok, _ := s.Lookup(k3, now); !ok || !p.ReadOnly {
+		t.Fatalf("read actor key = %+v %v", p, ok)
 	}
 }
