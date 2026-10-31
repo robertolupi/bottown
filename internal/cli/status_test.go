@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -12,12 +11,6 @@ import (
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/server"
 )
-
-var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func stripANSI(s string) string {
-	return ansiRegexp.ReplaceAllString(s, "")
-}
 
 func testInstance() config.Instance {
 	return config.Instance{

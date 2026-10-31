@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -161,25 +162,43 @@ func newWhoami() *cobra.Command {
 				return printJSON(cmd, map[string]any{"actor": who.Actor, "instance": who.Instance, "run": who.RunRaw, "worktree": a.Worktree})
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "actor %s on instance %s\n", who.Actor, who.Instance)
-			var run struct {
-				ID, Kind, Repo, Branch, SHA string
-				Issue, PR                   int64
-			}
-			if len(who.RunRaw) > 0 && string(who.RunRaw) != "null" && json.Unmarshal(who.RunRaw, &run) == nil {
-				target := fmt.Sprintf("issue #%d", run.Issue)
-				if run.PR > 0 {
-					target = fmt.Sprintf("PR !%d at %s", run.PR, run.SHA[:min(10, len(run.SHA))])
+			var run *whoamiRun
+			if len(who.RunRaw) > 0 && string(who.RunRaw) != "null" {
+				var wr whoamiRun
+				if json.Unmarshal(who.RunRaw, &wr) == nil {
+					run = &wr
 				}
-				fmt.Fprintf(out, "run %s: %s %s in %s\n", run.ID, run.Kind, target, run.Repo)
-			} else {
-				fmt.Fprintln(out, "no active run (read-only; start one with `bottown run start implement|verify N`)")
 			}
+			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, run)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
+}
+
+type whoamiRun struct {
+	ID, Kind, Repo, Branch, SHA string
+	Issue, PR                   int64
+}
+
+func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance string, run *whoamiRun) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "actor %s on instance %s\n", st.Info.Bold(true).Render(actor), st.Bold.Render(instance))
+	if run != nil {
+		target := fmt.Sprintf("issue #%d", run.Issue)
+		if run.PR > 0 {
+			target = fmt.Sprintf("PR !%d at %s", run.PR, run.SHA[:min(10, len(run.SHA))])
+		}
+		fmt.Fprintf(out, "run %s: %s %s in %s\n",
+			st.Info.Bold(true).Render(run.ID),
+			st.Purple.Bold(true).Render(run.Kind),
+			st.Bold.Render(target),
+			st.Bold.Render(run.Repo),
+		)
+	} else {
+		fmt.Fprintln(out, st.Dim.Render("no active run (read-only; start one with `bottown run start implement|verify N`)"))
+	}
 }
 
 func targetQuery(repo string, n int64, extra url.Values) string {
@@ -264,14 +283,7 @@ func newIssue() *cobra.Command {
 				return printJSON(cmd, is)
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "#%d %s [%s] by %s", is.Number, is.Title, is.State, is.Author)
-			if len(is.Labels) > 0 {
-				fmt.Fprintf(out, " (%s)", strings.Join(is.Labels, ", "))
-			}
-			fmt.Fprintf(out, "\n\n%s\n", strings.TrimSpace(is.Body))
-			for _, c := range is.Comments {
-				fmt.Fprintf(out, "\n--- %s, %s\n%s\n", c.Author, c.Created.Local().Format(time.DateTime), strings.TrimSpace(c.Body))
-			}
+			printIssueShow(out, lipgloss.NewRenderer(out), is)
 			return nil
 		},
 	}
@@ -345,17 +357,7 @@ func newIssue() *cobra.Command {
 				return printJSON(cmd, issues)
 			}
 			out := cmd.OutOrStdout()
-			if len(issues) == 0 {
-				fmt.Fprintln(out, "no issues found")
-				return nil
-			}
-			for _, is := range issues {
-				labels := ""
-				if len(is.Labels) > 0 {
-					labels = " (" + strings.Join(is.Labels, ", ") + ")"
-				}
-				fmt.Fprintf(out, "#%-4d %-8s %-16s %s%s\n", is.Number, is.State, is.Author, is.Title, labels)
-			}
+			printIssueList(out, lipgloss.NewRenderer(out), issues)
 			return nil
 		},
 	}
@@ -399,42 +401,7 @@ func newPR() *cobra.Command {
 				return printJSON(cmd, p)
 			}
 			out := cmd.OutOrStdout()
-			state := p.State
-			if p.Merged {
-				state = "merged"
-			}
-			fmt.Fprintf(out, "!%d %s [%s] by %s\n%s -> %s at %s, mergeable %v\n\n%s\n", p.Number, p.Title, state, p.Author,
-				p.HeadBranch, p.BaseBranch, p.HeadSHA, p.Mergeable, strings.TrimSpace(p.Body))
-			for _, r := range p.Reviews {
-				flags := ""
-				if r.Stale {
-					flags += " stale"
-				}
-				if r.Dismissed {
-					flags += " dismissed"
-				}
-				fmt.Fprintf(out, "\n--- review %s by %s at %s%s\n%s\n", r.State, r.Reviewer, r.CommitID[:min(10, len(r.CommitID))], flags, strings.TrimSpace(r.Body))
-			}
-			if diff || stat {
-				files := parseDiff(p.Diff)
-				if full {
-					for i := range files {
-						files[i].Collapsed = false
-					}
-				}
-				fmt.Fprintln(out)
-				writeDiffStat(out, files)
-				if p.DiffTruncated {
-					fmt.Fprintln(out, " [diff truncated: the summary covers only what was received]")
-				}
-				if diff {
-					fmt.Fprintln(out)
-					writeDiff(out, files)
-					if p.DiffTruncated {
-						fmt.Fprintln(out, "[diff truncated]")
-					}
-				}
-			}
+			printPRShow(out, lipgloss.NewRenderer(out), p, diff, stat, full)
 			return nil
 		},
 	}
@@ -507,17 +474,7 @@ func newPR() *cobra.Command {
 				return printJSON(cmd, prs)
 			}
 			out := cmd.OutOrStdout()
-			if len(prs) == 0 {
-				fmt.Fprintln(out, "no pull requests found")
-				return nil
-			}
-			for _, p := range prs {
-				sha := p.HeadSHA
-				if len(sha) > 8 {
-					sha = sha[:8]
-				}
-				fmt.Fprintf(out, "!%-4d %-8s %-10s %-16s %-18s %s\n", p.Number, p.State, sha, p.Author, p.ReviewState, p.Title)
-			}
+			printPRList(out, lipgloss.NewRenderer(out), prs)
 			return nil
 		},
 	}
@@ -648,4 +605,149 @@ func newAPI() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&data, "data", "", "JSON request body, or - for stdin")
 	return cmd
+}
+
+func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "%s %s [%s] by %s",
+		st.Info.Bold(true).Render(fmt.Sprintf("#%d", is.Number)),
+		st.Bold.Render(is.Title),
+		st.issueState(is.State),
+		st.Bold.Render(is.Author),
+	)
+	if len(is.Labels) > 0 {
+		fmt.Fprintf(out, " (%s)", strings.Join(is.Labels, ", "))
+	}
+	fmt.Fprintf(out, "\n\n%s\n", strings.TrimSpace(is.Body))
+	for _, c := range is.Comments {
+		fmt.Fprintf(out, "\n--- %s, %s\n%s\n",
+			st.Bold.Render(c.Author),
+			st.Dim.Render(c.Created.Local().Format(time.DateTime)),
+			strings.TrimSpace(c.Body),
+		)
+	}
+}
+
+func printIssueList(out io.Writer, r *lipgloss.Renderer, issues []server.IssueItem) {
+	if len(issues) == 0 {
+		fmt.Fprintln(out, "no issues found")
+		return
+	}
+	st := newStyles(r)
+	for _, is := range issues {
+		labels := ""
+		if len(is.Labels) > 0 {
+			labels = " (" + strings.Join(is.Labels, ", ") + ")"
+		}
+		numStr := fmt.Sprintf("#%-4d", is.Number)
+		statePad := 8 - len(is.State)
+		if statePad < 0 {
+			statePad = 0
+		}
+		authorPad := 16 - len(is.Author)
+		if authorPad < 0 {
+			authorPad = 0
+		}
+		fmt.Fprintf(out, "%s %s%s %s%s %s%s\n",
+			st.Info.Bold(true).Render(numStr),
+			st.issueState(is.State), strings.Repeat(" ", statePad),
+			st.Bold.Render(is.Author), strings.Repeat(" ", authorPad),
+			is.Title, labels,
+		)
+	}
+}
+
+func printPRShow(out io.Writer, r *lipgloss.Renderer, p server.PROut, diff, stat, full bool) {
+	st := newStyles(r)
+	state := p.State
+	if p.Merged {
+		state = "merged"
+	}
+	fmt.Fprintf(out, "%s %s [%s] by %s\n%s -> %s at %s, mergeable %v\n\n%s\n",
+		st.Info.Bold(true).Render(fmt.Sprintf("!%d", p.Number)),
+		st.Bold.Render(p.Title),
+		st.prState(state),
+		st.Bold.Render(p.Author),
+		st.Bold.Render(p.HeadBranch),
+		st.Bold.Render(p.BaseBranch),
+		st.Dim.Render(p.HeadSHA),
+		p.Mergeable,
+		strings.TrimSpace(p.Body),
+	)
+	for _, rev := range p.Reviews {
+		flags := ""
+		if rev.Stale {
+			flags += " " + st.Warning.Render("stale")
+		}
+		if rev.Dismissed {
+			flags += " " + st.Warning.Render("dismissed")
+		}
+		commit := rev.CommitID[:min(10, len(rev.CommitID))]
+		fmt.Fprintf(out, "\n--- review %s by %s at %s%s\n%s\n",
+			st.reviewVerdict(rev.State),
+			st.Bold.Render(rev.Reviewer),
+			st.Dim.Render(commit),
+			flags,
+			strings.TrimSpace(rev.Body),
+		)
+	}
+	if diff || stat {
+		files := parseDiff(p.Diff)
+		if full {
+			for i := range files {
+				files[i].Collapsed = false
+			}
+		}
+		fmt.Fprintln(out)
+		writeDiffStat(out, files)
+		if p.DiffTruncated {
+			fmt.Fprintln(out, " [diff truncated: the summary covers only what was received]")
+		}
+		if diff {
+			fmt.Fprintln(out)
+			writeDiff(out, files)
+			if p.DiffTruncated {
+				fmt.Fprintln(out, "[diff truncated]")
+			}
+		}
+	}
+}
+
+func printPRList(out io.Writer, r *lipgloss.Renderer, prs []server.PRItem) {
+	if len(prs) == 0 {
+		fmt.Fprintln(out, "no pull requests found")
+		return
+	}
+	st := newStyles(r)
+	for _, p := range prs {
+		sha := p.HeadSHA
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
+		numStr := fmt.Sprintf("!%-4d", p.Number)
+		statePad := 8 - len(p.State)
+		if statePad < 0 {
+			statePad = 0
+		}
+		shaPad := 10 - len(sha)
+		if shaPad < 0 {
+			shaPad = 0
+		}
+		authorPad := 16 - len(p.Author)
+		if authorPad < 0 {
+			authorPad = 0
+		}
+		revPad := 18 - len(p.ReviewState)
+		if revPad < 0 {
+			revPad = 0
+		}
+		fmt.Fprintf(out, "%s %s%s %s%s %s%s %s%s %s\n",
+			st.Info.Bold(true).Render(numStr),
+			st.prState(p.State), strings.Repeat(" ", statePad),
+			st.Dim.Render(sha), strings.Repeat(" ", shaPad),
+			st.Bold.Render(p.Author), strings.Repeat(" ", authorPad),
+			st.reviewVerdict(p.ReviewState), strings.Repeat(" ", revPad),
+			p.Title,
+		)
+	}
 }
