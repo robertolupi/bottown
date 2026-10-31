@@ -103,3 +103,15 @@ func TestPromptsNameWhereChecksAre(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscussPrompt(t *testing.T) {
+	p, err := Prompt("discuss", PromptData{RunID: "r-1", Actor: "claude", Family: "anthropic", Repo: "o/r", Issue: 7, Title: "T", SHA: "abc", Base: "main", Bottown: "/b", SelfEnd: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"**discussant**", "#7 in `o/r`", "Do not\nimplement it", "/b comment --body-file -", "/b run end --summary", "detached at `abc`, the head\n  of `main`"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("discuss prompt lacks %q:\n%s", want, p)
+		}
+	}
+}

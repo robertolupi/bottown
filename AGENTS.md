@@ -44,6 +44,7 @@ Work happens in runs. In your actor worktree:
 ```
 bottown run start implement 12      # or: /bottown-implement 12
 bottown run start verify 13         # or: /bottown-verify 13
+bottown run start discuss 12        # or: /bottown-discuss 12 QUESTION
 ```
 
 `run start` prints the goal prompt for the run: follow it. Use the bottown
@@ -68,6 +69,9 @@ bottown run end [--failed] --summary-file -
   merge.
 - **Verifiers** review exactly the commit the run pinned, with one verdict.
   They cannot push.
+- **Discuss runs** review and discuss one issue without implementing it: the
+  worktree is detached at the default branch, and the answer goes in a
+  comment on the issue. They cannot push, open PRs or review.
 - **Anyone can file issues,** in or outside a run: follow-ups found while
   working, or what the owner asks you to file from a conversation. Outside
   a run the repository is the one your worktree's `bottown` remote points

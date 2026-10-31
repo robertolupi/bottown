@@ -5,6 +5,7 @@ import "testing"
 func TestRunScopeAPI(t *testing.T) {
 	impl := RunScope{Org: "bottown", Repo: "demo", Role: Implement}
 	ver := RunScope{Org: "bottown", Repo: "demo", Role: Verify}
+	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
 	cases := []struct {
 		s            RunScope
 		method, path string
@@ -31,6 +32,15 @@ func TestRunScopeAPI(t *testing.T) {
 		{ver, "POST", "/repos/bottown/demo/contents/README", false, "role-verify"},
 		{ver, "POST", "/repos/bottown/other/pulls/2/reviews", false, "run-repo"},
 		{ver, "POST", "/repos/BOTTOWN/DEMO/issues/2/comments", true, "run-verify-comment"},
+		// Discuss runs read and comment, nothing else.
+		{dis, "GET", "/repos/bottown/demo/issues/1", true, "run-read"},
+		{dis, "POST", "/repos/bottown/demo/issues/1/comments", true, "run-discuss-comment"},
+		{dis, "PATCH", "/repos/bottown/demo/issues/comments/9", true, "run-discuss-comment-edit"},
+		{dis, "POST", "/repos/bottown/demo/pulls", false, "role-discuss"},
+		{dis, "PATCH", "/repos/bottown/demo/issues/1", false, "role-discuss"},
+		{dis, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "review-via-tool"},
+		{dis, "POST", "/repos/bottown/demo/contents/README", false, "role-discuss"},
+		{dis, "POST", "/repos/bottown/other/issues/1/comments", false, "run-repo"},
 	}
 	for _, c := range cases {
 		d := c.s.DecideAPI(c.method, c.path)
@@ -43,6 +53,7 @@ func TestRunScopeAPI(t *testing.T) {
 func TestRunScopeGit(t *testing.T) {
 	impl := RunScope{Org: "bottown", Repo: "demo", Role: Implement}
 	ver := RunScope{Org: "bottown", Repo: "demo", Role: Verify}
+	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
 	cases := []struct {
 		s             RunScope
 		path, service string
@@ -56,6 +67,9 @@ func TestRunScopeGit(t *testing.T) {
 		{ver, "/bottown/demo.git/git-upload-pack", "", true},
 		{ver, "/bottown/demo.git/info/refs", "git-receive-pack", false},
 		{ver, "/bottown/demo.git/git-receive-pack", "", false},
+		{dis, "/bottown/demo.git/info/refs", "git-upload-pack", true},
+		{dis, "/bottown/demo.git/info/refs", "git-receive-pack", false},
+		{dis, "/bottown/demo.git/git-receive-pack", "", false},
 	}
 	for _, c := range cases {
 		if d := c.s.DecideGit(c.path, c.service); d.Allow != c.allow {

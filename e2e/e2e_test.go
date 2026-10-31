@@ -895,6 +895,45 @@ func TestE2E(t *testing.T) {
 		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "implemented agent.txt") {
 			t.Errorf("implement handover on the issue: %+v", comments)
 		}
+
+		// A discuss run reads and comments on the issue, and changes nothing.
+		if out, err := agent(cw, "x", "comment", n, "--body-file", "-"); err == nil || !strings.Contains(out, "read-only") {
+			t.Errorf("comment outside a run: %v %s", err, out)
+		}
+		dp := must(cw, "", "run", "start", "discuss", "#"+n)
+		if !strings.Contains(dp, "**discussant**") || !strings.Contains(dp, "comment --body-file -") || !strings.Contains(dp, "add agent.txt") {
+			t.Fatalf("discuss prompt:\n%s", dp)
+		}
+		if head, main := git(t, cw, "rev-parse", "HEAD"), git(t, cw, "rev-parse", "bottown-"+a.name+"/main"); head != main {
+			t.Errorf("discuss worktree at %s, want the default branch head %s", head, main)
+		}
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "discuss issue #"+n) {
+			t.Errorf("whoami in discuss run: %s", out)
+		}
+		if out := must(cw, "blah, not foo", "comment", "--body-file", "-"); !strings.Contains(out, "commented") {
+			t.Errorf("comment in discuss run: %s", out)
+		}
+		if out, err := agent(cw, "", "pr", "create", "--title", "x"); err == nil || !strings.Contains(out, "implement run") {
+			t.Errorf("pr create in discuss run: %v %s", err, out)
+		}
+		if out, err := agent(cw, "", "review", "submit", "--event", "COMMENT", "--commit", "x", "--body", "x"); err == nil || !strings.Contains(out, "verify run") {
+			t.Errorf("review in discuss run: %v %s", err, out)
+		}
+		if out, err := agent(cw, "", "api", "PATCH", "/repos/bottown/demo/issues/"+n, "--data", `{"title":"renamed"}`); err == nil {
+			t.Errorf("issue edit in discuss run succeeded: %s", out)
+		}
+		if b, err := exec.Command("git", "-C", cw, "push", "bottown-"+a.name, "HEAD:refs/heads/discuss-push").CombinedOutput(); err == nil {
+			t.Errorf("push in discuss run succeeded: %s", b)
+		}
+		if out := must(cw, "", "run", "end", "--summary", "answered blah"); !strings.Contains(out, "succeeded; key revoked") {
+			t.Errorf("discuss run end: %s", out)
+		}
+		comments = nil
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), nil, &comments)
+		if k := len(comments); k < 2 || comments[k-2].Body != "blah, not foo" || !strings.Contains(comments[k-1].Body, "· discuss · claude") ||
+			!strings.Contains(comments[k-1].Body, "Discussed against") || !strings.Contains(comments[k-1].Body, "answered blah") {
+			t.Errorf("discuss comments on the issue: %+v", comments)
+		}
 	})
 
 	t.Run("mcp whoami", func(t *testing.T) {
