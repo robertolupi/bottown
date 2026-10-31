@@ -897,11 +897,11 @@ func TestE2E(t *testing.T) {
 		}
 
 		// A discuss run reads and comments on the issue, and changes nothing.
-		if out, err := agent(cw, "x", "issue", "comment", n, "--body-file", "-"); err == nil || !strings.Contains(out, "read-only") {
-			t.Errorf("issue comment outside a run: %v %s", err, out)
+		if out, err := agent(cw, "x", "comment", n, "--body-file", "-"); err == nil || !strings.Contains(out, "read-only") {
+			t.Errorf("comment outside a run: %v %s", err, out)
 		}
 		dp := must(cw, "", "run", "start", "discuss", "#"+n)
-		if !strings.Contains(dp, "**discussant**") || !strings.Contains(dp, "issue comment --body-file -") || !strings.Contains(dp, "add agent.txt") {
+		if !strings.Contains(dp, "**discussant**") || !strings.Contains(dp, "comment --body-file -") || !strings.Contains(dp, "add agent.txt") {
 			t.Fatalf("discuss prompt:\n%s", dp)
 		}
 		if head, main := git(t, cw, "rev-parse", "HEAD"), git(t, cw, "rev-parse", "bottown-"+a.name+"/main"); head != main {
@@ -910,8 +910,8 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "", "whoami"); !strings.Contains(out, "discuss issue #"+n) {
 			t.Errorf("whoami in discuss run: %s", out)
 		}
-		if out := must(cw, "blah, not foo", "issue", "comment", "--body-file", "-"); !strings.Contains(out, "commented") {
-			t.Errorf("issue comment in discuss run: %s", out)
+		if out := must(cw, "blah, not foo", "comment", "--body-file", "-"); !strings.Contains(out, "commented") {
+			t.Errorf("comment in discuss run: %s", out)
 		}
 		if out, err := agent(cw, "", "pr", "create", "--title", "x"); err == nil || !strings.Contains(out, "implement run") {
 			t.Errorf("pr create in discuss run: %v %s", err, out)

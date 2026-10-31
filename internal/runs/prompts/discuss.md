@@ -15,7 +15,7 @@ implement it.
   requests or review.
 - Use the bottown CLI, `{{.Bottown}}`, for the forge:
   - `{{.Bottown}} issue show` prints the issue and its discussion so far.
-  - `{{.Bottown}} issue comment --body-file -` comments on it.
+  - `{{.Bottown}} comment --body-file -` comments on it.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a separate
     issue, for something you find that is outside this one.
 - The owner's request may come with the command that started this run, as
@@ -28,7 +28,7 @@ implement it.
 
 1. You have read the issue, its discussion and the code it touches.
 2. Your answer is posted as one comment on #{{.Issue}}
-   (`issue comment --body-file -`): the question you were asked, your
+   (`comment --body-file -`): the question you were asked, your
    answer and its reasons, and any open questions. The discussion belongs
    on the issue, not only in this conversation.
 {{- if .SelfEnd}}

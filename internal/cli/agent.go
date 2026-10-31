@@ -479,10 +479,7 @@ func newIssue() *cobra.Command {
 	list.Flags().StringVar(&listRepo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	list.Flags().StringVar(&listState, "state", "open", "state filter: open, closed, or all")
 	list.Flags().BoolVar(&listJSON, "json", false, "print JSON")
-	comment := newComment()
-	comment.Use = "comment [N] (--body B | --body-file F|-)"
-	comment.Short = "Comment on an issue (same as `bottown comment`)"
-	issue.AddCommand(show, create, list, comment)
+	issue.AddCommand(show, create, list)
 	return issue
 }
 
