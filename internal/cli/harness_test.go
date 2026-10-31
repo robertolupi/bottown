@@ -39,10 +39,23 @@ func TestInstallCommands(t *testing.T) {
 	if !strings.Contains(string(ver), self+" run start verify <number>") || !strings.Contains(string(ver), "/bottown-verify") {
 		t.Errorf("agy verify workflow:\n%s", ver)
 	}
+	dis, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-discuss.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{self + " run start discuss <number>", "> $ARGUMENTS", "argument-hint: <issue number> [question]", harnessMarker} {
+		if !strings.Contains(string(dis), want) {
+			t.Errorf("claude discuss command lacks %q:\n%s", want, dis)
+		}
+	}
+	adis, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-discuss.md"))
+	if err != nil || !strings.Contains(string(adis), self+" run start discuss <number>") {
+		t.Errorf("agy discuss workflow: %v\n%s", err, adis)
+	}
 
 	// Re-running is a no-op; a foreign file is protected unless --force.
 	out.Reset()
-	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != 2 {
+	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != 3 {
 		t.Errorf("second install: %v %s", err, out.String())
 	}
 	foreign := filepath.Join(home, ".claude", "commands", "bottown-verify.md")
@@ -129,5 +142,31 @@ func TestRunTarget(t *testing.T) {
 		if err != nil || n != tc.want {
 			t.Errorf("%q: got %d, %v; want %d", tc.args, n, err, tc.want)
 		}
+	}
+}
+
+// /bottown-discuss takes free text, so none of it may reach a shell: the
+// command shows the request as text and the agent runs `run start discuss`
+// with the number only. (Claude Code splits $0, $1, ... shell-style, so an
+// apostrophe in the question could break even a positional argument.)
+func TestClaudeDiscussKeepsTheQuestionOutOfTheShell(t *testing.T) {
+	home := t.TempDir()
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	if err := installCommands(cmd, home, "claude", false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-discuss.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile("(?m)^!`").Match(b) {
+		t.Errorf("discuss command runs a shell line itself:\n%s", b)
+	}
+	if strings.Count(string(b), "$ARGUMENTS") != 1 || !strings.Contains(string(b), "\n> $ARGUMENTS\n") {
+		t.Errorf("$ARGUMENTS must appear once, as quoted text:\n%s", b)
+	}
+	if !strings.Contains(string(b), selfPath()+" run start discuss <number>") {
+		t.Errorf("discuss command does not say how to start the run:\n%s", b)
 	}
 }

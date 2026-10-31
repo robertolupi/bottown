@@ -50,7 +50,7 @@ type APIKey struct {
 // in-flight run keys.
 type Run struct {
 	ID              string `json:"id"`
-	Kind            string `json:"kind"` // implement | verify
+	Kind            string `json:"kind"` // implement | verify | discuss
 	Actor           string `json:"actor"`
 	Family          string `json:"family"`
 	Harness         string `json:"harness,omitempty"` // which CLI runs the actor

@@ -9,17 +9,21 @@ import (
 const (
 	Implement = "implement"
 	Verify    = "verify"
+	// Discuss runs review and discuss an issue without implementing it:
+	// they read the repository and comment, like a verifier without a
+	// verdict.
+	Discuss = "discuss"
 )
 
 // RunScope confines a run key to one repository and to its role. It applies
 // after the base Policy: a request must pass both.
 type RunScope struct {
 	Org, Repo string
-	Role      string // Implement | Verify
+	Role      string // Implement | Verify | Discuss
 }
 
-// verifyWrites are the only API writes a verify run may make directly
-// inside its repository: commenting. Reviews go through the review_submit
+// verifyWrites are the only API writes a verify or discuss run may make
+// directly inside its repository: commenting. Reviews go through the review_submit
 // MCP tool, which pins them to the run's commit; everything else that
 // changes the repository (pushes, PRs, issues, files, branches, releases) is
 // denied.
@@ -56,16 +60,16 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 		return Decision{Allow: true, Rule: "run-read"}
 	}
 	switch s.Role {
-	case Verify:
+	case Verify, Discuss:
 		if slices.Contains(reviewWrites.Methods, method) && match(split(reviewWrites.Pattern), segs) {
 			return Decision{Allow: false, Rule: reviewWrites.Name}
 		}
 		for _, r := range verifyWrites {
 			if slices.Contains(r.Methods, method) && match(split(r.Pattern), segs) {
-				return Decision{Allow: true, Rule: "run-verify-" + r.Name}
+				return Decision{Allow: true, Rule: "run-" + s.Role + "-" + r.Name}
 			}
 		}
-		return Decision{Allow: false, Rule: "role-verify"}
+		return Decision{Allow: false, Rule: "role-" + s.Role}
 	case Implement:
 		for _, r := range implementDenied {
 			if slices.Contains(r.Methods, method) && match(split(r.Pattern), segs) {
@@ -87,7 +91,7 @@ func (s RunScope) DecideGit(gitPath, service string) Decision {
 	}
 	push := service == "git-receive-pack" || (len(segs) > 0 && segs[len(segs)-1] == "git-receive-pack")
 	if push && s.Role != Implement {
-		return Decision{Allow: false, Rule: "role-verify-push"}
+		return Decision{Allow: false, Rule: "role-" + s.Role + "-push"}
 	}
 	if push {
 		return Decision{Allow: true, Rule: "run-implement-push"}

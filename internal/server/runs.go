@@ -22,7 +22,7 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind            string `json:"kind"` // implement | verify
+	Kind            string `json:"kind"` // implement | verify | discuss
 	Actor           string `json:"actor"`
 	Repo            string `json:"repo"` // name within the org
 	Issue           int64  `json:"issue,omitempty"`
@@ -113,7 +113,8 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		Created: now, Expires: now.Add(ttl),
 	}
 	api := s.Rec.API(r.Context())
-	if _, resp, err := api.GetRepo(run.Org, req.Repo); forgejo.IsNotFound(resp, err) {
+	repo, resp, err := api.GetRepo(run.Org, req.Repo)
+	if forgejo.IsNotFound(resp, err) {
 		return run, runErr(http.StatusNotFound, "repo %s/%s not found", run.Org, req.Repo)
 	} else if err != nil {
 		return run, err
@@ -170,8 +171,29 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		}
 		run.PR, run.SHA, run.Branch = req.PR, pr.Head.Sha, pr.Head.Ref
 
+	case policy.Discuss:
+		// Any issue or pull request, open or closed: discussing changes
+		// nothing but the comments. The run reads the default branch's
+		// current code, recorded as its SHA.
+		if req.Issue <= 0 {
+			return run, runErr(http.StatusBadRequest, "discuss runs need an issue or pull request number")
+		}
+		if _, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue); forgejo.IsNotFound(resp, err) {
+			return run, runErr(http.StatusNotFound, "issue #%d not found", req.Issue)
+		} else if err != nil {
+			return run, err
+		}
+		b, _, err := api.GetRepoBranch(run.Org, run.Repo, repo.DefaultBranch)
+		if err != nil {
+			return run, fmt.Errorf("default branch %s: %w", repo.DefaultBranch, err)
+		}
+		if b.Commit == nil || b.Commit.ID == "" {
+			return run, fmt.Errorf("default branch %s has no commit", repo.DefaultBranch)
+		}
+		run.Issue, run.SHA = req.Issue, b.Commit.ID
+
 	default:
-		return run, runErr(http.StatusBadRequest, `kind must be %q or %q`, policy.Implement, policy.Verify)
+		return run, runErr(http.StatusBadRequest, `kind must be %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss)
 	}
 	return run, nil
 }

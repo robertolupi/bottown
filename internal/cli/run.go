@@ -320,7 +320,7 @@ func askOutcome(cmd *cobra.Command, def string) string {
 	return def
 }
 
-// handover posts the run's outcome on its issue (implement) or PR (verify),
+// handover posts the run's outcome on its issue (implement, discuss) or PR (verify),
 // with the run key, as the actor.
 func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, key, status string, code int, summary string) error {
 	n := run.Issue
@@ -339,11 +339,14 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		fmt.Fprintf(&b, " (exit %d)", code)
 	}
 	b.WriteString("\n\n")
-	if rec.Kind == policy.Implement {
+	switch rec.Kind {
+	case policy.Implement:
 		if head, err := runs.Git(rec.Worktree, nil, "rev-parse", "--short", "HEAD"); err == nil {
 			fmt.Fprintf(&b, "Branch `%s` at `%s`.\n\n", rec.Branch, head)
 		}
-	} else {
+	case policy.Discuss:
+		fmt.Fprintf(&b, "Discussed against `%s`, the default branch's head.\n\n", rec.SHA)
+	default:
 		fmt.Fprintf(&b, "Verified at `%s`.\n\n", rec.SHA)
 	}
 	if rec.Interactive {

@@ -22,17 +22,21 @@ import (
 
 func newRunStart() *cobra.Command {
 	return &cobra.Command{
-		Use:   "start implement|verify [issue|pr] N",
+		Use:   "start implement|verify|discuss [issue|pr] N",
 		Short: "Start a run for this actor worktree and print its goal prompt (agent CLI)",
 		Long: `Start a run for this actor worktree and print its goal prompt. The number may
 be written 12, #12 or !12, optionally after "issue", "pr" or "pull request", so
 slash commands can pass what the user typed: /bottown-implement issue 12.
-Each argument is split on spaces, so it may also arrive as one quoted word.`,
+Each argument is split on spaces, so it may also arrive as one quoted word.
+
+A discuss run reviews and discusses an issue (or pull request) without
+implementing it: the worktree is detached at the default branch, and the
+run may read and comment, but not push, open pull requests or review.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind := args[0]
-			if kind != policy.Implement && kind != policy.Verify {
-				return fmt.Errorf("kind must be %s or %s", policy.Implement, policy.Verify)
+			if kind != policy.Implement && kind != policy.Verify && kind != policy.Discuss {
+				return fmt.Errorf("kind must be %s, %s or %s", policy.Implement, policy.Verify, policy.Discuss)
 			}
 			n, err := runTarget(kind, args[1:])
 			if err != nil {
@@ -100,10 +104,10 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	}
 
 	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true}
-	if kind == policy.Implement {
-		req.Issue = n
-	} else {
+	if kind == policy.Verify {
 		req.PR = n
+	} else {
+		req.Issue = n
 	}
 	var created server.RunResponse
 	if err := a.call("POST", "/v1/runs", req, &created); err != nil {

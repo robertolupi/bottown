@@ -24,17 +24,18 @@ var harnessTmpl = template.Must(template.ParseFS(harnessFS, "harness/*.md"))
 const harnessMarker = "written by `bottown harness setup`; re-run it to refresh"
 
 // harnessCommands describes, per harness, where its global slash commands
-// live and which template renders them.
+// live and which templates render them: one for implement and verify, and
+// one for discuss, which also takes a free-text question.
 var harnessCommands = map[string]struct {
-	dir      func(home string) string
-	template string
+	dir               func(home string) string
+	template, discuss string
 }{
 	// Claude Code user commands: /bottown-implement 12 runs `bottown run
 	// start` itself (the !`...` line) and inlines the goal prompt.
-	"claude": {func(h string) string { return filepath.Join(h, ".claude", "commands") }, "claude-command.md"},
+	"claude": {func(h string) string { return filepath.Join(h, ".claude", "commands") }, "claude-command.md", "claude-discuss.md"},
 	// Antigravity global workflows: invoked as /bottown-implement; the agent
 	// runs `bottown run start` with the number the user typed.
-	"agy": {func(h string) string { return filepath.Join(h, ".gemini", "config", "global_workflows") }, "agy-workflow.md"},
+	"agy": {func(h string) string { return filepath.Join(h, ".gemini", "config", "global_workflows") }, "agy-workflow.md", "agy-discuss.md"},
 }
 
 type commandData struct {
@@ -46,14 +47,17 @@ func newHarness() *cobra.Command {
 	var force bool
 	setup := &cobra.Command{
 		Use:   "setup [claude|agy]...",
-		Short: "Install /bottown-implement and /bottown-verify in harnesses' global commands",
-		Long: `Install /bottown-implement and /bottown-verify for each harness (default: all):
+		Short: "Install /bottown-implement, /bottown-verify and /bottown-discuss in harnesses' global commands",
+		Long: `Install /bottown-implement, /bottown-verify and /bottown-discuss for each
+harness (default: all):
 
-  claude  ~/.claude/commands/bottown-{implement,verify}.md
-  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify}.md
+  claude  ~/.claude/commands/bottown-{implement,verify,discuss}.md
+  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss}.md
 
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
-actor (bottown run start implement 12) and works the issue. The files name this
+actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
+QUESTION starts a discuss run: the agent answers on the issue, without
+implementing it. The files name this
 bottown binary by absolute path. Re-running refreshes them; a same-named file
 bottown did not write is left alone unless --force.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,10 +98,15 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 	for _, c := range []commandData{
 		{Kind: "implement", Target: "issue"},
 		{Kind: "verify", Target: "pull request"},
+		{Kind: "discuss", Target: "issue"},
 	} {
 		c.Bottown, c.Marker = selfPath(), harnessMarker
+		tmpl := hc.template
+		if c.Kind == "discuss" {
+			tmpl = hc.discuss
+		}
 		var b bytes.Buffer
-		if err := harnessTmpl.ExecuteTemplate(&b, hc.template, c); err != nil {
+		if err := harnessTmpl.ExecuteTemplate(&b, tmpl, c); err != nil {
 			return err
 		}
 		path := filepath.Join(dir, "bottown-"+c.Kind+".md")
