@@ -193,8 +193,22 @@ func newInstance(name string) (config.Instance, error) {
 	}
 	return config.Instance{
 		Name: name, ForgejoPort: fp, ServerPort: sp,
-		OwnerLogin: login, OwnerEmail: gitConfig("user.email"),
+		OwnerLogin: login, OwnerEmail: ownerEmail(os.Getenv("BOTTOWN_OWNER_EMAIL"), gitConfig("user.email")),
 	}, nil
+}
+
+// ownerEmail picks the owner's email: BOTTOWN_OWNER_EMAIL when set, else
+// git's user.email, unless that is an actor identity (an actor worktree sets
+// <actor>@bottown.local), which would collide with the actor's account. Empty
+// lets the reconciler default to <login>@bottown.local.
+func ownerEmail(env, git string) string {
+	if env != "" {
+		return env
+	}
+	if strings.HasSuffix(strings.ToLower(git), "@bottown.local") {
+		return ""
+	}
+	return git
 }
 
 func portFree(p int) bool {

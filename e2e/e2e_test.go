@@ -71,6 +71,7 @@ func (in *instance) env() []string {
 		"BOTTOWN_HOME="+home,
 		"BOTTOWN_SECRET_STORE=file",
 		"BOTTOWN_OWNER_LOGIN=owner",
+		"BOTTOWN_OWNER_EMAIL=owner@e2e.test",
 		"BOTTOWN_INSTANCE="+in.name,
 	)
 }
