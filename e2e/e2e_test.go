@@ -340,6 +340,13 @@ func TestE2E(t *testing.T) {
 			t.Errorf("claude worktree actor = %s", got)
 		}
 		a.mustAPI(owner, "GET", "/repos/bottown/famtest/branch_protections/main", nil, nil)
+		// Re-running repo add in <fam>/main keeps the same repo (not "main").
+		if out := a.mustCmd(main2, "repo", "add"); !strings.Contains(out, "famtest is hosted") || strings.Contains(out, "updated remote") {
+			t.Errorf("repo add in fam main:\n%s", out)
+		}
+		if out, err := a.cmd(main2, "repo", "add", "other"); err == nil || !strings.Contains(out, "already points at") {
+			t.Errorf("repo add with a conflicting name: %v %s", err, out)
+		}
 		if out, err := a.cmd("", "clone", demo, fam2); err == nil || !strings.Contains(out, "not empty") {
 			t.Errorf("clone into an existing fam: %v %s", err, out)
 		}

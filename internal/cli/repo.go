@@ -27,8 +27,9 @@ func newRepo(g *globals) *cobra.Command {
 	add := &cobra.Command{
 		Use:   "add [NAME]",
 		Short: "Host the current checkout on the instance under a bottown remote",
-		Long: `Create bottown/NAME on the instance (NAME defaults to the checkout's directory
-name), add a git remote named after the instance ("bottown" for prod,
+		Long: `Create bottown/NAME on the instance (NAME defaults to the repo the instance
+remote already points at, else the checkout's directory name, or the fam's name
+for a <fam>/main checkout), add a git remote named after the instance ("bottown" for prod,
 "bottown-<instance>" otherwise), push the branch, then apply labels and branch
 protection. "origin" is never touched: it stays the external upstream.`,
 		Args: cobra.MaximumNArgs(1),
@@ -64,8 +65,26 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	if err != nil {
 		return errors.New("not inside a git checkout")
 	}
-	if name == "" {
+	// The repo this checkout already belongs to on the instance, if any. An
+	// existing remote is never silently re-pointed at a different repo.
+	remote := inst.Remote()
+	existing := ""
+	if u, err := git(top, "remote", "get-url", remote); err == nil {
+		if _, p, ok := strings.Cut(u, "/git/"); ok {
+			_, existing, _ = strings.Cut(strings.TrimSuffix(p, ".git"), "/")
+		}
+	}
+	switch {
+	case name == "" && existing != "":
+		name = existing
+	case name == "":
+		// <fam>/main is named after the fam, not "main".
 		name = strings.ToLower(filepath.Base(top))
+		if name == "main" {
+			name = strings.ToLower(filepath.Base(filepath.Dir(top)))
+		}
+	case existing != "" && !strings.EqualFold(name, existing):
+		return fmt.Errorf("remote %s already points at bottown repo %q, not %q; change it with `git remote set-url` first if that is intended", remote, existing, name)
 	}
 	if branch == "" {
 		if branch, err = git(top, "symbolic-ref", "--short", "HEAD"); err != nil {
@@ -81,7 +100,6 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 		return err
 	}
 	url := inst.ServerURL() + res.GitPath
-	remote := inst.Remote()
 	if have, err := git(top, "remote", "get-url", remote); err != nil {
 		if _, err := git(top, "remote", "add", remote, url); err != nil {
 			return err
