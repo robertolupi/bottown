@@ -369,10 +369,10 @@ func newIssue() *cobra.Command {
 func newPR() *cobra.Command {
 	pr := &cobra.Command{Use: "pr", Short: "Read and open pull requests (agent CLI)"}
 	var repo string
-	var asJSON, diff bool
+	var asJSON, diff, stat, full bool
 	show := &cobra.Command{
-		Use:   "show [N]",
-		Short: "Show a pull request: head, reviews, and with --diff the diff (default: the run's PR)",
+		Use:   "show [N] [--diff [--full] | --stat]",
+		Short: "Show a pull request: head, reviews, and with --diff a file summary and the diff (default: the run's PR)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := resolveAgent()
@@ -388,7 +388,7 @@ func newPR() *cobra.Command {
 				r = a.defaultRepo()
 			}
 			extra := url.Values{}
-			if diff {
+			if diff || stat {
 				extra.Set("diff", "1")
 			}
 			var p server.PROut
@@ -415,10 +415,24 @@ func newPR() *cobra.Command {
 				}
 				fmt.Fprintf(out, "\n--- review %s by %s at %s%s\n%s\n", r.State, r.Reviewer, r.CommitID[:min(10, len(r.CommitID))], flags, strings.TrimSpace(r.Body))
 			}
-			if diff {
-				fmt.Fprintf(out, "\n%s", p.Diff)
+			if diff || stat {
+				files := parseDiff(p.Diff)
+				if full {
+					for i := range files {
+						files[i].Collapsed = false
+					}
+				}
+				fmt.Fprintln(out)
+				writeDiffStat(out, files)
 				if p.DiffTruncated {
-					fmt.Fprintln(out, "\n[diff truncated]")
+					fmt.Fprintln(out, " [diff truncated: the summary covers only what was received]")
+				}
+				if diff {
+					fmt.Fprintln(out)
+					writeDiff(out, files)
+					if p.DiffTruncated {
+						fmt.Fprintln(out, "[diff truncated]")
+					}
 				}
 			}
 			return nil
@@ -426,7 +440,10 @@ func newPR() *cobra.Command {
 	}
 	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
-	show.Flags().BoolVar(&diff, "diff", false, "include the diff")
+	show.Flags().BoolVar(&diff, "diff", false, "include a file summary and the diff, with lock files such as go.sum collapsed")
+	show.Flags().BoolVar(&stat, "stat", false, "include only the file summary")
+	show.Flags().BoolVar(&full, "full", false, "with --diff, do not collapse lock files")
+	show.MarkFlagsMutuallyExclusive("diff", "stat")
 
 	var title, body, bodyFile string
 	var createJSON bool

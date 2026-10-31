@@ -854,8 +854,12 @@ func TestE2E(t *testing.T) {
 		if !strings.Contains(vp, "review submit --commit "+sha) {
 			t.Fatalf("verify prompt lacks the pinned commit %s:\n%s", sha, vp)
 		}
-		if out := must(aw, "", "pr", "show", "--diff"); !strings.Contains(out, "agent.txt") || !strings.Contains(out, "by claude") {
+		if out := must(aw, "", "pr", "show", "--diff"); !strings.Contains(out, "agent.txt") || !strings.Contains(out, "by claude") ||
+			!strings.Contains(out, " agent.txt | 1 +\n 1 file changed, 1 insertion(+), 0 deletions(-)") || !strings.Contains(out, "+agent") {
 			t.Errorf("pr show --diff: %s", out)
+		}
+		if out := must(aw, "", "pr", "show", "--stat"); !strings.Contains(out, " agent.txt | 1 +") || strings.Contains(out, "+agent") {
+			t.Errorf("pr show --stat: %s", out)
 		}
 		if out := must(aw, "", "pr", "list"); !strings.Contains(out, "needs review") {
 			t.Errorf("pr list in verify run before review: %s", out)
