@@ -13,9 +13,11 @@ itself: this repository is hosted on the prod instance as `bottown/bottown`.
 > and forge operations happen exclusively through the `bottown` CLI
 > (`~/.local/bin/bottown`) and the local Forgejo control plane.
 
-Read [docs/index.md](docs/index.md) first. The current plan and its status
-are in [docs/iteration-1.md](docs/iteration-1.md), and the bootstrap design,
-including Forgejo quirks we found, is in [docs/bootstrap.md](docs/bootstrap.md).
+Read [docs/index.md](docs/index.md) first. `docs/` holds only current docs;
+records of past work are in `docs/history/`: iteration 1's plan and build
+record in [docs/history/iteration-1.md](docs/history/iteration-1.md), and the
+bootstrap design, including Forgejo quirks we found, in
+[docs/history/bootstrap.md](docs/history/bootstrap.md).
 
 ## The fam layout
 
@@ -98,8 +100,9 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 - **Checks:** `make check` is what "the repository's checks" means to
   implementers and verifiers: `gofmt -l` clean, `go mod tidy -diff` clean,
   `make vet` (including `-tags e2e`) and `make test`.
-- **Before a PR:** `make check` and `make e2e` pass. New
-  behaviour gets a test. Keep the docs in `docs/` true to the code.
+- **Before a PR:** `make check` and `make e2e` pass. New behaviour gets a
+  test. Keep the docs in `docs/` true to the code; `docs/history/` is a
+  record and is not kept current.
 - **Style:** match the surrounding code, comment density included. Commit
   messages say what changed and why.
 

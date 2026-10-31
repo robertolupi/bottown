@@ -1,8 +1,9 @@
 # Iteration 1: one issue landed through bottown runs
 
 > [!NOTE]
-> **Status**: Plan (2026-10-31). Decisions below were agreed with rlupi in
-> the design discussion of the same day. It builds on
+> **Status**: Built (2026-10-31), except build step 7.5. Decisions below
+> were agreed with rlupi in the design discussion of the same day; the text
+> was checked against the code at bc6e7ab (#39). It builds on
 > [bootstrap.md](bootstrap.md).
 
 ## Goal
@@ -88,14 +89,19 @@ harness = "kimi"
 
 ### Run keys (server)
 
-- **Minting:** `POST /v1/runs` (owner only) takes `{kind, actor, repo,
-  issue|pr, allow_same_family}`.
+- **Minting:** `POST /v1/runs` takes `{kind, actor, repo, issue|pr,
+  allow_same_family, interactive}`. The owner mints runs for any actor; an
+  actor may start one for itself (step 7).
   1. For verify runs, it reads the PR to get its head SHA and author, then
      checks the family rule.
   2. It mints a run key bound to all of that, valid for 12 h by default.
-  3. It returns `{run_id, key, sha, branch}`.
-- **Revoking:** `DELETE /v1/runs/{id}` revokes the key. `GET /v1/runs`
-  lists the server's run records (for `run ls --all`).
+  3. It returns the run record (`id`, `sha`, `branch`, …) plus its `key`.
+- **Revoking:** `DELETE /v1/runs/{id}` ends the run and deletes its key. The
+  owner ends any run, an actor only its own. `GET /v1/runs` (owner only)
+  lists the server's run records, for `run ls`.
+- **Purging:** `POST /v1/runs/purge` (owner only) deletes a repository's
+  ended run records, for `run gc`. Runs that have not ended are never
+  purged.
 - **Proxy role policy**, applied on top of the existing deny-list:
   - **verify runs:** no `git-receive-pack`, no PR or issue creation, no
     edits. They may read, comment, and submit a review. Filing a follow-up
@@ -105,9 +111,10 @@ harness = "kimi"
     comment.
   - **all runs:** API and git calls are limited to the run's repo; anything
     else is denied.
-- **Record:** the server keeps run records (key hash, binding, created,
-  expires, revoked, last seen) in the secrets store. They are operational
-  state that could be rebuilt, not part of the tracker.
+- **Record:** the server keeps run records (binding, created, expires, and
+  when ended, the end time and status) in the secrets store. Keys are stored
+  separately, by hash. Records are operational state, not part of the
+  tracker; the handover comments keep the history on the issue or PR.
 
 ### MCP tools
 
@@ -115,9 +122,11 @@ harness = "kimi"
 |---|---|
 | `whoami` | Returns actor, family, role, repo, issue/PR and SHA for the run |
 | `issue_get` | The run's issue, or a given number in the run's repo: body, comments, labels |
+| `issue_list` | Lists issues in the run's repository (or a given one outside a run), open by default |
 | `issue_create` | Files an issue as the actor. Allowed outside a run with a read-only key (repo required) and in any run (the run's repo only); `disable_actor_issue_create` turns it off |
 | `pr_create` | Implement runs only; opens a PR from the run branch, closing the issue |
 | `pr_get` | Head SHA, base, author, diff and reviews |
+| `pr_list` | Lists pull requests with author, head SHA and review state, open by default |
 | `comment` | Comments on the run's issue or PR |
 | `review_submit` | Verify runs only. Requires a `commit_id` equal to the PR's current head, rechecked on the server. Applies the family rule, adding a note when the run has the same-family override. |
 | `forge_api` | Passthrough `(method, path, body)` through the same proxy policy |
@@ -126,16 +135,20 @@ harness = "kimi"
 
 ```
 <repo>/.bottown/
-  mirror.git/                        bare mirror of the bottown remote
-  runs/<run-id>/                     git worktree of mirror.git
-  runs/<run-id>/.bottown-run.json    kind, target, actor, role, sha, status, exit code
+  mirror.git/                 bare mirror of the bottown remote
+  runs/<run-id>/              git worktree of mirror.git (the agent's cwd)
+  runs/<run-id>.json          local record (0600; holds the key while running)
+  runs/<run-id>.log           harness output
+  runs/<run-id>.mcp.json      harness MCP config (0600; deleted at run end)
+  runs/<run-id>.prompt.md     the goal prompt
 ```
 
 - `.bottown/` is added to `.git/info/exclude`, so no `.gitignore` change is
   needed. `du -sh .bottown` shows the disk cost.
 - **Worktree config** (`extensions.worktreeConfig`): `user.name` and
   `user.email` are the actor's. The only remote is the bottown one. The
-  credential helper is reset, then set to `bottown credential --run <id>`.
+  credential helper is reset, then set to `bottown credential --run-file
+  <record>`.
 - **Implement runs** use branch `issue/<n>`, created or resumed. A later run,
   possibly by another actor, continues the same branch to address review.
 - **Verify runs** are detached at the PR's head SHA.
@@ -146,10 +159,10 @@ harness = "kimi"
 ### Commands
 
 ```bash
-bottown run implement -a <actor> [-I] <issue>
-bottown run verify -a <actor> [-I] [--allow-same-family] <pr>
-bottown run ls [--all]        # local run dirs merged with server records; flags orphans
-bottown run show <run-id>
+bottown run implement -a <actor> [-I] [--keep] [--allow TOOL]... <issue>
+bottown run verify -a <actor> [-I] [--keep] [--allow TOOL]... [--allow-same-family] <pr>
+bottown run ls [--all]        # local runs merged with the server's records
+bottown run show <run-id>     # alias: run status
 bottown run gc [--failed] [--older-than D]  # remove finished runs (failed ones only with --failed)
 ```
 
@@ -172,8 +185,11 @@ recently ended runs.
 6. On exit, post a handover comment and revoke the key. Remove the worktree
    on success; keep it on failure.
 
-`run ls` columns are run, kind, target, actor, family, mode, status, branch
-or SHA, age and size.
+`run ls` columns are run, kind, target, actor, family, mode, status, key
+state, branch or SHA, age and size. It hides ended runs that exist only on
+the server (actor-worktree runs, once over); `run ls --all` lists every run
+on the instance. `--keep` keeps a succeeded run's worktree; `--allow` adds
+tools the agent may use without asking.
 
 **Batch or interactive.** Both modes use the same worktree, run key, MCP
 config and actor identity, so roles are enforced the same way. Only the
@@ -197,8 +213,9 @@ hood, since a headless stream cannot be steered.
 ### Harness bindings (iteration 1)
 
 - **claude:** `claude -p` with stream-json output, `--mcp-config` pointing at
-  the run's file, and an allowlist of `mcp__bottown__*` plus the repo's build
-  and test commands.
+  the run's file, and an allowlist of `mcp__bottown`, `Bash(bottown:*)`, the
+  file tools and common build, test and git commands (`go`, `make`, `npm`,
+  `cargo`, …), plus whatever `--allow` adds.
 - **agy (Antigravity):** the second vendor for verification; see build step 5.
 - **codex and kimi:** their actor accounts exist, but there are no bindings
   yet. kimi may come through crush and OpenRouter.
@@ -247,9 +264,10 @@ hood, since a headless stream cannot be steered.
    - **Batch:** `--dangerously-skip-permissions --output-format stream-json
      --print <prompt>`. agy has no allowlist tier.
    - **Interactive:** `-i <prompt>`.
-   - **Not yet run live:** the auto-mode classifier blocks Claude from
-     starting agy with `--dangerously-skip-permissions`, so the owner runs
-     the first live check.
+   - **Run live** on dev and then on prod, as implementer and verifier,
+     mostly through the in-harness path of step 7. Claude cannot start agy
+     with `--dangerously-skip-permissions` itself (the auto-mode classifier
+     blocks it), so the owner starts agy's runs.
 
    **Option:** a `crush` binding with OpenRouter would give actors on many
    model families through one harness, at pay-per-token cost. It is not
@@ -259,11 +277,12 @@ hood, since a headless stream cannot be steered.
    agy approved it with an official review pinned to the PR head. Claude
    runs are isolated from the owner's personal setup: no user-level
    settings, plugins, hooks or auto-memory, and no Claude-host variables.
-7. **Permanent actor worktrees and runs from inside the harness** (next;
-   see below).
-8. Prod: run `bottown up -i prod --ref <commit>`, then bootstrap the fam:
+7. **Permanent actor worktrees and runs from inside the harness.** Done
+   (2026-10-31) except 7.5; see below.
+8. ~~Prod: run `bottown up -i prod --ref <commit>`, then bootstrap the fam:
    `bottown clone -i prod ~/src/bottown ~/src/fams/bottown`. Then file and
-   pre-register the first issue.
+   pre-register the first issue.~~ Done (2026-10-31). Prod is upgraded
+   only from commits on `main`; this repository is `bottown/bottown` there.
 
    `bottown clone SRC FAMDIR` (done 2026-10-31, tried on dev) does three
    things:
@@ -286,7 +305,7 @@ work in the agent harnesses' own UIs and start a run from inside one, with
 for normal use as well (e.g. running a verify while the actor's permanent
 worktree is busy), in addition to e2e and dev.
 
-### Layout (the fam layout of `~/src/fams/botfam-new`)
+### Layout (the fam layout of `~/src/fams/bottown`)
 
 ```
 <fam>/main      the owner's checkout (the real .git), remotes origin + bottown
@@ -316,7 +335,8 @@ worktree. Runs then lease it instead of creating a directory.
 ### Starting runs from inside a harness
 
 - **The slash command** `/bottown-implement 12` (and `/bottown-verify 13`)
-  is a harness command or skill that calls a new **`run_start`** MCP tool.
+  is a harness command or skill that runs `bottown run start` (the CLI, see
+  below; there is no `run_start` MCP tool).
 - **The actor starts its own run.** The server applies the same checks as
   `POST /v1/runs` (issue open, PR head SHA, author refusal, family rule) and
   binds the run to the calling actor's worktree. The owner can disable
@@ -324,9 +344,10 @@ worktree. Runs then lease it instead of creating a directory.
 - **The worktree is then prepared:** branch `issue/<n>` is checked out, or
   the PR head detached for verify runs. This is refused if the worktree is
   dirty or already in a run.
-- **`run_end`** (or `bottown run end`) ends the lease and revokes the key.
-- **Outside a run,** MCP allows reads and `run_start` only. Writes need a
-  run, so role and repo scoping still hold.
+- **`bottown run end`** ends the lease and revokes the key.
+- **Outside a run,** actor keys are read-only: reads, starting a run, and
+  filing issues. Other writes need a run, so role and repo scoping still
+  hold.
 - **`bottown run implement/verify -a <actor> N`** from `main` keeps working.
   It can lease that actor's permanent worktree (then launching the harness
   batch, `-I`, or `--no-launch` to open the UI yourself), or run in an
@@ -399,7 +420,8 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
      a run. Runs record `started_by`. An actor can read and end its own
      runs. `disable_actor_self_start` turns self-start off.
    - **One implementation:** forge operations live in `server/forge.go`,
-     behind `/v1/forge/{issue,pr,comment,review}` and the MCP tools.
+     behind `/v1/forge/{issue,issues,pr,prs,comment,review}` (reads with
+     `GET`, writes with `POST`) and the MCP tools.
    - **Not done:** there are no `run_start`/`run_end` MCP tools; the CLI
      is the primary path.
 3. ~~The agent CLI (`run start/end`, `whoami`, `issue`, `pr`, `comment`,
@@ -441,8 +463,10 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
    worktrees (`--no-launch`, batch, `-I`), while keeping ephemeral runs
    supported as an explicit option (default or flag, the owner's call), at
    least for `run verify`. `run ls` reads the worktrees' state.
-6. e2e: a scripted run through the CLI and an actor-started run; check that
-   an owner-key push from an actor worktree is impossible.
+6. ~~e2e: a scripted run through the CLI and an actor-started run; check
+   that an owner-key push from an actor worktree is impossible.~~ Done
+   (2026-10-31): "agent CLI in actor worktrees" and "actor worktrees next
+   to main".
 
 ## Done when
 
@@ -450,5 +474,6 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
 - The commits are by the implementer actor.
 - The approving review is by an actor of another family, pinned to the PR's
   final head SHA.
-- Both runs show in `run ls` with their final status.
+- Both runs show in `run ls --all` with their final status, until `run gc`
+  purges them. (`run ls` hides ended actor-worktree runs.)
 - The written record exists.
