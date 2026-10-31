@@ -99,7 +99,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		return err
 	}
 
-	req := server.RunRequest{Kind: kind, Repo: repo}
+	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true}
 	if kind == policy.Implement {
 		req.Issue = n
 	} else {

@@ -167,6 +167,103 @@ func TestPrintRunLs(t *testing.T) {
 	})
 }
 
+func TestPrintRunLsFiltering(t *testing.T) {
+	now := time.Now()
+	endedTime := now.Add(-10 * time.Minute)
+
+	// 1. Local ended run whose server record is ended:
+	// must keep KEY "ended", not "gone".
+	recLocalEnded := runs.Record{
+		ID:       "r-local",
+		Kind:     policy.Implement,
+		Issue:    1,
+		Actor:    "claude",
+		Family:   "anthropic",
+		Branch:   "issue/1",
+		Status:   runs.StatusFailed,
+		Started:  now.Add(-time.Hour),
+		Ended:    &endedTime,
+		Worktree: "/tmp/nonexistent",
+	}
+	srLocalEnded := secrets.Run{
+		ID:      "r-local",
+		Kind:    policy.Implement,
+		Issue:   1,
+		Actor:   "claude",
+		Family:  "anthropic",
+		Branch:  "issue/1",
+		Status:  runs.StatusFailed,
+		Created: now.Add(-time.Hour),
+		Expires: now.Add(time.Hour),
+		Ended:   &endedTime,
+	}
+
+	// 2. Server-only expired run (never ended, sr.Ended == nil):
+	// must remain listed with STATUS "dead" and KEY "expired".
+	srExpiredStuck := secrets.Run{
+		ID:      "r-stuck",
+		Kind:    policy.Implement,
+		Issue:   2,
+		Actor:   "codex",
+		Family:  "openai",
+		Branch:  "issue/2",
+		Created: now.Add(-2 * time.Hour),
+		Expires: now.Add(-time.Hour), // expired, never ended
+	}
+
+	// 3. Server-only ended run (sr.Ended != nil):
+	// must be hidden from default printRunLs.
+	srServerEnded := secrets.Run{
+		ID:      "r-ended",
+		Kind:    policy.Verify,
+		PR:      3,
+		Actor:   "agy",
+		Family:  "google",
+		Branch:  "issue/3",
+		Status:  runs.StatusSucceeded,
+		Created: now.Add(-time.Hour),
+		Expires: now.Add(time.Hour),
+		Ended:   &endedTime,
+	}
+
+	var buf bytes.Buffer
+	r := lipgloss.NewRenderer(&buf)
+	local := []runs.Record{recLocalEnded}
+	remote := []secrets.Run{srLocalEnded, srExpiredStuck, srServerEnded}
+
+	if err := printRunLs(&buf, r, local, remote); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+
+	// 1. Local ended run must show "ended", not "gone"
+	if !strings.Contains(got, "r-local") {
+		t.Errorf("expected r-local in output:\n%s", got)
+	}
+	if strings.Contains(got, "gone") {
+		t.Errorf("r-local must not show KEY 'gone':\n%s", got)
+	}
+	if !strings.Contains(got, "ended") {
+		t.Errorf("r-local must show KEY 'ended':\n%s", got)
+	}
+
+	// 2. Server-only expired run must be listed with dead/expired
+	if !strings.Contains(got, "r-stuck") {
+		t.Errorf("expected r-stuck (expired never-ended) in output:\n%s", got)
+	}
+	if !strings.Contains(got, "dead") {
+		t.Errorf("r-stuck must show STATUS 'dead':\n%s", got)
+	}
+	if !strings.Contains(got, "expired") {
+		t.Errorf("r-stuck must show KEY 'expired':\n%s", got)
+	}
+
+	// 3. Server-only ended run must be hidden
+	if strings.Contains(got, "r-ended") {
+		t.Errorf("r-ended (server-only ended) must be hidden from output:\n%s", got)
+	}
+}
+
 func TestPrintRunLsAll(t *testing.T) {
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	sr := secrets.Run{
