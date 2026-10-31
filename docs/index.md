@@ -48,6 +48,9 @@ dropped.
 
 ## Documents
 
+- [Iteration 1](iteration-1.md): plan for landing the first issue through
+  `bottown run implement`/`verify`, with actors as forge identities and roles
+  per run.
 - [Bootstrap](bootstrap.md): how `bottown up` gets from nothing to a
   provisioned Forgejo plus bottown server, and what Forgejo corrected in the
   problem statement.
