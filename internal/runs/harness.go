@@ -85,10 +85,19 @@ func LookupHarness(name string) (Harness, error) {
 // credentials an agent could fall back to, plus the run's coordinates.
 func RunEnv(l Launch) []string {
 	var env []string
+	// Launched from inside a Claude Code session, the environment carries
+	// that host's session and routing variables; a run must not inherit
+	// them (it would talk to the host's proxy, or think it is a child).
+	insideClaude := os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "" || os.Getenv("CLAUDECODE") != ""
 	for _, e := range os.Environ() {
 		k, _, _ := strings.Cut(e, "=")
-		switch k {
-		case "GH_TOKEN", "GITHUB_TOKEN", "GITEA_TOKEN", "FORGEJO_TOKEN", "BOTTOWN_INSTANCE", HarnessCmdEnv:
+		switch {
+		case k == "GH_TOKEN", k == "GITHUB_TOKEN", k == "GITEA_TOKEN", k == "FORGEJO_TOKEN",
+			k == "BOTTOWN_INSTANCE", k == HarnessCmdEnv:
+			continue
+		case strings.HasPrefix(k, "CLAUDE_CODE_"), k == "CLAUDECODE":
+			continue
+		case insideClaude && (k == "ANTHROPIC_BASE_URL" || k == "USE_STAGING_OAUTH" || k == "USE_LOCAL_OAUTH" || strings.HasPrefix(k, "MCP_")):
 			continue
 		}
 		env = append(env, e)
@@ -143,15 +152,29 @@ func writeMCP(l *Launch, path, typeKey string) error {
 	return nil
 }
 
+// claudeIsolation keeps a run independent of the owner's personal Claude
+// setup: user-level settings (and so the owner's plugins, hooks and
+// permissions) are not loaded, auto-memory is off, and only bottown's MCP
+// server is configured. The repository's own CLAUDE.md and project settings
+// still apply. (--bare would isolate more but cannot use subscription
+// OAuth; --safe-mode drops the repository's CLAUDE.md.)
+var claudeIsolation = []string{
+	"--setting-sources", "project,local",
+	"--settings", `{"autoMemoryEnabled": false}`,
+	"--strict-mcp-config",
+}
+
 func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
-	args := []string{
-		"--mcp-config", l.MCPConfig, "--strict-mcp-config",
+	args := append([]string{"--mcp-config", l.MCPConfig}, claudeIsolation...)
+	args = append(args,
 		"--permission-mode", "acceptEdits",
 		"--allowedTools", strings.Join(append(append([]string{}, defaultAllowed...), l.Allow...), ","),
-		"-n", "bottown " + l.RunID,
-	}
+		"-n", "bottown "+l.RunID,
+	)
 	if !l.Interactive {
-		args = append(args, "-p", "--output-format", "stream-json", "--verbose")
+		// The run log keeps the transcript; don't add batch sessions to the
+		// owner's session list.
+		args = append(args, "-p", "--output-format", "stream-json", "--verbose", "--no-session-persistence")
 	}
 	args = append(args, l.Prompt)
 	cmd := exec.CommandContext(ctx, "claude", args...)

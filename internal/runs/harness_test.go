@@ -65,3 +65,27 @@ func TestAgySummary(t *testing.T) {
 		t.Fatalf("text summary = %q", got)
 	}
 }
+
+func TestClaudeIsolationAndEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "desktop")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s")
+	t.Setenv("ANTHROPIC_BASE_URL", "http://host-proxy")
+	t.Setenv("GH_TOKEN", "x")
+	t.Setenv("KEEP_ME", "1")
+	c, _ := (claudeHarness{}).Command(t.Context(), Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k"})
+	args := strings.Join(c.Args, " ")
+	for _, want := range []string{"--setting-sources project,local", `"autoMemoryEnabled": false`, "--strict-mcp-config", "--mcp-config /m.json", "--no-session-persistence"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args lack %q: %s", want, args)
+		}
+	}
+	env := strings.Join(c.Env, "\n")
+	for _, gone := range []string{"CLAUDE_CODE_ENTRYPOINT=", "CLAUDE_CODE_SESSION_ID=", "ANTHROPIC_BASE_URL=", "GH_TOKEN="} {
+		if strings.Contains(env, gone) {
+			t.Errorf("env still has %s", gone)
+		}
+	}
+	if !strings.Contains(env, "KEEP_ME=1") || !strings.Contains(env, "BOTTOWN_RUN_KEY=k") {
+		t.Errorf("env lost a variable it should keep")
+	}
+}
