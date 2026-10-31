@@ -82,7 +82,8 @@ re-run with the previous commit.
    - branch protection on the default branch of every non-empty repo.
 
 `bottown repo add [NAME]` is run inside a checkout:
-1. Creates `bottown/NAME`.
+1. Creates `bottown/NAME` through the server (`PUT /v1/repos/{name}`, owner
+   only).
 2. Adds the instance's remote, leaving `origin` untouched as the external
    upstream.
 3. Points git's credential helper for that URL at bottown, and only bottown.

@@ -48,14 +48,19 @@ dropped.
 
 ## Documents
 
-- [Iteration 1](iteration-1.md): plan for landing the first issue through
-  `bottown run implement`/`verify`, with actors as forge identities and roles
-  per run.
-- [Bootstrap](bootstrap.md): how `bottown up` gets from nothing to a
-  provisioned Forgejo plus bottown server, and what Forgejo corrected in the
-  problem statement.
 - [Problem statement](problem-statement.md) — what bottown solves, constraints,
   what v1 settled, the shape of the solution, identity and enforcement on the
   local forge, open decisions.
-- [History: v1 rewrite epic](history/v1-rewrite-epic.md) — superseded; evidence
+
+### History
+
+Records of past work, not kept current:
+
+- [Iteration 1](history/iteration-1.md): plan and build record for landing
+  the first issue through bottown runs, with actors as forge identities and
+  roles per run, then permanent actor worktrees and in-harness runs.
+- [Bootstrap](history/bootstrap.md): how `bottown up` gets from nothing to a
+  provisioned Forgejo plus bottown server, and what Forgejo corrected in the
+  problem statement.
+- [v1 rewrite epic](history/v1-rewrite-epic.md) — superseded; evidence
   tables and the red-team challenges.
