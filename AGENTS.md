@@ -51,14 +51,14 @@ CLI for the forge; it holds no token, and the server enforces your run's role
 and repository:
 
 ```
-bottown whoami
+bottown whoami                      # actor, run or last run, HEAD vs main
 bottown issue list [--state open|closed|all] [--repo R] [--json]
-bottown issue show [N]
+bottown issue show [N] [--repo R] [--json]
 bottown issue create --title T --body-file -
 bottown pr list [--state open|closed|all] [--repo R] [--json]
-bottown pr show [N] [--diff [--full] | --stat]
+bottown pr show [N] [--repo R] [--diff [--full] | --stat] [--json]
 bottown pr create --title T --body-file -
-bottown comment [N] --body-file -
+bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
 bottown api METHOD PATH [--data JSON]
 bottown run end [--failed] --summary-file -
@@ -76,6 +76,17 @@ bottown run end [--failed] --summary-file -
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end
   the run with `--failed`. Do not guess, and do not work outside the issue.
+- **Checks:** "the repository's checks" in your prompt means `make check`.
+  Implementers also run `make e2e` before opening a PR.
+- **Review follow-ups** happen in a new implement run on the same issue: it
+  resumes `issue/<n>`. Every new head needs a new verify run; if `review
+  submit` says the PR has moved, stop.
+- **After a run,** your worktree stays where the run left it, often on code
+  that has since merged. Run `bottown whoami`: it shows the last run and how
+  HEAD compares with `main`.
+- **Never run `make install` from an actor worktree.** It replaces the
+  shared `~/.local/bin/bottown`, which every actor and the harness commands
+  use, with your branch's build. Build with `make build` (`bin/bottown`).
 
 ## Code
 
@@ -114,6 +125,15 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 | `dev` | 3040 / 3041 | Disposable; `bottown up -i dev` rebuilds it from the working tree. |
 | `e2e-*` | 3050+ | Created and purged by `make e2e`. |
 
+**After merging (owner),** in `main`:
+
+1. `git pull --ff-only bottown main`. The checkout does not track prod's
+   `main` by itself, and the steps below build from it.
+2. `make install` when the CLI changed (including the run prompts, which
+   the CLI renders).
+3. `bottown harness setup` when the slash-command templates changed.
+4. `bottown up -i prod --ref <commit>` when the server changed.
+
 <!-- BEGIN TRANSITION: remove this section once every item below is done. -->
 ## Transition from the bootstrap (temporary)
 
@@ -124,18 +144,15 @@ section is removed:
   reach neither this fam nor prod.
 - **Some changes still bypass runs.** The owner, or Claude acting for the
   owner in `main`, may commit and push directly while the run commands are
-  finished (step 7.5 of the plan). Afterwards every change goes through an
-  issue and a run.
-- **A stray prod repo, `bottown/main`,** was created by a since-fixed
-  `repo add` bug. It is not this repository; ignore it until the owner
-  deletes it.
+  finished (step 7.5 of [iteration 1](docs/history/iteration-1.md)).
+  Afterwards every change goes through an issue and a run.
 
 Done when all of these hold; then remove this section in a run:
 
-- [ ] `bottown/main` deleted on prod (owner).
+- [x] `bottown/main` deleted on prod (owner).
 - [ ] Step 7.5 merged: `bottown run implement/verify` lease permanent
       worktrees, with ephemeral runs kept as a supported option.
-- [ ] The first pre-registered issue landed through a run: an implementer
-      PR, a cross-family verifier approval, an owner merge.
+- [x] The first pre-registered issue landed through a run: an implementer
+      PR, a cross-family verifier approval, an owner merge (#10 via !24).
 - [ ] `~/src/bottown` archived or removed (owner).
 <!-- END TRANSITION -->
