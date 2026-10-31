@@ -402,7 +402,7 @@ func newIssue() *cobra.Command {
 			return nil
 		},
 	}
-	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 
 	var createRepo, title, body, bodyFile string
@@ -619,15 +619,19 @@ func newComment() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			r := repo
+			if r == "" {
+				r = a.defaultRepo()
+			}
 			var out server.CommentOut
-			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Target: server.Target{Repo: repo, Number: n}, Body: b}, &out); err != nil {
+			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Target: server.Target{Repo: r, Number: n}, Body: b}, &out); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "commented (id %d) as %s\n", out.ID, out.Author)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	cmd.Flags().StringVar(&body, "body", "", "comment text")
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "read the comment from a file, or - for stdin")
 	return cmd
