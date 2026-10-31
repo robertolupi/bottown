@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 func TestInstallCommands(t *testing.T) {
@@ -168,5 +170,34 @@ func TestClaudeDiscussKeepsTheQuestionOutOfTheShell(t *testing.T) {
 	}
 	if !strings.Contains(string(b), selfPath()+" run start discuss <number>") {
 		t.Errorf("discuss command does not say how to start the run:\n%s", b)
+	}
+}
+
+func TestDiscussQuestion(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader("what's $(this)?\nsecond line\n"))
+	if q, err := discussQuestion(cmd, nil, "-"); err != nil || q != "what's $(this)?\nsecond line" {
+		t.Errorf("stdin: %q %v", q, err)
+	}
+	if q, err := discussQuestion(cmd, []string{"blah", "or", "foo?"}, ""); err != nil || q != "blah or foo?" {
+		t.Errorf("words: %q %v", q, err)
+	}
+	if q, err := discussQuestion(cmd, nil, ""); err != nil || q != "" {
+		t.Errorf("none: %q %v", q, err)
+	}
+	if _, err := discussQuestion(cmd, []string{"x"}, "-"); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("both: %v", err)
+	}
+}
+
+func TestDiscussHandover(t *testing.T) {
+	rec := runs.Record{ID: "r-1", Kind: "discuss", Actor: "claude", Family: "anthropic", SHA: "abc", Question: "blah\nor foo?"}
+	got := handoverText(rec, "succeeded", 0, "answered")
+	if !strings.Contains(got, "Discussed against `abc`") || !strings.Contains(got, "Question:\n> blah\n> or foo?\n\n") || !strings.Contains(got, "answered") {
+		t.Errorf("handover:\n%s", got)
+	}
+	rec.Question = ""
+	if got := handoverText(rec, "succeeded", 0, ""); strings.Contains(got, "Question:") {
+		t.Errorf("handover without a question:\n%s", got)
 	}
 }

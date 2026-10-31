@@ -1223,6 +1223,34 @@ func TestE2E(t *testing.T) {
 		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Contains(out, "kimi") {
 			t.Errorf("run ls after gc:\n%s", out)
 		}
+
+		// A batch discuss run from main: the question reaches the prompt
+		// through stdin, the agent comments, and it cannot push.
+		discuss := "set -e; grep -q '## Question to discuss' \"$BOTTOWN_PROMPT_FILE\"; grep -q \"what's best: blah or foo?\" \"$BOTTOWN_PROMPT_FILE\"; " +
+			"echo 'foo, because' | " + bin + " comment --body-file -; " +
+			"if git push -q origin HEAD:refs/heads/discuss-push 2>/dev/null; then echo pushed; exit 9; fi; echo 'discussed by script'"
+		c := exec.Command(bin, "run", "discuss", "-a", "agy", "--question-file", "-", fmt.Sprint(issue.Number))
+		c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+discuss)
+		c.Dir, c.Stdin = demo, strings.NewReader("what's best: blah or foo?\n")
+		if b, err := c.CombinedOutput(); err != nil || !strings.Contains(string(b), "succeeded") {
+			t.Fatalf("run discuss: %v\n%s", err, b)
+		}
+		if out, err := a.cmd(demo, "run", "discuss", "-a", "agy", "--question-file", "-", fmt.Sprint(issue.Number), "extra"); err == nil || !strings.Contains(out, "not both") {
+			t.Errorf("run discuss with two questions: %v %s", err, out)
+		}
+		var dc []struct {
+			User struct{ Login string }
+			Body string
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), nil, &dc)
+		if k := len(dc); k < 2 || dc[k-2].User.Login != "agy" || strings.TrimSpace(dc[k-2].Body) != "foo, because" ||
+			!strings.Contains(dc[k-1].Body, "· discuss · agy") || !strings.Contains(dc[k-1].Body, "Question:\n> what's best: blah or foo?") ||
+			!strings.Contains(dc[k-1].Body, "discussed by script") {
+			t.Errorf("discuss comments on the issue: %+v", dc)
+		}
+		if out := a.mustCmd(demo, "run", "ls"); !strings.Contains(out, "discuss") || !strings.Contains(out, "succeeded") {
+			t.Errorf("run ls after discuss:\n%s", out)
+		}
 	})
 
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {

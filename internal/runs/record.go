@@ -33,6 +33,7 @@ type Record struct {
 	SHA             string     `json:"sha,omitempty"`
 	Interactive     bool       `json:"interactive,omitempty"`
 	AllowSameFamily bool       `json:"allow_same_family,omitempty"`
+	Question        string     `json:"question,omitempty"` // discuss: the owner's question
 	Harness         string     `json:"harness"`
 	Status          string     `json:"status"`
 	ExitCode        *int       `json:"exit_code,omitempty"`

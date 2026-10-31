@@ -6,6 +6,12 @@ Review and discuss #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**. Do not
 implement it.
 
 {{.Body}}
+{{- if .Question}}
+
+## Question to discuss
+
+{{.Question}}
+{{- end}}
 
 ## How this run works
 
@@ -18,10 +24,14 @@ implement it.
   - `{{.Bottown}} comment --body-file -` comments on it.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a separate
     issue, for something you find that is outside this one.
+{{- if .Question}}
+- Answer the question above.
+{{- else}}
 - The owner's request may come with the command that started this run, as
   words after the number. That is the question to discuss. Without one,
   review the issue: is it clear and complete, what approach would you take,
   what are the risks and open questions?
+{{- end}}
 - If the owner is in the conversation, discuss it with them there.
 
 ## Done means
