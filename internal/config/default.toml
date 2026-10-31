@@ -19,6 +19,11 @@ actor_token_scopes = ["write:repository", "write:issue", "read:user", "read:orga
 # themselves a same-family review. Set to true to allow owner-started runs only.
 disable_actor_self_start = false
 
+# Actors may file issues as themselves (`bottown issue create`), also outside
+# a run, e.g. follow-ups from a discussion with the owner. Run keys stay in
+# their run's repository. Set to true to allow only the owner to file issues.
+disable_actor_issue_create = false
+
 # Accounts that existed in earlier designs. They are disabled (prohibit_login,
 # which also rejects their tokens) but kept, so their history stays attributed.
 retired = ["implementer", "verifier"]

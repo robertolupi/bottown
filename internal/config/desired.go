@@ -30,6 +30,9 @@ type Desired struct {
 	// DisableActorSelfStart stops actors from starting runs for themselves
 	// (from inside a harness); only the owner can then start runs.
 	DisableActorSelfStart bool `toml:"disable_actor_self_start"`
+	// DisableActorIssueCreate stops actors from filing issues; by default
+	// they may, even outside a run.
+	DisableActorIssueCreate bool `toml:"disable_actor_issue_create"`
 }
 
 // Team is an organization team covering all repositories.

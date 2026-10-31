@@ -682,6 +682,13 @@ func TestE2E(t *testing.T) {
 		if code, _ := call(rk, "POST", "/v1/forge/comment", map[string]any{"repo": "demo", "number": issue.Number, "body": "x"}); code != 403 {
 			t.Errorf("read key POST /v1/forge/comment: %d, want 403", code)
 		}
+		// Filing an issue is the one write a read key may make.
+		if code, got := call(rk, "POST", "/v1/forge/issue", map[string]any{"repo": "demo", "title": "from a read key"}); code != 200 || got["repo"] != "demo" {
+			t.Errorf("read key POST /v1/forge/issue: %d %v", code, got)
+		}
+		if code, _ := call(rk, "POST", "/v1/forge/issue", map[string]any{"title": "no repo"}); code != 400 {
+			t.Errorf("read key POST /v1/forge/issue without repo: %d, want 400", code)
+		}
 
 		// Self-start: only for itself, never with a same-family override.
 		if code, _ := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number}); code != 403 {
@@ -747,6 +754,21 @@ func TestE2E(t *testing.T) {
 			t.Errorf("idle whoami: %s", out)
 		}
 
+		// Filing issues works outside a run, in the worktree's repository.
+		out := must(cw, "found while talking", "issue", "create", "--title", "filed from chat", "--body-file", "-")
+		var filed int64
+		if _, err := fmt.Sscanf(out, "filed #%d in demo", &filed); err != nil {
+			t.Fatalf("issue create outside a run: %s", out)
+		}
+		var got struct {
+			Body string
+			User struct{ Login string }
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", filed), nil, &got)
+		if got.User.Login != "claude" || !strings.Contains(got.Body, "found while talking") || !strings.Contains(got.Body, "filed by claude, anthropic outside a run") {
+			t.Errorf("filed issue: %+v", got)
+		}
+
 		var issue struct{ Number int64 }
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "agent cli", "body": "add agent.txt"}, &issue)
 		n := fmt.Sprint(issue.Number)
@@ -774,6 +796,12 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "", "issue", "show"); !strings.Contains(out, "agent cli") {
 			t.Errorf("issue show: %s", out)
 		}
+		if out, err := agent(cw, "", "issue", "create", "--repo", "other", "--title", "x"); err == nil || !strings.Contains(out, "confined to") {
+			t.Errorf("issue create in another repo from a run: %v %s", err, out)
+		}
+		if out := must(cw, "", "issue", "create", "--title", "follow-up from a run"); !strings.Contains(out, "in demo") {
+			t.Errorf("issue create in a run: %s", out)
+		}
 
 		os.WriteFile(filepath.Join(cw, "agent.txt"), []byte("agent\n"), 0o644)
 		git(t, cw, "add", "agent.txt")
@@ -781,7 +809,7 @@ func TestE2E(t *testing.T) {
 		if out, err := exec.Command("git", "-C", cw, "push", "-q", "bottown-"+a.name, "HEAD").CombinedOutput(); err != nil {
 			t.Fatalf("push from actor worktree in a run: %v %s", err, out)
 		}
-		out := must(cw, "what changed: agent.txt", "pr", "create", "--title", "agent cli PR", "--body-file", "-")
+		out = must(cw, "what changed: agent.txt", "pr", "create", "--title", "agent cli PR", "--body-file", "-")
 		var prn int64
 		if _, err := fmt.Sscanf(out, "opened !%d", &prn); err != nil {
 			t.Fatalf("pr create: %s", out)

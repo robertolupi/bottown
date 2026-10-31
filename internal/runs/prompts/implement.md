@@ -36,4 +36,5 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 
 If the issue is unclear, or you are blocked, say so with `comment` on the
 issue and stop, rather than guessing. Do not work on anything outside this
-issue.
+issue: file what you find along the way as a new issue with
+`{{.Bottown}} issue create --title "…" --body-file -`.

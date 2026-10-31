@@ -98,7 +98,8 @@ harness = "kimi"
   lists the server's run records (for `run ls --all`).
 - **Proxy role policy**, applied on top of the existing deny-list:
   - **verify runs:** no `git-receive-pack`, no PR or issue creation, no
-    edits. They may read, comment, and submit a review.
+    edits. They may read, comment, and submit a review. Filing a follow-up
+    issue goes through `issue_create`, not the proxy.
   - **implement runs:** no review submission. They may push branches other
     than `main` (protection blocks `main` anyway), open and update PRs, and
     comment.
@@ -114,6 +115,7 @@ harness = "kimi"
 |---|---|
 | `whoami` | Returns actor, family, role, repo, issue/PR and SHA for the run |
 | `issue_get` | The run's issue, or a given number in the run's repo: body, comments, labels |
+| `issue_create` | Files an issue as the actor. Allowed outside a run with a read-only key (repo required) and in any run (the run's repo only); `disable_actor_issue_create` turns it off |
 | `pr_create` | Implement runs only; opens a PR from the run branch, closing the issue |
 | `pr_get` | Head SHA, base, author, diff and reviews |
 | `comment` | Comments on the run's issue or PR |
@@ -335,6 +337,7 @@ bottown run start implement 12 | verify 13   # self-start; prints the goal promp
 bottown run end [--failed]                   # handover comment + revoke
 bottown whoami
 bottown issue show [N]                       # defaults to the run's issue
+bottown issue create --title T [--body-file F]  # also outside a run
 bottown pr show [N] [--diff]
 bottown pr create --title T [--body-file F]
 bottown comment [N] (--body B | --body-file F | -)

@@ -43,6 +43,7 @@ and repository:
 ```
 bottown whoami
 bottown issue show [N]
+bottown issue create --title T --body-file -
 bottown pr show [N] [--diff]
 bottown pr create --title T --body-file -
 bottown comment [N] --body-file -
@@ -55,6 +56,10 @@ bottown run end [--failed] --summary-file -
   merge.
 - **Verifiers** review exactly the commit the run pinned, with one verdict.
   They cannot push.
+- **Anyone can file issues,** in or outside a run: follow-ups found while
+  working, or what the owner asks you to file from a conversation. Outside
+  a run the repository is the one your worktree's `bottown` remote points
+  at. Filing is the one write a read-only key may make.
 - **Cross-family rule:** a verifier must be from another model family than
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end

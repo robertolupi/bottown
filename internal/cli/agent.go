@@ -206,8 +206,37 @@ func optNumber(args []string) (int64, error) {
 	return parseNumber(args[0])
 }
 
+// repoFromGitURL returns org and repository from a bottown git remote URL,
+// e.g. http://127.0.0.1:3031/git/bottown/demo.git.
+func repoFromGitURL(u string) (org, repo string, ok bool) {
+	_, rest, found := strings.Cut(u, "/git/")
+	if !found {
+		return "", "", false
+	}
+	org, repo, found = strings.Cut(strings.TrimSuffix(strings.TrimSuffix(rest, "/"), ".git"), "/")
+	if !found || org == "" || repo == "" || strings.Contains(repo, "/") {
+		return "", "", false
+	}
+	return org, repo, true
+}
+
+// defaultRepo is the repository an agent command without --repo targets
+// outside a run: the one the worktree's bottown remote points at. In a run
+// it is empty, and the server uses the run's.
+func (a *agentCtx) defaultRepo() string {
+	if a.RunID != "" || a.Worktree == "" {
+		return ""
+	}
+	u, err := git(a.Worktree, "remote", "get-url", a.Remote)
+	if err != nil {
+		return ""
+	}
+	_, repo, _ := repoFromGitURL(u)
+	return repo
+}
+
 func newIssue() *cobra.Command {
-	issue := &cobra.Command{Use: "issue", Short: "Read issues (agent CLI)"}
+	issue := &cobra.Command{Use: "issue", Short: "Read and file issues (agent CLI)"}
 	var repo string
 	var asJSON bool
 	show := &cobra.Command{
@@ -244,7 +273,44 @@ func newIssue() *cobra.Command {
 	}
 	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
 	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
-	issue.AddCommand(show)
+
+	var createRepo, title, body, bodyFile string
+	var createJSON bool
+	create := &cobra.Command{
+		Use:   "create --title T [--body B | --body-file F|-]",
+		Short: "File a new issue as yourself, in or outside a run (default repo: the run's, else this worktree's)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			b, err := readBody(cmd, body, bodyFile)
+			if err != nil {
+				return err
+			}
+			r := createRepo
+			if r == "" {
+				r = a.defaultRepo()
+			}
+			var out server.IssueCreateOut
+			if err := a.call("POST", "/v1/forge/issue", server.IssueCreateIn{Repo: r, Title: title, Body: b}, &out); err != nil {
+				return err
+			}
+			if createJSON {
+				return printJSON(cmd, out)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "filed #%d in %s: %s\n", out.Number, out.Repo, out.URL)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&createRepo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
+	create.Flags().StringVar(&title, "title", "", "title (required)")
+	create.Flags().StringVar(&body, "body", "", "description")
+	create.Flags().StringVar(&bodyFile, "body-file", "", "read the description from a file, or - for stdin")
+	create.Flags().BoolVar(&createJSON, "json", false, "print JSON")
+	_ = create.MarkFlagRequired("title")
+	issue.AddCommand(show, create)
 	return issue
 }
 
