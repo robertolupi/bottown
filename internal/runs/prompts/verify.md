@@ -19,8 +19,9 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
 - You cannot push, open pull requests, or edit the issue. You can read,
   build, run tests, and comment.
 - Use the bottown CLI, `{{.Bottown}}`, for the forge:
-  - `{{.Bottown}} pr show --diff` prints the description, reviews so far, and
-    the diff.
+  - `{{.Bottown}} pr show --diff` prints the description, reviews so far, a
+    file summary, and the diff. Lock files such as `go.sum` are collapsed;
+    `--full` shows them.
   - `{{.Bottown}} issue show N` prints the linked issue.
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up

@@ -338,7 +338,7 @@ bottown run end [--failed]                   # handover comment + revoke
 bottown whoami
 bottown issue show [N]                       # defaults to the run's issue
 bottown issue create --title T [--body-file F]  # also outside a run
-bottown pr show [N] [--diff]
+bottown pr show [N] [--diff [--full] | --stat]
 bottown pr create --title T [--body-file F]
 bottown comment [N] (--body B | --body-file F | -)
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA (--body-file F | -)
