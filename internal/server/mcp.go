@@ -12,6 +12,7 @@ import (
 // WhoamiOut is the result of the whoami tool.
 type WhoamiOut struct {
 	Actor    string `json:"actor"`
+	Family   string `json:"family,omitempty"` // model vendor; empty for the owner
 	Instance string `json:"instance"`
 }
 
@@ -30,7 +31,9 @@ func (s *Server) mcpServer() *mcp.Server {
 		Name:        "whoami",
 		Description: "Report which bottown actor this connection is authenticated as.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, WhoamiOut, error) {
-		return nil, WhoamiOut{Actor: req.Extra.TokenInfo.UserID, Instance: s.Instance}, nil
+		actor := req.Extra.TokenInfo.UserID
+		a, _ := s.Desired.Actor(actor)
+		return nil, WhoamiOut{Actor: actor, Family: a.Family, Instance: s.Instance}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "forge_status",

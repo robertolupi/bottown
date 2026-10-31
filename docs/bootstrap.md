@@ -73,7 +73,9 @@ re-run with the previous commit.
 3. Converges the desired state in `internal/config/default.toml`. To
    override it, mount `/data/bottown/bottown.toml`. The state covers:
    - the owner, as a site admin;
-   - the bots `implementer`, `verifier` and `manager`;
+   - the actor accounts (`claude`, `codex`, `agy`, `kimi`), which are the
+     agents' forge identities, plus the internal `manager`; roles are per
+     run (see [iteration-1.md](iteration-1.md));
    - the org `bottown`, with teams that cover all repos;
    - org-wide labels;
    - one scoped token per actor;
@@ -100,9 +102,9 @@ enforced:
    keep web login allowed, but their password is random and discarded, so no
    one can log in as them.
 2. **Posting a PR review needs `write:repository`** token scope, so a
-   read-only verifier token cannot work. The verifier gets
-   `write:repository`. It still cannot push, because the `verifiers` team has
-   read-only code access. (The e2e test checks that its push is rejected.)
+   read-only reviewer token cannot work. Every actor gets
+   `write:repository`. Keeping a reviewer from pushing is enforced per run
+   by bottown, not by token scope or team permissions.
 3. **Commit statuses are covered by `write:repository`**, so token scope
    alone does not stop the implementer from forging `bottown/verify`. §5.2's
    "enforced by token scope" is wrong. The bottown proxy policy denies status

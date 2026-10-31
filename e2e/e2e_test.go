@@ -220,7 +220,7 @@ func TestE2E(t *testing.T) {
 	owner := a.ownerKey()
 
 	t.Run("accounts, org and labels match the spec", func(t *testing.T) {
-		for _, u := range []string{"owner", "implementer", "verifier", "manager"} {
+		for _, u := range []string{"owner", "claude", "codex", "agy", "kimi", "manager"} {
 			a.mustAPI(owner, "GET", "/users/"+u, nil, nil)
 		}
 		var labels []struct{ Name string }
@@ -326,9 +326,11 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
-	impl := a.mustCmd("", "credential", "key", "implementer")
+	// claude implements and codex verifies; roles are per run (step 2), so
+	// here they are only how the test uses each actor.
+	impl := a.mustCmd("", "credential", "key", "claude")
 	impl = strings.TrimSpace(impl)
-	ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "verifier"))
+	ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex"))
 
 	t.Run("policy and protection bound the bots", func(t *testing.T) {
 		head := git(t, demo, "rev-parse", "HEAD")
@@ -338,10 +340,7 @@ func TestE2E(t *testing.T) {
 		if code, _ := a.api(impl, "GET", "/repos/bottown/demo/issues", nil); code != 200 {
 			t.Errorf("implementer read issues: %d", code)
 		}
-		if out, err := a.pushAs(demo, "verifier", ver, "main:refs/heads/verifier-branch"); err == nil {
-			t.Errorf("verifier push succeeded:\n%s", out)
-		}
-		if out, err := a.pushAs(demo, "implementer", impl, "main:refs/heads/main"); err == nil && !strings.Contains(out, "Everything up-to-date") {
+		if out, err := a.pushAs(demo, "claude", impl, "main:refs/heads/main"); err == nil && !strings.Contains(out, "Everything up-to-date") {
 			t.Errorf("implementer push to protected main succeeded:\n%s", out)
 		}
 		var me struct{ Login string }
@@ -354,7 +353,7 @@ func TestE2E(t *testing.T) {
 		}
 		json.NewDecoder(resp.Body).Decode(&me)
 		resp.Body.Close()
-		if me.Login != "implementer" {
+		if me.Login != "claude" {
 			t.Errorf("Sudo header honoured: acting as %q", me.Login)
 		}
 		if code, _ := a.api("btk_bogus", "GET", "/user", nil); code != 401 {
@@ -370,7 +369,7 @@ func TestE2E(t *testing.T) {
 		os.WriteFile(filepath.Join(demo, "a.txt"), []byte("1\n"), 0o644)
 		git(t, demo, "add", ".")
 		git(t, demo, "commit", "-q", "-m", "feature 1")
-		if out, err := a.pushAs(demo, "implementer", impl, "feature"); err != nil {
+		if out, err := a.pushAs(demo, "claude", impl, "feature"); err != nil {
 			t.Fatalf("implementer push feature: %v\n%s", err, out)
 		}
 		var pr struct {
@@ -392,7 +391,7 @@ func TestE2E(t *testing.T) {
 		// A new commit must make the approval stale.
 		os.WriteFile(filepath.Join(demo, "a.txt"), []byte("2\n"), 0o644)
 		git(t, demo, "commit", "-q", "-am", "feature 2")
-		if out, err := a.pushAs(demo, "implementer", impl, "feature"); err != nil {
+		if out, err := a.pushAs(demo, "claude", impl, "feature"); err != nil {
 			t.Fatalf("push feature 2: %v\n%s", err, out)
 		}
 		deadline := time.Now().Add(30 * time.Second)
@@ -451,7 +450,7 @@ func TestE2E(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := json.Marshal(res.StructuredContent)
-		if !strings.Contains(string(b), `"actor":"implementer"`) {
+		if !strings.Contains(string(b), `"actor":"claude"`) || !strings.Contains(string(b), `"family":"anthropic"`) {
 			t.Fatalf("whoami = %s", b)
 		}
 		req, _ := http.NewRequest("POST", a.cfg.ServerURL()+"/mcp", strings.NewReader("{}"))

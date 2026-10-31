@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/spf13/cobra"
@@ -54,7 +55,7 @@ func newAdmin() *cobra.Command {
 	var label string
 	actorKey := &cobra.Command{
 		Use:   "actor-key ACTOR",
-		Short: "Mint a bottown API key for a bot that accepts host clients",
+		Short: "Mint a bottown API key for an actor",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := readContainerEnv()
@@ -65,12 +66,12 @@ func newAdmin() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b, ok := rec.Desired.Bot(args[0])
+			b, ok := rec.Desired.Actor(args[0])
 			switch {
+			case args[0] == rec.Desired.Manager.Name:
+				return fmt.Errorf("%q acts only inside bottown and never gets an API key", args[0])
 			case !ok:
-				return fmt.Errorf("unknown bot %q", args[0])
-			case !b.Keys:
-				return fmt.Errorf("bot %q acts only inside bottown and never gets an API key", args[0])
+				return fmt.Errorf("unknown actor %q (actors: %s)", args[0], strings.Join(rec.Desired.ActorNames(), ", "))
 			}
 			key, err := store.NewAPIKey(b.Name, label)
 			if err != nil {

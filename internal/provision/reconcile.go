@@ -122,11 +122,12 @@ func (r *Reconciler) Run(ctx context.Context) (Report, error) {
 	api := r.API(ctx)
 	steps := []func(*forgejo.Client, *Report) error{
 		r.ensureOwner,
-		r.ensureBots,
+		r.ensureAccounts,
 		r.ensureOrg,
 		r.ensureTeams,
 		r.ensureLabels,
 		func(api *forgejo.Client, rep *Report) error { return r.ensureTokens(ctx, rep) },
+		r.retireAccounts,
 		r.ensureAllRepos,
 	}
 	for _, step := range steps {
@@ -181,8 +182,9 @@ func (r *Reconciler) ensureOwner(api *forgejo.Client, rep *Report) error {
 	return nil
 }
 
-func (r *Reconciler) ensureBots(api *forgejo.Client, rep *Report) error {
-	for _, b := range r.Desired.Bots {
+// ensureAccounts creates the actors' and the manager's accounts.
+func (r *Reconciler) ensureAccounts(api *forgejo.Client, rep *Report) error {
+	for _, b := range r.Desired.Accounts() {
 		u, resp, err := api.GetUserInfo(b.Name)
 		if forgejo.IsNotFound(resp, err) {
 			no := false
@@ -193,7 +195,7 @@ func (r *Reconciler) ensureBots(api *forgejo.Client, rep *Report) error {
 			}); err != nil {
 				return err
 			}
-			rep.add("created bot %s", b.Name)
+			rep.add("created account %s", b.Name)
 			u, _, err = api.GetUserInfo(b.Name)
 		}
 		if err != nil {
@@ -209,7 +211,7 @@ func (r *Reconciler) ensureBots(api *forgejo.Client, rep *Report) error {
 			}); err != nil {
 				return err
 			}
-			rep.add("updated bot %s", b.Name)
+			rep.add("updated account %s", b.Name)
 		}
 	}
 	return nil
@@ -294,7 +296,7 @@ func (r *Reconciler) ensureTeams(api *forgejo.Client, rep *Report) error {
 			}
 			rep.add("updated team %s", dt.Name)
 		}
-		for _, b := range r.Desired.Bots {
+		for _, b := range r.Desired.Accounts() {
 			if b.Team == dt.Name {
 				if err := r.ensureMember(api, rep, t, b.Name); err != nil {
 					return err
@@ -373,7 +375,7 @@ func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
 		scopes []string
 	}
 	actors := []actor{{r.Owner.Login, r.Desired.OwnerScope}}
-	for _, b := range r.Desired.Bots {
+	for _, b := range r.Desired.Accounts() {
 		actors = append(actors, actor{b.Name, b.Scopes})
 	}
 	st, err := r.Store.Read()
@@ -414,6 +416,49 @@ func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
 			return err
 		}
 		rep.add("minted token for %s (%s)", a.login, strings.Join(scopes, ","))
+	}
+	return nil
+}
+
+// retireAccounts disables accounts from earlier designs without deleting
+// them, so commits and reviews they made stay attributed. prohibit_login
+// also makes Forgejo reject their tokens; bottown drops its copies of the
+// tokens and any API keys issued for them.
+func (r *Reconciler) retireAccounts(api *forgejo.Client, rep *Report) error {
+	for _, name := range r.Desired.Retired {
+		u, resp, err := api.GetUserInfo(name)
+		if forgejo.IsNotFound(resp, err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !u.ProhibitLogin {
+			yes := true
+			if _, err := api.AdminEditUser(name, sdk.EditUserOption{LoginName: name, ProhibitLogin: &yes}); err != nil {
+				return err
+			}
+			rep.add("retired account %s", name)
+		}
+		var dropped int
+		if err := r.Store.Update(func(s *secrets.State) error {
+			if _, ok := s.Tokens[name]; ok {
+				delete(s.Tokens, name)
+				dropped++
+			}
+			for h, k := range s.Keys {
+				if k.Actor == name {
+					delete(s.Keys, h)
+					dropped++
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if dropped > 0 {
+			rep.add("dropped %d credentials of retired account %s", dropped, name)
+		}
 	}
 	return nil
 }
@@ -495,7 +540,8 @@ type Protection struct {
 }
 
 // WantProtection is the protection rule derived from Desired. The owner is
-// always on the push, merge and approval allow-lists.
+// always on the push, merge and approval allow-lists, and every actor's
+// approval counts (who may review what is decided per run, by bottown).
 func (r *Reconciler) WantProtection() Protection {
 	p := r.Desired.Protection
 	owner := r.Owner.Login
@@ -506,7 +552,7 @@ func (r *Reconciler) WantProtection() Protection {
 		EnableMergeWhitelist:        true,
 		MergeWhitelistUsernames:     withOwner(p.MergeWhitelist, owner),
 		EnableApprovalsWhitelist:    true,
-		ApprovalsWhitelistUsernames: withOwner(p.ApprovalsWhitelist, owner),
+		ApprovalsWhitelistUsernames: withOwner(append(r.Desired.ActorNames(), p.ApprovalsWhitelist...), owner),
 		RequiredApprovals:           p.RequiredApprovals,
 		DismissStaleApprovals:       p.DismissStaleApprovals,
 		BlockOnRejectedReviews:      p.BlockOnRejectedReviews,

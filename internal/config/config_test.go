@@ -7,8 +7,14 @@ func TestDefaultDesiredIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := d.Bot("manager"); !ok || m.Keys {
-		t.Fatalf("manager must exist and never get API keys: %+v", m)
+	if d.Manager.Name != "manager" {
+		t.Fatalf("manager = %+v", d.Manager)
+	}
+	if _, ok := d.Actor("manager"); ok {
+		t.Fatal("manager must not be an actor (actors can get API keys)")
+	}
+	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" {
+		t.Fatalf("claude = %+v", a)
 	}
 }
 

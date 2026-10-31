@@ -79,9 +79,12 @@ harness = "kimi"
   approvals allow-list is all actors plus the owner.
 - **Token scopes:** every actor gets `write:repository` and `write:issue`.
   The role restrictions are enforced by the proxy, below, not by the forge.
-- **Migration:** the reconciler creates the actor accounts. Old accounts
-  (`implementer`, `verifier`) are not deleted automatically; a doc step says
-  how to remove them.
+- **Migration:** the reconciler creates the actor accounts. Accounts listed
+  in `retired` (`implementer`, `verifier`) get `prohibit_login`, which also
+  makes Forgejo reject their tokens. bottown drops their tokens and API keys,
+  but keeps the accounts so their history stays attributed. Their old teams
+  (`implementers`, `verifiers`) are no longer managed; delete them by hand if
+  you want.
 
 ### Run keys (server)
 
@@ -176,8 +179,8 @@ age and size.
 
 ## Build order
 
-1. Actors in desired state, plus migration, the `actors` team and
-   protection.
+1. ~~Actors in desired state, plus migration, the `actors` team and
+   protection.~~ Done (2026-10-31).
 2. Run keys: the server endpoints, run records and proxy role and repo
    scoping. Unit tests for the policy.
 3. MCP tools, including the `/mcp/k/<key>` fallback.

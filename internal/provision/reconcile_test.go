@@ -36,3 +36,25 @@ func TestOwnerAlwaysAllowListed(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryActorCanApprove(t *testing.T) {
+	r := &Reconciler{Desired: config.DefaultDesired(), Owner: Owner{Login: "owner"}}
+	got := r.WantProtection().ApprovalsWhitelistUsernames
+	for _, a := range append(r.Desired.ActorNames(), "owner") {
+		if !contains(got, a) {
+			t.Errorf("%s missing from approvals allow-list %v", a, got)
+		}
+	}
+	if contains(got, "manager") {
+		t.Errorf("manager must not approve: %v", got)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

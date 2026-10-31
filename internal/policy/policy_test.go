@@ -9,19 +9,19 @@ func TestDecide(t *testing.T) {
 		allow               bool
 		rule                string
 	}{
-		{"implementer", "GET", "/repos/bottown/x/issues", true, "default"},
-		{"implementer", "POST", "/repos/bottown/x/pulls", true, "default"},
-		{"implementer", "POST", "/repos/bottown/x/pulls/3/merge", false, "merge"},
-		{"implementer", "POST", "/repos/bottown/x/statuses/abc123", false, "commit-status"},
-		{"verifier", "POST", "/repos/bottown/x/pulls/3/reviews", true, "default"},
-		{"verifier", "GET", "/repos/bottown/x/branch_protections", true, "default"},
-		{"verifier", "POST", "/repos/bottown/x/branch_protections", false, "branch-protection"},
-		{"implementer", "DELETE", "/repos/bottown/x/issues/4/labels/7", false, "issue-labels"},
-		{"implementer", "POST", "/repos/bottown/x/issues/4/labels", false, "issue-labels"},
-		{"implementer", "PATCH", "/repos/bottown/x", false, "repo-settings"},
-		{"implementer", "GET", "/repos/bottown/x", true, "default"},
-		{"implementer", "GET", "/admin/users", false, "admin"},
-		{"implementer", "POST", "/REPOS/bottown/x/PULLS/3/MERGE", false, "merge"},
+		{"claude", "GET", "/repos/bottown/x/issues", true, "default"},
+		{"claude", "POST", "/repos/bottown/x/pulls", true, "default"},
+		{"claude", "POST", "/repos/bottown/x/pulls/3/merge", false, "merge"},
+		{"claude", "POST", "/repos/bottown/x/statuses/abc123", false, "commit-status"},
+		{"codex", "POST", "/repos/bottown/x/pulls/3/reviews", true, "default"},
+		{"codex", "GET", "/repos/bottown/x/branch_protections", true, "default"},
+		{"codex", "POST", "/repos/bottown/x/branch_protections", false, "branch-protection"},
+		{"claude", "DELETE", "/repos/bottown/x/issues/4/labels/7", false, "issue-labels"},
+		{"claude", "POST", "/repos/bottown/x/issues/4/labels", false, "issue-labels"},
+		{"claude", "PATCH", "/repos/bottown/x", false, "repo-settings"},
+		{"claude", "GET", "/repos/bottown/x", true, "default"},
+		{"claude", "GET", "/admin/users", false, "admin"},
+		{"claude", "POST", "/REPOS/bottown/x/PULLS/3/MERGE", false, "merge"},
 		{"rlupi", "POST", "/repos/bottown/x/pulls/3/merge", true, "exempt"},
 	}
 	for _, c := range cases {

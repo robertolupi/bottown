@@ -17,12 +17,16 @@ var defaultDesired []byte
 
 // Desired is the forge state bottown reconciles on every start.
 type Desired struct {
-	Org        string     `toml:"org"`
-	Teams      []Team     `toml:"teams"`
-	Bots       []Bot      `toml:"bots"`
-	Labels     []Label    `toml:"labels"`
-	Protection Protection `toml:"protection"`
-	OwnerScope []string   `toml:"owner_token_scopes"`
+	Org         string     `toml:"org"`
+	Teams       []Team     `toml:"teams"`
+	Actors      []Actor    `toml:"actors"`
+	ActorTeam   string     `toml:"actor_team"`
+	ActorScopes []string   `toml:"actor_token_scopes"`
+	Manager     Account    `toml:"manager"`
+	Retired     []string   `toml:"retired"`
+	Labels      []Label    `toml:"labels"`
+	Protection  Protection `toml:"protection"`
+	OwnerScope  []string   `toml:"owner_token_scopes"`
 }
 
 // Team is an organization team covering all repositories.
@@ -31,15 +35,21 @@ type Team struct {
 	Units map[string]string `toml:"units"` // unit -> read|write
 }
 
-// Bot is a token-only forge account driven by bottown.
-type Bot struct {
+// Actor is the forge identity of a coding agent. Roles (implementer,
+// verifier) are not part of it: a run grants one.
+type Actor struct {
+	Name     string `toml:"name"`
+	Family   string `toml:"family"`  // model vendor, for the cross-family review rule
+	Harness  string `toml:"harness"` // which CLI runs it
+	FullName string `toml:"full_name"`
+}
+
+// Account is a token-only forge account bottown reconciles.
+type Account struct {
 	Name     string   `toml:"name"`
 	FullName string   `toml:"full_name"`
 	Team     string   `toml:"team"`
 	Scopes   []string `toml:"token_scopes"`
-	// Keys reports whether host clients may be issued API keys for this bot.
-	// The manager acts only inside bottown, so it never gets one.
-	Keys bool `toml:"api_keys"`
 }
 
 // Label is an organization-wide label.
@@ -88,14 +98,40 @@ func DefaultDesired() Desired {
 	return d
 }
 
-// Bot returns the bot named name.
-func (d Desired) Bot(name string) (Bot, bool) {
-	for _, b := range d.Bots {
-		if b.Name == name {
-			return b, true
+// Actor returns the actor named name.
+func (d Desired) Actor(name string) (Actor, bool) {
+	for _, a := range d.Actors {
+		if a.Name == name {
+			return a, true
 		}
 	}
-	return Bot{}, false
+	return Actor{}, false
+}
+
+// Accounts returns every bot account to reconcile: the actors, then the
+// manager.
+func (d Desired) Accounts() []Account {
+	var out []Account
+	for _, a := range d.Actors {
+		full := a.FullName
+		if full == "" {
+			full = a.Name + " (" + a.Family + ")"
+		}
+		out = append(out, Account{Name: a.Name, FullName: full, Team: d.ActorTeam, Scopes: d.ActorScopes})
+	}
+	if d.Manager.Name != "" {
+		out = append(out, d.Manager)
+	}
+	return out
+}
+
+// ActorNames lists the actors' logins.
+func (d Desired) ActorNames() []string {
+	var out []string
+	for _, a := range d.Actors {
+		out = append(out, a.Name)
+	}
+	return out
 }
 
 func (d Desired) validate() error {
@@ -106,12 +142,26 @@ func (d Desired) validate() error {
 	for _, t := range d.Teams {
 		teams[t.Name] = true
 	}
-	for _, b := range d.Bots {
-		if b.Team != "" && !teams[b.Team] {
-			return fmt.Errorf("desired state: bot %s: unknown team %q", b.Name, b.Team)
+	seen := map[string]bool{}
+	for _, a := range d.Accounts() {
+		switch {
+		case seen[a.Name]:
+			return fmt.Errorf("desired state: account %s defined twice", a.Name)
+		case a.Team != "" && !teams[a.Team]:
+			return fmt.Errorf("desired state: account %s: unknown team %q", a.Name, a.Team)
+		case len(a.Scopes) == 0:
+			return fmt.Errorf("desired state: account %s: token scopes are required", a.Name)
 		}
-		if len(b.Scopes) == 0 {
-			return fmt.Errorf("desired state: bot %s: token_scopes is required", b.Name)
+		seen[a.Name] = true
+	}
+	for _, a := range d.Actors {
+		if a.Family == "" {
+			return fmt.Errorf("desired state: actor %s: family is required", a.Name)
+		}
+	}
+	for _, r := range d.Retired {
+		if seen[r] {
+			return fmt.Errorf("desired state: %s is both active and retired", r)
 		}
 	}
 	return nil

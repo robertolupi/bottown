@@ -247,7 +247,7 @@ func newCredential(g *globals) *cobra.Command {
 	var label string
 	key := &cobra.Command{
 		Use:   "key ACTOR",
-		Short: "Mint a bottown API key for a bot (e.g. for `claude mcp add`)",
+		Short: "Mint a bottown API key for an actor (e.g. for `claude mcp add`)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			inst, err := g.loadInstance()
