@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/server"
@@ -513,6 +514,32 @@ func newDown(g *globals) *cobra.Command {
 	return cmd
 }
 
+func printStatus(out io.Writer, r *lipgloss.Renderer, inst config.Instance, source, state string, h *server.Health, healthErr error) {
+	bold := r.NewStyle().Bold(true).Render
+	label := func(w string) string {
+		pad := 10 - len(w)
+		if pad < 1 {
+			pad = 1
+		}
+		return bold(w) + strings.Repeat(" ", pad)
+	}
+	fmt.Fprintf(out, "%s%s (from %s)\n%s%s (%s)\n%s%s\n%s%s\n%s%s\n",
+		label("instance"), inst.Name, source,
+		label("container"), inst.Container(), state,
+		label("image"), inst.Image,
+		label("forgejo"), inst.ForgejoURL(),
+		label("bottown"), inst.ServerURL())
+	if healthErr != nil {
+		fmt.Fprintf(out, "%sunreachable: %v\n", label("health"), healthErr)
+	} else if h != nil {
+		fmt.Fprintf(out, "%sforgejo=%s reconciled=%v version=%s forgejo_version=%s\n",
+			label("health"), h.Forgejo, h.Reconciled, h.Version, h.ForgejoVersion)
+		if h.Error != "" {
+			fmt.Fprintf(out, "%s%s\n", label("error"), h.Error)
+		}
+	}
+}
+
 func newStatus(g *globals) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -535,20 +562,19 @@ func newStatus(g *globals) *cobra.Command {
 					state = "running"
 				}
 			}
-			fmt.Fprintf(out, "instance  %s (from %s)\ncontainer %s (%s)\nimage     %s\nforgejo   %s\nbottown   %s\n",
-				inst.Name, g.source, inst.Container(), state, inst.Image, inst.ForgejoURL(), inst.ServerURL())
+			var (
+				h         *server.Health
+				healthErr error
+			)
 			if c.Running {
-				h, err := fetchHealth(cmd.Context(), inst)
+				res, err := fetchHealth(cmd.Context(), inst)
 				if err != nil {
-					fmt.Fprintf(out, "health    unreachable: %v\n", err)
-					return nil
-				}
-				fmt.Fprintf(out, "health    forgejo=%s reconciled=%v version=%s forgejo_version=%s\n",
-					h.Forgejo, h.Reconciled, h.Version, h.ForgejoVersion)
-				if h.Error != "" {
-					fmt.Fprintf(out, "error     %s\n", h.Error)
+					healthErr = err
+				} else {
+					h = &res
 				}
 			}
+			printStatus(out, lipgloss.NewRenderer(out), inst, g.source, state, h, healthErr)
 			return nil
 		},
 	}
