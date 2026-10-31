@@ -48,6 +48,7 @@ func (s *Server) mcpServer() *mcp.Server {
 			Reconciled: h.Reconciled, Org: s.desired().Org,
 		}, nil
 	})
+	s.addForgeTools(srv)
 	return srv
 }
 

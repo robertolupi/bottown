@@ -93,7 +93,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.getRun))))
 	mux.Handle("DELETE /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.endRun))))
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
-	mux.Handle("/mcp", s.ready(s.specRead(s.mcpHandler())))
+	mcpH := s.ready(s.specRead(s.mcpHandler()))
+	mux.Handle("/mcp", mcpH)
+	// Fallback for harnesses that cannot send headers: the key in the path.
+	// Nothing logs request paths, and run keys are short-lived.
+	mux.Handle("/mcp/k/{key}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.Header.Set("Authorization", "Bearer "+r.PathValue("key"))
+		r2.URL.Path, r2.URL.RawPath = "/mcp", ""
+		mcpH.ServeHTTP(w, r2)
+	}))
 	mux.Handle("/forgejo/api/v1/", s.authed(http.HandlerFunc(s.apiProxy)))
 	mux.Handle("/git/", s.authed(http.HandlerFunc(s.gitProxy)))
 	mux.Handle("POST /v1/web/session", s.authed(s.ownerOnly(http.HandlerFunc(s.postWebSession))))

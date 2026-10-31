@@ -209,7 +209,13 @@ hood, since a headless stream cannot be steered.
    - images are built with `--provenance=false`, so identical builds keep
      their image ID and `up` no longer recreates the container needlessly;
    - run records carry an `interactive` flag.
-3. MCP tools, including the `/mcp/k/<key>` fallback.
+3. ~~MCP tools, including the `/mcp/k/<key>` fallback.~~ Done (2026-10-31).
+   Runs can review *only* through `review_submit`. The proxy denies raw
+   review writes to every run key, so no review can skip the commit check.
+   `review_submit` also refuses if the PR head has moved since the run
+   started. PRs and reviews created by runs carry a footer naming the run,
+   the actor and the family. A same-family review starts with an
+   owner-override note.
 4. Run directories and `run implement`/`verify`/`ls`/`show`/`gc` with the
    claude binding.
 5. The codex binding.

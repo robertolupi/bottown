@@ -526,8 +526,9 @@ func TestE2E(t *testing.T) {
 		}
 		vk := ver["key"].(string)
 		prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
-		if code, _ := a.api(vk, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": pr.Head.Sha}); code != 200 {
-			t.Errorf("verify run review: %d", code)
+		// Reviews only through review_submit, which pins the commit.
+		if code, _ := a.api(vk, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": pr.Head.Sha}); code != 403 {
+			t.Errorf("verify run raw review: %d, want 403", code)
 		}
 		if code, _ := a.api(vk, "POST", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", pr.Number), map[string]string{"body": "note"}); code != 201 {
 			t.Errorf("verify run comment: %d", code)
@@ -585,6 +586,142 @@ func TestE2E(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != 401 {
 			t.Fatalf("bogus MCP key: %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("mcp forge tools in runs", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		connect := func(endpoint, key string) *mcp.ClientSession {
+			t.Helper()
+			hc := http.DefaultClient
+			if key != "" {
+				hc = &http.Client{Transport: bearer{key}}
+			}
+			cl := mcp.NewClient(&mcp.Implementation{Name: "e2e", Version: "0"}, nil)
+			sess, err := cl.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: hc}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { sess.Close() })
+			return sess
+		}
+		call := func(sess *mcp.ClientSession, name string, args map[string]any) (map[string]any, string) {
+			t.Helper()
+			res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if res.IsError {
+				var msg string
+				for _, c := range res.Content {
+					if tc, ok := c.(*mcp.TextContent); ok {
+						msg += tc.Text
+					}
+				}
+				return nil, msg
+			}
+			b, _ := json.Marshal(res.StructuredContent)
+			var m map[string]any
+			json.Unmarshal(b, &m)
+			return m, ""
+		}
+		newRun := func(body map[string]any) map[string]any {
+			t.Helper()
+			b, _ := json.Marshal(body)
+			req, _ := http.NewRequest("POST", a.cfg.ServerURL()+"/v1/runs", bytes.NewReader(b))
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var m map[string]any
+			json.NewDecoder(resp.Body).Decode(&m)
+			if resp.StatusCode != 201 {
+				t.Fatalf("create run: %d %v", resp.StatusCode, m)
+			}
+			return m
+		}
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "mcp test", "body": "do the thing"}, &issue)
+		impl := newRun(map[string]any{"kind": "implement", "actor": "claude", "repo": "demo", "issue": issue.Number})
+		ik, branch := impl["key"].(string), impl["branch"].(string)
+		// The key-in-URL fallback, for harnesses that cannot send headers.
+		is := connect(a.cfg.ServerURL()+"/mcp/k/"+ik, "")
+
+		who, _ := call(is, "whoami", nil)
+		if run, _ := who["run"].(map[string]any); who["actor"] != "claude" || run["kind"] != "implement" {
+			t.Fatalf("whoami in implement run = %v", who)
+		}
+		got, errMsg := call(is, "issue_get", nil)
+		if errMsg != "" || got["title"] != "mcp test" {
+			t.Fatalf("issue_get default: %v %s", got, errMsg)
+		}
+		if _, errMsg := call(is, "issue_get", map[string]any{"repo": "elsewhere"}); !strings.Contains(errMsg, "confined") {
+			t.Errorf("issue_get other repo: %q", errMsg)
+		}
+		if out, _ := call(is, "forge_api", map[string]any{"method": "GET", "path": "/repos/bottown/elsewhere"}); out["status"] != float64(403) {
+			t.Errorf("forge_api other repo: %v", out)
+		}
+
+		git(t, demo, "checkout", "-q", "-B", branch, "bottown-"+a.name+"/main")
+		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("1\n"), 0o644)
+		git(t, demo, "add", ".")
+		git(t, demo, "commit", "-q", "-m", "mcp change")
+		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
+			t.Fatalf("push: %v\n%s", err, out)
+		}
+		pr, errMsg := call(is, "pr_create", map[string]any{"title": "mcp PR", "body": "done"})
+		if errMsg != "" {
+			t.Fatalf("pr_create: %s", errMsg)
+		}
+		prn := int64(pr["number"].(float64))
+		if _, errMsg := call(is, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "abc"}); !strings.Contains(errMsg, "verify run") {
+			t.Errorf("review_submit in implement run: %q", errMsg)
+		}
+		if out, _ := call(is, "forge_api", map[string]any{"method": "POST", "path": fmt.Sprintf("/repos/bottown/demo/pulls/%d/merge", prn), "body": map[string]string{"Do": "merge"}}); out["status"] != float64(403) {
+			t.Errorf("forge_api merge: %v", out)
+		}
+
+		ver := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
+		vs := connect(a.cfg.ServerURL()+"/mcp", ver["key"].(string))
+		got, errMsg = call(vs, "pr_get", nil)
+		if errMsg != "" || got["head_sha"] != ver["sha"] || !strings.Contains(fmt.Sprint(got["diff"]), "mcp.txt") {
+			t.Fatalf("pr_get: %s head=%v run=%v", errMsg, got["head_sha"], ver["sha"])
+		}
+		if _, errMsg := call(vs, "pr_create", map[string]any{"title": "x"}); !strings.Contains(errMsg, "implement run") {
+			t.Errorf("pr_create in verify run: %q", errMsg)
+		}
+		if _, errMsg := call(vs, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "deadbeef"}); !strings.Contains(errMsg, "not the commit") {
+			t.Errorf("review at wrong commit: %q", errMsg)
+		}
+		// The PR moves after the verify run started: its verdict no longer covers it.
+		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("2\n"), 0o644)
+		git(t, demo, "commit", "-q", "-am", "mcp change 2")
+		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
+			t.Fatalf("push 2: %v\n%s", err, out)
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		for {
+			_, errMsg = call(vs, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": ver["sha"]})
+			if strings.Contains(errMsg, "moved") || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(500 * time.Millisecond) // the PR head updates asynchronously
+		}
+		if !strings.Contains(errMsg, "moved") {
+			t.Fatalf("review after PR moved: %q", errMsg)
+		}
+		ver2 := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
+		vs2 := connect(a.cfg.ServerURL()+"/mcp", ver2["key"].(string))
+		rv, errMsg := call(vs2, "review_submit", map[string]any{"event": "APPROVED", "body": "verified", "commit_id": ver2["sha"]})
+		if errMsg != "" || rv["commit_id"] != ver2["sha"] || !strings.Contains(fmt.Sprint(rv["body"]), "bottown verify run "+ver2["id"].(string)) {
+			t.Fatalf("review_submit: %v %s", rv, errMsg)
+		}
+		if c, errMsg := call(vs2, "comment", map[string]any{"body": "handover"}); errMsg != "" || c["author"] != "codex" {
+			t.Fatalf("comment: %v %s", c, errMsg)
 		}
 	})
 

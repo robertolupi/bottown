@@ -22,7 +22,7 @@ func TestRunScopeAPI(t *testing.T) {
 		{impl, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "role-implement-review"},
 		{impl, "POST", "/repos/bottown/demo/pulls/2/reviews/5/comments", false, "role-implement-review"},
 		{ver, "GET", "/repos/bottown/demo/pulls/2", true, "run-read"},
-		{ver, "POST", "/repos/bottown/demo/pulls/2/reviews", true, "run-verify-review"},
+		{ver, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "review-via-tool"},
 		{ver, "POST", "/repos/bottown/demo/issues/2/comments", true, "run-verify-comment"},
 		{ver, "PATCH", "/repos/bottown/demo/issues/comments/9", true, "run-verify-comment-edit"},
 		{ver, "POST", "/repos/bottown/demo/pulls", false, "role-verify"},
@@ -30,7 +30,7 @@ func TestRunScopeAPI(t *testing.T) {
 		{ver, "POST", "/repos/bottown/demo/issues", false, "role-verify"},
 		{ver, "POST", "/repos/bottown/demo/contents/README", false, "role-verify"},
 		{ver, "POST", "/repos/bottown/other/pulls/2/reviews", false, "run-repo"},
-		{ver, "POST", "/repos/BOTTOWN/DEMO/pulls/2/reviews", true, "run-verify-review"},
+		{ver, "POST", "/repos/BOTTOWN/DEMO/issues/2/comments", true, "run-verify-comment"},
 	}
 	for _, c := range cases {
 		d := c.s.DecideAPI(c.method, c.path)

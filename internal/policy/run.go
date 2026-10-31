@@ -18,15 +18,19 @@ type RunScope struct {
 	Role      string // Implement | Verify
 }
 
-// verifyWrites are the only API writes a verify run may make inside its
-// repository: commenting and reviewing. Everything else that changes the
-// repository (pushes, PRs, issues, files, branches, releases) is denied.
+// verifyWrites are the only API writes a verify run may make directly
+// inside its repository: commenting. Reviews go through the review_submit
+// MCP tool, which pins them to the run's commit; everything else that
+// changes the repository (pushes, PRs, issues, files, branches, releases) is
+// denied.
 var verifyWrites = []Rule{
 	{Name: "comment", Methods: []string{"POST"}, Pattern: "/repos/*/*/issues/*/comments"},
 	{Name: "comment-edit", Methods: []string{"PATCH", "DELETE"}, Pattern: "/repos/*/*/issues/comments/*"},
-	{Name: "review", Methods: []string{"POST"}, Pattern: "/repos/*/*/pulls/*/reviews/**"},
 	{Name: "reaction", Methods: []string{"POST", "DELETE"}, Pattern: "/repos/*/*/issues/**/reactions"},
 }
+
+// reviewWrites must go through review_submit in any run.
+var reviewWrites = Rule{Name: "review-via-tool", Methods: writes, Pattern: "/repos/*/*/pulls/*/reviews/**"}
 
 // implementDenied are writes an implement run may not make: reviewing is
 // the verifier's job.
@@ -53,6 +57,9 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 	}
 	switch s.Role {
 	case Verify:
+		if slices.Contains(reviewWrites.Methods, method) && match(split(reviewWrites.Pattern), segs) {
+			return Decision{Allow: false, Rule: reviewWrites.Name}
+		}
 		for _, r := range verifyWrites {
 			if slices.Contains(r.Methods, method) && match(split(r.Pattern), segs) {
 				return Decision{Allow: true, Rule: "run-verify-" + r.Name}
