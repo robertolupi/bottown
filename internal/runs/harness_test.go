@@ -115,3 +115,49 @@ func TestDiscussPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeReadOnlyRun(t *testing.T) {
+	allowedOf := func(l Launch) (string, string) {
+		c, _ := (claudeHarness{}).Command(t.Context(), l)
+		var allowed, mode string
+		for i, a := range c.Args {
+			switch a {
+			case "--allowedTools":
+				allowed = c.Args[i+1]
+			case "--permission-mode":
+				mode = c.Args[i+1]
+			}
+		}
+		return allowed, mode
+	}
+	l := Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k", Allow: []string{"Bash(cargo:*)"}}
+	if allowed, mode := allowedOf(l); !strings.Contains(allowed, ",Edit,") || mode != "acceptEdits" {
+		t.Errorf("default run: allowed %s, mode %s", allowed, mode)
+	}
+	l.ReadOnly = true
+	allowed, mode := allowedOf(l)
+	for _, tool := range strings.Split(allowed, ",") {
+		if tool == "Edit" || tool == "Write" {
+			t.Errorf("read-only run pre-approves %s: %s", tool, allowed)
+		}
+	}
+	if mode != "default" || !strings.Contains(allowed, "Read") || !strings.Contains(allowed, "Bash(cargo:*)") {
+		t.Errorf("read-only run: allowed %s, mode %s", allowed, mode)
+	}
+}
+
+func TestDiscussPromptQuestion(t *testing.T) {
+	d := PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 7, Title: "T", SHA: "abc", Base: "main", Bottown: "/b"}
+	without, _ := Prompt("discuss", d)
+	d.Question = "Should it say blah or foo?"
+	with, err := Prompt("discuss", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, "## Question to discuss\n\nShould it say blah or foo?\n\n## How this run works") || !strings.Contains(with, "- Answer the question above.") || strings.Contains(with, "words after the number") {
+		t.Errorf("prompt with a question:\n%s", with)
+	}
+	if strings.Contains(without, "Question to discuss") || !strings.Contains(without, "words after the number") {
+		t.Errorf("prompt without a question:\n%s", without)
+	}
+}

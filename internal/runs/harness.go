@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -29,6 +30,7 @@ type PromptData struct {
 	Bottown                    string // absolute path of the bottown CLI
 	Remote                     string // the bottown remote in the worktree
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
+	Question                   string // discuss: the owner's question, if given to the command
 }
 
 // Prompt renders the goal prompt for kind ("implement" or "verify").
@@ -52,6 +54,9 @@ type Launch struct {
 	RunID       string
 	Interactive bool
 	Allow       []string // extra allowed tools (claude syntax)
+	// ReadOnly runs (discuss) must not change the worktree: no file-editing
+	// tools are pre-approved, and edits are not auto-accepted.
+	ReadOnly bool
 }
 
 // Harness starts an agent CLI for a run.
@@ -169,12 +174,17 @@ var claudeIsolation = []string{
 
 func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	allowed := append([]string{}, defaultAllowed...)
+	mode := "acceptEdits"
+	if l.ReadOnly {
+		allowed = slices.DeleteFunc(allowed, func(t string) bool { return t == "Edit" || t == "Write" })
+		mode = "default"
+	}
 	if self, err := os.Executable(); err == nil {
 		allowed = append(allowed, "Bash("+self+":*)") // the agent CLI, by absolute path
 	}
 	args := append([]string{"--mcp-config", l.MCPConfig}, claudeIsolation...)
 	args = append(args,
-		"--permission-mode", "acceptEdits",
+		"--permission-mode", mode,
 		"--allowedTools", strings.Join(append(allowed, l.Allow...), ","),
 		"-n", "bottown "+l.RunID,
 	)

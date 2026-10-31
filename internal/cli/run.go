@@ -27,6 +27,7 @@ type runOpts struct {
 	allowSameFamily bool
 	allow           []string
 	keep            bool
+	question        string // discuss: the owner's question for the prompt
 }
 
 func newRun(g *globals) *cobra.Command {
@@ -54,7 +55,30 @@ the actor's git identity, and a key limited to the role and this repository.`,
 			return startRun(cmd, g, policy.Verify, args[0], o)
 		},
 	}
-	for _, c := range []*cobra.Command{implement, verify} {
+	var questionFile string
+	discuss := &cobra.Command{
+		Use:   "discuss -a ACTOR [-I] N [QUESTION... | --question-file F|-]",
+		Short: "Discuss an issue or pull request without implementing it: the agent answers in a comment",
+		Long: `Discuss an issue or pull request without implementing it. The agent reads the
+issue and the code at the default branch's head, and answers in one comment;
+the run cannot push, open pull requests or review.
+
+The question can follow the number, but your shell reads it first: quote it,
+since ?, *, #, ' and ! mean something to the shell, and put -- before it if a
+word starts with -. --question-file - reads it from stdin, which the shell
+leaves alone. Without a question, the agent reviews the issue.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			q, err := discussQuestion(cmd, args[1:], questionFile)
+			if err != nil {
+				return err
+			}
+			o.question = q
+			return startRun(cmd, g, policy.Discuss, args[0], o)
+		},
+	}
+	discuss.Flags().StringVar(&questionFile, "question-file", "", "read the question from a file, or - for stdin")
+	for _, c := range []*cobra.Command{implement, verify, discuss} {
 		c.Flags().StringVarP(&o.actor, "actor", "a", "", "actor to run as (required), e.g. claude, codex")
 		c.Flags().BoolVarP(&o.interactive, "interactive", "I", false, "run the harness's interactive UI in this terminal, so you can steer it")
 		c.Flags().StringSliceVar(&o.allow, "allow", nil, "extra tools the agent may use without asking (harness syntax, e.g. 'Bash(cargo:*)')")
@@ -63,7 +87,7 @@ the actor's git identity, and a key limited to the role and this repository.`,
 	}
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
-	run.AddCommand(implement, verify, newRunLs(g), newRunShow(g), newRunGC(g))
+	run.AddCommand(implement, verify, discuss, newRunLs(g), newRunShow(g), newRunGC(g))
 	run.AddCommand(agentCmds(newRunStart(), newRunEnd())...)
 	return run
 }
@@ -110,6 +134,23 @@ func openRunContext(g *globals) (*runContext, error) {
 	return &runContext{inst: inst, ws: ws, org: org, repo: name, key: key}, nil
 }
 
+// discussQuestion is the question for a discuss run: the words after the
+// number, or --question-file (- is stdin), not both.
+func discussQuestion(cmd *cobra.Command, words []string, file string) (string, error) {
+	q := strings.Join(words, " ")
+	if file != "" {
+		if q != "" {
+			return "", errors.New("give the question as arguments or with --question-file, not both")
+		}
+		b, err := readBody(cmd, "", file)
+		if err != nil {
+			return "", err
+		}
+		q = b
+	}
+	return strings.TrimSpace(q), nil
+}
+
 func parseNumber(s string) (int64, error) {
 	s = strings.TrimLeft(s, "#!")
 	var n int64
@@ -135,10 +176,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 
 	req := server.RunRequest{Kind: kind, Actor: o.actor, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Interactive: o.interactive}
-	if kind == policy.Implement {
-		req.Issue = n
-	} else {
+	if kind == policy.Verify {
 		req.PR = n
+	} else {
+		req.Issue = n
 	}
 	var created server.RunResponse
 	if err := callServer(ctx, rc.inst, rc.key, "POST", "/v1/runs", req, &created); err != nil {
@@ -155,7 +196,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}()
 
-	prompt, base, err := renderPrompt(ctx, rc, run)
+	prompt, base, err := renderPrompt(ctx, rc, run, o.question)
 	if err != nil {
 		return err
 	}
@@ -191,7 +232,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
 		Status: runs.StatusRunning, PID: os.Getpid(), Started: time.Now().UTC(), Worktree: dir,
-		Key: created.Key, ServerURL: rc.inst.ServerURL(),
+		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 	}
 	if err := rc.ws.Save(rec); err != nil {
 		return err
@@ -201,6 +242,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
 		MCPURL: mcpURL, Key: created.Key,
 		RecordFile: recPath, RunID: run.ID, Interactive: o.interactive, Allow: o.allow,
+		ReadOnly: kind == policy.Discuss,
 	}
 	if err := h.PrepareMCP(&l, rc.ws.RunsDir); err != nil {
 		return err
@@ -267,7 +309,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 
 // renderPrompt fetches the issue or PR and renders the goal prompt. It
 // also returns the repository's default branch.
-func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run) (string, string, error) {
+func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question string) (string, string, error) {
 	base, err := rc.ws.DefaultBranch(ctx)
 	if err != nil {
 		return "", "", err
@@ -287,7 +329,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run) (string,
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: selfPath(), Remote: "origin",
+		Bottown: selfPath(), Remote: "origin", Question: question,
 	})
 	return p, base, err
 }
@@ -346,6 +388,9 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		}
 	case policy.Discuss:
 		fmt.Fprintf(&b, "Discussed against `%s`, the default branch's head.\n\n", rec.SHA)
+		if rec.Question != "" {
+			fmt.Fprintf(&b, "Question:%s\n\n", quoteLines(rec.Question))
+		}
 	default:
 		fmt.Fprintf(&b, "Verified at `%s`.\n\n", rec.SHA)
 	}
@@ -672,6 +717,11 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 			fmt.Fprintf(out, "  %s\n", truncate(l, 200))
 		}
 	}
+}
+
+// quoteLines renders s as a Markdown blockquote, starting on its own line.
+func quoteLines(s string) string {
+	return "\n> " + strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ")
 }
 
 func truncate(s string, n int) string {
