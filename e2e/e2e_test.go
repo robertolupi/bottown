@@ -725,6 +725,83 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("run commands with a scripted harness", func(t *testing.T) {
+		withHarness := func(script string, args ...string) (string, error) {
+			c := exec.Command(bin, args...)
+			c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+script)
+			c.Dir = demo
+			out, err := c.CombinedOutput()
+			return string(out), err
+		}
+		git(t, demo, "checkout", "-q", "main")
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "scripted run", "body": "add cli.txt"}, &issue)
+
+		implement := "set -e; test -n \"$BOTTOWN_RUN_KEY\"; grep -q 'scripted run' \"$BOTTOWN_PROMPT_FILE\"; " +
+			"echo cli > cli.txt; git add cli.txt; git -c commit.gpgsign=false commit -qm 'cli change'; git push -q origin HEAD; " +
+			bin + ` mcp call pr_create '{"title":"cli PR","body":"scripted"}' > /dev/null; echo 'implemented by script'`
+		out, err := withHarness(implement, "run", "implement", "-a", "claude", fmt.Sprint(issue.Number))
+		if err != nil || !strings.Contains(out, "succeeded (worktree removed)") {
+			t.Fatalf("run implement: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(demo, ".bottown", "mirror.git")); err != nil {
+			t.Fatalf("no mirror: %v", err)
+		}
+		if st := git(t, demo, "status", "--porcelain"); strings.Contains(st, ".bottown") {
+			t.Fatalf(".bottown is not excluded: %s", st)
+		}
+		var prs []struct {
+			Number int64
+			Title  string
+			User   struct{ Login string }
+			Head   struct{ Sha string }
+		}
+		a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+		var pr int64
+		for _, p := range prs {
+			if p.Title == "cli PR" && p.User.Login == "claude" {
+				pr = p.Number
+			}
+		}
+		if pr == 0 {
+			t.Fatalf("no cli PR by claude: %+v", prs)
+		}
+		var comments []struct {
+			User struct{ Login string }
+			Body string
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), nil, &comments)
+		if len(comments) == 0 || comments[len(comments)-1].User.Login != "claude" || !strings.Contains(comments[len(comments)-1].Body, "implemented by script") {
+			t.Fatalf("handover comment: %+v", comments)
+		}
+
+		verify := "set -e; test \"$(cat cli.txt)\" = cli; " + bin +
+			` mcp call review_submit "{\"event\":\"APPROVED\",\"body\":\"ok\",\"commit_id\":\"$(git rev-parse HEAD)\"}" > /dev/null; echo approved`
+		if out, err := withHarness(verify, "run", "verify", "-a", "agy", fmt.Sprint(pr)); err != nil || !strings.Contains(out, "succeeded") {
+			t.Fatalf("run verify: %v\n%s", err, out)
+		}
+		// A failing run keeps its worktree; -I is recorded even without a TTY.
+		out, err = withHarness("echo boom; exit 3", "run", "implement", "-a", "kimi", "-I", fmt.Sprint(issue.Number))
+		if err == nil || !strings.Contains(out, "failed (exit 3); worktree kept") {
+			t.Fatalf("failing run: %v\n%s", err, out)
+		}
+		out = a.mustCmd(demo, "run", "ls")
+		for _, want := range []string{"implement  #", "verify     !", "agy", "interactive  failed", "succeeded"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("run ls lacks %q:\n%s", want, out)
+			}
+		}
+		if out := a.mustCmd(demo, "run", "gc"); !strings.Contains(out, "removed 2 runs") {
+			t.Errorf("gc: %s", out)
+		}
+		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs") {
+			t.Errorf("gc --failed: %s", out)
+		}
+		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Count(out, "(no local dir)") < 3 {
+			t.Errorf("run ls after gc:\n%s", out)
+		}
+	})
+
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {
 		if out, err := exec.Command("docker", "restart", a.cfg.Container()).CombinedOutput(); err != nil {
 			t.Fatalf("docker restart: %v %s", err, out)

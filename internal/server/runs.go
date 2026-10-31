@@ -88,7 +88,7 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	}
 	now := time.Now().UTC()
 	run = secrets.Run{
-		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family,
+		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family, Harness: actor.Harness,
 		Org: s.desired().Org, Repo: req.Repo, Interactive: req.Interactive,
 		Created: now, Expires: now.Add(ttl),
 	}

@@ -49,6 +49,7 @@ type Run struct {
 	Kind            string `json:"kind"` // implement | verify
 	Actor           string `json:"actor"`
 	Family          string `json:"family"`
+	Harness         string `json:"harness,omitempty"` // which CLI runs the actor
 	Org             string `json:"org"`
 	Repo            string `json:"repo"`
 	Issue           int64  `json:"issue,omitempty"`

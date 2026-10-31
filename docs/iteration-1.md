@@ -190,11 +190,9 @@ hood, since a headless stream cannot be steered.
 - **claude:** `claude -p` with stream-json output, `--mcp-config` pointing at
   the run's file, and an allowlist of `mcp__bottown__*` plus the repo's build
   and test commands.
-- **codex:** the second vendor for verification. Remote MCP using a bearer
-  token from an environment variable; check the exact config keys when
-  building this.
-- **agy and kimi:** bindings are added when needed; their actor accounts
-  exist from the start.
+- **agy (Antigravity):** the second vendor for verification; see build step 5.
+- **codex and kimi:** their actor accounts exist, but there are no bindings
+  yet. kimi may come through crush and OpenRouter.
 
 ## Build order
 
@@ -216,9 +214,37 @@ hood, since a headless stream cannot be steered.
    started. PRs and reviews created by runs carry a footer naming the run,
    the actor and the family. A same-family review starts with an
    owner-override note.
-4. Run directories and `run implement`/`verify`/`ls`/`show`/`gc` with the
-   claude binding.
-5. The codex binding.
+4. ~~Run directories and `run implement`/`verify`/`ls`/`show`/`gc` with the
+   claude binding.~~ Done (2026-10-31), with batch and `-I` modes.
+   - **Per-run files sit next to the worktree, never inside it:** the record,
+     log, prompt and MCP config. The MCP config holds the run key and is
+     deleted when the run ends.
+   - **The mirror is bare** and fetches into `refs/remotes/origin/*`. With
+     `extensions.worktreeConfig`, `core.bare` must live in the mirror's own
+     `config.worktree`; otherwise every run worktree thinks it is bare.
+   - **Run worktrees call the bottown remote `origin`,** since it is their
+     only remote.
+   - **Testing hooks:** `BOTTOWN_HARNESS_CMD` runs a script instead of the
+     actor's CLI, and `bottown mcp call TOOL JSON` calls a tool with the
+     run's key, for scripts and debugging. The e2e suite runs a full
+     implement → verify loop this way, without model tokens.
+5. ~~The codex binding.~~ The second vendor is **Antigravity (`agy`,
+   google)**: rlupi has no Codex subscription. The binding exists and is
+   unit-tested:
+   - **MCP config:** per run, in the workspace file
+     `<worktree>/.agents/mcp_config.json` (`url` + `headers`). It is excluded
+     through the mirror's `info/exclude` and deleted at run end. A repo that
+     tracks its own copy is refused rather than overwritten.
+   - **Batch:** `--dangerously-skip-permissions --output-format stream-json
+     --print <prompt>`. agy has no allowlist tier.
+   - **Interactive:** `-i <prompt>`.
+   - **Not yet run live:** the auto-mode classifier blocks Claude from
+     starting agy with `--dangerously-skip-permissions`, so the owner runs
+     the first live check.
+
+   **Option:** a `crush` binding with OpenRouter would give actors on many
+   model families through one harness, at pay-per-token cost. It is not
+   built; its per-run config and headless flags need checking first.
 6. e2e:
    - a fake harness (a script) runs the implement and verify paths
      end-to-end;

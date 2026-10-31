@@ -17,6 +17,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/spf13/cobra"
 )
 
@@ -194,17 +195,17 @@ func ownerKey(g *globals) (string, error) {
 }
 
 func newCredential(g *globals) *cobra.Command {
+	var runFile string
 	cred := &cobra.Command{
 		Use:   "credential (get|store|erase)",
 		Short: "git credential helper for the instance's git remote",
-		Args:  cobra.ExactArgs(1),
+		Long: `git credential helper. Without --run-file it returns the owner's key for the
+instance's git remote; with --run-file (set up in run worktrees) it returns
+that run's key, as the run's actor.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if args[0] != "get" {
 				return nil // store/erase: bottown owns the key, nothing to do
-			}
-			inst, err := g.loadInstance()
-			if err != nil {
-				return err
 			}
 			attrs := map[string]string{}
 			sc := bufio.NewScanner(cmd.InOrStdin())
@@ -212,6 +213,21 @@ func newCredential(g *globals) *cobra.Command {
 				if k, v, ok := strings.Cut(sc.Text(), "="); ok {
 					attrs[k] = v
 				}
+			}
+			if runFile != "" {
+				rec, err := runs.LoadFile(runFile)
+				if err != nil {
+					return err
+				}
+				if attrs["protocol"] != "http" || "http://"+attrs["host"] != rec.ServerURL || rec.Key == "" {
+					return nil
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "username=%s\npassword=%s\n", rec.Actor, rec.Key)
+				return nil
+			}
+			inst, err := g.loadInstance()
+			if err != nil {
+				return err
 			}
 			if attrs["protocol"] != "http" || attrs["host"] != fmt.Sprintf("127.0.0.1:%d", inst.ServerPort) {
 				return nil
@@ -264,5 +280,6 @@ func newCredential(g *globals) *cobra.Command {
 	}
 	key.Flags().StringVar(&label, "label", "", "note stored with the key")
 	cred.AddCommand(key)
+	cred.Flags().StringVar(&runFile, "run-file", "", "answer with the key of the run recorded in this file")
 	return cred
 }
