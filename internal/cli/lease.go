@@ -26,31 +26,41 @@ func newRunStart() *cobra.Command {
 		Short: "Start a run for this actor worktree and print its goal prompt (agent CLI)",
 		Long: `Start a run for this actor worktree and print its goal prompt. The number may
 be written 12, #12 or !12, optionally after "issue", "pr" or "pull request", so
-slash commands can pass what the user typed: /bottown-implement issue 12.`,
+slash commands can pass what the user typed: /bottown-implement issue 12.
+Each argument is split on spaces, so it may also arrive as one quoted word.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind := args[0]
 			if kind != policy.Implement && kind != policy.Verify {
 				return fmt.Errorf("kind must be %s or %s", policy.Implement, policy.Verify)
 			}
-			var rest []string
-			for _, w := range args[1:] {
-				switch strings.ToLower(w) {
-				case "issue", "pr", "pull", "request":
-				default:
-					rest = append(rest, w)
-				}
-			}
-			if len(rest) != 1 {
-				return fmt.Errorf("give one issue or pull request number, e.g. `run start %s 12`", kind)
-			}
-			n, err := parseNumber(rest[0])
+			n, err := runTarget(kind, args[1:])
 			if err != nil {
 				return err
 			}
 			return runStart(cmd, kind, n)
 		},
 	}
+}
+
+// runTarget parses run start's number from what the user typed: 12, #12 or
+// !12, optionally after "issue", "pr" or "pull request". Slash commands pass
+// it as one quoted word ("issue #12"), so each argument is split too.
+func runTarget(kind string, args []string) (int64, error) {
+	var rest []string
+	for _, a := range args {
+		for _, w := range strings.Fields(a) {
+			switch strings.ToLower(w) {
+			case "issue", "pr", "pull", "request":
+			default:
+				rest = append(rest, w)
+			}
+		}
+	}
+	if len(rest) != 1 {
+		return 0, fmt.Errorf("give one issue or pull request number, e.g. `run start %s 12`", kind)
+	}
+	return parseNumber(rest[0])
 }
 
 // worktreeRepo returns the bottown repo name the actor worktree's remote

@@ -415,13 +415,16 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
    agy.~~ Done (2026-10-31): `bottown harness setup [claude|agy]` installs
    them globally, naming `bottown` by absolute path.
    - **claude:** `~/.claude/commands/bottown-{implement,verify}.md`. The
-     command itself runs `` !`bottown run start <kind> $ARGUMENTS` ``, which
-     inlines the goal prompt, with `allowed-tools: Bash(bottown:*)`.
+     command itself runs `` !`bottown run start <kind> '$ARGUMENTS'` ``, which
+     inlines the goal prompt, with `allowed-tools: Bash(bottown:*)`. The
+     quotes matter: unquoted, the shell reads `#12` as a comment (#5).
    - **agy:** `~/.gemini/config/global_workflows/bottown-{implement,verify}.md`.
      A workflow cannot run commands itself, so it tells the agent to run
-     `bottown run start <kind> <number>` and follow its output.
+     `bottown run start <kind> <number>`, the number as digits only, and
+     follow its output.
    - **Arguments:** `run start` accepts what users type,
-     `/bottown-implement issue #12` as well as `12`.
+     `/bottown-implement issue #12` as well as `12`, as separate words or
+     as one quoted word.
    - **Safe re-runs:** re-running refreshes the files; a same-named file
      bottown did not write is left alone unless `--force`.
    - **Fallback for other harnesses:** a skill or instructions file that

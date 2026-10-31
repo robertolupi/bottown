@@ -5,7 +5,7 @@ allowed-tools: Bash({{.Bottown}}:*), Bash(bottown:*)
 ---
 <!-- {{.Marker}} -->
 
-!`{{.Bottown}} run start {{.Kind}} $ARGUMENTS`
+!`{{.Bottown}} run start {{.Kind}} '$ARGUMENTS'`
 
 The output above comes from bottown. If it is an error (for example, this is
 not an actor worktree, the worktree is busy or has uncommitted changes, or the
