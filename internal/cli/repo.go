@@ -216,6 +216,9 @@ that run's key, as the run's actor.`,
 			}
 			if runFile != "" {
 				rec, err := runs.LoadFile(runFile)
+				if errors.Is(err, os.ErrNotExist) {
+					return nil // an actor worktree outside a run has no credentials
+				}
 				if err != nil {
 					return err
 				}

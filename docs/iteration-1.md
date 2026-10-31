@@ -346,8 +346,19 @@ bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the p
 
 ### Build order for step 7
 
-1. `bottown actor setup`: worktree creation, worktree config, credential
-   reset and blocked origin push.
+1. ~~`bottown actor setup`: worktree creation, worktree config, credential
+   reset and blocked origin push.~~ Done (2026-10-31), plus `bottown actor
+   ls` and `GET /v1/actors`.
+   - **Location:** setup refuses unless the checkout is `<fam>/main`, or
+     `--path` is given.
+   - **Idle state:** the worktree is detached at the bottown remote's
+     default branch.
+   - **Credentials:** every inherited credential helper is reset, including
+     URL-scoped ones such as the owner's bottown helper from `main`. The
+     only helper left answers with the run key from the worktree's git dir.
+     With no run, git finds no credentials, so even a fetch from bottown
+     fails until step 2 adds read-only actor keys.
+   - **Pushes:** every remote except bottown gets a blocked `pushurl`.
 2. Server: forge operations as shared functions behind REST `/v1/forge/...`
    (MCP tools reuse them); run leases bound to permanent worktrees; actor
    self-start (`run start`), and reads-only outside runs.

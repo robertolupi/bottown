@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, s.healthSnapshot())
 	})
 	mux.Handle("GET /v1/whoami", s.authed(http.HandlerFunc(s.whoami)))
+	mux.Handle("GET /v1/actors", s.authed(http.HandlerFunc(s.listActors)))
 	mux.Handle("POST /v1/reconcile", s.authedNoSpec(s.ownerOnly(http.HandlerFunc(s.postReconcile))))
 	mux.Handle("POST /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.postRun))))
 	mux.Handle("GET /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.listRuns))))
@@ -192,6 +193,21 @@ func (s *Server) ownerOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ActorInfo is one actor as GET /v1/actors lists it.
+type ActorInfo struct {
+	Name    string `json:"name"`
+	Family  string `json:"family"`
+	Harness string `json:"harness"`
+}
+
+func (s *Server) listActors(w http.ResponseWriter, r *http.Request) {
+	out := []ActorInfo{}
+	for _, a := range s.desired().Actors {
+		out = append(out, ActorInfo{Name: a.Name, Family: a.Family, Harness: a.Harness})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {

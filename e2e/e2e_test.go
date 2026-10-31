@@ -237,7 +237,10 @@ func TestE2E(t *testing.T) {
 	})
 
 	// A demo checkout with an external origin.
-	demo := t.TempDir()
+	// The fam layout: the owner's checkout is <fam>/main.
+	fam := t.TempDir()
+	demo := filepath.Join(fam, "main")
+	os.Mkdir(demo, 0o755)
 	git(t, demo, "init", "-q", "-b", "main")
 	os.WriteFile(filepath.Join(demo, "README"), []byte("demo\n"), 0o644)
 	git(t, demo, "add", ".")
@@ -264,6 +267,53 @@ func TestE2E(t *testing.T) {
 		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections/main", nil, &bp)
 		if bp.RequiredApprovals != 1 || !bp.DismissStaleApprovals || !bp.EnableMergeWhitelist {
 			t.Fatalf("protection = %+v", bp)
+		}
+	})
+
+	t.Run("actor worktrees next to main", func(t *testing.T) {
+		out := a.mustCmd(demo, "actor", "setup", "claude", "agy")
+		wt := filepath.Join(fam, "claude")
+		if !strings.Contains(out, "created claude's worktree at") || !strings.Contains(out, "pushes blocked to origin") {
+			t.Fatalf("actor setup:\n%s", out)
+		}
+		for k, want := range map[string]string{"user.name": "claude", "bottown.actor": "claude", "bottown.family": "anthropic", "bottown.instance": a.name} {
+			if got := git(t, wt, "config", "--worktree", "--get", k); got != want {
+				t.Errorf("%s = %q, want %q", k, got, want)
+			}
+		}
+		// Nothing leaks into main's own config.
+		if out, _ := exec.Command("git", "-C", demo, "config", "--get", "bottown.actor").Output(); len(out) > 0 {
+			t.Errorf("main has bottown.actor = %s", out)
+		}
+		if got := git(t, demo, "config", "--get", "user.name"); got == "claude" {
+			t.Errorf("main's user.name became claude")
+		}
+		// Pushes to origin are blocked; pushes to bottown get no owner key.
+		push := func(remote string) (string, error) {
+			c := exec.Command("git", "-C", wt, "push", remote, "HEAD:refs/heads/actor-push-test")
+			c.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+			b, err := c.CombinedOutput()
+			return string(b), err
+		}
+		if out, err := push("origin"); err == nil || !strings.Contains(out, "bottown-blocked") {
+			t.Errorf("push to origin from actor worktree: %v\n%s", err, out)
+		}
+		if out, err := push("bottown-" + a.name); err == nil {
+			t.Errorf("push to bottown from actor worktree without a run succeeded:\n%s", out)
+		}
+		// Re-running repairs, refuses non-actors, and ls lists both.
+		if out := a.mustCmd(demo, "actor", "setup", "claude"); !strings.Contains(out, "repairing claude's worktree") {
+			t.Errorf("second setup:\n%s", out)
+		}
+		if out, err := a.cmd(demo, "actor", "setup", "manager"); err == nil || !strings.Contains(out, "not an actor") {
+			t.Errorf("setup manager: %v %s", err, out)
+		}
+		if out, err := a.cmd(wt, "actor", "setup", "kimi"); err == nil || !strings.Contains(out, "main checkout") {
+			t.Errorf("setup from an actor worktree: %v %s", err, out)
+		}
+		ls := a.mustCmd(demo, "actor", "ls")
+		if !strings.Contains(ls, "claude") || !strings.Contains(ls, "agy") || !strings.Contains(ls, "(detached)") {
+			t.Errorf("actor ls:\n%s", ls)
 		}
 	})
 
