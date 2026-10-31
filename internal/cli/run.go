@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -249,13 +250,14 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := rc.ws.Save(rec); err != nil {
 		return err
 	}
+	st := newStyles(lipgloss.NewRenderer(out))
 	if status == runs.StatusSucceeded && !o.keep {
 		if err := rc.ws.Remove(run.ID); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove worktree: %v\n", err)
 		}
-		fmt.Fprintf(out, "run %s %s (worktree removed)\n", run.ID, status)
+		fmt.Fprintf(out, "run %s %s (worktree removed)\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status))
 	} else {
-		fmt.Fprintf(out, "run %s %s (exit %d); worktree kept at %s\n", run.ID, status, code, dir)
+		fmt.Fprintf(out, "run %s %s (exit %d); worktree kept at %s\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status), code, dir)
 	}
 	if status != runs.StatusSucceeded {
 		return fmt.Errorf("run %s %s", run.ID, status)
@@ -384,46 +386,86 @@ func newRunLs(g *globals) *cobra.Command {
 			if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?repo="+rc.repo, nil, &remote); err != nil {
 				return err
 			}
-			byID := map[string]secrets.Run{}
-			for _, r := range remote {
-				byID[r.ID] = r
-			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "RUN\tKIND\tTARGET\tACTOR\tFAMILY\tMODE\tSTATUS\tKEY\tBRANCH/SHA\tAGE\tSIZE")
-			seen := map[string]bool{}
-			for _, r := range local {
-				seen[r.ID] = true
-				keyState := "gone"
-				if sr, ok := byID[r.ID]; ok {
-					keyState = serverKeyState(sr)
-				}
-				size := "-"
-				if _, err := os.Stat(r.Worktree); err == nil {
-					size = humanBytes(runs.DirSize(r.Worktree))
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Kind, r.Target(), r.Actor, r.Family,
-					r.Mode(), r.Status, keyState, branchOrSHA(r.Branch, r.SHA), age(r.Started), size)
-			}
-			for _, sr := range remote {
-				if seen[sr.ID] {
-					continue
-				}
-				mode := "batch"
-				if sr.Interactive {
-					mode = "interactive"
-				}
-				target := fmt.Sprintf("#%d", sr.Issue)
-				if sr.PR > 0 {
-					target = fmt.Sprintf("!%d", sr.PR)
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sr.ID, sr.Kind, target, sr.Actor, sr.Family,
-					mode, "(no local dir)", serverKeyState(sr), branchOrSHA(sr.Branch, sr.SHA), age(sr.Created), "-")
-			}
-			return tw.Flush()
+			out := cmd.OutOrStdout()
+			return printRunLs(out, lipgloss.NewRenderer(out), local, remote)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list the server's runs for every repository on the instance")
 	return cmd
+}
+
+func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote []secrets.Run) error {
+	byID := map[string]secrets.Run{}
+	for _, rem := range remote {
+		byID[rem.ID] = rem
+	}
+	st := newStyles(r)
+	tw := newTableWriter(out)
+	tw.Row(
+		st.Header.Render("RUN"),
+		st.Header.Render("KIND"),
+		st.Header.Render("TARGET"),
+		st.Header.Render("ACTOR"),
+		st.Header.Render("FAMILY"),
+		st.Header.Render("MODE"),
+		st.Header.Render("STATUS"),
+		st.Header.Render("KEY"),
+		st.Header.Render("BRANCH/SHA"),
+		st.Header.Render("AGE"),
+		st.Header.Render("SIZE"),
+	)
+	seen := map[string]bool{}
+	for _, rec := range local {
+		seen[rec.ID] = true
+		keySt := "gone"
+		if sr, ok := byID[rec.ID]; ok {
+			keySt = serverKeyState(sr)
+		}
+		size := "-"
+		if _, err := os.Stat(rec.Worktree); err == nil {
+			size = humanBytes(runs.DirSize(rec.Worktree))
+		}
+		tw.Row(
+			st.Info.Bold(true).Render(rec.ID),
+			st.Purple.Render(rec.Kind),
+			st.Bold.Render(rec.Target()),
+			st.Info.Render(rec.Actor),
+			rec.Family,
+			rec.Mode(),
+			st.runStatus(rec.Status),
+			st.keyState(keySt),
+			branchOrSHA(rec.Branch, rec.SHA),
+			st.Dim.Render(age(rec.Started)),
+			size,
+		)
+	}
+	for _, sr := range remote {
+		if seen[sr.ID] {
+			continue
+		}
+		mode := "batch"
+		if sr.Interactive {
+			mode = "interactive"
+		}
+		target := fmt.Sprintf("#%d", sr.Issue)
+		if sr.PR > 0 {
+			target = fmt.Sprintf("!%d", sr.PR)
+		}
+		tw.Row(
+			st.Info.Bold(true).Render(sr.ID),
+			st.Purple.Render(sr.Kind),
+			st.Bold.Render(target),
+			st.Info.Render(sr.Actor),
+			sr.Family,
+			mode,
+			st.Dim.Render("(no local dir)"),
+			st.keyState(serverKeyState(sr)),
+			branchOrSHA(sr.Branch, sr.SHA),
+			st.Dim.Render(age(sr.Created)),
+			"-",
+		)
+	}
+	return tw.Flush()
 }
 
 func lsAll(cmd *cobra.Command, g *globals) error {
@@ -439,15 +481,40 @@ func lsAll(cmd *cobra.Command, g *globals) error {
 	if err := callServer(cmd.Context(), inst, key, "GET", "/v1/runs", nil, &remote); err != nil {
 		return err
 	}
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tREPO\tKIND\tTARGET\tACTOR\tFAMILY\tKEY\tSTATUS\tAGE")
+	out := cmd.OutOrStdout()
+	return printRunLsAll(out, lipgloss.NewRenderer(out), remote)
+}
+
+func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) error {
+	st := newStyles(r)
+	tw := newTableWriter(out)
+	tw.Row(
+		st.Header.Render("RUN"),
+		st.Header.Render("REPO"),
+		st.Header.Render("KIND"),
+		st.Header.Render("TARGET"),
+		st.Header.Render("ACTOR"),
+		st.Header.Render("FAMILY"),
+		st.Header.Render("KEY"),
+		st.Header.Render("STATUS"),
+		st.Header.Render("AGE"),
+	)
 	for _, sr := range remote {
 		target := fmt.Sprintf("#%d", sr.Issue)
 		if sr.PR > 0 {
 			target = fmt.Sprintf("!%d", sr.PR)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sr.ID, sr.Repo, sr.Kind, target, sr.Actor, sr.Family,
-			serverKeyState(sr), sr.Status, age(sr.Created))
+		tw.Row(
+			st.Info.Bold(true).Render(sr.ID),
+			st.Bold.Render(sr.Repo),
+			st.Purple.Render(sr.Kind),
+			st.Bold.Render(target),
+			st.Info.Render(sr.Actor),
+			sr.Family,
+			st.keyState(serverKeyState(sr)),
+			st.runStatus(sr.Status),
+			st.Dim.Render(age(sr.Created)),
+		)
 	}
 	return tw.Flush()
 }
@@ -496,48 +563,92 @@ func humanBytes(n int64) string {
 
 func newRunShow(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "show RUN",
-		Short: "Show a run's local record, server record and log tail",
-		Args:  cobra.ExactArgs(1),
+		Use:     "show RUN",
+		Aliases: []string{"status"},
+		Short:   "Show a run's local record, server record and log tail",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := openRunContext(g)
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			if rec, err := rc.ws.Load(args[0]); err == nil {
-				rec.Key = "" // never print a live key
-				fmt.Fprintf(out, "local:  %s %s %s as %s (%s), %s, %s\n", rec.ID, rec.Kind, rec.Target(), rec.Actor, rec.Family, rec.Mode(), rec.Status)
-				fmt.Fprintf(out, "        worktree %s\n        started %s", rec.Worktree, rec.Started.Local().Format(time.DateTime))
-				if rec.Ended != nil {
-					fmt.Fprintf(out, ", ended %s", rec.Ended.Local().Format(time.DateTime))
-				}
-				fmt.Fprintln(out)
+			var (
+				rec        *runs.Record
+				sr         *secrets.Run
+				srErr      error
+				logContent string
+			)
+			if r, err := rc.ws.Load(args[0]); err == nil {
+				r.Key = "" // never print a live key
+				rec = &r
+			}
+			var s secrets.Run
+			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+args[0], nil, &s); err == nil {
+				sr = &s
 			} else {
-				fmt.Fprintf(out, "local:  no record\n")
+				srErr = err
 			}
-			var sr secrets.Run
-			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+args[0], nil, &sr); err == nil {
-				fmt.Fprintf(out, "server: key %s, expires %s", serverKeyState(sr), sr.Expires.Local().Format(time.DateTime))
-				if sr.Status != "" {
-					fmt.Fprintf(out, ", ended %s", sr.Status)
-				}
-				if sr.AllowSameFamily {
-					fmt.Fprint(out, ", same-family override")
-				}
-				fmt.Fprintln(out)
-			} else {
-				fmt.Fprintf(out, "server: %v\n", err)
+			logPath := rc.ws.Path(args[0], ".log")
+			if b, err := os.ReadFile(logPath); err == nil && len(b) > 0 {
+				logContent = string(b)
 			}
-			if b, err := os.ReadFile(rc.ws.Path(args[0], ".log")); err == nil && len(b) > 0 {
-				lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-				fmt.Fprintf(out, "log (%s, last %d lines):\n", rc.ws.Path(args[0], ".log"), min(len(lines), 20))
-				for _, l := range lines[max(0, len(lines)-20):] {
-					fmt.Fprintf(out, "  %s\n", truncate(l, 200))
-				}
-			}
+			printRunShow(out, lipgloss.NewRenderer(out), rec, sr, srErr, logPath, logContent)
 			return nil
 		},
+	}
+}
+
+func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *secrets.Run, srErr error, logPath, logContent string) {
+	st := newStyles(r)
+	if rec != nil {
+		fmt.Fprintf(out, "%s  %s %s %s as %s (%s), %s, %s\n",
+			st.Bold.Render("local:"),
+			st.Info.Bold(true).Render(rec.ID),
+			st.Purple.Render(rec.Kind),
+			st.Bold.Render(rec.Target()),
+			st.Info.Render(rec.Actor),
+			rec.Family,
+			rec.Mode(),
+			st.runStatus(rec.Status),
+		)
+		fmt.Fprintf(out, "        worktree %s\n        started %s",
+			rec.Worktree,
+			st.Dim.Render(rec.Started.Local().Format(time.DateTime)),
+		)
+		if rec.Ended != nil {
+			fmt.Fprintf(out, ", ended %s", st.Dim.Render(rec.Ended.Local().Format(time.DateTime)))
+		}
+		fmt.Fprintln(out)
+	} else {
+		fmt.Fprintf(out, "%s  no record\n", st.Bold.Render("local:"))
+	}
+	if sr != nil {
+		fmt.Fprintf(out, "%s key %s, expires %s",
+			st.Bold.Render("server:"),
+			st.keyState(serverKeyState(*sr)),
+			st.Dim.Render(sr.Expires.Local().Format(time.DateTime)),
+		)
+		if sr.Status != "" {
+			fmt.Fprintf(out, ", ended %s", st.runStatus(sr.Status))
+		}
+		if sr.AllowSameFamily {
+			fmt.Fprint(out, ", same-family override")
+		}
+		fmt.Fprintln(out)
+	} else if srErr != nil {
+		fmt.Fprintf(out, "%s %v\n", st.Bold.Render("server:"), srErr)
+	}
+	if len(logContent) > 0 {
+		lines := strings.Split(strings.TrimRight(logContent, "\n"), "\n")
+		fmt.Fprintf(out, "%s (%s, last %d lines):\n",
+			st.Bold.Render("log"),
+			logPath,
+			min(len(lines), 20),
+		)
+		for _, l := range lines[max(0, len(lines)-20):] {
+			fmt.Fprintf(out, "  %s\n", truncate(l, 200))
+		}
 	}
 }
 

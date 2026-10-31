@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"text/tabwriter"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -219,11 +220,7 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 		}
 		blocked = append(blocked, r)
 	}
-	fmt.Fprintf(out, "%s (%s, %s): identity %s <%s@bottown.local>, instance %s", name, info.Family, info.Harness, name, name, inst.Name)
-	if len(blocked) > 0 {
-		fmt.Fprintf(out, ", pushes blocked to %s", strings.Join(blocked, ", "))
-	}
-	fmt.Fprintln(out)
+	printActorSetup(out, lipgloss.NewRenderer(out), name, info.Family, info.Harness, inst.Name, blocked)
 	return nil
 }
 
@@ -355,16 +352,52 @@ func newActorLs(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ACTOR\tRUN\tHEAD\tPATH")
-			for _, wt := range wts {
-				run := wt.Run
-				if run == "" {
-					run = "-"
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", wt.Actor, run, wt.Head, wt.Path)
-			}
-			return tw.Flush()
+			out := cmd.OutOrStdout()
+			return printActorList(out, lipgloss.NewRenderer(out), wts)
 		},
 	}
+}
+
+func printActorList(out io.Writer, r *lipgloss.Renderer, wts []actorWorktree) error {
+	st := newStyles(r)
+	tw := newTableWriter(out)
+	tw.Row(
+		st.Header.Render("ACTOR"),
+		st.Header.Render("RUN"),
+		st.Header.Render("HEAD"),
+		st.Header.Render("PATH"),
+	)
+	for _, wt := range wts {
+		run := wt.Run
+		styledRun := run
+		if run == "" {
+			run = "-"
+			styledRun = st.Dim.Render("-")
+		} else {
+			styledRun = st.Info.Bold(true).Render(run)
+		}
+		tw.Row(
+			st.Info.Bold(true).Render(wt.Actor),
+			styledRun,
+			st.Bold.Render(wt.Head),
+			st.Dim.Render(wt.Path),
+		)
+	}
+	return tw.Flush()
+}
+
+func printActorSetup(out io.Writer, r *lipgloss.Renderer, name, family, harness, instName string, blocked []string) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "%s (%s, %s): identity %s <%s@bottown.local>, instance %s",
+		st.Info.Bold(true).Render(name),
+		st.Dim.Render(family),
+		st.Dim.Render(harness),
+		st.Bold.Render(name),
+		name,
+		st.Bold.Render(instName),
+	)
+	if len(blocked) > 0 {
+		fmt.Fprintf(out, ", pushes blocked to %s", st.Warning.Render(strings.Join(blocked, ", ")))
+	}
+	fmt.Fprintln(out)
 }

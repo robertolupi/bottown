@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -100,16 +101,17 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 		return err
 	}
 	url := inst.ServerURL() + res.GitPath
+	r := lipgloss.NewRenderer(out)
 	if have, err := git(top, "remote", "get-url", remote); err != nil {
 		if _, err := git(top, "remote", "add", remote, url); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "added remote %s -> %s\n", remote, url)
+		printRepoRemoteAdded(out, r, remote, url)
 	} else if have != url {
 		if _, err := git(top, "remote", "set-url", remote, url); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "updated remote %s -> %s\n", remote, url)
+		printRepoRemoteUpdated(out, r, remote, url)
 	}
 	if err := configureCredentialHelper(top, inst); err != nil {
 		return err
@@ -146,8 +148,23 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	for _, c := range append(res.Changes, res2.Changes...) {
 		fmt.Fprintf(out, "  - %s\n", c)
 	}
-	fmt.Fprintf(out, "%s is hosted on bottown %s: %s/%s\n", name, inst.Name, inst.ForgejoURL(), res2.FullName)
+	printRepoAdded(out, r, name, inst.Name, inst.ForgejoURL()+"/"+res2.FullName)
 	return nil
+}
+
+func printRepoRemoteAdded(out io.Writer, r *lipgloss.Renderer, remote, url string) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "added remote %s -> %s\n", st.Bold.Render(remote), st.Info.Render(url))
+}
+
+func printRepoRemoteUpdated(out io.Writer, r *lipgloss.Renderer, remote, url string) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "updated remote %s -> %s\n", st.Bold.Render(remote), st.Info.Render(url))
+}
+
+func printRepoAdded(out io.Writer, r *lipgloss.Renderer, name, instName, url string) {
+	st := newStyles(r)
+	fmt.Fprintf(out, "%s is hosted on bottown %s: %s\n", st.Bold.Render(name), st.Bold.Render(instName), st.Info.Render(url))
 }
 
 // configureCredentialHelper makes git ask bottown, and only bottown, for
