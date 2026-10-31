@@ -336,8 +336,10 @@ no MCP config at all.
 bottown run start implement 12 | verify 13   # self-start; prints the goal prompt
 bottown run end [--failed]                   # handover comment + revoke
 bottown whoami
+bottown issue list [--state open|closed|all] [--repo R]
 bottown issue show [N]                       # defaults to the run's issue
 bottown issue create --title T [--body-file F]  # also outside a run
+bottown pr list [--state open|closed|all] [--repo R]
 bottown pr show [N] [--diff]
 bottown pr create --title T [--body-file F]
 bottown comment [N] (--body B | --body-file F | -)

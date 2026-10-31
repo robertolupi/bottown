@@ -23,6 +23,13 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opIssue(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	})))
+	mux.Handle("GET /v1/forge/issues", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opIssueList(r.Context(), Who(r.Context()), IssueListIn{
+			Repo:  r.URL.Query().Get("repo"),
+			State: r.URL.Query().Get("state"),
+		})
+		writeOp(w, out, err)
+	})))
 	mux.Handle("POST /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in IssueCreateIn
 		if !decode(w, r, &in) {
@@ -33,6 +40,13 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	})))
 	mux.Handle("GET /v1/forge/pr", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opPR(r.Context(), Who(r.Context()), targetFromQuery(r), r.URL.Query().Get("diff") != "")
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/prs", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opPRList(r.Context(), Who(r.Context()), PRListIn{
+			Repo:  r.URL.Query().Get("repo"),
+			State: r.URL.Query().Get("state"),
+		})
 		writeOp(w, out, err)
 	})))
 	mux.Handle("POST /v1/forge/pr", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -42,8 +42,10 @@ and repository:
 
 ```
 bottown whoami
+bottown issue list [--state open|closed|all] [--repo R] [--json]
 bottown issue show [N]
 bottown issue create --title T --body-file -
+bottown pr list [--state open|closed|all] [--repo R] [--json]
 bottown pr show [N] [--diff]
 bottown pr create --title T --body-file -
 bottown comment [N] --body-file -
