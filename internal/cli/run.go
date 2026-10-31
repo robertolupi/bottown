@@ -386,8 +386,14 @@ func newRunLs(g *globals) *cobra.Command {
 			if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?repo="+rc.repo, nil, &remote); err != nil {
 				return err
 			}
+			var activeRemote []secrets.Run
+			for _, sr := range remote {
+				if serverKeyState(sr) == "live" {
+					activeRemote = append(activeRemote, sr)
+				}
+			}
 			out := cmd.OutOrStdout()
-			return printRunLs(out, lipgloss.NewRenderer(out), local, remote)
+			return printRunLs(out, lipgloss.NewRenderer(out), local, activeRemote)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list the server's runs for every repository on the instance")
@@ -451,6 +457,14 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 		if sr.PR > 0 {
 			target = fmt.Sprintf("!%d", sr.PR)
 		}
+		status := sr.Status
+		if status == "" {
+			if serverKeyState(sr) == "live" {
+				status = runs.StatusRunning
+			} else {
+				status = runs.StatusDead
+			}
+		}
 		tw.Row(
 			st.Info.Bold(true).Render(sr.ID),
 			st.Purple.Render(sr.Kind),
@@ -458,7 +472,7 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 			st.Info.Render(sr.Actor),
 			sr.Family,
 			mode,
-			st.Dim.Render("(no local dir)"),
+			st.runStatus(status),
 			st.keyState(serverKeyState(sr)),
 			branchOrSHA(sr.Branch, sr.SHA),
 			st.Dim.Render(age(sr.Created)),
@@ -504,6 +518,14 @@ func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) er
 		if sr.PR > 0 {
 			target = fmt.Sprintf("!%d", sr.PR)
 		}
+		status := sr.Status
+		if status == "" {
+			if serverKeyState(sr) == "live" {
+				status = runs.StatusRunning
+			} else {
+				status = runs.StatusDead
+			}
+		}
 		tw.Row(
 			st.Info.Bold(true).Render(sr.ID),
 			st.Bold.Render(sr.Repo),
@@ -512,7 +534,7 @@ func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) er
 			st.Info.Render(sr.Actor),
 			sr.Family,
 			st.keyState(serverKeyState(sr)),
-			st.runStatus(sr.Status),
+			st.runStatus(status),
 			st.Dim.Render(age(sr.Created)),
 		)
 	}

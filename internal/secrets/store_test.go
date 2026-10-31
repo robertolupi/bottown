@@ -32,6 +32,16 @@ func TestRunKeyLifecycle(t *testing.T) {
 	if st.Runs["r-1"].Status != "succeeded" || len(st.Keys) != 0 {
 		t.Fatalf("after end: %+v keys=%d", st.Runs["r-1"], len(st.Keys))
 	}
+	if ok, _ := s.DeleteRun("r-1"); !ok {
+		t.Fatal("DeleteRun: want true, got false")
+	}
+	if ok, _ := s.DeleteRun("r-1"); ok {
+		t.Fatal("DeleteRun on deleted: want false, got true")
+	}
+	st, _ = s.Read()
+	if _, ok := st.Runs["r-1"]; ok {
+		t.Fatal("run r-1 still exists after DeleteRun")
+	}
 	// A plain actor key has no run.
 	k2, _ := s.NewAPIKey("codex", "manual", "")
 	if p, ok, _ := s.Lookup(k2, now); !ok || p.Run != nil || p.ReadOnly {

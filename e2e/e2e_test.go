@@ -1155,8 +1155,11 @@ func TestE2E(t *testing.T) {
 		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs") {
 			t.Errorf("gc --failed: %s", out)
 		}
-		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Count(out, "(no local dir)") < 3 {
+		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Contains(out, "kimi") {
 			t.Errorf("run ls after gc:\n%s", out)
+		}
+		if out := a.mustCmd(demo, "run", "ls", "--all"); !strings.Contains(out, "kimi") {
+			t.Errorf("run ls --all lacks kimi:\n%s", out)
 		}
 	})
 
