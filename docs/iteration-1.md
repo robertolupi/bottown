@@ -245,19 +245,109 @@ hood, since a headless stream cannot be steered.
    **Option:** a `crush` binding with OpenRouter would give actors on many
    model families through one harness, at pay-per-token cost. It is not
    built; its per-run config and headless flags need checking first.
-6. e2e:
-   - a fake harness (a script) runs the implement and verify paths
-     end-to-end;
-   - the role policy denies cross-role and cross-repo calls;
-   - the family rule refuses a same-family verify without the override and
-     allows it with one;
-   - `run ls` shows each state, and `gc` removes finished runs.
-7. Prod: run `bottown up -i prod --ref <commit>`, then `bottown repo add`.
+6. ~~e2e~~ Done (2026-10-31) with the scripted harness. The first **live**
+   loop also ran on dev: claude implemented issue #3 as PR !4 (52 s), and
+   agy approved it with an official review pinned to the PR head. Claude
+   runs are isolated from the owner's personal setup: no user-level
+   settings, plugins, hooks or auto-memory, and no Claude-host variables.
+7. **Permanent actor worktrees and runs from inside the harness** (next;
+   see below).
+8. Prod: run `bottown up -i prod --ref <commit>`, then `bottown repo add`.
    File and pre-register the first issue.
-8. The real run, with a written record covering:
+9. The real run, with a written record covering:
    - which steps needed you;
    - what the verifier caught;
    - whether any of the §5.4 gotchas appeared.
+
+## Step 7: permanent actor worktrees and in-harness runs
+
+Decided with rlupi on 2026-10-31, after the first live loop. The goal is to
+work in the agent harnesses' own UIs and start a run from inside one, with
+`/bottown-implement 12`. The ephemeral `.bottown/runs/` worktrees stay for
+e2e and dev.
+
+### Layout (the fam layout of `~/src/fams/botfam-new`)
+
+```
+<fam>/main      the owner's checkout (the real .git), remotes origin + bottown
+<fam>/claude    permanent git worktree of main, actor claude
+<fam>/agy       permanent git worktree of main, actor agy
+...
+```
+
+`bottown actor setup <actor>` (run in `main`) creates or repairs an actor
+worktree. Runs then lease it instead of creating a directory.
+
+### Per-actor state lives with the worktree
+
+- **`config.worktree`** (`extensions.worktreeConfig` on) holds non-secret
+  state: `bottown.actor`, `bottown.instance`, `bottown.run` (the active run
+  id, empty when there is none), `user.name`/`user.email`, and the
+  credential helper.
+- **The run key** lives in `main/.git/worktrees/<actor>/bottown/run.json`
+  (0600), outside the working tree: no `git add -A` can commit it, and it
+  is never in git config, where `git config -l` would print it into
+  transcripts.
+- **Shared `main` config is neutralised per worktree.** Credential helpers
+  are reset to the actor's own (no owner key), and `remote.origin.pushurl`
+  is set to a blocked value, so agents cannot push upstream with the
+  owner's credentials. Fetching from origin still works.
+
+### Starting runs from inside a harness
+
+- **The slash command** `/bottown-implement 12` (and `/bottown-verify 13`)
+  is a harness command or skill that calls a new **`run_start`** MCP tool.
+- **The actor starts its own run.** The server applies the same checks as
+  `POST /v1/runs` (issue open, PR head SHA, author refusal, family rule) and
+  binds the run to the calling actor's worktree. The owner can disable
+  self-start in the desired state.
+- **The worktree is then prepared:** branch `issue/<n>` is checked out, or
+  the PR head detached for verify runs. This is refused if the worktree is
+  dirty or already in a run.
+- **`run_end`** (or `bottown run end`) ends the lease and revokes the key.
+- **Outside a run,** MCP allows reads and `run_start` only. Writes need a
+  run, so role and repo scoping still hold.
+- **`bottown run implement -a <actor> N`** from `main` keeps working. It
+  leases that actor's permanent worktree, then launches the harness batch,
+  `-I`, or not at all (`--no-launch`, to open the UI yourself).
+
+### MCP without secrets: the stdio shim
+
+`bottown mcp stdio` is a local MCP server that relays to bottown's HTTP
+endpoint with the right key. It must work out which actor worktree it
+serves; its working directory is not reliable, because some harnesses
+start stdio servers from a global directory. Resolution order:
+
+1. **MCP roots:** it asks the client for workspace folders (`roots/list`)
+   and uses the root that is an actor worktree.
+2. **An explicit `--worktree <path>`** in a per-worktree config that
+   `bottown actor setup` writes in each harness's workspace location
+   (`.mcp.json` for claude, `.agents/mcp_config.json` for agy). These files
+   are excluded through `main/.git/info/exclude`.
+3. **The working directory,** only if it is an actor worktree.
+4. **Otherwise,** a clear error pointing to `bottown actor setup`.
+
+The shim reads `bottown.actor` and `bottown.run` from git config and the
+key from the worktree's git dir. With an active run it uses the run key;
+otherwise an actor key limited to reads and `run_start`. Harnesses that
+support roots get one global entry, `bottown mcp stdio`; the others get the
+per-worktree file. Neither holds a secret.
+
+### Build order for step 7
+
+1. `bottown actor setup`: worktree creation, worktree config, credential
+   reset, blocked origin push, and per-harness workspace MCP files.
+2. Run leases on permanent worktrees: server binding, `run.json` in the
+   git dir, `run_start`/`run_end` MCP tools, and the read-only mode outside
+   runs.
+3. `bottown mcp stdio`, with roots, `--worktree`, then the working
+   directory.
+4. The `/bottown-implement` and `/bottown-verify` commands, for claude
+   first, then agy.
+5. `bottown run implement/verify` from `main`, leasing permanent worktrees
+   (`--no-launch`, batch, `-I`), and `run ls` reading worktree state.
+6. e2e: a scripted run through the shim and an actor-started run; check
+   that an owner-key push from an actor worktree is impossible.
 
 ## Done when
 
