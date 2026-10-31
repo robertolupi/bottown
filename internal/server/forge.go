@@ -49,22 +49,35 @@ type Target struct {
 	Number int64  `json:"number,omitempty" jsonschema:"issue or pull request number; defaults to the run's"`
 }
 
-// resolve fills a Target from the run, and confines run keys to their repo.
-func (s *Server) resolve(p secrets.Principal, t Target, def int64) (string, string, int64, error) {
+// resolveRepo resolves and confines a repository name for an actor/run.
+func (s *Server) resolveRepo(p secrets.Principal, repo string) (string, string, error) {
 	org := s.desired().Org
 	if p.Run != nil {
-		if t.Repo != "" && !strings.EqualFold(t.Repo, p.Run.Repo) {
-			return "", "", 0, ferr(http.StatusForbidden, "this run is confined to %s/%s", p.Run.Org, p.Run.Repo)
+		if repo != "" && !strings.EqualFold(repo, p.Run.Repo) {
+			return "", "", ferr(http.StatusForbidden, "this run is confined to %s/%s", p.Run.Org, p.Run.Repo)
 		}
-		t.Repo = p.Run.Repo
-		if t.Number == 0 {
-			t.Number = def
-		}
+		repo = p.Run.Repo
 	}
-	if t.Repo == "" || t.Number <= 0 {
+	repo = strings.TrimPrefix(repo, org+"/")
+	if repo == "" {
+		return "", "", ferr(http.StatusBadRequest, "repo is required without a run")
+	}
+	return org, repo, nil
+}
+
+// resolve fills a Target from the run, and confines run keys to their repo.
+func (s *Server) resolve(p secrets.Principal, t Target, def int64) (string, string, int64, error) {
+	if p.Run != nil && t.Number == 0 {
+		t.Number = def
+	}
+	if t.Number <= 0 {
 		return "", "", 0, ferr(http.StatusBadRequest, "repo and number are required without a run")
 	}
-	return org, t.Repo, t.Number, nil
+	org, repo, err := s.resolveRepo(p, t.Repo)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return org, repo, t.Number, nil
 }
 
 func (s *Server) actorClient(ctx context.Context, actor string) (*forgejo.Client, error) {
@@ -178,6 +191,40 @@ type IssueCreateOut struct {
 	Repo   string `json:"repo"`
 }
 
+// IssueListIn is the input of issue list.
+type IssueListIn struct {
+	Repo  string `json:"repo,omitempty" jsonschema:"repository name in the bottown org; defaults to the run's repository, required outside a run"`
+	State string `json:"state,omitempty" jsonschema:"state filter: open, closed, or all (default: open)"`
+}
+
+// IssueItem is an issue summary in a list.
+type IssueItem struct {
+	Number int64    `json:"number"`
+	Title  string   `json:"title"`
+	State  string   `json:"state"`
+	Author string   `json:"author"`
+	Labels []string `json:"labels,omitempty"`
+	URL    string   `json:"url"`
+}
+
+// PRListIn is the input of pr list.
+type PRListIn struct {
+	Repo  string `json:"repo,omitempty" jsonschema:"repository name in the bottown org; defaults to the run's repository, required outside a run"`
+	State string `json:"state,omitempty" jsonschema:"state filter: open, closed, or all (default: open)"`
+}
+
+// PRItem is a pull request summary in a list.
+type PRItem struct {
+	Number      int64  `json:"number"`
+	Title       string `json:"title"`
+	State       string `json:"state"`
+	Author      string `json:"author"`
+	HeadBranch  string `json:"head_branch,omitempty"`
+	HeadSHA     string `json:"head_sha,omitempty"`
+	ReviewState string `json:"review_state"`
+	URL         string `json:"url"`
+}
+
 // CommentIn is the input of comment.
 type CommentIn struct {
 	Target
@@ -253,15 +300,9 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 	if strings.TrimSpace(in.Title) == "" {
 		return IssueCreateOut{}, ferr(http.StatusBadRequest, "title is required")
 	}
-	org, repo := s.desired().Org, in.Repo
-	if p.Run != nil {
-		if repo != "" && !strings.EqualFold(repo, p.Run.Repo) {
-			return IssueCreateOut{}, ferr(http.StatusForbidden, "this run is confined to %s/%s", p.Run.Org, p.Run.Repo)
-		}
-		repo = p.Run.Repo
-	}
-	if repo == "" {
-		return IssueCreateOut{}, ferr(http.StatusBadRequest, "repo is required without a run")
+	org, repo, err := s.resolveRepo(p, in.Repo)
+	if err != nil {
+		return IssueCreateOut{}, err
 	}
 	c, err := s.actorClient(ctx, p.Actor)
 	if err != nil {
@@ -289,6 +330,47 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 	}
 	s.toolAudit(p, "issue_create", "allow", fmt.Sprintf("%s#%d", repo, is.Index))
 	return IssueCreateOut{Number: is.Index, URL: is.HTMLURL, Repo: repo}, nil
+}
+
+func (s *Server) opIssueList(ctx context.Context, p secrets.Principal, in IssueListIn) ([]IssueItem, error) {
+	org, repo, err := s.resolveRepo(p, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	state, err := parseState(in.State)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return nil, err
+	}
+	issues, resp, err := c.ListRepoIssues(org, repo, sdk.ListIssueOption{
+		State:       state,
+		Type:        sdk.IssueTypeIssue,
+		ListOptions: sdk.ListOptions{PageSize: 50},
+	})
+	if forgejo.IsNotFound(resp, err) {
+		return nil, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
+	} else if err != nil {
+		return nil, err
+	}
+	out := make([]IssueItem, 0, len(issues))
+	for _, is := range issues {
+		item := IssueItem{
+			Number: is.Index,
+			Title:  is.Title,
+			State:  string(is.State),
+			Author: login(is.Poster),
+			URL:    is.HTMLURL,
+			Labels: []string{},
+		}
+		for _, l := range is.Labels {
+			item.Labels = append(item.Labels, l.Name)
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withDiff bool) (PROut, error) {
@@ -369,6 +451,94 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	}
 	s.toolAudit(p, "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
 	return PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch}, nil
+}
+
+func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn) ([]PRItem, error) {
+	org, repo, err := s.resolveRepo(p, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	state, err := parseState(in.State)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return nil, err
+	}
+	prs, resp, err := c.ListRepoPullRequests(org, repo, sdk.ListPullRequestsOptions{
+		State:       state,
+		ListOptions: sdk.ListOptions{PageSize: 50},
+	})
+	if forgejo.IsNotFound(resp, err) {
+		return nil, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
+	} else if err != nil {
+		return nil, err
+	}
+	out := make([]PRItem, 0, len(prs))
+	for _, pr := range prs {
+		item := PRItem{
+			Number: pr.Index,
+			Title:  pr.Title,
+			State:  string(pr.State),
+			Author: login(pr.Poster),
+			URL:    pr.HTMLURL,
+		}
+		if pr.Head != nil {
+			item.HeadBranch = pr.Head.Ref
+			item.HeadSHA = pr.Head.Sha
+		}
+		if pr.HasMerged {
+			item.ReviewState = "merged"
+		} else if pr.State == sdk.StateClosed {
+			item.ReviewState = "closed"
+		} else {
+			rs, _, err := c.ListPullReviews(org, repo, pr.Index, sdk.ListPullReviewsOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
+			if err != nil {
+				item.ReviewState = "unknown"
+			} else {
+				item.ReviewState = reviewState(rs)
+			}
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func reviewState(reviews []*sdk.PullReview) string {
+	hasChangesRequested := false
+	hasApproved := false
+	for _, r := range reviews {
+		if r.Stale || r.Dismissed {
+			continue
+		}
+		switch r.State {
+		case sdk.ReviewStateRequestChanges:
+			hasChangesRequested = true
+		case sdk.ReviewStateApproved:
+			hasApproved = true
+		}
+	}
+	if hasChangesRequested {
+		return "changes requested"
+	}
+	if hasApproved {
+		return "approved"
+	}
+	return "needs review"
+}
+
+func parseState(s string) (sdk.StateType, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "open":
+		return sdk.StateOpen, nil
+	case "closed":
+		return sdk.StateClosed, nil
+	case "all":
+		return sdk.StateAll, nil
+	default:
+		return "", ferr(http.StatusBadRequest, "invalid state %q: must be open, closed, or all", s)
+	}
 }
 
 func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentIn) (CommentOut, error) {

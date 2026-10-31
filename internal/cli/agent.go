@@ -252,8 +252,12 @@ func newIssue() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			r := repo
+			if r == "" {
+				r = a.defaultRepo()
+			}
 			var is server.IssueOut
-			if err := a.call("GET", "/v1/forge/issue"+targetQuery(repo, n, nil), nil, &is); err != nil {
+			if err := a.call("GET", "/v1/forge/issue"+targetQuery(r, n, nil), nil, &is); err != nil {
 				return err
 			}
 			if asJSON {
@@ -310,7 +314,55 @@ func newIssue() *cobra.Command {
 	create.Flags().StringVar(&bodyFile, "body-file", "", "read the description from a file, or - for stdin")
 	create.Flags().BoolVar(&createJSON, "json", false, "print JSON")
 	_ = create.MarkFlagRequired("title")
-	issue.AddCommand(show, create)
+
+	var listRepo, listState string
+	var listJSON bool
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List issues in a repository (default repo: the run's, else this worktree's)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			r := listRepo
+			if r == "" {
+				r = a.defaultRepo()
+			}
+			q := url.Values{}
+			if r != "" {
+				q.Set("repo", r)
+			}
+			if listState != "" {
+				q.Set("state", listState)
+			}
+			var issues []server.IssueItem
+			if err := a.call("GET", "/v1/forge/issues?"+q.Encode(), nil, &issues); err != nil {
+				return err
+			}
+			if listJSON {
+				return printJSON(cmd, issues)
+			}
+			out := cmd.OutOrStdout()
+			if len(issues) == 0 {
+				fmt.Fprintln(out, "no issues found")
+				return nil
+			}
+			for _, is := range issues {
+				labels := ""
+				if len(is.Labels) > 0 {
+					labels = " (" + strings.Join(is.Labels, ", ") + ")"
+				}
+				fmt.Fprintf(out, "#%-4d %-8s %-16s %s%s\n", is.Number, is.State, is.Author, is.Title, labels)
+			}
+			return nil
+		},
+	}
+	list.Flags().StringVar(&listRepo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
+	list.Flags().StringVar(&listState, "state", "open", "state filter: open, closed, or all")
+	list.Flags().BoolVar(&listJSON, "json", false, "print JSON")
+	issue.AddCommand(show, create, list)
 	return issue
 }
 
@@ -331,12 +383,16 @@ func newPR() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			r := repo
+			if r == "" {
+				r = a.defaultRepo()
+			}
 			extra := url.Values{}
 			if diff || stat {
 				extra.Set("diff", "1")
 			}
 			var p server.PROut
-			if err := a.call("GET", "/v1/forge/pr"+targetQuery(repo, n, extra), nil, &p); err != nil {
+			if err := a.call("GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
 				return err
 			}
 			if asJSON {
@@ -382,7 +438,7 @@ func newPR() *cobra.Command {
 			return nil
 		},
 	}
-	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's)")
+	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	show.Flags().BoolVar(&diff, "diff", false, "include a file summary and the diff, with lock files such as go.sum collapsed")
 	show.Flags().BoolVar(&stat, "stat", false, "include only the file summary")
@@ -390,6 +446,7 @@ func newPR() *cobra.Command {
 	show.MarkFlagsMutuallyExclusive("diff", "stat")
 
 	var title, body, bodyFile string
+	var createJSON bool
 	create := &cobra.Command{
 		Use:   "create --title T [--body B | --body-file F|-]",
 		Short: "Open a pull request from this implement run's branch (push it first)",
@@ -407,7 +464,7 @@ func newPR() *cobra.Command {
 			if err := a.call("POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b}, &out); err != nil {
 				return err
 			}
-			if asJSON {
+			if createJSON {
 				return printJSON(cmd, out)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "opened !%d (%s -> %s): %s\n", out.Number, out.Head, out.Base, out.URL)
@@ -417,9 +474,57 @@ func newPR() *cobra.Command {
 	create.Flags().StringVar(&title, "title", "", "title (required)")
 	create.Flags().StringVar(&body, "body", "", "description")
 	create.Flags().StringVar(&bodyFile, "body-file", "", "read the description from a file, or - for stdin")
-	create.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	create.Flags().BoolVar(&createJSON, "json", false, "print JSON")
 	_ = create.MarkFlagRequired("title")
-	pr.AddCommand(show, create)
+
+	var listRepo, listState string
+	var listJSON bool
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List pull requests in a repository (default repo: the run's, else this worktree's)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			r := listRepo
+			if r == "" {
+				r = a.defaultRepo()
+			}
+			q := url.Values{}
+			if r != "" {
+				q.Set("repo", r)
+			}
+			if listState != "" {
+				q.Set("state", listState)
+			}
+			var prs []server.PRItem
+			if err := a.call("GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
+				return err
+			}
+			if listJSON {
+				return printJSON(cmd, prs)
+			}
+			out := cmd.OutOrStdout()
+			if len(prs) == 0 {
+				fmt.Fprintln(out, "no pull requests found")
+				return nil
+			}
+			for _, p := range prs {
+				sha := p.HeadSHA
+				if len(sha) > 8 {
+					sha = sha[:8]
+				}
+				fmt.Fprintf(out, "!%-4d %-8s %-10s %-16s %-18s %s\n", p.Number, p.State, sha, p.Author, p.ReviewState, p.Title)
+			}
+			return nil
+		},
+	}
+	list.Flags().StringVar(&listRepo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
+	list.Flags().StringVar(&listState, "state", "open", "state filter: open, closed, or all")
+	list.Flags().BoolVar(&listJSON, "json", false, "print JSON")
+	pr.AddCommand(show, create, list)
 	return pr
 }
 

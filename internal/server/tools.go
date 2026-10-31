@@ -45,10 +45,29 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "issue_list",
+		Description: "List issues in a repository. Defaults to the run's repository; outside a run repo is required. " +
+			"State filter can be open (default), closed, or all.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in IssueListIn) (*mcp.CallToolResult, []IssueItem, error) {
+		out, err := s.opIssueList(ctx, principal(req), in)
+		return nil, out, err
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "pr_get",
 		Description: "Read a pull request: head SHA, branches, reviews and the diff. Defaults to the run's pull request.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in Target) (*mcp.CallToolResult, PROut, error) {
 		out, err := s.opPR(ctx, principal(req), in, true)
+		return nil, out, err
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "pr_list",
+		Description: "List pull requests in a repository with author, head SHA, and review state. " +
+			"Defaults to the run's repository; outside a run repo is required. " +
+			"State filter can be open (default), closed, or all.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in PRListIn) (*mcp.CallToolResult, []PRItem, error) {
+		out, err := s.opPRList(ctx, principal(req), in)
 		return nil, out, err
 	})
 

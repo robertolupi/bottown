@@ -802,6 +802,12 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "", "issue", "create", "--title", "follow-up from a run"); !strings.Contains(out, "in demo") {
 			t.Errorf("issue create in a run: %s", out)
 		}
+		if out := must(cw, "", "issue", "list"); !strings.Contains(out, "agent cli") {
+			t.Errorf("issue list: %s", out)
+		}
+		if out := must(cw, "", "issue", "list", "--json"); !strings.Contains(out, `"title": "agent cli"`) {
+			t.Errorf("issue list --json: %s", out)
+		}
 
 		os.WriteFile(filepath.Join(cw, "agent.txt"), []byte("agent\n"), 0o644)
 		git(t, cw, "add", "agent.txt")
@@ -814,6 +820,12 @@ func TestE2E(t *testing.T) {
 		if _, err := fmt.Sscanf(out, "opened !%d", &prn); err != nil {
 			t.Fatalf("pr create: %s", out)
 		}
+		if out := must(cw, "", "pr", "list"); !strings.Contains(out, "agent cli PR") || !strings.Contains(out, "needs review") {
+			t.Errorf("pr list: %s", out)
+		}
+		if out := must(cw, "", "pr", "list", "--json"); !strings.Contains(out, `"review_state": "needs review"`) {
+			t.Errorf("pr list --json: %s", out)
+		}
 		if out, err := agent(cw, "", "review", "submit", "--event", "APPROVED", "--commit", "x", "--body", "x"); err == nil || !strings.Contains(out, "verify run") {
 			t.Errorf("review from implement run: %v %s", err, out)
 		}
@@ -822,6 +834,15 @@ func TestE2E(t *testing.T) {
 		}
 		if out := must(cw, "", "whoami"); !strings.Contains(out, "no active run") {
 			t.Errorf("whoami after end: %s", out)
+		}
+		if out := must(cw, "", "issue", "list"); !strings.Contains(out, "follow-up from a run") {
+			t.Errorf("issue list outside run: %s", out)
+		}
+		if out := must(cw, "", "issue", "show", n); !strings.Contains(out, "agent cli") {
+			t.Errorf("issue show outside run: %s", out)
+		}
+		if out := must(cw, "", "pr", "show", fmt.Sprint(prn)); !strings.Contains(out, "agent cli PR") {
+			t.Errorf("pr show outside run: %s", out)
 		}
 		if b, err := exec.Command("git", "-C", cw, "push", "bottown-"+a.name, "HEAD:refs/heads/after-end").CombinedOutput(); err == nil {
 			t.Errorf("push after run end succeeded: %s", b)
@@ -840,8 +861,14 @@ func TestE2E(t *testing.T) {
 		if out := must(aw, "", "pr", "show", "--stat"); !strings.Contains(out, " agent.txt | 1 +") || strings.Contains(out, "+agent") {
 			t.Errorf("pr show --stat: %s", out)
 		}
+		if out := must(aw, "", "pr", "list"); !strings.Contains(out, "needs review") {
+			t.Errorf("pr list in verify run before review: %s", out)
+		}
 		if out := must(aw, "looks right", "review", "submit", "--event", "APPROVED", "--commit", sha, "--body-file", "-"); !strings.Contains(out, "APPROVED by agy") || !strings.Contains(out, "official true") {
 			t.Errorf("review submit: %s", out)
+		}
+		if out := must(aw, "", "pr", "list"); !strings.Contains(out, "approved") {
+			t.Errorf("pr list in verify run after review: %s", out)
 		}
 		if out, err := agent(aw, "", "api", "POST", fmt.Sprintf("/repos/bottown/demo/pulls/%d/merge", prn), "--data", `{"Do":"merge"}`); err == nil {
 			t.Errorf("api merge from verify run succeeded: %s", out)
@@ -907,7 +934,7 @@ func TestE2E(t *testing.T) {
 			t.Cleanup(func() { sess.Close() })
 			return sess
 		}
-		call := func(sess *mcp.ClientSession, name string, args map[string]any) (map[string]any, string) {
+		callRaw := func(sess *mcp.ClientSession, name string, args map[string]any) (*mcp.CallToolResult, string) {
 			t.Helper()
 			res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 			if err != nil {
@@ -920,6 +947,14 @@ func TestE2E(t *testing.T) {
 						msg += tc.Text
 					}
 				}
+				return nil, msg
+			}
+			return res, ""
+		}
+		call := func(sess *mcp.ClientSession, name string, args map[string]any) (map[string]any, string) {
+			t.Helper()
+			res, msg := callRaw(sess, name, args)
+			if msg != "" {
 				return nil, msg
 			}
 			b, _ := json.Marshal(res.StructuredContent)
@@ -960,6 +995,11 @@ func TestE2E(t *testing.T) {
 		if errMsg != "" || got["title"] != "mcp test" {
 			t.Fatalf("issue_get default: %v %s", got, errMsg)
 		}
+		res, errMsg := callRaw(is, "issue_list", nil)
+		b, _ := json.Marshal(res.StructuredContent)
+		if errMsg != "" || !strings.Contains(string(b), "mcp test") {
+			t.Fatalf("issue_list: %s %s", string(b), errMsg)
+		}
 		if _, errMsg := call(is, "issue_get", map[string]any{"repo": "elsewhere"}); !strings.Contains(errMsg, "confined") {
 			t.Errorf("issue_get other repo: %q", errMsg)
 		}
@@ -977,6 +1017,11 @@ func TestE2E(t *testing.T) {
 		pr, errMsg := call(is, "pr_create", map[string]any{"title": "mcp PR", "body": "done"})
 		if errMsg != "" {
 			t.Fatalf("pr_create: %s", errMsg)
+		}
+		res, errMsg = callRaw(is, "pr_list", nil)
+		b, _ = json.Marshal(res.StructuredContent)
+		if errMsg != "" || !strings.Contains(string(b), "mcp PR") {
+			t.Fatalf("pr_list: %s %s", string(b), errMsg)
 		}
 		prn := int64(pr["number"].(float64))
 		if _, errMsg := call(is, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "abc"}); !strings.Contains(errMsg, "verify run") {
