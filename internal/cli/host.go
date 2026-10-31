@@ -120,6 +120,7 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 	if err != nil {
 		return err
 	}
+	started := true // whether this up (re)started the container
 	switch {
 	case c.Exists && (c.ImageID != imageID || c.Labels[specLabel] != containerSpec(inst).Labels[specLabel]):
 		fmt.Fprintf(out, "recreating %s on image %s (volume %s kept)\n", inst.Container(), image, inst.Volume())
@@ -137,6 +138,8 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 		if err := runContainer(ctx, d, inst); err != nil {
 			return err
 		}
+	default:
+		started = false
 	}
 
 	h, err := waitHealthy(ctx, inst, timeout)
@@ -147,6 +150,12 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 	pwStored, err := handOff(ctx, g, d, inst)
 	if err != nil {
 		return err
+	}
+	if !started {
+		// The boot-time reconcile is old news; converge now and report that.
+		if h.Changes, err = reconcileNow(ctx, g, inst); err != nil {
+			return err
+		}
 	}
 
 	fmt.Fprintf(out, "bottown %s is up (bottown %s, Forgejo %s)\n", inst.Name, h.Version, h.ForgejoVersion)
@@ -320,6 +329,34 @@ func handOff(ctx context.Context, g *globals, d hostctl.Docker, inst config.Inst
 		return false, nil
 	}
 	return true, sec.Set(hostctl.AccountPassword, oc.Password)
+}
+
+func reconcileNow(ctx context.Context, g *globals, inst config.Instance) ([]string, error) {
+	key, err := ownerKey(g)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, inst.ServerURL()+"/v1/reconcile", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var v struct {
+		Changes []string `json:"changes"`
+		Error   string   `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, fmt.Errorf("reconcile: %s", resp.Status)
+	}
+	if v.Error != "" {
+		return v.Changes, fmt.Errorf("reconcile: %s", v.Error)
+	}
+	return v.Changes, nil
 }
 
 func whoami(ctx context.Context, inst config.Instance, key string) (string, error) {

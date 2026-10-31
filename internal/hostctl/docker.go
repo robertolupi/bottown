@@ -61,7 +61,9 @@ func (d Docker) ImageID(ctx context.Context, ref string) (string, error) {
 
 // Build runs `docker build`. contextDir may be "-" with tar supplied on stdin.
 func (d Docker) Build(ctx context.Context, contextDir string, stdin io.Reader, dockerfile, tag string, buildArgs map[string]string) error {
-	args := []string{"build", "-f", dockerfile, "-t", tag}
+	// No provenance attestation: it embeds a timestamp, so every build got a
+	// new image ID and `up` recreated the container even when nothing changed.
+	args := []string{"build", "--provenance=false", "-f", dockerfile, "-t", tag}
 	for k, v := range buildArgs {
 		args = append(args, "--build-arg", k+"="+v)
 	}

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/policy"
@@ -28,7 +29,6 @@ type Server struct {
 	Owner      string
 	Store      *secrets.Store
 	Rec        *provision.Reconciler
-	Desired    config.Desired
 	Policy     policy.Policy
 	Log        *slog.Logger
 
@@ -42,6 +42,10 @@ type Server struct {
 
 	mu     sync.Mutex
 	health Health
+	// specMu guards the reconciler's desired state: request handlers hold
+	// it for reading, a reconcile pass (which may reload the file) for
+	// writing.
+	specMu sync.RWMutex
 }
 
 // Health is the /healthz document.
@@ -83,36 +87,44 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, s.healthSnapshot())
 	})
 	mux.Handle("GET /v1/whoami", s.authed(http.HandlerFunc(s.whoami)))
+	mux.Handle("POST /v1/reconcile", s.authedNoSpec(s.ownerOnly(http.HandlerFunc(s.postReconcile))))
+	mux.Handle("POST /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.postRun))))
+	mux.Handle("GET /v1/runs", s.authed(s.ownerOnly(http.HandlerFunc(s.listRuns))))
+	mux.Handle("GET /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.getRun))))
+	mux.Handle("DELETE /v1/runs/{id}", s.authed(s.ownerOnly(http.HandlerFunc(s.endRun))))
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
-	mux.Handle("/mcp", s.ready(s.mcpHandler()))
+	mux.Handle("/mcp", s.ready(s.specRead(s.mcpHandler())))
 	mux.Handle("/forgejo/api/v1/", s.authed(http.HandlerFunc(s.apiProxy)))
 	mux.Handle("/git/", s.authed(http.HandlerFunc(s.gitProxy)))
 	mux.Handle("POST /v1/web/session", s.authed(s.ownerOnly(http.HandlerFunc(s.postWebSession))))
 	mux.Handle("GET /v1/web/login/{ticket}", s.ready(http.HandlerFunc(s.webLogin)))
 	mux.Handle("GET /web/forgejo", s.ready(s.uiAuthed(http.HandlerFunc(s.webForgejo))))
-	mux.Handle("GET /{$}", s.ready(s.uiAuthed(http.HandlerFunc(s.uiHome))))
+	mux.Handle("GET /{$}", s.ready(s.specRead(s.uiAuthed(http.HandlerFunc(s.uiHome)))))
 	return mux
 }
 
 type ctxKey struct{}
 
-// Actor returns the authenticated actor of a request.
-func Actor(ctx context.Context) string {
-	a, _ := ctx.Value(ctxKey{}).(string)
-	return a
+// Who returns the authenticated principal of a request.
+func Who(ctx context.Context) secrets.Principal {
+	p, _ := ctx.Value(ctxKey{}).(secrets.Principal)
+	return p
 }
 
-// LookupKey resolves an API key to an actor.
-func (s *Server) LookupKey(key string) (string, bool) {
+// Actor returns the authenticated actor of a request.
+func Actor(ctx context.Context) string { return Who(ctx).Actor }
+
+// Lookup resolves an API key; ended or expired run keys do not resolve.
+func (s *Server) Lookup(key string) (secrets.Principal, bool) {
 	if !strings.HasPrefix(key, secrets.KeyPrefix) {
-		return "", false
+		return secrets.Principal{}, false
 	}
-	actor, ok, err := s.Store.LookupKey(key)
+	p, ok, err := s.Store.Lookup(key, time.Now())
 	if err != nil {
 		s.Log.Error("key lookup", "err", err)
-		return "", false
+		return secrets.Principal{}, false
 	}
-	return actor, ok
+	return p, ok
 }
 
 // keyFromRequest accepts "Bearer <key>" or HTTP Basic with the key as
@@ -138,21 +150,34 @@ func (s *Server) ready(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) authed(next http.Handler) http.Handler {
+// desired is the current desired state; callers run under specRead.
+func (s *Server) desired() config.Desired { return s.Rec.Desired }
+
+func (s *Server) specRead(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.specMu.RLock()
+		defer s.specMu.RUnlock()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) authed(next http.Handler) http.Handler { return s.authedNoSpec(s.specRead(next)) }
+
+func (s *Server) authedNoSpec(next http.Handler) http.Handler {
 	return s.ready(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := s.LookupKey(keyFromRequest(r))
+		p, ok := s.Lookup(keyFromRequest(r))
 		if !ok {
 			w.Header().Set("WWW-Authenticate", `Basic realm="bottown"`)
-			writeError(w, http.StatusUnauthorized, "missing or unknown bottown API key")
+			writeError(w, http.StatusUnauthorized, "missing, unknown, ended or expired bottown API key")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, actor)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, p)))
 	}))
 }
 
 func (s *Server) ownerOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Actor(r.Context()) != s.Owner {
+		if p := Who(r.Context()); p.Actor != s.Owner || p.Run != nil {
 			writeError(w, http.StatusForbidden, "owner only")
 			return
 		}
@@ -161,7 +186,30 @@ func (s *Server) ownerOnly(next http.Handler) http.Handler {
 }
 
 func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"actor": Actor(r.Context()), "instance": s.Instance})
+	p := Who(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"actor": p.Actor, "instance": s.Instance, "run": p.Run})
+}
+
+// postReconcile runs a reconcile pass now (what `bottown up` does when the
+// container was already running) and returns the changes it made.
+func (s *Server) postReconcile(w http.ResponseWriter, r *http.Request) {
+	s.specMu.Lock()
+	defer s.specMu.Unlock()
+	rep, err := s.Rec.Run(r.Context())
+	changes := rep.Changes
+	if changes == nil {
+		changes = []string{}
+	}
+	if err != nil {
+		s.SetHealth(func(h *Health) { h.Error = err.Error() })
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "changes": changes})
+		return
+	}
+	s.SetHealth(func(h *Health) { h.Error, h.Changes = "", changes })
+	for _, c := range changes {
+		s.Log.Info("change", "what", c)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
 }
 
 func (s *Server) putRepo(w http.ResponseWriter, r *http.Request) {
@@ -239,9 +287,12 @@ func (s *Server) apiProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := s.Policy.Decide(actor, r.Method, apiPath)
+	if run := Who(r.Context()).Run; d.Allow && run != nil {
+		d = runScope(run).DecideAPI(r.Method, apiPath)
+	}
 	if !d.Allow {
 		s.audit(actor, r.Method, apiPath, "deny", d.Rule, http.StatusForbidden)
-		writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule+"; this write is performed by bottown")
+		writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
 		return
 	}
 	token, ok := s.actorToken(actor)
@@ -262,6 +313,13 @@ func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
 	if !ok || r.URL.RawPath != "" {
 		writeError(w, http.StatusBadRequest, "path must be clean and unencoded")
 		return
+	}
+	if run := Who(r.Context()).Run; run != nil {
+		if d := runScope(run).DecideGit(gitPath, r.URL.Query().Get("service")); !d.Allow {
+			s.audit(actor, r.Method, gitPath, "deny", d.Rule, http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
+			return
+		}
 	}
 	token, ok := s.actorToken(actor)
 	if !ok {
@@ -292,6 +350,10 @@ func (s *Server) proxy(path string, auth func(*http.Request)) *httputil.ReverseP
 		},
 		FlushInterval: -1,
 	}
+}
+
+func runScope(run *secrets.Run) policy.RunScope {
+	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind}
 }
 
 func (s *Server) audit(actor, method, path, decision, rule string, status int) {

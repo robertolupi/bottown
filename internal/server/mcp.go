@@ -7,13 +7,16 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 // WhoamiOut is the result of the whoami tool.
 type WhoamiOut struct {
-	Actor    string `json:"actor"`
-	Family   string `json:"family,omitempty"` // model vendor; empty for the owner
-	Instance string `json:"instance"`
+	Actor    string       `json:"actor"`
+	Family   string       `json:"family,omitempty"` // model vendor; empty for the owner
+	Instance string       `json:"instance"`
+	Run      *secrets.Run `json:"run,omitempty"` // the run this key is scoped to, if any
 }
 
 // StatusOut is the result of the forge_status tool.
@@ -31,9 +34,9 @@ func (s *Server) mcpServer() *mcp.Server {
 		Name:        "whoami",
 		Description: "Report which bottown actor this connection is authenticated as.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, WhoamiOut, error) {
-		actor := req.Extra.TokenInfo.UserID
-		a, _ := s.Desired.Actor(actor)
-		return nil, WhoamiOut{Actor: actor, Family: a.Family, Instance: s.Instance}, nil
+		p, _ := req.Extra.TokenInfo.Extra["principal"].(secrets.Principal)
+		a, _ := s.desired().Actor(p.Actor)
+		return nil, WhoamiOut{Actor: p.Actor, Family: a.Family, Instance: s.Instance, Run: p.Run}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "forge_status",
@@ -42,7 +45,7 @@ func (s *Server) mcpServer() *mcp.Server {
 		h := s.healthSnapshot()
 		return nil, StatusOut{
 			Instance: h.Instance, Version: h.Version, ForgejoVersion: h.ForgejoVersion,
-			Reconciled: h.Reconciled, Org: s.Desired.Org,
+			Reconciled: h.Reconciled, Org: s.desired().Org,
 		}, nil
 	})
 	return srv
@@ -52,12 +55,21 @@ func (s *Server) mcpHandler() http.Handler {
 	srv := s.mcpServer()
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	verify := func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
-		actor, ok := s.LookupKey(token)
+		p, ok := s.Lookup(token)
 		if !ok {
 			return nil, auth.ErrInvalidToken
 		}
-		// UserID binds MCP sessions to the actor that opened them.
-		return &auth.TokenInfo{UserID: actor, Expiration: time.Now().Add(time.Hour)}, nil
+		exp := time.Now().Add(time.Hour)
+		if p.Run != nil {
+			exp = p.Run.Expires
+		}
+		// UserID binds MCP sessions to the principal that opened them; a run
+		// key's session is bound to its run.
+		id := p.Actor
+		if p.Run != nil {
+			id += "/" + p.Run.ID
+		}
+		return &auth.TokenInfo{UserID: id, Expiration: exp, Extra: map[string]any{"principal": p}}, nil
 	}
 	return auth.RequireBearerToken(verify, nil)(h)
 }

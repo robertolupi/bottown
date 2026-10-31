@@ -433,6 +433,129 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("run keys: role, repo scope, family rule, lifecycle", func(t *testing.T) {
+		// A second anthropic actor, via the desired-state override file, so
+		// the same-family rule has something to refuse.
+		def, err := os.ReadFile(filepath.Join(src, "internal", "config", "default.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		override := string(def) + "\n[[actors]]\nname = \"claude2\"\nfamily = \"anthropic\"\nharness = \"claude\"\n"
+		c := exec.Command("docker", "exec", "-i", "-u", "git", a.cfg.Container(), "sh", "-c", "cat > /data/bottown/bottown.toml")
+		c.Stdin = strings.NewReader(override)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("write override: %v %s", err, out)
+		}
+		// `up` on a running instance reconciles now: no restart needed.
+		if out := a.up(); !strings.Contains(out, "created account claude2") {
+			t.Fatalf("override not applied:\n%s", out)
+		}
+
+		runs := func(key, method, path string, body any) (int, map[string]any) {
+			t.Helper()
+			var r io.Reader
+			if body != nil {
+				b, _ := json.Marshal(body)
+				r = bytes.NewReader(b)
+			}
+			req, _ := http.NewRequest(method, a.cfg.ServerURL()+path, r)
+			req.Header.Set("Authorization", "Bearer "+key)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var m map[string]any
+			json.NewDecoder(resp.Body).Decode(&m)
+			return resp.StatusCode, m
+		}
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "run test"}, &issue)
+		code, impl := runs(owner, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "claude", "repo": "demo", "issue": issue.Number})
+		if code != 201 || impl["branch"] != fmt.Sprintf("issue/%d", issue.Number) {
+			t.Fatalf("implement run: %d %v", code, impl)
+		}
+		ik := impl["key"].(string)
+		branch := impl["branch"].(string)
+
+		// Repo scope and owner-only endpoints.
+		if code, _ := a.api(ik, "GET", "/repos/bottown/demo/issues/1", nil); code != 200 {
+			t.Errorf("implement run read own repo: %d", code)
+		}
+		if code, _ := a.api(ik, "GET", "/repos/bottown/elsewhere", nil); code != 403 {
+			t.Errorf("implement run read other repo: %d, want 403", code)
+		}
+		if code, _ := runs(ik, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "claude", "repo": "demo", "issue": issue.Number}); code != 403 {
+			t.Errorf("run key creating runs: %d, want 403", code)
+		}
+
+		// The implementer pushes its branch and opens a PR, but cannot review.
+		git(t, demo, "checkout", "-q", "-B", branch, "bottown-"+a.name+"/main")
+		os.WriteFile(filepath.Join(demo, "run.txt"), []byte("run\n"), 0o644)
+		git(t, demo, "add", ".")
+		git(t, demo, "commit", "-q", "-m", "run change")
+		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
+			t.Fatalf("implement run push: %v\n%s", err, out)
+		}
+		var pr struct {
+			Number int64
+			Head   struct{ Sha string }
+		}
+		a.mustAPI(ik, "POST", "/repos/bottown/demo/pulls", map[string]string{"head": branch, "base": "main", "title": "run PR"}, &pr)
+		if code, _ := a.api(ik, "POST", fmt.Sprintf("/repos/bottown/demo/pulls/%d/reviews", pr.Number), map[string]string{"event": "COMMENT", "body": "x"}); code != 403 {
+			t.Errorf("implement run review: %d, want 403", code)
+		}
+
+		// Verify runs: not by the author, not same-family without override.
+		verify := func(actor string, allow bool) (int, map[string]any) {
+			return runs(owner, "POST", "/v1/runs", map[string]any{"kind": "verify", "actor": actor, "repo": "demo", "pr": pr.Number, "allow_same_family": allow})
+		}
+		if code, m := verify("claude", false); code != 409 {
+			t.Errorf("author verifying own PR: %d %v", code, m)
+		}
+		if code, m := verify("claude2", false); code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "anthropic") {
+			t.Errorf("same-family verify without override: %d %v", code, m)
+		}
+		if code, m := verify("claude2", true); code != 201 || m["allow_same_family"] != true {
+			t.Errorf("same-family verify with override: %d %v", code, m)
+		}
+		code, ver := verify("codex", false)
+		if code != 201 || ver["sha"] != pr.Head.Sha {
+			t.Fatalf("verify run: %d %v (head %s)", code, ver, pr.Head.Sha)
+		}
+		vk := ver["key"].(string)
+		prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
+		if code, _ := a.api(vk, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": pr.Head.Sha}); code != 200 {
+			t.Errorf("verify run review: %d", code)
+		}
+		if code, _ := a.api(vk, "POST", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", pr.Number), map[string]string{"body": "note"}); code != 201 {
+			t.Errorf("verify run comment: %d", code)
+		}
+		if code, _ := a.api(vk, "POST", "/repos/bottown/demo/pulls", map[string]string{"head": branch, "base": "main", "title": "x"}); code != 403 {
+			t.Errorf("verify run create PR: %d, want 403", code)
+		}
+		if out, err := a.pushAs(demo, "codex", vk, branch+":refs/heads/codex-push"); err == nil {
+			t.Errorf("verify run push succeeded:\n%s", out)
+		}
+
+		// Ending a run kills its key; short TTLs expire.
+		if code, m := runs(owner, "DELETE", "/v1/runs/"+impl["id"].(string), map[string]string{"status": "succeeded"}); code != 200 || m["status"] != "succeeded" {
+			t.Fatalf("end run: %d %v", code, m)
+		}
+		if code, _ := a.api(ik, "GET", "/repos/bottown/demo/issues/1", nil); code != 401 {
+			t.Errorf("ended run key: %d, want 401", code)
+		}
+		code, short := runs(owner, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number, "ttl_seconds": 1})
+		if code != 201 {
+			t.Fatalf("short run: %d %v", code, short)
+		}
+		time.Sleep(1500 * time.Millisecond)
+		if code, _ := a.api(short["key"].(string), "GET", "/user", nil); code != 401 {
+			t.Errorf("expired run key: %d, want 401", code)
+		}
+	})
+
 	t.Run("mcp whoami", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

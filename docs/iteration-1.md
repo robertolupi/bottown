@@ -144,8 +144,8 @@ harness = "kimi"
 ### Commands
 
 ```bash
-bottown run implement -a <actor> <issue>
-bottown run verify -a <actor> [--allow-same-family] <pr>
+bottown run implement -a <actor> [-I] <issue>
+bottown run verify -a <actor> [-I] [--allow-same-family] <pr>
 bottown run ls [--all]        # local run dirs merged with server records; flags orphans
 bottown run show <run-id>
 bottown run gc [--failed]     # remove finished runs (failed ones only with --failed)
@@ -163,8 +163,27 @@ bottown run gc [--failed]     # remove finished runs (failed ones only with --fa
 6. On exit, post a handover comment and revoke the key. Remove the worktree
    on success; keep it on failure.
 
-`run ls` columns are run, kind, target, actor, family, status, branch or SHA,
-age and size.
+`run ls` columns are run, kind, target, actor, family, mode, status, branch
+or SHA, age and size.
+
+**Batch or interactive.** Both modes use the same worktree, run key, MCP
+config and actor identity, so roles are enforced the same way. Only the
+launch differs:
+
+- **Batch (default):** the harness runs headless (`claude -p`, `codex exec`),
+  its output goes to the run log, and the run ends when the agent exits.
+- **Interactive (`-I`):** the harness's own TUI runs in your terminal, seeded
+  with the goal prompt as its first message, so you can discuss and steer
+  while it works. The run ends when you quit, and bottown asks whether it
+  succeeded.
+
+Interactive runs are recorded as such, in the run record, `run ls` and the
+handover comment. A result you steered is partly your work, and that should
+stay measurable (red-team C3).
+
+Later, both modes could run inside tmux, so a batch run could be joined with
+`bottown run attach <id>`. That requires the interactive launch under the
+hood, since a headless stream cannot be steered.
 
 ### Harness bindings (iteration 1)
 
@@ -181,8 +200,15 @@ age and size.
 
 1. ~~Actors in desired state, plus migration, the `actors` team and
    protection.~~ Done (2026-10-31).
-2. Run keys: the server endpoints, run records and proxy role and repo
-   scoping. Unit tests for the policy.
+2. ~~Run keys: the server endpoints, run records and proxy role and repo
+   scoping. Unit tests for the policy.~~ Done (2026-10-31). Also added:
+   - `POST /v1/reconcile`, which `up` calls when the container is already
+     running, so it reports what *this* run changed;
+   - the desired-state file is re-read on every reconcile, so edits apply
+     without a restart;
+   - images are built with `--provenance=false`, so identical builds keep
+     their image ID and `up` no longer recreates the container needlessly;
+   - run records carry an `interactive` flag.
 3. MCP tools, including the `/mcp/k/<key>` fallback.
 4. Run directories and `run implement`/`verify`/`ls`/`show`/`gc` with the
    claude binding.

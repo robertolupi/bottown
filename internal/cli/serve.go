@@ -67,12 +67,13 @@ func newReconciler(e containerEnv, log *slog.Logger) (*provision.Reconciler, *se
 		return nil, nil, err
 	}
 	return &provision.Reconciler{
-		BaseURL: e.ForgejoURL,
-		Admin:   forgejo.AdminClient{},
-		Store:   store,
-		Desired: desired,
-		Owner:   e.Owner,
-		Log:     log,
+		BaseURL:     e.ForgejoURL,
+		Admin:       forgejo.AdminClient{},
+		Store:       store,
+		Desired:     desired,
+		DesiredPath: config.DesiredPath,
+		Owner:       e.Owner,
+		Log:         log,
 	}, store, nil
 }
 
@@ -104,7 +105,7 @@ func serve(ctx context.Context) error {
 	}
 	srv := &server.Server{
 		Instance: e.Instance, Version: Version, ForgejoURL: fu, Owner: e.Owner.Login,
-		Store: store, Rec: rec, Desired: rec.Desired, Policy: policy.Default(e.Owner.Login), Log: log,
+		Store: store, Rec: rec, Policy: policy.Default(e.Owner.Login), Log: log,
 		PublicForgejoURL: e.PublicURL,
 		ForgejoCookie:    config.ForgejoCookie(e.Instance),
 		UICookie:         config.UICookie(e.Instance),

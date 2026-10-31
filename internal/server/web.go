@@ -188,7 +188,7 @@ func (s *Server) webForgejo(w http.ResponseWriter, r *http.Request) { s.redirect
 // uiHome is a placeholder status page until the real web UI exists.
 func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = homeTmpl.Execute(w, map[string]any{"H": s.healthSnapshot(), "Org": s.Desired.Org, "Owner": s.Owner})
+	_ = homeTmpl.Execute(w, map[string]any{"H": s.healthSnapshot(), "Org": s.desired().Org, "Owner": s.Owner})
 }
 
 var homeTmpl = template.Must(template.New("home").Parse(`<!doctype html>

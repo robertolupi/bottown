@@ -53,8 +53,11 @@ type Reconciler struct {
 	Admin   Admin
 	Store   *secrets.Store
 	Desired config.Desired
-	Owner   Owner
-	Log     *slog.Logger
+	// DesiredPath, if set, is re-read at the start of every Run, so edits
+	// apply on the next reconcile without a restart.
+	DesiredPath string
+	Owner       Owner
+	Log         *slog.Logger
 
 	adminToken string
 }
@@ -116,6 +119,13 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 // non-empty org repository.
 func (r *Reconciler) Run(ctx context.Context) (Report, error) {
 	var rep Report
+	if r.DesiredPath != "" {
+		d, err := config.LoadDesired(r.DesiredPath)
+		if err != nil {
+			return rep, err
+		}
+		r.Desired = d
+	}
 	if err := r.Bootstrap(ctx, &rep); err != nil {
 		return rep, err
 	}
@@ -416,6 +426,27 @@ func (r *Reconciler) ensureTokens(ctx context.Context, rep *Report) error {
 			return err
 		}
 		rep.add("minted token for %s (%s)", a.login, strings.Join(scopes, ","))
+	}
+	// Drop stored tokens of accounts no longer managed (removed from the
+	// desired state, or deleted by hand).
+	known := map[string]bool{}
+	for _, a := range actors {
+		known[a.login] = true
+	}
+	var stale []string
+	if err := r.Store.Update(func(s *secrets.State) error {
+		for login := range s.Tokens {
+			if !known[login] {
+				delete(s.Tokens, login)
+				stale = append(stale, login)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, login := range stale {
+		rep.add("dropped stored token of unmanaged account %s", login)
 	}
 	return nil
 }

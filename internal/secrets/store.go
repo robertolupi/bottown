@@ -32,11 +32,42 @@ type ActorToken struct {
 }
 
 // APIKey is the stored form of a bottown API key; only its hash is kept.
+// A run key also names its run, which bounds what the key may do and for
+// how long.
 type APIKey struct {
 	Actor   string    `json:"actor"`
 	Label   string    `json:"label,omitempty"`
+	RunID   string    `json:"run_id,omitempty"`
 	Created time.Time `json:"created"`
 }
+
+// Run is the server's record of one agent run: who, in which role, on what.
+// It is operational state, not tracker state: losing it only invalidates
+// in-flight run keys.
+type Run struct {
+	ID              string `json:"id"`
+	Kind            string `json:"kind"` // implement | verify
+	Actor           string `json:"actor"`
+	Family          string `json:"family"`
+	Org             string `json:"org"`
+	Repo            string `json:"repo"`
+	Issue           int64  `json:"issue,omitempty"`
+	PR              int64  `json:"pr,omitempty"`
+	Branch          string `json:"branch,omitempty"`
+	SHA             string `json:"sha,omitempty"`    // verify: PR head at creation
+	Author          string `json:"author,omitempty"` // verify: PR author
+	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	// Interactive runs are steered by the owner in the harness's TUI, so
+	// their result is partly the owner's work.
+	Interactive bool       `json:"interactive,omitempty"`
+	Created     time.Time  `json:"created"`
+	Expires     time.Time  `json:"expires"`
+	Ended       *time.Time `json:"ended,omitempty"`
+	Status      string     `json:"status,omitempty"` // set when ended: succeeded | failed | revoked
+}
+
+// Active reports whether the run's key is usable at t.
+func (r Run) Active(t time.Time) bool { return r.Ended == nil && t.Before(r.Expires) }
 
 // State is the full content of the secrets file.
 type State struct {
@@ -44,6 +75,7 @@ type State struct {
 	Tokens        map[string]ActorToken `json:"tokens,omitempty"`
 	OwnerPassword string                `json:"owner_password,omitempty"`
 	Keys          map[string]APIKey     `json:"keys,omitempty"` // sha256(key) hex -> key
+	Runs          map[string]Run        `json:"runs,omitempty"` // run id -> run
 }
 
 // Store is a lock-protected JSON file of State.
@@ -105,14 +137,79 @@ func (s *Store) NewAPIKey(actor, label string) (string, error) {
 	return key, nil
 }
 
-// LookupKey returns the actor owning key, if any.
-func (s *Store) LookupKey(key string) (string, bool, error) {
+// NewRun stores run and mints its key in one update.
+func (s *Store) NewRun(run Run) (string, error) {
+	key := KeyPrefix + RandomString(32)
+	err := s.Update(func(st *State) error {
+		if st.Keys == nil {
+			st.Keys = map[string]APIKey{}
+		}
+		if st.Runs == nil {
+			st.Runs = map[string]Run{}
+		}
+		if _, dup := st.Runs[run.ID]; dup {
+			return fmt.Errorf("run %s exists", run.ID)
+		}
+		st.Runs[run.ID] = run
+		st.Keys[HashKey(key)] = APIKey{Actor: run.Actor, Label: "run " + run.ID, RunID: run.ID, Created: run.Created}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// EndRun marks a run ended with status and deletes its key. It reports
+// false if the run does not exist.
+func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
+	var run Run
+	var ok bool
+	err := s.Update(func(st *State) error {
+		run, ok = st.Runs[id]
+		if !ok {
+			return nil
+		}
+		if run.Ended == nil {
+			run.Ended, run.Status = &at, status
+			st.Runs[id] = run
+		}
+		for h, k := range st.Keys {
+			if k.RunID == id {
+				delete(st.Keys, h)
+			}
+		}
+		return nil
+	})
+	return run, ok, err
+}
+
+// Principal is who an API key authenticates: an actor, and for run keys
+// the run that scopes it.
+type Principal struct {
+	Actor string
+	Run   *Run
+}
+
+// Lookup resolves key. Run keys whose run has ended or expired do not
+// resolve.
+func (s *Store) Lookup(key string, now time.Time) (Principal, bool, error) {
 	st, err := s.Read()
 	if err != nil {
-		return "", false, err
+		return Principal{}, false, err
 	}
 	k, ok := st.Keys[HashKey(key)]
-	return k.Actor, ok, nil
+	if !ok {
+		return Principal{}, false, nil
+	}
+	if k.RunID == "" {
+		return Principal{Actor: k.Actor}, true, nil
+	}
+	run, ok := st.Runs[k.RunID]
+	if !ok || !run.Active(now) {
+		return Principal{}, false, nil
+	}
+	return Principal{Actor: k.Actor, Run: &run}, true, nil
 }
 
 // HashKey is the storage form of an API key.
