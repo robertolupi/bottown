@@ -1,0 +1,260 @@
+package cli
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/hostctl"
+	"github.com/spf13/cobra"
+)
+
+func newRepo(g *globals) *cobra.Command {
+	repo := &cobra.Command{Use: "repo", Short: "Manage repositories on an instance"}
+	var branch string
+	add := &cobra.Command{
+		Use:   "add [NAME]",
+		Short: "Host the current checkout on the instance under a bottown remote",
+		Long: `Create bottown/NAME on the instance (NAME defaults to the checkout's directory
+name), add a git remote named after the instance ("bottown" for prod,
+"bottown-<instance>" otherwise), push the branch, then apply labels and branch
+protection. "origin" is never touched: it stays the external upstream.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			return repoAdd(cmd.Context(), g, cmd.OutOrStdout(), name, branch)
+		},
+	}
+	add.Flags().StringVar(&branch, "branch", "", "branch to push and protect (default: the current branch)")
+	repo.AddCommand(add)
+	return repo
+}
+
+func git(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string) error {
+	inst, err := g.loadInstance()
+	if err != nil {
+		return err
+	}
+	top, err := git(".", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return errors.New("not inside a git checkout")
+	}
+	if name == "" {
+		name = strings.ToLower(filepath.Base(top))
+	}
+	if branch == "" {
+		if branch, err = git(top, "symbolic-ref", "--short", "HEAD"); err != nil {
+			return errors.New("detached HEAD; pass --branch")
+		}
+	}
+	key, err := ownerKey(g)
+	if err != nil {
+		return err
+	}
+	res, err := putRepo(ctx, inst, key, name, branch)
+	if err != nil {
+		return err
+	}
+	url := inst.ServerURL() + res.GitPath
+	remote := inst.Remote()
+	if have, err := git(top, "remote", "get-url", remote); err != nil {
+		if _, err := git(top, "remote", "add", remote, url); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "added remote %s -> %s\n", remote, url)
+	} else if have != url {
+		if _, err := git(top, "remote", "set-url", remote, url); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "updated remote %s -> %s\n", remote, url)
+	}
+	if err := configureCredentialHelper(top, inst); err != nil {
+		return err
+	}
+	push := exec.CommandContext(ctx, "git", "-C", top, "push", remote, branch)
+	push.Stdout, push.Stderr = out, os.Stderr
+	if err := push.Run(); err != nil {
+		return fmt.Errorf("git push %s %s: %w", remote, branch, err)
+	}
+	// Now that the branch exists, set it as default and protect it. Forgejo
+	// clears the repository's "empty" flag asynchronously after the first
+	// push, so wait for that before protection can be applied.
+	var res2 repoResult
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		if res2, err = putRepo(ctx, inst, key, name, branch); err != nil {
+			return err
+		}
+		if !res2.Empty {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s still empty on the forge after push; re-run `bottown repo add`", name)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	for _, c := range append(res.Changes, res2.Changes...) {
+		fmt.Fprintf(out, "  - %s\n", c)
+	}
+	fmt.Fprintf(out, "%s is hosted on bottown %s: %s/%s\n", name, inst.Name, inst.ForgejoURL(), res2.FullName)
+	return nil
+}
+
+// configureCredentialHelper makes git ask bottown, and only bottown, for
+// credentials to this instance's server URL.
+func configureCredentialHelper(top string, inst config.Instance) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	k := "credential." + inst.ServerURL() + ".helper"
+	_, _ = git(top, "config", "--local", "--unset-all", k)
+	// An empty helper resets helpers inherited from global config (such as
+	// osxkeychain), so the key is neither looked up nor stored elsewhere.
+	if _, err := git(top, "config", "--local", "--add", k, ""); err != nil {
+		return err
+	}
+	_, err = git(top, "config", "--local", "--add", k, fmt.Sprintf("!%q -i %s credential", self, inst.Name))
+	return err
+}
+
+type repoResult struct {
+	FullName      string   `json:"full_name"`
+	Empty         bool     `json:"empty"`
+	DefaultBranch string   `json:"default_branch"`
+	GitPath       string   `json:"git_path"`
+	Changes       []string `json:"changes"`
+}
+
+func putRepo(ctx context.Context, inst config.Instance, key, name, branch string) (repoResult, error) {
+	var res repoResult
+	body, _ := json.Marshal(map[string]string{"default_branch": branch})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, inst.ServerURL()+"/v1/repos/"+name, bytes.NewReader(body))
+	if err != nil {
+		return res, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return res, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return res, fmt.Errorf("create repo %s: %s: %s", name, resp.Status, strings.TrimSpace(string(b)))
+	}
+	return res, json.NewDecoder(resp.Body).Decode(&res)
+}
+
+func ownerKey(g *globals) (string, error) {
+	sec, err := g.secrets()
+	if err != nil {
+		return "", err
+	}
+	key, ok, err := sec.Get(hostctl.AccountAPIKey)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("no owner API key for instance %s; run `bottown up -i %s`", g.instance, g.instance)
+	}
+	return key, nil
+}
+
+func newCredential(g *globals) *cobra.Command {
+	cred := &cobra.Command{
+		Use:   "credential (get|store|erase)",
+		Short: "git credential helper for the instance's git remote",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "get" {
+				return nil // store/erase: bottown owns the key, nothing to do
+			}
+			inst, err := g.loadInstance()
+			if err != nil {
+				return err
+			}
+			attrs := map[string]string{}
+			sc := bufio.NewScanner(cmd.InOrStdin())
+			for sc.Scan() {
+				if k, v, ok := strings.Cut(sc.Text(), "="); ok {
+					attrs[k] = v
+				}
+			}
+			if attrs["protocol"] != "http" || attrs["host"] != fmt.Sprintf("127.0.0.1:%d", inst.ServerPort) {
+				return nil
+			}
+			key, err := ownerKey(g)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "username=%s\npassword=%s\n", inst.OwnerLogin, key)
+			return nil
+		},
+	}
+	cred.AddCommand(&cobra.Command{
+		Use:   "password",
+		Short: "Print the owner's initial Forgejo web password",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			sec, err := g.secrets()
+			if err != nil {
+				return err
+			}
+			pw, ok, err := sec.Get(hostctl.AccountPassword)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("no stored password for this instance")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), pw)
+			return nil
+		},
+	})
+	var label string
+	key := &cobra.Command{
+		Use:   "key ACTOR",
+		Short: "Mint a bottown API key for a bot (e.g. for `claude mcp add`)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			inst, err := g.loadInstance()
+			if err != nil {
+				return err
+			}
+			k, err := g.docker().Exec(cmd.Context(), inst.Container(), "git", "bottown", "admin", "actor-key", args[0], "--label", label)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), k)
+			return nil
+		},
+	}
+	key.Flags().StringVar(&label, "label", "", "note stored with the key")
+	cred.AddCommand(key)
+	return cred
+}

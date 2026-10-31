@@ -1,0 +1,70 @@
+# Desired forge state reconciled by `bottown serve` on every start.
+# Override by mounting a file at /data/bottown/bottown.toml.
+
+org = "bottown"
+
+# Scopes of the owner's token, used when the owner works through bottown
+# (git push via the credential helper, API via the proxy).
+owner_token_scopes = ["all"]
+
+# Teams cover every repository in the org. Unit permissions are read|write.
+[[teams]]
+name = "implementers"
+units = { "repo.code" = "write", "repo.issues" = "write", "repo.pulls" = "write", "repo.releases" = "read", "repo.wiki" = "write" }
+
+[[teams]]
+name = "verifiers"
+units = { "repo.code" = "read", "repo.issues" = "write", "repo.pulls" = "write", "repo.releases" = "read", "repo.wiki" = "read" }
+
+[[teams]]
+name = "managers"
+units = { "repo.code" = "write", "repo.issues" = "write", "repo.pulls" = "write", "repo.releases" = "write", "repo.wiki" = "write" }
+
+[[bots]]
+name = "implementer"
+full_name = "bottown implementer"
+team = "implementers"
+token_scopes = ["write:repository", "write:issue", "read:user", "read:organization", "read:notification"]
+api_keys = true
+
+[[bots]]
+name = "verifier"
+full_name = "bottown verifier"
+team = "verifiers"
+# Forgejo gates PR reviews on write:repository; the verifier still cannot push
+# because its team has read-only code access.
+token_scopes = ["write:repository", "write:issue", "read:user", "read:organization", "read:notification"]
+api_keys = true
+
+[[bots]]
+name = "manager"
+full_name = "bottown manager"
+team = "managers"
+token_scopes = ["write:repository", "write:issue", "read:user", "read:organization"]
+api_keys = false
+
+[[labels]]
+name = "mode/ask"
+color = "1d76db"
+description = "Stop before merge and on anything unusual; wait for the owner"
+exclusive = true
+
+[[labels]]
+name = "mode/auto"
+color = "0e8a16"
+description = "Merge once the verifier and checks are green (owner-set only)"
+exclusive = true
+
+[[labels]]
+name = "needs/human"
+color = "d93f0b"
+description = "Escalated; only the owner clears it"
+
+[protection]
+required_approvals = 1
+approvals_whitelist = ["verifier"]
+merge_whitelist = ["manager"]
+dismiss_stale_approvals = true
+block_on_rejected_reviews = true
+# Forgejo name for "admins cannot bypass approvals" (Gitea: block_admin_merge_override).
+apply_to_admins = true
