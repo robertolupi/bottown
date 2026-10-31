@@ -252,8 +252,18 @@ hood, since a headless stream cannot be steered.
    settings, plugins, hooks or auto-memory, and no Claude-host variables.
 7. **Permanent actor worktrees and runs from inside the harness** (next;
    see below).
-8. Prod: run `bottown up -i prod --ref <commit>`, then `bottown repo add`.
-   File and pre-register the first issue.
+8. Prod: run `bottown up -i prod --ref <commit>`, then bootstrap the fam:
+   `bottown clone -i prod ~/src/bottown ~/src/fams/bottown`. Then file and
+   pre-register the first issue.
+
+   `bottown clone SRC FAMDIR` (done 2026-10-31, tried on dev) does three
+   things:
+   - **Clones `FAMDIR/main` from SRC.** SRC is a checkout or URL; only
+     committed history is cloned, with a warning if SRC is dirty. `origin`
+     is set to SRC's own upstream, never to a local path.
+   - **Runs `repo add`:** `bottown/<name>` on the instance, protected, with
+     the instance remote.
+   - **Runs `actor setup`** for each actor (`--actors` to pick).
 9. The real run, with a written record covering:
    - which steps needed you;
    - what the verifier caught;

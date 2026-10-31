@@ -321,6 +321,30 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("clone bootstraps a fam", func(t *testing.T) {
+		fam2 := filepath.Join(t.TempDir(), "famtest")
+		out := a.mustCmd("", "clone", demo, fam2, "--actors", "claude,agy")
+		main2 := filepath.Join(fam2, "main")
+		for _, want := range []string{"origin https://example.invalid/demo.git", "protected bottown/famtest:main", "created claude's worktree", "created agy's worktree", "is ready"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("clone output lacks %q:\n%s", want, out)
+			}
+		}
+		if got := git(t, main2, "remote", "get-url", "origin"); got != "https://example.invalid/demo.git" {
+			t.Errorf("main origin = %s (a local path must never be origin)", got)
+		}
+		if got := git(t, main2, "remote", "get-url", "bottown-"+a.name); !strings.HasSuffix(got, "/git/bottown/famtest.git") {
+			t.Errorf("bottown remote = %s", got)
+		}
+		if got := git(t, filepath.Join(fam2, "claude"), "config", "--worktree", "--get", "bottown.actor"); got != "claude" {
+			t.Errorf("claude worktree actor = %s", got)
+		}
+		a.mustAPI(owner, "GET", "/repos/bottown/famtest/branch_protections/main", nil, nil)
+		if out, err := a.cmd("", "clone", demo, fam2); err == nil || !strings.Contains(out, "not empty") {
+			t.Errorf("clone into an existing fam: %v %s", err, out)
+		}
+	})
+
 	t.Run("a hosted checkout resolves its instance", func(t *testing.T) {
 		if got := git(t, demo, "config", "--local", "--get", "bottown.instance"); got != a.name {
 			t.Fatalf("bottown.instance = %q", got)
