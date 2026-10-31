@@ -127,8 +127,8 @@ section is removed:
 Done when all of these hold; then remove this section in a run:
 
 - [ ] `bottown/main` deleted on prod (owner).
-- [ ] Step 7.5 merged: `bottown run implement/verify` lease the permanent
-      worktrees.
+- [ ] Step 7.5 merged: `bottown run implement/verify` lease permanent
+      worktrees, with ephemeral runs kept as a supported option.
 - [ ] The first pre-registered issue landed through a run: an implementer
       PR, a cross-family verifier approval, an owner merge.
 - [ ] `~/src/bottown` archived or removed (owner).
