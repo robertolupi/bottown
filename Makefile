@@ -5,7 +5,7 @@ LDFLAGS := -X github.com/robertolupi/bottown/internal/cli.Version=$(VERSION)
 BINDIR  ?= $(HOME)/.local/bin
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o bin/bottown ./cmd/bottown
+	go build -buildvcs=false -ldflags "$(LDFLAGS)" -o bin/bottown ./cmd/bottown
 
 # Build to a temporary name and rename: overwriting a running binary in
 # place can get it killed on macOS. Re-run `bottown harness setup` and, in
@@ -13,7 +13,7 @@ build:
 # record this binary's absolute path.
 install:
 	mkdir -p $(BINDIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BINDIR)/.bottown.new ./cmd/bottown
+	go build -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BINDIR)/.bottown.new ./cmd/bottown
 	mv $(BINDIR)/.bottown.new $(BINDIR)/bottown
 	@echo "installed $(BINDIR)/bottown ($(VERSION))"
 
