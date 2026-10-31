@@ -311,43 +311,54 @@ worktree. Runs then lease it instead of creating a directory.
   leases that actor's permanent worktree, then launches the harness batch,
   `-I`, or not at all (`--no-launch`, to open the UI yourself).
 
-### MCP without secrets: the stdio shim
+### Agents use a CLI, not an MCP shim
 
-`bottown mcp stdio` is a local MCP server that relays to bottown's HTTP
-endpoint with the right key. It must work out which actor worktree it
-serves; its working directory is not reliable, because some harnesses
-start stdio servers from a global directory. Resolution order:
+Agents reach the forge with `bottown` commands run in their worktree. Every
+harness runs its shell tool in the workspace, so the working directory is
+reliable. That is not true of stdio MCP servers, which some harnesses start
+from a global directory. The CLI reads `bottown.actor` and `bottown.run`
+from git config and the key from the worktree's git dir, so harnesses need
+no MCP config at all.
 
-1. **MCP roots:** it asks the client for workspace folders (`roots/list`)
-   and uses the root that is an actor worktree.
-2. **An explicit `--worktree <path>`** in a per-worktree config that
-   `bottown actor setup` writes in each harness's workspace location
-   (`.mcp.json` for claude, `.agents/mcp_config.json` for agy). These files
-   are excluded through `main/.git/info/exclude`.
-3. **The working directory,** only if it is an actor worktree.
-4. **Otherwise,** a clear error pointing to `bottown actor setup`.
+```
+bottown run start implement 12 | verify 13   # self-start; prints the goal prompt
+bottown run end [--failed]                   # handover comment + revoke
+bottown whoami
+bottown issue show [N]                       # defaults to the run's issue
+bottown pr show [N] [--diff]
+bottown pr create --title T [--body-file F]
+bottown comment [N] (--body B | --body-file F | -)
+bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA (--body-file F | -)
+bottown api METHOD PATH [--data JSON]        # passthrough, same policy as the proxy
+```
 
-The shim reads `bottown.actor` and `bottown.run` from git config and the
-key from the worktree's git dir. With an active run it uses the run key;
-otherwise an actor key limited to reads and `run_start`. Harnesses that
-support roots get one global entry, `bottown mcp stdio`; the others get the
-per-worktree file. Neither holds a secret.
+- **Output:** short text by default, `--json` for structured output.
+- **One implementation:** the MCP tool logic moves into server functions
+  exposed over REST (`/v1/forge/...`). The CLI and MCP share them, so the
+  checks are identical. MCP stays available for harnesses that prefer it.
+- **Allowlisting is safe.** `Bash(bottown:*)` is a safe allowlist entry,
+  unlike `gh` (red-team C5): `bottown` holds no forge token, and the server
+  enforces the run's role, repo and commit pin. This also covers agy, which
+  has no allowlist tier, for forge calls.
+- **The slash command** `/bottown-implement 12` is a small command or skill
+  per harness: run `bottown run start implement 12`, then follow the
+  prompt it prints.
 
 ### Build order for step 7
 
 1. `bottown actor setup`: worktree creation, worktree config, credential
-   reset, blocked origin push, and per-harness workspace MCP files.
-2. Run leases on permanent worktrees: server binding, `run.json` in the
-   git dir, `run_start`/`run_end` MCP tools, and the read-only mode outside
-   runs.
-3. `bottown mcp stdio`, with roots, `--worktree`, then the working
+   reset and blocked origin push.
+2. Server: forge operations as shared functions behind REST `/v1/forge/...`
+   (MCP tools reuse them); run leases bound to permanent worktrees; actor
+   self-start (`run start`), and reads-only outside runs.
+3. The agent CLI (`run start/end`, `whoami`, `issue`, `pr`, `comment`,
+   `review submit`, `api`), resolving the actor and run from the working
    directory.
-4. The `/bottown-implement` and `/bottown-verify` commands, for claude
-   first, then agy.
+4. `/bottown-implement` and `/bottown-verify` commands for claude, then agy.
 5. `bottown run implement/verify` from `main`, leasing permanent worktrees
-   (`--no-launch`, batch, `-I`), and `run ls` reading worktree state.
-6. e2e: a scripted run through the shim and an actor-started run; check
-   that an owner-key push from an actor worktree is impossible.
+   (`--no-launch`, batch, `-I`). `run ls` reads the worktrees' state.
+6. e2e: a scripted run through the CLI and an actor-started run; check that
+   an owner-key push from an actor worktree is impossible.
 
 ## Done when
 
