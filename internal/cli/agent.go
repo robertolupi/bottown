@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,8 +159,25 @@ func newWhoami() *cobra.Command {
 			if err := a.call("GET", "/v1/whoami", nil, &who); err != nil {
 				return err
 			}
+			var last *runs.Record
+			var head *headInfo
+			if a.Worktree != "" {
+				if a.RunID == "" {
+					if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json")); err == nil && rec.ID != "" {
+						last = &rec
+					}
+				}
+				head = worktreeHead(cmd.Context(), a.Worktree, a.Remote)
+			}
 			if asJSON {
-				return printJSON(cmd, map[string]any{"actor": who.Actor, "instance": who.Instance, "run": who.RunRaw, "worktree": a.Worktree})
+				m := map[string]any{"actor": who.Actor, "instance": who.Instance, "run": who.RunRaw, "worktree": a.Worktree}
+				if last != nil {
+					m["last_run"] = map[string]any{"id": last.ID, "kind": last.Kind, "repo": last.Repo, "issue": last.Issue, "pr": last.PR, "status": last.Status, "ended": last.Ended}
+				}
+				if head != nil {
+					m["head"] = head
+				}
+				return printJSON(cmd, m)
 			}
 			out := cmd.OutOrStdout()
 			var run *whoamiRun
@@ -169,7 +187,7 @@ func newWhoami() *cobra.Command {
 					run = &wr
 				}
 			}
-			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, run)
+			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, run, last, head)
 			return nil
 		},
 	}
@@ -182,7 +200,7 @@ type whoamiRun struct {
 	Issue, PR                   int64
 }
 
-func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance string, run *whoamiRun) {
+func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance string, run *whoamiRun, last *runs.Record, head *headInfo) {
 	st := newStyles(r)
 	fmt.Fprintf(out, "actor %s on instance %s\n", st.Info.Bold(true).Render(actor), st.Bold.Render(instance))
 	if run != nil {
@@ -198,7 +216,104 @@ func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance string, ru
 		)
 	} else {
 		fmt.Fprintln(out, st.Dim.Render("no active run (read-only; start one with `bottown run start implement|verify N`)"))
+		if last != nil {
+			fmt.Fprintln(out, lastRunLine(*last))
+		}
 	}
+	if head != nil {
+		line := head.String()
+		if head.Behind > 0 || head.Base == "" || !head.Fetched {
+			line = st.Warning.Render(line)
+		}
+		fmt.Fprintln(out, line)
+	}
+}
+
+// lastRunLine describes the run that last used this worktree.
+func lastRunLine(r runs.Record) string {
+	target := fmt.Sprintf("issue #%d", r.Issue)
+	if r.PR > 0 {
+		target = fmt.Sprintf("PR !%d", r.PR)
+	}
+	s := fmt.Sprintf("last run %s: %s %s in %s, %s", r.ID, r.Kind, target, r.Repo, r.Status)
+	if r.Ended != nil {
+		s += ", ended " + r.Ended.Local().Format("2006-01-02 15:04")
+	}
+	return s
+}
+
+// headInfo is where a worktree's HEAD is relative to the bottown remote's
+// default branch.
+type headInfo struct {
+	SHA     string `json:"sha"`
+	Branch  string `json:"branch,omitempty"` // empty when detached
+	Base    string `json:"base,omitempty"`   // e.g. bottown/main; empty when unknown
+	Ahead   int    `json:"ahead"`
+	Behind  int    `json:"behind"`
+	Fetched bool   `json:"fetched"` // false: compared with the last fetch
+}
+
+// worktreeHead fetches the remote (briefly, so a merge since the last run
+// shows) and compares HEAD with its default branch. It returns nil when
+// HEAD cannot be read.
+func worktreeHead(ctx context.Context, top, remote string) *headInfo {
+	sha, err := git(top, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return nil
+	}
+	h := &headInfo{SHA: sha}
+	h.Branch, _ = git(top, "symbolic-ref", "-q", "--short", "HEAD")
+	fctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = runs.GitCtx(fctx, top, nil, "fetch", "-q", remote)
+	h.Fetched = err == nil
+	branch, err := remoteDefaultBranch(top, remote)
+	if err != nil {
+		return h
+	}
+	base := remote + "/" + branch
+	counts, err := git(top, "rev-list", "--left-right", "--count", "HEAD..."+base)
+	if err != nil {
+		return h
+	}
+	if _, err := fmt.Sscanf(counts, "%d %d", &h.Ahead, &h.Behind); err != nil {
+		return h
+	}
+	h.Base = base
+	return h
+}
+
+func (h headInfo) String() string {
+	s := "HEAD " + h.SHA
+	if h.Branch != "" {
+		s += " on " + h.Branch
+	} else {
+		s += " (detached)"
+	}
+	if h.Base == "" {
+		return s + ", default branch unknown"
+	}
+	switch {
+	case h.Ahead == 0 && h.Behind == 0:
+		s += ", at " + h.Base
+	case h.Ahead == 0:
+		s += fmt.Sprintf(", %s behind %s", commits(h.Behind), h.Base)
+	case h.Behind == 0:
+		s += fmt.Sprintf(", %s ahead of %s", commits(h.Ahead), h.Base)
+	default:
+		s += fmt.Sprintf(", %s ahead of and %d behind %s", commits(h.Ahead), h.Behind, h.Base)
+	}
+	if !h.Fetched {
+		s += " (fetch failed; as of the last fetch)"
+	}
+	return s
+}
+
+func commits(n int) string {
+	if n == 1 {
+		return "1 commit"
+	}
+	return fmt.Sprintf("%d commits", n)
 }
 
 func targetQuery(repo string, n int64, extra url.Values) string {
