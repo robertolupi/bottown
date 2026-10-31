@@ -23,6 +23,8 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
     the diff.
   - `{{.Bottown}} issue show N` prints the linked issue.
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
+  - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
+    that should not block this pull request.
 
 ## Done means
 

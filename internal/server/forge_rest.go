@@ -10,6 +10,7 @@ import (
 // CLI that agents run in their worktrees:
 //
 //	GET  /v1/forge/issue?repo=&number=
+//	POST /v1/forge/issue    {repo, title, body}
 //	GET  /v1/forge/pr?repo=&number=&diff=1
 //	POST /v1/forge/pr       {title, body}
 //	POST /v1/forge/comment  {repo, number, body}
@@ -20,6 +21,14 @@ import (
 func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opIssue(r.Context(), Who(r.Context()), targetFromQuery(r))
+		writeOp(w, out, err)
+	})))
+	mux.Handle("POST /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in IssueCreateIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opIssueCreate(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	})))
 	mux.Handle("GET /v1/forge/pr", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

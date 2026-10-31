@@ -164,6 +164,20 @@ type PRCreateOut struct {
 	Base   string `json:"base"`
 }
 
+// IssueCreateIn is the input of issue create.
+type IssueCreateIn struct {
+	Repo  string `json:"repo,omitempty" jsonschema:"repository name in the bottown org; defaults to the run's repository, required outside a run"`
+	Title string `json:"title" jsonschema:"issue title"`
+	Body  string `json:"body,omitempty" jsonschema:"issue description (markdown); bottown appends who filed it"`
+}
+
+// IssueCreateOut is a created issue.
+type IssueCreateOut struct {
+	Number int64  `json:"number"`
+	URL    string `json:"url"`
+	Repo   string `json:"repo"`
+}
+
 // CommentIn is the input of comment.
 type CommentIn struct {
 	Target
@@ -226,6 +240,55 @@ func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (I
 		out.Comments = append(out.Comments, CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created})
 	}
 	return out, nil
+}
+
+// opIssueCreate files an issue as the actor. Unlike other writes it is
+// allowed with a read-only key outside a run, so agents can file issues
+// from a conversation with the owner; run keys stay in their repository.
+func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in IssueCreateIn) (IssueCreateOut, error) {
+	if p.Actor != s.Owner && s.desired().DisableActorIssueCreate {
+		s.toolAudit(p, "issue_create", "deny", "disabled")
+		return IssueCreateOut{}, ferr(http.StatusForbidden, "actors may not file issues on this instance")
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return IssueCreateOut{}, ferr(http.StatusBadRequest, "title is required")
+	}
+	org, repo := s.desired().Org, in.Repo
+	if p.Run != nil {
+		if repo != "" && !strings.EqualFold(repo, p.Run.Repo) {
+			return IssueCreateOut{}, ferr(http.StatusForbidden, "this run is confined to %s/%s", p.Run.Org, p.Run.Repo)
+		}
+		repo = p.Run.Repo
+	}
+	if repo == "" {
+		return IssueCreateOut{}, ferr(http.StatusBadRequest, "repo is required without a run")
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return IssueCreateOut{}, err
+	}
+	body := strings.TrimSpace(in.Body)
+	if p.Actor != s.Owner {
+		by := p.Actor
+		for _, a := range s.desired().Actors {
+			if a.Name == p.Actor && a.Family != "" {
+				by = fmt.Sprintf("%s, %s", a.Name, a.Family)
+			}
+		}
+		if p.Run != nil {
+			body += fmt.Sprintf("\n\n_filed during bottown %s run %s (%s)_", p.Run.Kind, p.Run.ID, by)
+		} else {
+			body += fmt.Sprintf("\n\n_filed by %s outside a run_", by)
+		}
+	}
+	is, resp, err := c.CreateIssue(org, repo, sdk.CreateIssueOption{Title: strings.TrimSpace(in.Title), Body: strings.TrimSpace(body)})
+	if forgejo.IsNotFound(resp, err) {
+		return IssueCreateOut{}, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
+	} else if err != nil {
+		return IssueCreateOut{}, err
+	}
+	s.toolAudit(p, "issue_create", "allow", fmt.Sprintf("%s#%d", repo, is.Index))
+	return IssueCreateOut{Number: is.Index, URL: is.HTMLURL, Repo: repo}, nil
 }
 
 func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withDiff bool) (PROut, error) {

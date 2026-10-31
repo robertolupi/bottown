@@ -36,6 +36,15 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "issue_create",
+		Description: "File a new issue as yourself, e.g. a follow-up from a discussion with the owner. " +
+			"Works outside a run (give repo); in a run it defaults to, and stays in, the run's repository.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in IssueCreateIn) (*mcp.CallToolResult, IssueCreateOut, error) {
+		out, err := s.opIssueCreate(ctx, principal(req), in)
+		return nil, out, err
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "pr_get",
 		Description: "Read a pull request: head SHA, branches, reviews and the diff. Defaults to the run's pull request.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in Target) (*mcp.CallToolResult, PROut, error) {
