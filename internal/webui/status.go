@@ -19,12 +19,14 @@ import (
 
 // UIStatusResponse is returned by GET /api/status.
 type UIStatusResponse struct {
-	Instance string          `json:"instance"`
-	Repo     string          `json:"repo"`
-	Upstream UpstreamStatus  `json:"upstream"`
-	Forge    ForgeStatus     `json:"forge"`
-	Health   HealthChecklist `json:"health"`
-	Links    RepoLinks       `json:"links"`
+	Instance   string          `json:"instance"`
+	Repo       string          `json:"repo"`
+	Upstream   UpstreamStatus  `json:"upstream"`
+	Forge      ForgeStatus     `json:"forge"`
+	Health     HealthChecklist `json:"health"`
+	Links      RepoLinks       `json:"links"`
+	Inbox      []InboxItem     `json:"inbox"`
+	InboxError string          `json:"inbox_error,omitempty"`
 }
 
 type UpstreamStatus struct {
@@ -297,6 +299,17 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	} else {
 		res.Health.Version.ServerVersion = "unreachable"
 		res.Health.Version.Matches = false
+	}
+
+	// 4. Owner inbox (§4.1)
+	inbox, err := s.ComputeInbox(ctx)
+	if err != nil {
+		res.Inbox = []InboxItem{}
+		res.InboxError = err.Error()
+	} else if inbox != nil {
+		res.Inbox = inbox
+	} else {
+		res.Inbox = []InboxItem{}
 	}
 
 	return res, nil

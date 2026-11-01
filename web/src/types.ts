@@ -65,6 +65,30 @@ export interface HealthChecklist {
   };
 }
 
+export type InboxItemKind =
+  | 'ready_to_merge'
+  | 'conflicts_with_main'
+  | 'stopped_flow'
+  | 'broken_run'
+  | 'discuss_answer'
+  | 'actor_filed_issue';
+
+export interface InboxAction {
+  label: string;
+  command: string;
+}
+
+export interface InboxItem {
+  id: string;
+  kind: InboxItemKind;
+  title: string;
+  description: string;
+  target: string;
+  target_url: string;
+  action?: InboxAction;
+  created: string;
+}
+
 export interface UIStatusResponse {
   instance: string;
   repo: string;
@@ -77,6 +101,8 @@ export interface UIStatusResponse {
     pulls: string;
     commits: string;
   };
+  inbox: InboxItem[];
+  inbox_error?: string;
 }
 
 export interface ActionResult {
