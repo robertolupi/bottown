@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,4 +115,63 @@ func TestExpiredLive(t *testing.T) {
 	if want := []string{"r-expired", "r-dead-launcher"}; !slices.Equal(got, want) {
 		t.Errorf("expiredLive = %v, want %v", got, want)
 	}
+}
+
+func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	mainDir := filepath.Join(dir, "main")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(mainDir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(mainDir, "config", "extensions.worktreeConfig", "true"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("actor worktree refused", func(t *testing.T) {
+		actorDir := filepath.Join(dir, "crush")
+		if err := os.MkdirAll(actorDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(actorDir, "init", "-q"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(actorDir, "config", "extensions.worktreeConfig", "true"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(actorDir, "config", "--worktree", gitActorKey, "crush"); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(actorDir)
+		_, err := openRunContext(&globals{})
+		if err == nil {
+			t.Fatal("expected error in actor worktree, got nil")
+		}
+		if !strings.Contains(err.Error(), "is actor crush's worktree; run this in the main checkout") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("run worktree refused", func(t *testing.T) {
+		runDir := filepath.Join(mainDir, ".bottown", "runs", "r-test")
+		if err := os.MkdirAll(runDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git(runDir, "init", "-q"); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(runDir)
+		_, err := openRunContext(&globals{})
+		if err == nil {
+			t.Fatal("expected error in run worktree, got nil")
+		}
+		if !strings.Contains(err.Error(), "this is a run worktree; run this in the main checkout") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
 }
