@@ -282,7 +282,9 @@ design is needed for the pilot.
 - Supporting a forge bottown did not deploy (the existing NAS Gitea is a
   migration source, not a target).
 - A planner role, more than two LLM roles, more than one repo per sprint.
-- Dashboards, OpenTelemetry, simulation.
+- Dashboards, OpenTelemetry, simulation. (Narrowed by the
+  [local web UI design](design/web-ui.md): a host-side view of runs and
+  host state the forge cannot show, linking to the forge for the rest.)
 - Backward compatibility with v1.
 
 ## 7. The smallest thing that tests the problem
