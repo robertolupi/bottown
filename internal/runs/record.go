@@ -36,8 +36,10 @@ type Record struct {
 	Question        string     `json:"question,omitempty"` // discuss: the owner's question
 	Harness         string     `json:"harness"`
 	Status          string     `json:"status"`
+	StopRequested   bool       `json:"stop_requested,omitempty"`
 	ExitCode        *int       `json:"exit_code,omitempty"`
 	PID             int        `json:"pid,omitempty"`
+	HarnessPID      int        `json:"harness_pid,omitempty"`
 	Started         time.Time  `json:"started"`
 	Ended           *time.Time `json:"ended,omitempty"`
 	Worktree        string     `json:"worktree"`

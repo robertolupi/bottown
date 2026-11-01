@@ -1,7 +1,8 @@
 # Design: the local web UI and the supervisor
 
 Status: **design**, written with the owner in issue #55. Built so far:
-run digests (phase 2, #60).
+run digests (phase 2, #60), and per-actor run limits and `run stop`
+(phase 1a, #58).
 
 ## 1. Goal
 
@@ -173,7 +174,7 @@ again:
 Batch runs started from `main` use their own run worktrees, so nothing
 stops one actor from working on two issues at once; the subscription's rate
 window is the real limit. Each actor has a **limit on live batch runs**,
-a per-actor setting with a default of 1 (none means no limit).
+a per-actor `max_batch_runs` setting with a default of 1 (0 means no limit).
 
 The server enforces it, atomically: `POST /v1/runs` refuses a batch run
 for an actor already at its limit, with an error that says so. A flow that

@@ -612,8 +612,12 @@ func TestE2E(t *testing.T) {
 		if code, m := verify("claude2", false); code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "anthropic") {
 			t.Errorf("same-family verify without override: %d %v", code, m)
 		}
-		if code, m := verify("claude2", true); code != 201 || m["allow_same_family"] != true {
-			t.Errorf("same-family verify with override: %d %v", code, m)
+		code, sameFamily := verify("claude2", true)
+		if code != 201 || sameFamily["allow_same_family"] != true {
+			t.Errorf("same-family verify with override: %d %v", code, sameFamily)
+		}
+		if code, m := runs(owner, "DELETE", "/v1/runs/"+sameFamily["id"].(string), map[string]string{"status": "revoked"}); code != 200 {
+			t.Fatalf("end same-family run: %d %v", code, m)
 		}
 		code, ver := verify("codex", false)
 		if code != 201 || ver["sha"] != pr.Head.Sha {
@@ -636,8 +640,10 @@ func TestE2E(t *testing.T) {
 		}
 
 		// Ending a run kills its key; short TTLs expire.
-		if code, m := runs(owner, "DELETE", "/v1/runs/"+impl["id"].(string), map[string]string{"status": "succeeded"}); code != 200 || m["status"] != "succeeded" {
-			t.Fatalf("end run: %d %v", code, m)
+		for _, run := range []map[string]any{impl, ver} {
+			if code, m := runs(owner, "DELETE", "/v1/runs/"+run["id"].(string), map[string]string{"status": "succeeded"}); code != 200 || m["status"] != "succeeded" {
+				t.Fatalf("end run: %d %v", code, m)
+			}
 		}
 		if code, _ := a.api(ik, "GET", "/repos/bottown/demo/issues/1", nil); code != 401 {
 			t.Errorf("ended run key: %d, want 401", code)
@@ -1031,6 +1037,20 @@ func TestE2E(t *testing.T) {
 			}
 			return m
 		}
+		endRun := func(id string) {
+			t.Helper()
+			req, _ := http.NewRequest("DELETE", a.cfg.ServerURL()+"/v1/runs/"+id, strings.NewReader(`{"status":"revoked"}`))
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != 200 {
+				b, _ := io.ReadAll(resp.Body)
+				t.Fatalf("end run %s: %d %s", id, resp.StatusCode, b)
+			}
+		}
 
 		var issue struct{ Number int64 }
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "mcp test", "body": "do the thing"}, &issue)
@@ -1112,6 +1132,7 @@ func TestE2E(t *testing.T) {
 		if !strings.Contains(errMsg, "moved") {
 			t.Fatalf("review after PR moved: %q", errMsg)
 		}
+		endRun(ver["id"].(string))
 		ver2 := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
 		vs2 := connect(a.cfg.ServerURL()+"/mcp", ver2["key"].(string))
 		rv, errMsg := call(vs2, "review_submit", map[string]any{"event": "APPROVED", "body": "verified", "commit_id": ver2["sha"]})
@@ -1120,6 +1141,9 @@ func TestE2E(t *testing.T) {
 		}
 		if c, errMsg := call(vs2, "comment", map[string]any{"body": "handover"}); errMsg != "" || c["author"] != "codex" {
 			t.Fatalf("comment: %v %s", c, errMsg)
+		}
+		for _, run := range []map[string]any{ver2, impl} {
+			endRun(run["id"].(string))
 		}
 	})
 
@@ -1256,6 +1280,60 @@ func TestE2E(t *testing.T) {
 		}
 		if out := a.mustCmd(demo, "run", "ls"); strings.Contains(out, "worktree kept") || strings.Contains(out, "kimi") {
 			t.Errorf("run ls after gc:\n%s", out)
+		}
+
+		var stopIssue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "stop run"}, &stopIssue)
+		idFile := filepath.Join(t.TempDir(), "run-id")
+		longRun := `echo "$BOTTOWN_RUN_ID" > ` + idFile + `; trap 'exit 0' TERM; while :; do sleep 1; done`
+		stopCmd := exec.Command(bin, "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
+		stopCmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+longRun)
+		stopCmd.Dir = demo
+		var runOut bytes.Buffer
+		stopCmd.Stdout, stopCmd.Stderr = &runOut, &runOut
+		if err := stopCmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if stopCmd.Process != nil {
+				_ = stopCmd.Process.Kill()
+				_ = stopCmd.Wait()
+			}
+		})
+		var stopID string
+		deadline := time.Now().Add(10 * time.Second)
+		for stopID == "" {
+			b, _ := os.ReadFile(idFile)
+			stopID = strings.TrimSpace(string(b))
+			if stopID == "" {
+				if time.Now().After(deadline) {
+					t.Fatal("long run did not write its id")
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		out, err = withHarness("exit 99", "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
+		if err == nil || !strings.Contains(out, "actor claude") || !strings.Contains(out, stopID) {
+			t.Fatalf("second batch run at limit: %v\n%s", err, out)
+		}
+		if out, err := withHarness("echo interactive", "run", "discuss", "-a", "claude", "-I", fmt.Sprint(stopIssue.Number)); err != nil || !strings.Contains(out, "succeeded") {
+			t.Fatalf("interactive run at batch limit: %v\n%s", err, out)
+		}
+		if out := a.mustCmd(demo, "run", "stop", stopID); !strings.Contains(out, "stopped") {
+			t.Errorf("run stop: %s", out)
+		}
+		if err := stopCmd.Wait(); err == nil || !strings.Contains(runOut.String(), "failed") {
+			t.Errorf("stopped launcher: %v\n%s", err, runOut.String())
+		}
+		if out := a.mustCmd(demo, "run", "show", stopID); !strings.Contains(out, "failed") {
+			t.Errorf("stopped run record: %s", out)
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", stopIssue.Number), nil, &comments)
+		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "Stopped by the owner.") || !strings.Contains(comments[len(comments)-1].Body, "**failed**") {
+			t.Errorf("stopped handover: %+v", comments)
+		}
+		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 2 runs, purged 2 ended runs") {
+			t.Errorf("gc stopped run: %s", out)
 		}
 
 		// A batch discuss run from main: the question reaches the prompt
