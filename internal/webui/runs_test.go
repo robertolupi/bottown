@@ -69,8 +69,10 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 			}
 			_ = json.NewEncoder(w).Encode(filtered)
 		case p == "/v1/audit":
-			if r.URL.Query().Get("decision") != "deny" || r.URL.Query().Get("repo") == "" {
-				http.Error(w, "want decision=deny and a repo", http.StatusBadRequest)
+			// Refusals are selected by run: a repo filter would drop a
+			// run's out-of-repo and repo-less ones.
+			if q := r.URL.Query(); q.Get("decision") != "deny,reject" || q.Has("repo") {
+				http.Error(w, "want decision=deny,reject and no repo", http.StatusBadRequest)
 				return
 			}
 			out := fix.denials
@@ -190,6 +192,8 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	fix.denials = []Denial{
 		{Time: now, Run: "r-verify-1", Op: "api", Method: "POST", Path: "/repos/bottown/bottown/issues/51/dependencies", Rule: "issue-dependencies"},
 		{Time: now, Run: "r-other", Op: "git", Rule: "run-push"},
+		{Time: now, Run: "r-verify-1", Op: "api", Method: "POST", Path: "/repos/bottown/other/issues/1/comments", Rule: "run-repo"},
+		{Time: now, Run: "r-verify-1", Op: "api", Method: "POST", Path: "/forgejo/api/v1/repos/bottown/bottown/issues/51%2Fcomments", Rule: "unclean-path"},
 	}
 	_, port := newRunsFixtureServer(t, fix)
 
@@ -254,8 +258,11 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if len(r.LogTail) != 2 || r.LogTail[0] != "Bash: make check" || r.LogTail[1] != "Running checks now" {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
-	if len(r.Denials) != 1 || r.Denials[0].Rule != "issue-dependencies" {
-		t.Fatalf("expected the run's one denial, got %+v", r.Denials)
+	// The run's refusals outside its repository and with no repository
+	// are its own too.
+	if len(r.Denials) != 3 || r.Denials[0].Rule != "issue-dependencies" ||
+		r.Denials[1].Path != "/repos/bottown/other/issues/1/comments" || r.Denials[2].Rule != "unclean-path" {
+		t.Fatalf("expected the run's three refusals, got %+v", r.Denials)
 	}
 }
 

@@ -168,7 +168,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	if len(serverRuns) == 0 {
 		return []LiveRunInfo{}, nil
 	}
-	denials := s.fetchDenials(ctx, repo)
+	denials := s.fetchDenials(ctx)
 
 	// 3. Fetch open PRs only if needed
 	var prs []*sdk.PullRequest
@@ -437,7 +437,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
 		return nil, fmt.Errorf("fetch history runs: %w", err)
 	}
-	denials := s.fetchDenials(ctx, repo)
+	denials := s.fetchDenials(ctx)
 
 	var history []HistoryRunInfo
 	for _, sr := range serverRuns {
@@ -657,12 +657,14 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 	return timeline, nil
 }
 
-// fetchDenials returns the policy denials the server has kept for repo's
-// runs, by run id. They are an addition to the runs view: if the server
-// cannot say, the runs show none rather than failing.
-func (s *Server) fetchDenials(ctx context.Context, repo string) map[string][]Denial {
+// fetchDenials returns the policy refusals the server has kept, denials and
+// rejected requests, by run id. They are selected by run, not repository:
+// a run's refusals include its attempts outside its repository and the
+// ones with no repository at all. They are an addition to the runs view:
+// if the server cannot say, the runs show none rather than failing.
+func (s *Server) fetchDenials(ctx context.Context) map[string][]Denial {
 	var entries []Denial
-	path := "/v1/audit?decision=deny&repo=" + url.QueryEscape(repo)
+	path := "/v1/audit?decision=deny,reject"
 	if err := s.callServer(ctx, http.MethodGet, path, nil, &entries); err != nil {
 		return nil
 	}

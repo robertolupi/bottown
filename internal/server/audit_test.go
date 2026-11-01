@@ -154,6 +154,7 @@ func TestAuditRecordsAndFilters(t *testing.T) {
 		{runKey, "POST", "/forgejo/api/v1/repos/bottown/demo/issues/4/dependencies", `{"index":1}`, 403}, // reserved for bottown
 		{runKey, "POST", "/forgejo/api/v1/repos/bottown/other/issues/1/comments", `{"body":"x"}`, 403},   // outside the run's repo
 		{runKey, "POST", "/v1/forge/review", `{"event":"APPROVED","commit_id":"x"}`, 403},                // review in an implement run
+		{runKey, "POST", "/forgejo/api/v1/repos/bottown/demo/issues/4%2Fcomments", `{"body":"x"}`, 400},  // encoded path: rejected
 		{codexKey, "POST", "/forgejo/api/v1/repos/bottown/demo/issues/4/comments", `{"body":"x"}`, 403},  // read-only key
 		{codexKey, "GET", "/git/bottown/demo.git/info/refs?service=git-receive-pack", "", 403},           // read-only push
 	} {
@@ -175,8 +176,8 @@ func TestAuditRecordsAndFilters(t *testing.T) {
 		return out
 	}
 	all := list("")
-	if len(all) != 6 {
-		t.Fatalf("all = %d entries, want 6 (no allowed read): %+v", len(all), all)
+	if len(all) != 7 {
+		t.Fatalf("all = %d entries, want 7 (no allowed read): %+v", len(all), all)
 	}
 	if e := all[0]; e.Decision != "allow" || e.Run != "r-1" || e.Repo != "bottown/demo" || e.Method != "POST" {
 		t.Errorf("first entry = %+v, want the run's allowed comment", e)
@@ -190,6 +191,17 @@ func TestAuditRecordsAndFilters(t *testing.T) {
 	}
 	if e := runDenials[2]; e.Op != "review_submit" || e.Repo != "bottown/demo" {
 		t.Errorf("review denial = %+v, want review_submit in bottown/demo", e)
+	}
+	// What the runs views ask for: a run's refusals, whatever their repo.
+	refused := list("?run=r-1&decision=deny,reject")
+	if len(refused) != 4 {
+		t.Fatalf("run=r-1&decision=deny,reject: %+v, want 4", refused)
+	}
+	if e := refused[1]; e.Repo != "bottown/other" {
+		t.Errorf("second refusal = %+v, want the out-of-repo comment", e)
+	}
+	if e := refused[3]; e.Decision != "reject" || e.Rule != "unclean-path" || e.Repo != "" {
+		t.Errorf("last refusal = %+v, want the unclean-path reject", e)
 	}
 	if got := list("?actor=codex"); len(got) != 2 || got[1].Op != "git" || got[1].Rule != "read-only-key" {
 		t.Errorf("actor=codex: %+v, want the comment and the push", got)
@@ -211,7 +223,9 @@ func TestAuditRecordsAndFilters(t *testing.T) {
 	if w := do(runKey, "GET", "/v1/audit", ""); w.Code != http.StatusForbidden {
 		t.Errorf("run key GET /v1/audit = %d, want 403", w.Code)
 	}
-	if w := do(ownerKey, "GET", "/v1/audit?decision=maybe", ""); w.Code != http.StatusBadRequest {
-		t.Errorf("decision=maybe = %d, want 400", w.Code)
+	for _, d := range []string{"maybe", "deny,maybe", "deny,"} {
+		if w := do(ownerKey, "GET", "/v1/audit?decision="+d, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("decision=%s = %d, want 400", d, w.Code)
+		}
 	}
 }

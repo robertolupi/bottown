@@ -284,9 +284,10 @@ handover. It can be filtered by actor, kind, status and date. An issue's **timel
 reviews and the merge between them.
 
 **Denials.** A live run's card and a history row (when expanded) list
-the operations the server's policy refused the run: when, the request or
-operation, the rule, and why. History marks a run with denials with a
-count. They come from `GET /v1/audit` (§7); while the server cannot say,
+the operations the server's policy refused the run (denied or rejected),
+including those outside its repository: when, the request or operation,
+the rule, and why. History marks a run with denials with a count. They
+come from `GET /v1/audit` (§7); while the server cannot say,
 runs show none.
 
 In-harness runs (started with a harness's slash commands) leave no log:
@@ -458,7 +459,8 @@ The UI uses the server's existing API where it can. What changes:
   entry has its time, actor, run, repository (`org/name`), operation
   (`api`, `git` or e.g. `pr_create`), method and path, decision, rule,
   detail and status. Filters: `repo` (`org/name`, or a name in the
-  instance's org), `actor`, `run`, `decision=allow|deny|reject`, `since`
+  instance's org), `actor`, `run`, `decision` (`allow`, `deny` or
+  `reject`, or a comma-separated list such as `deny,reject`), `since`
   (RFC 3339) and `limit` (the newest N); entries come oldest first. The
   server keeps them in `audit.jsonl` in its data directory for 14 days,
   and at most the newest 20000.

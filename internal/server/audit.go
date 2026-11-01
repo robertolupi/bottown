@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,7 +48,7 @@ type AuditFilter struct {
 	Repo     string
 	Actor    string
 	Run      string
-	Decision string
+	Decision string // one decision, or several separated by commas
 	Since    time.Time
 	Limit    int // the newest Limit entries; 0 means all
 }
@@ -56,7 +57,7 @@ func (f AuditFilter) match(e AuditEntry) bool {
 	return (f.Repo == "" || strings.EqualFold(e.Repo, f.Repo)) &&
 		(f.Actor == "" || e.Actor == f.Actor) &&
 		(f.Run == "" || e.Run == f.Run) &&
-		(f.Decision == "" || e.Decision == f.Decision) &&
+		(f.Decision == "" || slices.Contains(strings.Split(f.Decision, ","), e.Decision)) &&
 		(f.Since.IsZero() || !e.Time.Before(f.Since))
 }
 
@@ -236,18 +237,22 @@ func gitRepo(path string) string {
 
 // listAudit is GET /v1/audit: the stored decisions, oldest first,
 // filtered by repo (org/name, or a name in the instance's org), actor,
-// run, decision, since (RFC 3339) and limit (the newest N).
+// run, decision (one or a comma-separated list), since (RFC 3339) and limit (the newest N).
 func (s *Server) listAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := AuditFilter{Repo: q.Get("repo"), Actor: q.Get("actor"), Run: q.Get("run"), Decision: q.Get("decision")}
 	if f.Repo != "" && !strings.Contains(f.Repo, "/") {
 		f.Repo = s.desired().Org + "/" + f.Repo
 	}
-	switch f.Decision {
-	case "", "allow", "deny", "reject":
-	default:
-		writeError(w, http.StatusBadRequest, "decision must be allow, deny or reject")
-		return
+	if f.Decision != "" {
+		for _, d := range strings.Split(f.Decision, ",") {
+			switch d {
+			case "allow", "deny", "reject":
+			default:
+				writeError(w, http.StatusBadRequest, "decision must be allow, deny or reject, or a comma-separated list of them")
+				return
+			}
+		}
 	}
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
