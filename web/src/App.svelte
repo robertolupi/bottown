@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail } from './types';
+  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo } from './types';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -40,12 +40,17 @@
   let runQuestion = $state<string>('');
   let runAllowSameFamily = $state<boolean>(false);
 
+  // Timer, Polling & Logs
+  let nowTime = $state<number>(Date.now());
+  let expandedLogs = $state<Record<string, { loading: boolean; lines?: string[]; error?: string }>>({});
+
   // History state & filters
   let historyRuns = $state<HistoryRunInfo[]>([]);
   let historyLoading = $state<boolean>(false);
   let filterActor = $state<string>('');
   let filterKind = $state<string>('');
   let filterStatus = $state<string>('');
+  let filterDate = $state<string>('');
   let filterSearch = $state<string>('');
 
   // Timeline state
@@ -63,11 +68,73 @@
     getActor(flowImplement)?.family === getActor(flowVerify)?.family
   );
 
+  function formatElapsed(createdIso: string): string {
+    if (!createdIso) return '';
+    const start = new Date(createdIso).getTime();
+    const diffSec = Math.max(0, Math.floor((nowTime - start) / 1000));
+    const m = Math.floor(diffSec / 60);
+    const s = diffSec % 60;
+    return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+  }
+
+  let flowGroups = $derived(() => {
+    if (!status?.live_runs) return [];
+    const groups: { flow: FlowInfo; runs: LiveRunInfo[] }[] = [];
+    const map = new Map<number, { flow: FlowInfo; runs: LiveRunInfo[] }>();
+    for (const r of status.live_runs) {
+      if (r.flow) {
+        let g = map.get(r.flow.issue);
+        if (!g) {
+          g = { flow: r.flow, runs: [] };
+          map.set(r.flow.issue, g);
+          groups.push(g);
+        }
+        g.runs.push(r);
+      }
+    }
+    return groups;
+  });
+
+  let standaloneRuns = $derived(() => {
+    if (!status?.live_runs) return [];
+    return status.live_runs.filter((r) => !r.flow);
+  });
+
+  async function toggleHistoryLog(id: string) {
+    if (expandedLogs[id]) {
+      delete expandedLogs[id];
+      expandedLogs = { ...expandedLogs };
+      return;
+    }
+    expandedLogs[id] = { loading: true };
+    expandedLogs = { ...expandedLogs };
+    try {
+      const res = await fetch(`/api/runs/${id}/log`);
+      if (!res.ok) throw new Error('Failed to load log');
+      const data = await res.json();
+      expandedLogs[id] = { loading: false, lines: data.lines || [] };
+    } catch (e: any) {
+      expandedLogs[id] = { loading: false, error: e.message };
+    }
+    expandedLogs = { ...expandedLogs };
+  }
+
   let filteredHistory = $derived(
     historyRuns.filter((h) => {
       if (filterActor && h.actor !== filterActor) return false;
       if (filterKind && h.kind !== filterKind) return false;
       if (filterStatus && h.status !== filterStatus) return false;
+      if (filterDate) {
+        const timeMs = new Date(h.ended || h.created).getTime();
+        let maxAgeMs = 0;
+        switch (filterDate) {
+          case '1h': maxAgeMs = 3600 * 1000; break;
+          case '24h': maxAgeMs = 24 * 3600 * 1000; break;
+          case '7d': maxAgeMs = 7 * 24 * 3600 * 1000; break;
+          case '30d': maxAgeMs = 30 * 24 * 3600 * 1000; break;
+        }
+        if (maxAgeMs > 0 && nowTime - timeMs > maxAgeMs) return false;
+      }
       if (filterSearch) {
         const s = filterSearch.toLowerCase();
         return (
@@ -377,6 +444,34 @@
   onMount(() => {
     loadStatus();
     loadHistory();
+
+    const timerInterval = setInterval(() => {
+      nowTime = Date.now();
+    }, 1000);
+
+    const pollInterval = setInterval(async () => {
+      if (status?.live_runs && status.live_runs.length > 0) {
+        try {
+          const res = await fetch('/api/runs?state=live');
+          if (res.ok) {
+            const liveRuns: LiveRunInfo[] = await res.json();
+            if (status) {
+              const prevLen = status.live_runs.length;
+              status.live_runs = liveRuns;
+              if (liveRuns.length === 0 && prevLen > 0) {
+                await loadStatus(true);
+                await loadHistory();
+              }
+            }
+          }
+        } catch {}
+      }
+    }, 2500);
+
+    return () => {
+      clearInterval(timerInterval);
+      clearInterval(pollInterval);
+    };
   });
 </script>
 
@@ -537,20 +632,86 @@
             </div>
           {:else}
             <div class="live-runs-list">
-              {#each status.live_runs as run (run.id)}
+              <!-- Active Flows -->
+              {#each flowGroups() as fg (fg.flow.issue)}
+                <div class="flow-group-card">
+                  <div class="flow-group-header">
+                    <div class="flow-group-title">
+                      <span class="badge badge-accent flow-badge">Flow for #{fg.flow.issue}</span>
+                      <strong>Round {fg.flow.round}/{fg.flow.max_rounds}</strong>
+                      <span class="muted text-sm">— {fg.flow.step}</span>
+                    </div>
+                    <div class="flow-group-actions">
+                      <button
+                        class="btn btn-sm btn-danger"
+                        onclick={() => {
+                          stopRunId = `flow-${fg.flow.issue}`;
+                          showStopModal = true;
+                        }}
+                      >
+                        Stop Flow
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-group-runs">
+                    {#each fg.runs as run (run.id)}
+                      <div class="run-card">
+                        <div class="run-card-header">
+                          <div class="run-card-title">
+                            <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                            <span class="badge badge-neutral">{run.kind}</span>
+                            <span class="badge repo-badge">{run.actor} ({run.family})</span>
+                            <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
+                          </div>
+                          <div class="run-card-actions">
+                            <span class="run-timer">{formatElapsed(run.created)} / {run.timeout}</span>
+                            <button
+                              class="btn btn-sm btn-danger"
+                              onclick={() => {
+                                stopRunId = run.id;
+                                showStopModal = true;
+                              }}
+                            >
+                              Stop Run
+                            </button>
+                          </div>
+                        </div>
+
+                        {#if !run.interactive}
+                          <div class="log-tail-box">
+                            <div class="log-tail-header">
+                              <span>Live Tail (.bottown/runs/{run.id}.log)</span>
+                            </div>
+                            <div class="log-tail-content">
+                              {#if !run.log_tail || run.log_tail.length === 0}
+                                <div class="log-line muted">Waiting for agent activity...</div>
+                              {:else}
+                                {#each run.log_tail as line}
+                                  <div class="log-line">{line}</div>
+                                {/each}
+                              {/if}
+                            </div>
+                          </div>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+
+              <!-- Standalone Runs -->
+              {#each standaloneRuns() as run (run.id)}
                 <div class="run-card">
                   <div class="run-card-header">
                     <div class="run-card-title">
-                      {#if run.flow}
-                        <span class="badge badge-accent flow-badge">{run.flow.label}</span>
-                      {/if}
                       <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
                       <span class="badge badge-neutral">{run.kind}</span>
                       <span class="badge repo-badge">{run.actor} ({run.family})</span>
                       <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
                     </div>
                     <div class="run-card-actions">
-                      <span class="run-timer">{run.elapsed} / {run.timeout}</span>
+                      <span class="run-timer">{formatElapsed(run.created)} / {run.timeout}</span>
                       <button
                         class="btn btn-sm btn-danger"
                         onclick={() => {
@@ -620,6 +781,13 @@
               <option value="failed">Failed</option>
               <option value="revoked">Revoked</option>
             </select>
+            <select class="input input-sm select-sm" bind:value={filterDate}>
+              <option value="">All Time</option>
+              <option value="1h">Past hour</option>
+              <option value="24h">Past 24 hours</option>
+              <option value="7d">Past 7 days</option>
+              <option value="30d">Past 30 days</option>
+            </select>
           </div>
         </div>
 
@@ -643,7 +811,7 @@
                     <th>Usage</th>
                     <th>Summary</th>
                     <th>When</th>
-                    <th>Timeline</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -664,11 +832,52 @@
                       <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
                       <td class="muted text-sm">{formatTime(h.created)}</td>
                       <td>
-                        <button class="btn btn-sm btn-secondary" onclick={() => extractIssueAndOpenTimeline(h.target)}>
-                          Timeline
-                        </button>
+                        <div class="row-actions">
+                          <button
+                            class="btn btn-sm btn-secondary"
+                            onclick={() => toggleHistoryLog(h.id)}
+                            title="Expand parsed run log"
+                          >
+                            {expandedLogs[h.id] ? 'Hide Log' : 'Log'}
+                          </button>
+                          <button
+                            class="btn btn-sm btn-secondary"
+                            onclick={() => extractIssueAndOpenTimeline(h.target)}
+                            title="View issue timeline"
+                          >
+                            Timeline
+                          </button>
+                        </div>
                       </td>
                     </tr>
+                    {#if expandedLogs[h.id]}
+                      {@const logState = expandedLogs[h.id]}
+                      <tr class="log-expand-row">
+                        <td colspan="9">
+                          <div class="log-tail-box history-log-box">
+                            <div class="log-tail-header">
+                              <span>Run Log ({h.id})</span>
+                              {#if logState.lines}
+                                <span class="muted text-sm">{logState.lines.length} lines</span>
+                              {/if}
+                            </div>
+                            <div class="log-tail-content">
+                              {#if logState.loading}
+                                <div class="log-line muted">Loading log...</div>
+                              {:else if logState.error}
+                                <div class="log-line error">{logState.error}</div>
+                              {:else if !logState.lines || logState.lines.length === 0}
+                                <div class="log-line muted">No log lines recorded.</div>
+                              {:else}
+                                {#each logState.lines as line}
+                                  <div class="log-line">{line}</div>
+                                {/each}
+                              {/if}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    {/if}
                   {/each}
                 </tbody>
               </table>
@@ -1499,6 +1708,53 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* Flow Group styles */
+  .flow-group-card {
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: rgba(125, 125, 125, 0.02);
+    overflow: hidden;
+  }
+
+  .flow-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: rgba(125, 125, 125, 0.06);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .flow-group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .flow-group-runs {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .log-expand-row td {
+    padding: 0 12px 12px;
+    background: rgba(125, 125, 125, 0.03);
+  }
+
+  .history-log-box {
+    margin-top: 6px;
+    max-height: 280px;
   }
 
   /* Live Runs styles */

@@ -192,6 +192,12 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Active flow record for issue 51
+	flowRec := fmt.Sprintf(`{"issue":51,"implement":"agy","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-51.json"), []byte(flowRec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := Config{
 		Instance: config.Instance{
 			Name:       "prod",
@@ -618,6 +624,12 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 	resp, body = doReq(http.MethodGet, "/api/runs/r-live-api/log", "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "starting task") {
 		t.Fatalf("GET /api/runs/r-live-api/log: status %d, body %s", resp.StatusCode, body)
+	}
+
+	// Path traversal attempt should be rejected with 400 Bad Request
+	resp, body = doReq(http.MethodGet, "/api/runs/..%2F..%2F..%2Fetc%2Ffoo/log", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for path traversal in log ID, got %d: %s", resp.StatusCode, body)
 	}
 
 	// 3. GET /api/issues/{number}/timeline

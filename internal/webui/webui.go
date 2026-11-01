@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -421,10 +422,12 @@ func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+var validRunID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run ID required"})
+	if id == "" || strings.Contains(id, "..") || !validRunID.MatchString(id) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid run ID"})
 		return
 	}
 

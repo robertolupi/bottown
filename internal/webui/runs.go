@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
@@ -98,6 +100,28 @@ type IssueTimeline struct {
 	Events []TimelineEvent `json:"events"`
 }
 
+func (s *Server) getActiveFlow(issue int64) *FlowRecord {
+	if issue <= 0 {
+		return nil
+	}
+	infoPath := filepath.Join(s.cfg.RepoTop, ".bottown", fmt.Sprintf("flow-%d.json", issue))
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		return nil
+	}
+	var rec FlowRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return nil
+	}
+	if rec.PID > 0 {
+		if err := syscall.Kill(rec.PID, 0); err != nil {
+			_ = os.Remove(infoPath)
+			return nil
+		}
+	}
+	return &rec
+}
+
 // ComputeLiveRuns calculates active runs with flow grouping and readable log tails.
 func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	org, repo := s.orgAndRepo()
@@ -115,21 +139,14 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
 		return nil, fmt.Errorf("fetch live runs: %w", err)
 	}
-
-	// 3. Fetch open PRs to group runs by flow
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
-	var prs []*sdk.PullRequest
-	_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
-
-	// Fetch reviews for open PRs
-	prReviews := make(map[int64][]*sdk.PullReview)
-	for _, pr := range prs {
-		revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-		var revs []*sdk.PullReview
-		if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
-			prReviews[pr.Index] = revs
-		}
+	if len(serverRuns) == 0 {
+		return []LiveRunInfo{}, nil
 	}
+
+	// 3. Fetch open PRs only if needed
+	var prs []*sdk.PullRequest
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
+	_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
 
 	// PR by issue index
 	prByIssue := make(map[int64]*sdk.PullRequest)
@@ -138,6 +155,33 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			var issueNum int64
 			if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &issueNum); err == nil {
 				prByIssue[issueNum] = pr
+			}
+		}
+	}
+
+	// Fetch reviews ONLY for PRs matching active runs
+	prReviews := make(map[int64][]*sdk.PullReview)
+	for _, sr := range serverRuns {
+		if sr.Kind != "implement" && sr.Kind != "verify" {
+			continue
+		}
+		issueNum := sr.Issue
+		if issueNum <= 0 && sr.PR > 0 {
+			for _, pr := range prs {
+				if pr.Index == sr.PR && pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
+					var num int64
+					if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &num); err == nil {
+						issueNum = num
+					}
+					break
+				}
+			}
+		}
+		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Index] == nil {
+			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+			var revs []*sdk.PullReview
+			if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
+				prReviews[pr.Index] = revs
 			}
 		}
 	}
@@ -180,49 +224,54 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			logTail = []string{}
 		}
 
-		// Calculate flow info if run is associated with an issue
+		// Calculate flow info ONLY for implement and verify runs when an active flow exists
 		var flow *FlowInfo
-		issueNum := sr.Issue
-		if issueNum <= 0 && sr.PR > 0 {
-			// Find issue for PR if possible
-			for _, pr := range prs {
-				if pr.Index == sr.PR && pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
-					var num int64
-					if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &num); err == nil {
-						issueNum = num
+		if sr.Kind == "implement" || sr.Kind == "verify" {
+			issueNum := sr.Issue
+			if issueNum <= 0 && sr.PR > 0 {
+				for _, pr := range prs {
+					if pr.Index == sr.PR && pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
+						var num int64
+						if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &num); err == nil {
+							issueNum = num
+						}
+						break
 					}
-					break
 				}
 			}
-		}
 
-		if issueNum > 0 {
-			pr := prByIssue[issueNum]
-			round := 1
-			if pr != nil {
-				for _, r := range prReviews[pr.Index] {
-					if !r.Dismissed && r.State == sdk.ReviewStateRequestChanges {
-						round++
+			if issueNum > 0 {
+				flowRec := s.getActiveFlow(issueNum)
+				if flowRec != nil {
+					pr := prByIssue[issueNum]
+					round := 1
+					if pr != nil {
+						for _, r := range prReviews[pr.Index] {
+							// Matching internal/flow countRounds: count all requested changes
+							// including dismissed/stale ones
+							if r.State == sdk.ReviewStateRequestChanges {
+								round++
+							}
+						}
+					}
+					maxRounds := flowRec.Rounds
+					if maxRounds <= 0 {
+						maxRounds = 3
+					}
+					stepWord := "implementing with"
+					if sr.Kind == "verify" {
+						stepWord = "verifying with"
+					}
+					step := fmt.Sprintf("%s %s", stepWord, sr.Actor)
+					label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
+					flow = &FlowInfo{
+						Issue:     issueNum,
+						Round:     round,
+						MaxRounds: maxRounds,
+						Step:      step,
+						Label:     label,
 					}
 				}
-			}
-			stepWord := "working with"
-			switch sr.Kind {
-			case "implement":
-				stepWord = "implementing with"
-			case "verify":
-				stepWord = "verifying with"
-			case "discuss":
-				stepWord = "discussing with"
-			}
-			step := fmt.Sprintf("%s %s", stepWord, sr.Actor)
-			label := fmt.Sprintf("#%d · round %d/3 · %s", issueNum, round, step)
-			flow = &FlowInfo{
-				Issue:     issueNum,
-				Round:     round,
-				MaxRounds: 3,
-				Step:      step,
-				Label:     label,
 			}
 		}
 

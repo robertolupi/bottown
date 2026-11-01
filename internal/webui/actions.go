@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 )
@@ -42,6 +44,17 @@ type GCRequest struct {
 	Failed bool `json:"failed,omitempty"`
 }
 
+// FlowRecord is persisted in .bottown/flow-<issue>.json when a flow is started.
+type FlowRecord struct {
+	Issue     int64     `json:"issue"`
+	Implement string    `json:"implement"`
+	Verify    string    `json:"verify"`
+	Rounds    int       `json:"rounds"`
+	Timeout   string    `json:"timeout"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 // ExecuteFlow starts a background `bottown flow` process that outlives the UI.
 func (s *Server) ExecuteFlow(ctx context.Context, req FlowRequest) (string, error) {
 	if req.Issue <= 0 {
@@ -53,8 +66,14 @@ func (s *Server) ExecuteFlow(ctx context.Context, req FlowRequest) (string, erro
 	if req.Verify == "" {
 		return "", errors.New("verifier actor is required")
 	}
+	if req.Timeout != "" {
+		if _, err := time.ParseDuration(req.Timeout); err != nil {
+			return "", fmt.Errorf("invalid timeout %q: %w", req.Timeout, err)
+		}
+	}
 
-	// Cross-family rule verification upfront
+	// Cross-family rule verification upfront. If fetching actors fails (e.g. server offline),
+	// we proceed because the CLI will enforce the family rule independently.
 	actorMap, err := s.fetchActorMap(ctx)
 	if err == nil {
 		impAct := actorMap[req.Implement]
@@ -68,17 +87,34 @@ func (s *Server) ExecuteFlow(ctx context.Context, req FlowRequest) (string, erro
 		"--implement", req.Implement,
 		"--verify", req.Verify,
 	}
-	if req.Rounds > 0 {
-		args = append(args, "--rounds", fmt.Sprint(req.Rounds))
+	rounds := req.Rounds
+	if rounds <= 0 {
+		rounds = 3
 	}
+	args = append(args, "--rounds", fmt.Sprint(rounds))
 	if req.Timeout != "" {
 		args = append(args, "--timeout", req.Timeout)
 	}
 
 	logName := fmt.Sprintf("flow-%d.log", req.Issue)
 	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", logName)
-	if err := s.startBackground(args, logPath); err != nil {
+	pid, err := s.startBackground(args, logPath)
+	if err != nil {
 		return "", fmt.Errorf("start flow: %w", err)
+	}
+
+	record := FlowRecord{
+		Issue:     req.Issue,
+		Implement: req.Implement,
+		Verify:    req.Verify,
+		Rounds:    rounds,
+		Timeout:   req.Timeout,
+		PID:       pid,
+		StartedAt: time.Now().UTC(),
+	}
+	if recBytes, err := json.Marshal(record); err == nil {
+		infoPath := filepath.Join(s.cfg.RepoTop, ".bottown", fmt.Sprintf("flow-%d.json", req.Issue))
+		_ = os.WriteFile(infoPath, recBytes, 0o600)
 	}
 
 	return fmt.Sprintf("Flow started for issue #%d in background (log: .bottown/%s)", req.Issue, logName), nil
@@ -126,18 +162,41 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 
 	logName := fmt.Sprintf("run-%s-%d.log", req.Kind, req.Target)
 	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", logName)
-	if err := s.startBackground(args, logPath); err != nil {
+	if _, err := s.startBackground(args, logPath); err != nil {
 		return "", fmt.Errorf("start run: %w", err)
 	}
 
 	return fmt.Sprintf("Run (%s) started in background for #%d", req.Kind, req.Target), nil
 }
 
-// ExecuteStop stops a live run and any flow supervising it.
+// ExecuteStop stops a live run or a flow supervising it.
 func (s *Server) ExecuteStop(ctx context.Context, id string) (string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return "", errors.New("run ID is required")
+		return "", errors.New("run or flow ID is required")
+	}
+
+	if strings.HasPrefix(id, "flow-") {
+		var issueNum int64
+		if _, err := fmt.Sscanf(id, "flow-%d", &issueNum); err == nil && issueNum > 0 {
+			infoPath := filepath.Join(s.cfg.RepoTop, ".bottown", fmt.Sprintf("flow-%d.json", issueNum))
+			if data, err := os.ReadFile(infoPath); err == nil {
+				var rec FlowRecord
+				if err := json.Unmarshal(data, &rec); err == nil && rec.PID > 0 {
+					_ = syscall.Kill(-rec.PID, syscall.SIGTERM)
+				}
+				_ = os.Remove(infoPath)
+			}
+			// Also stop any live run on this issue
+			if live, err := s.ComputeLiveRuns(ctx); err == nil {
+				for _, r := range live {
+					if r.Flow != nil && r.Flow.Issue == issueNum {
+						_, _ = s.runCommand(ctx, []string{"-i", s.cfg.Instance.Name, "run", "stop", r.ID})
+					}
+				}
+			}
+			return fmt.Sprintf("Flow for issue #%d stopped", issueNum), nil
+		}
 	}
 
 	args := []string{"-i", s.cfg.Instance.Name, "run", "stop", id}
@@ -171,12 +230,12 @@ func (s *Server) bottownBin() string {
 	return "bottown"
 }
 
-func (s *Server) startBackground(args []string, logPath string) error {
+func (s *Server) startBackground(args []string, logPath string) (int, error) {
 	bin := s.bottownBin()
 	_ = os.MkdirAll(filepath.Dir(logPath), 0o700)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	cmd := exec.Command(bin, args...)
@@ -189,15 +248,38 @@ func (s *Server) startBackground(args []string, logPath string) error {
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
-		return err
+		return 0, err
 	}
 
+	pid := cmd.Process.Pid
+	done := make(chan error, 1)
 	go func() {
-		_ = cmd.Wait()
+		done <- cmd.Wait()
 		_ = logFile.Close()
 	}()
 
-	return nil
+	// Wait briefly to catch immediate startup failures (e.g. invalid flags, actor limits)
+	select {
+	case err := <-done:
+		if err != nil {
+			logBytes, _ := os.ReadFile(logPath)
+			lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+			lastLine := ""
+			for i := len(lines) - 1; i >= 0; i-- {
+				if strings.TrimSpace(lines[i]) != "" {
+					lastLine = strings.TrimSpace(lines[i])
+					break
+				}
+			}
+			if lastLine != "" {
+				return 0, fmt.Errorf("%w: %s", err, lastLine)
+			}
+			return 0, err
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	return pid, nil
 }
 
 func (s *Server) runCommand(ctx context.Context, args []string) (string, error) {
