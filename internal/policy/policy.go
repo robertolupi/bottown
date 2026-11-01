@@ -2,7 +2,7 @@
 // bottown's proxy. Token scopes and team permissions already bound what each
 // bot can do, so the default is allow; the rules deny the policy-carrying
 // writes that bottown performs itself (merge, commit status, protection,
-// labels, repository and org administration).
+// labels, dependencies, repository and org administration).
 package policy
 
 import (
@@ -47,6 +47,8 @@ func Default(owner string) Policy {
 			{Name: "branch-protection", Methods: writes, Pattern: "/repos/*/*/branch_protections/**"},
 			{Name: "issue-labels", Methods: writes, Pattern: "/repos/*/*/issues/*/labels/**"},
 			{Name: "repo-labels", Methods: writes, Pattern: "/repos/*/*/labels/**"},
+			{Name: "issue-dependencies", Methods: writes, Pattern: "/repos/*/*/issues/*/dependencies/**"},
+			{Name: "issue-blocks", Methods: writes, Pattern: "/repos/*/*/issues/*/blocks/**"},
 			{Name: "repo-settings", Methods: []string{"PATCH", "DELETE"}, Pattern: "/repos/*/*"},
 			{Name: "collaborators", Methods: writes, Pattern: "/repos/*/*/collaborators/**"},
 			{Name: "hooks", Pattern: "/repos/*/*/hooks/**"},

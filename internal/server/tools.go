@@ -124,7 +124,7 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "forge_api",
 		Description: "Call any Forgejo API endpoint as yourself, under the same bottown policy as the HTTP proxy " +
-			"(run keys stay in their repository and role; merges, statuses, labels and admin are bottown's).",
+			"(run keys stay in their repository and role; merges, statuses, labels, dependencies and admin are bottown's).",
 		// The output is whatever the endpoint returns; no schema can describe
 		// it. Declaring the output type as any keeps the SDK from rendering
 		// `Body any` as a boolean schema, which strict clients reject.
