@@ -803,7 +803,7 @@
       <section class="card full-width">
         <div class="card-header">
           <div class="card-header-left">
-            <h2>Run History</h2>
+            <h2 id="run-history-heading">Run History</h2>
             <span class="badge badge-neutral">{historyRuns.length} total</span>
           </div>
           <div class="card-header-right filters-row">
@@ -851,7 +851,13 @@
               <span>No matching finished runs found.</span>
             </div>
           {:else}
-            <div class="table-container">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div
+              class="table-container history-table-container"
+              tabindex="0"
+              role="region"
+              aria-labelledby="run-history-heading"
+            >
               <table class="data-table">
                 <thead>
                   <tr>
@@ -2108,9 +2114,26 @@
     overflow-x: auto;
   }
 
+  .history-table-container {
+    max-height: 440px;
+    max-block-size: 440px;
+    overflow: auto;
+  }
+
+  .history-table-container thead {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+  }
+
+  .history-table-container th {
+    background: var(--card-bg);
+  }
+
   .data-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     font-size: 13px;
   }
 
