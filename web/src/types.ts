@@ -89,6 +89,84 @@ export interface InboxItem {
   created: string;
 }
 
+export interface ActorDetail {
+  name: string;
+  family: string;
+  harness: string;
+}
+
+export interface FlowInfo {
+  issue: number;
+  round: number;
+  max_rounds: number;
+  step: string;
+  label: string;
+}
+
+export interface LiveRunInfo {
+  id: string;
+  target: string;
+  target_url: string;
+  kind: string;
+  actor: string;
+  family: string;
+  harness: string;
+  interactive: boolean;
+  created: string;
+  expires: string;
+  elapsed: string;
+  timeout: string;
+  flow?: FlowInfo;
+  log_tail: string[];
+}
+
+export interface UsageInfo {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  cost_usd?: number;
+  turns?: number;
+  duration_ms?: number;
+}
+
+export interface HistoryRunInfo {
+  id: string;
+  target: string;
+  target_url: string;
+  kind: string;
+  actor: string;
+  family: string;
+  harness: string;
+  mode: string;
+  status: string;
+  created: string;
+  ended?: string;
+  duration: string;
+  summary: string;
+  usage?: UsageInfo;
+  purged: boolean;
+}
+
+export interface TimelineEvent {
+  type: string;
+  time: string;
+  title: string;
+  detail?: string;
+  actor?: string;
+  status?: string;
+  run_id?: string;
+  url?: string;
+}
+
+export interface IssueTimeline {
+  issue: number;
+  title: string;
+  state: string;
+  url: string;
+  events: TimelineEvent[];
+}
+
 export interface UIStatusResponse {
   instance: string;
   repo: string;
@@ -103,6 +181,8 @@ export interface UIStatusResponse {
   };
   inbox: InboxItem[];
   inbox_error?: string;
+  live_runs?: LiveRunInfo[];
+  actors?: ActorDetail[];
 }
 
 export interface ActionResult {

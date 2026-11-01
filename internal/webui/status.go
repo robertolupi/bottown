@@ -27,6 +27,8 @@ type UIStatusResponse struct {
 	Links      RepoLinks       `json:"links"`
 	Inbox      []InboxItem     `json:"inbox"`
 	InboxError string          `json:"inbox_error,omitempty"`
+	LiveRuns   []LiveRunInfo   `json:"live_runs"`
+	Actors     []ActorDetail   `json:"actors"`
 }
 
 type UpstreamStatus struct {
@@ -310,6 +312,22 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		res.Inbox = inbox
 	} else {
 		res.Inbox = []InboxItem{}
+	}
+
+	// 5. Live runs (§4.2)
+	liveRuns, err := s.ComputeLiveRuns(ctx)
+	if err == nil && liveRuns != nil {
+		res.LiveRuns = liveRuns
+	} else {
+		res.LiveRuns = []LiveRunInfo{}
+	}
+
+	// 6. Actors
+	var actors []ActorDetail
+	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actors); err == nil && actors != nil {
+		res.Actors = actors
+	} else {
+		res.Actors = []ActorDetail{}
 	}
 
 	return res, nil

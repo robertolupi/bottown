@@ -14,11 +14,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 //go:embed all:dist
@@ -32,6 +36,7 @@ type Config struct {
 	OwnerKey       string
 	Port           int
 	CLIVersion     string
+	BottownPath    string
 	HarnessChecker func(home string) []HarnessCommandInfo
 }
 
@@ -136,9 +141,16 @@ func (s *Server) Close() error {
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
+	mux.HandleFunc("GET /api/runs", s.handleGetRuns)
+	mux.HandleFunc("GET /api/runs/{id}/log", s.handleGetRunLog)
+	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleGetIssueTimeline)
 	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
 	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
+	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
+	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
+	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
+	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
 
 	// Static files
 	dist, err := fs.Sub(distFS, "dist")
@@ -354,4 +366,164 @@ func randomString(bytes int) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	state := q.Get("state")
+	if state == "live" {
+		live, err := s.ComputeLiveRuns(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if live == nil {
+			live = []LiveRunInfo{}
+		}
+		writeJSON(w, http.StatusOK, live)
+		return
+	}
+
+	filter := HistoryFilter{
+		Actor:  q.Get("actor"),
+		Kind:   q.Get("kind"),
+		Status: q.Get("status"),
+	}
+	if sinceStr := q.Get("since"); sinceStr != "" {
+		if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			filter.Since = t
+		}
+	}
+
+	history, err := s.ComputeHistoryRuns(r.Context(), filter)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if history == nil {
+		history = []HistoryRunInfo{}
+	}
+
+	if state == "ended" {
+		writeJSON(w, http.StatusOK, history)
+		return
+	}
+
+	live, _ := s.ComputeLiveRuns(r.Context())
+	if live == nil {
+		live = []LiveRunInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"live":    live,
+		"history": history,
+	})
+}
+
+func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run ID required"})
+		return
+	}
+
+	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":    id,
+			"lines": []string{},
+		})
+		return
+	}
+
+	actorMap, _ := s.fetchActorMap(r.Context())
+	harness := ""
+	var serverRun secrets.Run
+	if err := s.callServer(r.Context(), http.MethodGet, "/v1/runs/"+id, nil, &serverRun); err == nil {
+		harness = serverRun.Harness
+		if harness == "" && actorMap[serverRun.Actor] != nil {
+			harness = actorMap[serverRun.Actor].Harness
+		}
+	}
+
+	lines := runs.RenderLog(harness, logBytes)
+	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
+		if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":    id,
+		"lines": lines,
+	})
+}
+
+func (s *Server) handleGetIssueTimeline(w http.ResponseWriter, r *http.Request) {
+	numStr := r.PathValue("number")
+	issueNum, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil || issueNum <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid issue number required"})
+		return
+	}
+
+	timeline, err := s.ComputeIssueTimeline(r.Context(), issueNum)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
+}
+
+func (s *Server) handleActionFlow(w http.ResponseWriter, r *http.Request) {
+	var req FlowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
+		return
+	}
+	out, err := s.ExecuteFlow(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
+}
+
+func (s *Server) handleActionRun(w http.ResponseWriter, r *http.Request) {
+	var req RunActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
+		return
+	}
+	out, err := s.ExecuteRun(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
+}
+
+func (s *Server) handleActionStop(w http.ResponseWriter, r *http.Request) {
+	var req StopRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
+		return
+	}
+	out, err := s.ExecuteStop(r.Context(), req.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
+}
+
+func (s *Server) handleActionGC(w http.ResponseWriter, r *http.Request) {
+	var req GCRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	out, err := s.ExecuteGC(r.Context(), req.Failed)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
 }

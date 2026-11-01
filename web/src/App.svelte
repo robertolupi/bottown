@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult } from './types';
+  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail } from './types';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -8,9 +8,75 @@
   let errorMessage = $state<string | null>(null);
   let actionMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Push confirmation modal
+  // Modals
   let showPushModal = $state<boolean>(false);
+  let showFlowModal = $state<boolean>(false);
+  let showRunModal = $state<boolean>(false);
+  let showStopModal = $state<boolean>(false);
+  let showGCModal = $state<boolean>(false);
+  let showTimelineModal = $state<boolean>(false);
   let actionLoading = $state<boolean>(false);
+
+  // Stop modal state
+  let stopRunId = $state<string>('');
+
+  // GC modal state
+  let gcIncludeFailed = $state<boolean>(false);
+
+  // Flow form state
+  let flowIssue = $state<number | string>('');
+  let flowImplement = $state<string>('');
+  let flowVerify = $state<string>('');
+  let flowRounds = $state<number>(3);
+  let flowTimeout = $state<string>('60m');
+
+  // Run form state
+  let runKind = $state<'implement' | 'verify' | 'discuss'>('implement');
+  let runTarget = $state<number | string>('');
+  let runActor = $state<string>('');
+  let runQuestion = $state<string>('');
+  let runAllowSameFamily = $state<boolean>(false);
+
+  // History state & filters
+  let historyRuns = $state<HistoryRunInfo[]>([]);
+  let historyLoading = $state<boolean>(false);
+  let filterActor = $state<string>('');
+  let filterKind = $state<string>('');
+  let filterStatus = $state<string>('');
+  let filterSearch = $state<string>('');
+
+  // Timeline state
+  let timelineData = $state<IssueTimeline | null>(null);
+  let timelineLoading = $state<boolean>(false);
+
+  function getActor(name: string): ActorDetail | undefined {
+    return status?.actors?.find((a) => a.name === name);
+  }
+
+  let flowSameFamily = $derived(
+    flowImplement !== '' &&
+    flowVerify !== '' &&
+    getActor(flowImplement)?.family !== undefined &&
+    getActor(flowImplement)?.family === getActor(flowVerify)?.family
+  );
+
+  let filteredHistory = $derived(
+    historyRuns.filter((h) => {
+      if (filterActor && h.actor !== filterActor) return false;
+      if (filterKind && h.kind !== filterKind) return false;
+      if (filterStatus && h.status !== filterStatus) return false;
+      if (filterSearch) {
+        const s = filterSearch.toLowerCase();
+        return (
+          h.target.toLowerCase().includes(s) ||
+          h.summary.toLowerCase().includes(s) ||
+          h.id.toLowerCase().includes(s) ||
+          h.actor.toLowerCase().includes(s)
+        );
+      }
+      return true;
+    })
+  );
 
   async function loadStatus(isRefresh = false) {
     if (isRefresh) refreshing = true;
@@ -23,11 +89,35 @@
         throw new Error(`Failed to load status: ${res.statusText}`);
       }
       status = await res.json();
+      // Set default actor in forms if available and unset
+      if (status?.actors && status.actors.length > 0) {
+        if (!flowImplement) flowImplement = status.actors[0].name;
+        if (!flowVerify && status.actors.length > 1) {
+          const diffFamily = status.actors.find((a) => a.family !== status!.actors![0].family);
+          flowVerify = diffFamily ? diffFamily.name : status.actors[1].name;
+        }
+        if (!runActor) runActor = status.actors[0].name;
+      }
     } catch (e: any) {
       errorMessage = e.message || 'Unknown error loading status';
     } finally {
       loading = false;
       refreshing = false;
+    }
+  }
+
+  async function loadHistory() {
+    historyLoading = true;
+    try {
+      const res = await fetch('/api/runs?state=ended');
+      if (!res.ok) {
+        throw new Error(`Failed to load history: ${res.statusText}`);
+      }
+      historyRuns = await res.json();
+    } catch (e: any) {
+      console.error('Failed to load history:', e);
+    } finally {
+      historyLoading = false;
     }
   }
 
@@ -76,6 +166,148 @@
     }
   }
 
+  async function handleStartFlow() {
+    if (actionLoading || flowSameFamily) return;
+    actionLoading = true;
+    actionMessage = null;
+
+    try {
+      const res = await fetch('/api/actions/flow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          issue: Number(flowIssue),
+          implement: flowImplement,
+          verify: flowVerify,
+          rounds: Number(flowRounds) || 3,
+          timeout: flowTimeout || '60m',
+        }),
+      });
+      const data: ActionResult = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.output || 'Start flow failed');
+      }
+      actionMessage = { type: 'success', text: data.output };
+      showFlowModal = false;
+      await loadStatus(true);
+      await loadHistory();
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+    } finally {
+      actionLoading = false;
+    }
+  }
+
+  async function handleStartRun() {
+    if (actionLoading) return;
+    actionLoading = true;
+    actionMessage = null;
+
+    try {
+      const res = await fetch('/api/actions/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: runKind,
+          target: Number(runTarget),
+          actor: runActor,
+          question: runKind === 'discuss' ? runQuestion : undefined,
+          allow_same_family: runKind === 'verify' ? runAllowSameFamily : undefined,
+        }),
+      });
+      const data: ActionResult = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.output || 'Start run failed');
+      }
+      actionMessage = { type: 'success', text: data.output };
+      showRunModal = false;
+      await loadStatus(true);
+      await loadHistory();
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+    } finally {
+      actionLoading = false;
+    }
+  }
+
+  async function handleConfirmStop() {
+    if (actionLoading || !stopRunId) return;
+    actionLoading = true;
+    actionMessage = null;
+
+    try {
+      const res = await fetch('/api/actions/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: stopRunId }),
+      });
+      const data: ActionResult = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.output || 'Stop run failed');
+      }
+      actionMessage = { type: 'success', text: data.output || `Run ${stopRunId} stopped` };
+      showStopModal = false;
+      await loadStatus(true);
+      await loadHistory();
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+    } finally {
+      actionLoading = false;
+    }
+  }
+
+  async function handleConfirmGC() {
+    if (actionLoading) return;
+    actionLoading = true;
+    actionMessage = null;
+
+    try {
+      const res = await fetch('/api/actions/gc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ failed: gcIncludeFailed }),
+      });
+      const data: ActionResult = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.output || 'GC failed');
+      }
+      actionMessage = { type: 'success', text: data.output || 'Run cleanup succeeded' };
+      showGCModal = false;
+      await loadStatus(true);
+      await loadHistory();
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+    } finally {
+      actionLoading = false;
+    }
+  }
+
+  async function openTimeline(issueNum: number) {
+    timelineLoading = true;
+    timelineData = null;
+    showTimelineModal = true;
+
+    try {
+      const res = await fetch(`/api/issues/${issueNum}/timeline`);
+      if (!res.ok) {
+        throw new Error(`Failed to load timeline for #${issueNum}`);
+      }
+      timelineData = await res.json();
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+      showTimelineModal = false;
+    } finally {
+      timelineLoading = false;
+    }
+  }
+
+  function extractIssueAndOpenTimeline(target: string) {
+    const num = parseInt(target.replace(/^[#!]/, ''), 10);
+    if (!isNaN(num) && num > 0) {
+      openTimeline(num);
+    }
+  }
+
   function formatTime(isoStr?: string): string {
     if (!isoStr) return '';
     try {
@@ -86,8 +318,26 @@
     }
   }
 
+  function formatUsage(u?: any): string {
+    if (!u) return '—';
+    const parts: string[] = [];
+    if (u.input_tokens || u.output_tokens) {
+      const inTok = u.input_tokens ? `${(u.input_tokens / 1000).toFixed(1)}k in` : '';
+      const outTok = u.output_tokens ? `${(u.output_tokens / 1000).toFixed(1)}k out` : '';
+      parts.push([inTok, outTok].filter(Boolean).join(', '));
+    }
+    if (u.cost_usd !== undefined && u.cost_usd !== null) {
+      parts.push(`$${u.cost_usd.toFixed(3)}`);
+    }
+    if (u.turns) {
+      parts.push(`${u.turns} turn${u.turns > 1 ? 's' : ''}`);
+    }
+    return parts.join(' · ') || '—';
+  }
+
   onMount(() => {
     loadStatus();
+    loadHistory();
   });
 </script>
 
@@ -104,7 +354,7 @@
       {#if status?.upstream?.fetched_at}
         <span class="muted text-sm">origin as of {formatTime(status.upstream.fetched_at)}</span>
       {/if}
-      <button class="btn btn-secondary" onclick={() => loadStatus(true)} disabled={refreshing}>
+      <button class="btn btn-secondary" onclick={() => { loadStatus(true); loadHistory(); }} disabled={refreshing}>
         {#if refreshing}Refreshing...{:else}Refresh{/if}
       </button>
       {#if status?.links?.repo}
@@ -164,38 +414,50 @@
                 <div class="inbox-item">
                   <div class="inbox-badge-col">
                     {#if item.kind === 'ready_to_merge'}
-                      <span class="badge badge-success">Ready to merge</span>
+                      <span class="badge badge-success">ready to merge</span>
                     {:else if item.kind === 'conflicts_with_main'}
-                      <span class="badge badge-error">Conflicts</span>
+                      <span class="badge badge-error">conflicts with main</span>
                     {:else if item.kind === 'stopped_flow'}
-                      <span class="badge badge-warning">Stopped flow</span>
+                      <span class="badge badge-warning">stopped flow</span>
                     {:else if item.kind === 'broken_run'}
-                      <span class="badge badge-error">Broken run</span>
+                      <span class="badge badge-error">broken run</span>
                     {:else if item.kind === 'discuss_answer'}
-                      <span class="badge badge-accent">Discuss answer</span>
+                      <span class="badge badge-accent">discuss answer</span>
                     {:else if item.kind === 'actor_filed_issue'}
-                      <span class="badge badge-neutral">Actor-filed</span>
+                      <span class="badge badge-neutral">actor filed</span>
                     {/if}
                   </div>
-                  <div class="inbox-target-col">
-                    <a class="pr-badge" href={item.target_url} target="_blank" rel="noreferrer">
-                      {item.target} ↗
-                    </a>
-                  </div>
-                  <div class="inbox-desc-col">
-                    <div class="inbox-title">{item.title}</div>
+
+                  <div class="inbox-content-col">
+                    <div class="inbox-title-row">
+                      <a class="pr-badge" href={item.target_url} target="_blank" rel="noreferrer">
+                        {item.target}
+                      </a>
+                      <span class="inbox-title">{item.title}</span>
+                    </div>
                     <div class="inbox-desc muted">{item.description}</div>
                   </div>
+
                   <div class="inbox-action-col">
                     {#if item.action}
-                      <span class="action-command" title={item.action.command}>
-                        <code>{item.action.command}</code>
-                      </span>
-                    {:else}
-                      <a class="btn btn-sm btn-secondary" href={item.target_url} target="_blank" rel="noreferrer">
-                        View in Forgejo ↗
-                      </a>
+                      <button
+                        class="btn btn-sm btn-secondary"
+                        onclick={() => {
+                          if (item.action?.command.includes('gc')) {
+                            gcIncludeFailed = item.action.command.includes('--failed');
+                            showGCModal = true;
+                          } else if (item.action?.command.includes('stop')) {
+                            stopRunId = item.target;
+                            showStopModal = true;
+                          }
+                        }}
+                      >
+                        {item.action.label}
+                      </button>
                     {/if}
+                    <a class="btn btn-sm btn-primary" href={item.target_url} target="_blank" rel="noreferrer">
+                      View ↗
+                    </a>
                   </div>
                 </div>
               {/each}
@@ -204,112 +466,253 @@
         </div>
       </section>
 
-      <!-- 1. Upstream Section -->
-      <section class="card">
+      <!-- 1. Live Runs & Flow Actions (§4.2, §5) -->
+      <section class="card full-width">
         <div class="card-header">
-          <h2>Upstream</h2>
-          {#if !status.upstream.has_upstream}
-            <span class="badge badge-neutral">no upstream</span>
-          {:else if status.upstream.ahead_count > 0}
-            <span class="badge badge-warning">{status.upstream.ahead_count} unpushed commit{status.upstream.ahead_count > 1 ? 's' : ''}</span>
-          {:else}
-            <span class="badge badge-success">up to date</span>
-          {/if}
+          <div class="card-header-left">
+            <h2>Live Runs</h2>
+            {#if status.live_runs && status.live_runs.length > 0}
+              <span class="badge badge-accent">{status.live_runs.length} active</span>
+            {:else}
+              <span class="badge badge-neutral">0 active</span>
+            {/if}
+          </div>
+          <div class="card-header-right">
+            <button class="btn btn-sm btn-primary" onclick={() => (showFlowModal = true)}>
+              Start Flow
+            </button>
+            <button class="btn btn-sm btn-secondary" onclick={() => (showRunModal = true)}>
+              Start Run
+            </button>
+            <button class="btn btn-sm btn-secondary" onclick={() => (showGCModal = true)}>
+              Clean up (gc)
+            </button>
+          </div>
         </div>
 
         <div class="card-body">
-          {#if !status.upstream.has_upstream}
-            <p class="muted">No external <code>origin</code> remote configured for this checkout.</p>
+          {#if !status.live_runs || status.live_runs.length === 0}
+            <div class="inbox-zero">
+              <span class="inbox-zero-icon">💤</span>
+              <span>No runs currently active in this repository.</span>
+            </div>
           {:else}
-            <div class="info-row">
-              <span class="label">Remote:</span>
-              <span class="value"><code>{status.upstream.origin_url}</code></span>
-            </div>
-            <div class="info-row">
-              <span class="label">Status:</span>
-              <span class="value">
-                {status.upstream.ahead_count} ahead, {status.upstream.behind_count} behind <code>origin/main</code>
-              </span>
-            </div>
-
-            {#if status.upstream.ahead_count > 0}
-              <div class="commits-list">
-                <h3>Unpushed commits to origin:</h3>
-                <ul>
-                  {#each status.upstream.unpushed_commits as c}
-                    <li class="commit-item">
-                      <span class="commit-sha">{c.short_sha}</span>
-                      <span class="commit-subject">{c.subject}</span>
-                      {#if c.pr_number}
-                        <a
-                          class="badge pr-badge"
-                          href="{status.forge.forge_url}/{status.forge.repo}/pulls/{c.pr_number}"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          !{c.pr_number}
-                        </a>
+            <div class="live-runs-list">
+              {#each status.live_runs as run (run.id)}
+                <div class="run-card">
+                  <div class="run-card-header">
+                    <div class="run-card-title">
+                      {#if run.flow}
+                        <span class="badge badge-accent flow-badge">{run.flow.label}</span>
                       {/if}
-                      <span class="commit-meta">{c.author} · {c.date}</span>
-                    </li>
-                  {/each}
-                </ul>
-              </div>
+                      <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                      <span class="badge badge-neutral">{run.kind}</span>
+                      <span class="badge repo-badge">{run.actor} ({run.family})</span>
+                      <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
+                    </div>
+                    <div class="run-card-actions">
+                      <span class="run-timer">{run.elapsed} / {run.timeout}</span>
+                      <button
+                        class="btn btn-sm btn-danger"
+                        onclick={() => {
+                          stopRunId = run.id;
+                          showStopModal = true;
+                        }}
+                      >
+                        Stop
+                      </button>
+                    </div>
+                  </div>
 
-              <div class="actions-row">
-                <button
-                  class="btn btn-accent"
-                  onclick={() => (showPushModal = true)}
-                  disabled={actionLoading}
-                >
-                  Push main to origin
-                </button>
-              </div>
-            {/if}
+                  {#if !run.interactive}
+                    <div class="log-tail-box">
+                      <div class="log-tail-header">
+                        <span>Live Tail (.bottown/runs/{run.id}.log)</span>
+                      </div>
+                      <div class="log-tail-content">
+                        {#if !run.log_tail || run.log_tail.length === 0}
+                          <div class="log-line muted">Waiting for agent activity...</div>
+                        {:else}
+                          {#each run.log_tail as line}
+                            <div class="log-line">{line}</div>
+                          {/each}
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
           {/if}
         </div>
       </section>
 
-      <!-- 2. Checkout vs Forge Section -->
+      <!-- 2. Run History Section (§4.2) -->
+      <section class="card full-width">
+        <div class="card-header">
+          <div class="card-header-left">
+            <h2>Run History</h2>
+            <span class="badge badge-neutral">{historyRuns.length} total</span>
+          </div>
+          <div class="card-header-right filters-row">
+            <input
+              type="text"
+              class="input input-sm"
+              placeholder="Search target or summary..."
+              bind:value={filterSearch}
+            />
+            <select class="input input-sm select-sm" bind:value={filterActor}>
+              <option value="">All Actors</option>
+              {#if status.actors}
+                {#each status.actors as act}
+                  <option value={act.name}>{act.name}</option>
+                {/each}
+              {/if}
+            </select>
+            <select class="input input-sm select-sm" bind:value={filterKind}>
+              <option value="">All Kinds</option>
+              <option value="implement">Implement</option>
+              <option value="verify">Verify</option>
+              <option value="discuss">Discuss</option>
+            </select>
+            <select class="input input-sm select-sm" bind:value={filterStatus}>
+              <option value="">All Statuses</option>
+              <option value="succeeded">Succeeded</option>
+              <option value="failed">Failed</option>
+              <option value="revoked">Revoked</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card-body">
+          {#if historyLoading}
+            <div class="loading-state">Loading history...</div>
+          {:else if filteredHistory.length === 0}
+            <div class="inbox-zero">
+              <span>No matching finished runs found.</span>
+            </div>
+          {:else}
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Target</th>
+                    <th>Kind</th>
+                    <th>Actor</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Usage</th>
+                    <th>Summary</th>
+                    <th>When</th>
+                    <th>Timeline</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each filteredHistory as h (h.id)}
+                    <tr>
+                      <td>
+                        <a class="pr-badge" href={h.target_url} target="_blank" rel="noreferrer">{h.target}</a>
+                      </td>
+                      <td><span class="badge badge-neutral">{h.kind}</span></td>
+                      <td><span class="badge repo-badge">{h.actor} ({h.family})</span></td>
+                      <td>
+                        <span class="badge badge-{h.status === 'succeeded' ? 'success' : h.status === 'failed' ? 'error' : 'warning'}">
+                          {h.status}
+                        </span>
+                      </td>
+                      <td class="muted">{h.duration || '—'}</td>
+                      <td class="muted text-sm">{formatUsage(h.usage)}</td>
+                      <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
+                      <td class="muted text-sm">{formatTime(h.created)}</td>
+                      <td>
+                        <button class="btn btn-sm btn-secondary" onclick={() => extractIssueAndOpenTimeline(h.target)}>
+                          Timeline
+                        </button>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </div>
+      </section>
+
+      <!-- 3. Upstream & Forge Status Card (§4.3) -->
       <section class="card">
         <div class="card-header">
-          <h2>Forge & Checkout</h2>
-          {#if status.forge.behind_count > 0}
-            <span class="badge badge-warning">{status.forge.behind_count} commit{status.forge.behind_count > 1 ? 's' : ''} behind forge</span>
+          <h2>Upstream & Forge</h2>
+          {#if status.upstream.has_upstream}
+            <span class="badge badge-success">Upstream linked</span>
           {:else}
-            <span class="badge badge-success">in sync with forge</span>
+            <span class="badge badge-neutral">No upstream</span>
           {/if}
         </div>
 
         <div class="card-body">
-          <div class="info-row">
-            <span class="label">Default Branch:</span>
-            <span class="value"><code>{status.forge.default_branch}</code></span>
-          </div>
-          <div class="info-row">
-            <span class="label">Checkout HEAD:</span>
-            <span class="value"><code>{status.forge.checkout_sha}</code></span>
-          </div>
-          <div class="info-row">
-            <span class="label">Forge HEAD:</span>
-            <span class="value"><code>{status.forge.forge_sha}</code></span>
+          <div class="metric-row">
+            <span class="metric-label">Local Default Branch</span>
+            <span class="metric-value font-mono">{status.forge.default_branch} ({status.forge.checkout_sha})</span>
           </div>
 
+          <div class="metric-row">
+            <span class="metric-label">Forge ({status.forge.remote})</span>
+            <span class="metric-value font-mono">
+              <a href={status.links.commits} target="_blank" rel="noreferrer">{status.forge.forge_sha}</a>
+              {#if status.forge.behind_count > 0}
+                <span class="badge badge-warning">{status.forge.behind_count} behind</span>
+              {/if}
+              {#if status.forge.ahead_count > 0}
+                <span class="badge badge-accent">{status.forge.ahead_count} ahead</span>
+              {/if}
+            </span>
+          </div>
+
+          {#if status.upstream.has_upstream}
+            <div class="metric-row">
+              <span class="metric-label">Origin Head</span>
+              <span class="metric-value font-mono">
+                {status.upstream.head_sha || 'unknown'}
+                {#if status.upstream.ahead_count > 0}
+                  <span class="badge badge-accent">{status.upstream.ahead_count} ahead</span>
+                {/if}
+                {#if status.upstream.behind_count > 0}
+                  <span class="badge badge-warning">{status.upstream.behind_count} behind</span>
+                {/if}
+              </span>
+            </div>
+          {/if}
+
+          <!-- Checkout Behind: Pull Action -->
           {#if status.forge.behind_count > 0}
-            <p class="warning-text">
-              The local checkout is behind the forge's <code>main</code> (e.g. PR was merged on the forge).
-            </p>
-            <div class="actions-row">
+            <div class="action-banner">
+              <div>
+                <strong>Checkout is behind forge main.</strong>
+                <p class="muted text-sm">Pull fast-forward changes merged in Forgejo.</p>
+              </div>
               <button class="btn btn-primary" onclick={handlePull} disabled={actionLoading}>
-                {actionLoading ? 'Pulling...' : 'Pull (git pull --ff-only bottown main)'}
+                {actionLoading ? 'Pulling...' : 'Pull'}
+              </button>
+            </div>
+          {/if}
+
+          <!-- Ahead of origin: Push Action -->
+          {#if status.upstream.has_upstream && status.upstream.ahead_count > 0}
+            <div class="action-banner">
+              <div>
+                <strong>Local main is ahead of origin.</strong>
+                <p class="muted text-sm">{status.upstream.ahead_count} commit(s) ready to push.</p>
+              </div>
+              <button class="btn btn-accent" onclick={() => (showPushModal = true)} disabled={actionLoading}>
+                Push to Origin...
               </button>
             </div>
           {/if}
         </div>
       </section>
 
-      <!-- 3. Health Checklist -->
-      <section class="card full-width">
+      <!-- 4. Health Checklist Card (§4.3) -->
+      <section class="card">
         <div class="card-header">
           <h2>Health Checklist</h2>
         </div>
@@ -318,28 +721,28 @@
           <ul class="checklist">
             <li class="check-item">
               <span class="check-icon {status.health.agent_instructions.found ? 'icon-success' : 'icon-error'}">
-                {status.health.agent_instructions.found ? '✓' : '✗'}
+                {status.health.agent_instructions.found ? '✓' : '✕'}
               </span>
               <div class="check-content">
                 <strong>Agent Instructions</strong>
                 <span class="muted text-sm">
                   {status.health.agent_instructions.found
-                    ? `Found ${status.health.agent_instructions.filename} on main`
-                    : 'Missing AGENTS.md or README.md on main'}
+                    ? status.health.agent_instructions.filename
+                    : 'Missing AGENTS.md / README.md'}
                 </span>
               </div>
             </li>
 
             <li class="check-item">
               <span class="check-icon {status.health.protected_main.protected ? 'icon-success' : 'icon-error'}">
-                {status.health.protected_main.protected ? '✓' : '✗'}
+                {status.health.protected_main.protected ? '✓' : '✕'}
               </span>
               <div class="check-content">
-                <strong>Protected <code>main</code></strong>
+                <strong>Protected Main Branch</strong>
                 <span class="muted text-sm">
                   {status.health.protected_main.protected
-                    ? "The forge's main branch is protected against direct pushes"
-                    : (status.health.protected_main.error || "main branch is not protected on the forge")}
+                    ? 'Forgejo main is protected'
+                    : status.health.protected_main.error || 'Main branch unprotected'}
                 </span>
               </div>
             </li>
@@ -349,24 +752,21 @@
                 {status.health.version.matches ? '✓' : '!'}
               </span>
               <div class="check-content">
-                <strong>CLI and Server Versions</strong>
+                <strong>CLI & Server Versions</strong>
                 <span class="muted text-sm">
-                  CLI: <code>{status.health.version.cli_version}</code> · Server: <code>{status.health.version.server_version}</code>
-                  {status.health.version.matches ? ' (versions match)' : ' (versions differ)'}
+                  CLI {status.health.version.cli_version} · Server {status.health.version.server_version}
                 </span>
               </div>
             </li>
 
             <li class="check-item">
-              <span class="check-icon {status.health.harness_commands.every(h => h.current) ? 'icon-success' : 'icon-warning'}">
-                {status.health.harness_commands.every(h => h.current) ? '✓' : '!'}
-              </span>
+              <span class="check-icon icon-success">✓</span>
               <div class="check-content">
-                <strong>Harness Slash Commands</strong>
+                <strong>Harness Commands</strong>
                 <div class="harness-badges">
-                  {#each status.health.harness_commands as h}
-                    <span class="badge {h.current ? 'badge-success' : h.installed ? 'badge-warning' : 'badge-neutral'}">
-                      {h.harness}: {h.current ? 'current' : h.installed ? 'outdated' : 'not installed'}
+                  {#each status.health.harness_commands as hc}
+                    <span class="badge {hc.current ? 'badge-success' : 'badge-warning'}">
+                      {hc.harness}: {hc.current ? 'current' : 'outdated'}
                     </span>
                   {/each}
                 </div>
@@ -376,46 +776,40 @@
 
           <div class="worktrees-section">
             <h3>Actor Worktrees</h3>
-            {#if status.health.worktrees.length === 0}
-              <p class="muted">No actor worktrees registered.</p>
-            {:else}
-              <div class="table-container">
-                <table class="data-table">
-                  <thead>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Actor</th>
+                    <th>Head</th>
+                    <th>Status</th>
+                    <th>Active Run</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each status.health.worktrees as wt}
                     <tr>
-                      <th>Actor</th>
-                      <th>HEAD</th>
-                      <th>Status</th>
-                      <th>Run</th>
-                      <th>Path</th>
+                      <td class="font-mono"><strong>{wt.actor}</strong></td>
+                      <td class="font-mono text-sm">{wt.head}</td>
+                      <td>
+                        {#if wt.is_dirty}
+                          <span class="badge badge-warning">dirty</span>
+                        {:else}
+                          <span class="badge badge-success">clean</span>
+                        {/if}
+                      </td>
+                      <td>
+                        {#if wt.active_run}
+                          <span class="badge badge-accent">{wt.active_run}</span>
+                        {:else}
+                          <span class="muted text-sm">idle</span>
+                        {/if}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {#each status.health.worktrees as wt}
-                      <tr>
-                        <td><strong>{wt.actor}</strong></td>
-                        <td><code>{wt.head}</code></td>
-                        <td>
-                          <span class="badge {wt.is_dirty ? 'badge-warning' : 'badge-success'}">
-                            {wt.is_dirty ? 'dirty' : 'clean'}
-                          </span>
-                        </td>
-                        <td>
-                          {#if wt.active_run}
-                            <span class="badge badge-accent">live: {wt.active_run}</span>
-                          {:else if wt.last_run}
-                            <span class="text-sm muted">{wt.last_run}</span>
-                          {:else}
-                            <span class="muted">-</span>
-                          {/if}
-                        </td>
-                        <td class="text-sm muted"><code>{wt.path}</code></td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {/if}
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -423,28 +817,20 @@
   {/if}
 </main>
 
-{#if showPushModal}
-  <div
-    class="modal-backdrop"
-    role="presentation"
-    onclick={() => (showPushModal = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showPushModal = false; }}
-  >
-    <div
-      class="modal-card"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3>Confirm Push to Origin</h3>
-      <p>The following commits will be pushed to <code>origin/main</code>:</p>
+<!-- Push Confirmation Modal -->
+{#if showPushModal && status?.upstream?.unpushed_commits}
+  <div class="modal-backdrop">
+    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+      <h3>Push main to origin</h3>
+      <p class="muted">The following commit(s) will be pushed to origin/main:</p>
       <ul class="modal-commits-list">
-        {#each status?.upstream?.unpushed_commits || [] as c}
+        {#each status.upstream.unpushed_commits as c}
           <li>
-            <code>{c.short_sha}</code> {c.subject}
-            {#if c.pr_number}<span class="badge pr-badge">!{c.pr_number}</span>{/if}
+            <strong class="font-mono">{c.short_sha}</strong> {c.subject}
+            {#if c.pr_number}
+              <span class="badge pr-badge">!{c.pr_number}</span>
+            {/if}
+            <span class="muted text-sm">— {c.author}</span>
           </li>
         {/each}
       </ul>
@@ -454,6 +840,258 @@
         </button>
         <button class="btn btn-accent" onclick={handleConfirmPush} disabled={actionLoading}>
           {actionLoading ? 'Pushing...' : 'Confirm & Push to Origin'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Start Flow Modal (§5) -->
+{#if showFlowModal}
+  <div class="modal-backdrop">
+    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <h3>Start an Issue Flow</h3>
+        <button class="close-btn" onclick={() => (showFlowModal = false)}>✕</button>
+      </div>
+      <p class="muted text-sm">
+        Supervises an issue through implement and cross-family verify until ready to merge.
+      </p>
+
+      <form onsubmit={(e) => { e.preventDefault(); handleStartFlow(); }} class="form-grid">
+        <div class="form-group">
+          <label for="flow-issue">Issue Number</label>
+          <input
+            id="flow-issue"
+            type="number"
+            class="input"
+            placeholder="e.g. 51"
+            required
+            bind:value={flowIssue}
+          />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="flow-imp">Implementer</label>
+            <select id="flow-imp" class="input" bind:value={flowImplement}>
+              {#if status?.actors}
+                {#each status.actors as act}
+                  <option value={act.name}>{act.name} ({act.family})</option>
+                {/each}
+              {/if}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="flow-ver">Verifier (Cross-Family)</label>
+            <select id="flow-ver" class="input" bind:value={flowVerify}>
+              {#if status?.actors}
+                {#each status.actors as act}
+                  <option value={act.name}>{act.name} ({act.family})</option>
+                {/each}
+              {/if}
+            </select>
+          </div>
+        </div>
+
+        {#if flowSameFamily}
+          <div class="banner banner-error">
+            <span>Verifier must be from another model family than implementer.</span>
+          </div>
+        {/if}
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="flow-rounds">Rounds</label>
+            <input id="flow-rounds" type="number" class="input" min="1" max="10" bind:value={flowRounds} />
+          </div>
+
+          <div class="form-group">
+            <label for="flow-timeout">Timeout</label>
+            <input id="flow-timeout" type="text" class="input" placeholder="60m" bind:value={flowTimeout} />
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick={() => (showFlowModal = false)}>
+            Cancel
+          </button>
+          <button type="submit" class="btn btn-primary" disabled={actionLoading || flowSameFamily || !flowIssue}>
+            {actionLoading ? 'Starting...' : 'Start Flow'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+{/if}
+
+<!-- Start Run Modal (§5) -->
+{#if showRunModal}
+  <div class="modal-backdrop">
+    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <h3>Start Single Run</h3>
+        <button class="close-btn" onclick={() => (showRunModal = false)}>✕</button>
+      </div>
+
+      <form onsubmit={(e) => { e.preventDefault(); handleStartRun(); }} class="form-grid">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="run-kind">Run Kind</label>
+            <select id="run-kind" class="input" bind:value={runKind}>
+              <option value="implement">Implement (Issue)</option>
+              <option value="verify">Verify (PR)</option>
+              <option value="discuss">Discuss (Issue/PR)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="run-target">{runKind === 'verify' ? 'PR Number' : 'Issue Number'}</label>
+            <input
+              id="run-target"
+              type="number"
+              class="input"
+              placeholder="e.g. 51"
+              required
+              bind:value={runTarget}
+            />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="run-act">Actor</label>
+          <select id="run-act" class="input" bind:value={runActor}>
+            {#if status?.actors}
+              {#each status.actors as act}
+                <option value={act.name}>{act.name} ({act.family})</option>
+              {/each}
+            {/if}
+          </select>
+        </div>
+
+        {#if runKind === 'discuss'}
+          <div class="form-group">
+            <label for="run-q">Question (optional)</label>
+            <input
+              id="run-q"
+              type="text"
+              class="input"
+              placeholder="What should the agent answer?"
+              bind:value={runQuestion}
+            />
+          </div>
+        {/if}
+
+        {#if runKind === 'verify'}
+          <div class="form-checkbox">
+            <label>
+              <input type="checkbox" bind:checked={runAllowSameFamily} />
+              Allow same-family verifier (waiver)
+            </label>
+          </div>
+        {/if}
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick={() => (showRunModal = false)}>
+            Cancel
+          </button>
+          <button type="submit" class="btn btn-primary" disabled={actionLoading || !runTarget}>
+            {actionLoading ? 'Starting...' : 'Start Run'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+{/if}
+
+<!-- Stop Run Confirmation Modal (§5) -->
+{#if showStopModal}
+  <div class="modal-backdrop">
+    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+      <h3>Stop Run & Flow</h3>
+      <p class="muted">
+        Are you sure you want to stop run <strong>{stopRunId}</strong>?
+        This will kill the harness process group and end the run as failed. If this run is part of a flow, the flow will also stop.
+      </p>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick={() => (showStopModal = false)} disabled={actionLoading}>
+          Cancel
+        </button>
+        <button class="btn btn-danger" onclick={handleConfirmStop} disabled={actionLoading}>
+          {actionLoading ? 'Stopping...' : 'Confirm & Stop Run'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Clean up Broken Runs (GC) Modal (§5) -->
+{#if showGCModal}
+  <div class="modal-backdrop">
+    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+      <h3>Clean up Runs (bottown run gc)</h3>
+      <p class="muted">
+        Remove local run worktrees and purges server records for finished runs.
+      </p>
+      <div class="form-checkbox">
+        <label>
+          <input type="checkbox" bind:checked={gcIncludeFailed} />
+          Include failed runs with leftover worktrees (--failed)
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick={() => (showGCModal = false)} disabled={actionLoading}>
+          Cancel
+        </button>
+        <button class="btn btn-accent" onclick={handleConfirmGC} disabled={actionLoading}>
+          {actionLoading ? 'Cleaning up...' : 'Confirm & Run GC'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Issue Timeline Modal (§4.2) -->
+{#if showTimelineModal}
+  <div class="modal-backdrop">
+    <div class="modal-card timeline-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <h3>Timeline for Issue #{timelineData?.issue}: {timelineData?.title}</h3>
+        <button class="close-btn" onclick={() => (showTimelineModal = false)}>✕</button>
+      </div>
+
+      {#if timelineLoading}
+        <div class="loading-state">Loading timeline...</div>
+      {:else if timelineData}
+        <div class="timeline-list">
+          {#if timelineData.events.length === 0}
+            <div class="muted">No events recorded for this issue.</div>
+          {:else}
+            {#each timelineData.events as ev}
+              <div class="timeline-item timeline-{ev.type}">
+                <div class="timeline-dot"></div>
+                <div class="timeline-body">
+                  <div class="timeline-header">
+                    <span class="timeline-title">{ev.title}</span>
+                    <span class="muted text-sm">{formatTime(ev.time)}</span>
+                  </div>
+                  {#if ev.detail}
+                    <div class="timeline-detail">{ev.detail}</div>
+                  {/if}
+                  {#if ev.actor}
+                    <div class="timeline-meta muted text-sm">by {ev.actor}</div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick={() => (showTimelineModal = false)}>
+          Close
         </button>
       </div>
     </div>
@@ -501,24 +1139,15 @@
 
   :global(body) {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background-color: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
     color: var(--text);
-    line-height: 1.5;
-  }
-
-  :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.875em;
-    padding: 0.15em 0.35em;
-    background: rgba(125, 125, 125, 0.1);
-    border-radius: 4px;
   }
 
   .container {
-    max-width: 1080px;
+    max-width: 1200px;
     margin: 0 auto;
-    padding: 24px 16px 64px;
+    padding: 24px 16px;
   }
 
   .header {
@@ -526,8 +1155,8 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 24px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 16px;
   }
 
   .header-left, .header-right {
@@ -572,6 +1201,10 @@
     background: rgba(99, 102, 241, 0.15);
     color: #818cf8;
     text-decoration: none;
+    font-family: monospace;
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
   }
   .pr-badge:hover { text-decoration: underline; }
 
@@ -579,14 +1212,14 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 14px;
+    padding: 8px 16px;
     border-radius: 6px;
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
+    border: none;
+    transition: background-color 0.15s ease;
     text-decoration: none;
-    border: 1px solid transparent;
-    transition: all 0.15s ease;
   }
 
   .btn:disabled {
@@ -596,26 +1229,25 @@
 
   .btn-primary { background: var(--primary); color: #fff; }
   .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
-
-  .btn-secondary {
-    background: var(--card-bg);
-    border-color: var(--border);
-    color: var(--text);
-  }
-  .btn-secondary:hover:not(:disabled) { border-color: var(--text-muted); }
-
+  .btn-secondary { background: rgba(125, 125, 125, 0.15); color: var(--text); }
+  .btn-secondary:hover:not(:disabled) { background: rgba(125, 125, 125, 0.25); }
   .btn-accent { background: var(--accent); color: #fff; }
   .btn-accent:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-danger { background: var(--error); color: #fff; }
+  .btn-danger:hover:not(:disabled) { opacity: 0.9; }
 
-  .btn-sm { padding: 4px 8px; font-size: 12px; }
+  .btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
 
   .banner {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
     padding: 12px 16px;
     border-radius: 8px;
     margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     font-size: 14px;
   }
 
@@ -625,22 +1257,31 @@
   .close-btn {
     background: none;
     border: none;
-    color: inherit;
-    cursor: pointer;
     font-size: 16px;
+    cursor: pointer;
+    color: inherit;
+    padding: 0 4px;
   }
 
   .grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .card {
     background: var(--card-bg);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   .full-width {
@@ -648,11 +1289,20 @@
   }
 
   .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .card-header-left, .card-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
   .card-header h2 {
@@ -661,67 +1311,60 @@
     font-weight: 600;
   }
 
-  .card-header-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  .card-body {
+    padding: 20px;
+    flex: 1;
   }
 
   .inbox-zero {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 0;
+    gap: 12px;
+    padding: 24px;
     color: var(--text-muted);
     font-size: 14px;
+    justify-content: center;
   }
 
   .inbox-zero-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: var(--success-bg);
+    font-size: 20px;
     color: var(--success);
-    font-size: 12px;
-    font-weight: bold;
   }
 
   .inbox-list {
     display: flex;
     flex-direction: column;
+    gap: 12px;
   }
 
   .inbox-item {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 10px 0;
-    border-bottom: 1px solid rgba(125, 125, 125, 0.1);
-    font-size: 14px;
-  }
-
-  .inbox-item:last-child {
-    border-bottom: none;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: rgba(125, 125, 125, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    gap: 16px;
+    flex-wrap: wrap;
   }
 
   .inbox-badge-col {
-    min-width: 125px;
+    min-width: 140px;
   }
 
-  .inbox-target-col {
-    min-width: 55px;
-  }
-
-  .inbox-desc-col {
+  .inbox-content-col {
     flex: 1;
-    min-width: 0;
+    min-width: 250px;
   }
 
-  .inbox-title {
-    font-weight: 500;
+  .inbox-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
   }
 
   .inbox-desc {
@@ -729,80 +1372,249 @@
   }
 
   .inbox-action-col {
-    text-align: right;
-  }
-
-  .action-command code {
-    font-size: 12px;
-  }
-
-  .card-body {
-    padding: 16px 18px;
-  }
-
-  .info-row {
-    display: flex;
-    margin-bottom: 10px;
-    font-size: 14px;
-  }
-
-  .info-row .label {
-    width: 140px;
-    color: var(--text-muted);
-  }
-
-  .info-row .value {
-    flex: 1;
-  }
-
-  .commits-list {
-    margin-top: 16px;
-    border-top: 1px dashed var(--border);
-    padding-top: 12px;
-  }
-
-  .commits-list h3 {
-    font-size: 13px;
-    margin: 0 0 8px;
-    color: var(--text-muted);
-  }
-
-  .commits-list ul {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-
-  .commit-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 0;
-    font-size: 13px;
-    border-bottom: 1px solid rgba(125, 125, 125, 0.08);
   }
 
-  .commit-sha {
-    font-family: ui-monospace, monospace;
-    color: var(--primary);
+  /* Live Runs styles */
+  .live-runs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
-  .commit-subject {
-    flex: 1;
+  .run-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(125, 125, 125, 0.03);
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
-  .commit-meta {
+  .run-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(125, 125, 125, 0.06);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .run-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .flow-badge {
+    font-weight: 600;
+  }
+
+  .run-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .run-timer {
+    font-family: monospace;
+    font-size: 13px;
     color: var(--text-muted);
+  }
+
+  .log-tail-box {
+    background: #090d16;
+    color: #e2e8f0;
+    font-family: monospace;
     font-size: 12px;
   }
 
-  .actions-row {
-    margin-top: 16px;
+  .log-tail-header {
+    padding: 6px 12px;
+    background: #111827;
+    color: #94a3b8;
+    font-size: 11px;
+    border-bottom: 1px solid #1e293b;
+  }
+
+  .log-tail-content {
+    max-height: 180px;
+    overflow-y: auto;
+    padding: 10px 12px;
     display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .log-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* Filters */
+  .filters-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .input {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  .input-sm {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .select-sm {
+    cursor: pointer;
+  }
+
+  .summary-cell {
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Forms */
+  .form-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .form-group label {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 12px;
+  }
+
+  .form-checkbox {
+    margin: 8px 0;
+    font-size: 13px;
+  }
+
+  .form-checkbox label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+
+  /* Timeline */
+  .timeline-modal {
+    max-width: 680px;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
+
+  .modal-header h3 {
+    margin: 0;
+  }
+
+  .timeline-list {
+    margin: 20px 0;
+    max-height: 400px;
+    overflow-y: auto;
+    position: relative;
+    padding-left: 20px;
+  }
+
+  .timeline-item {
+    position: relative;
+    padding-bottom: 20px;
+    border-left: 2px solid var(--border);
+    padding-left: 16px;
+  }
+
+  .timeline-item:last-child {
+    border-left: 2px solid transparent;
+  }
+
+  .timeline-dot {
+    position: absolute;
+    left: -7px;
+    top: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--primary);
+    border: 2px solid var(--card-bg);
+  }
+
+  .timeline-review .timeline-dot { background: var(--warning); }
+  .timeline-pr_merged .timeline-dot { background: var(--success); }
+
+  .timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .timeline-detail {
+    font-size: 13px;
+    margin-top: 4px;
+    color: var(--text);
+  }
+
+  .timeline-meta {
+    margin-top: 2px;
+  }
+
+  /* Status details */
+  .metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+
+  .font-mono {
+    font-family: monospace;
+  }
+
+  .action-banner {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: rgba(125, 125, 125, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
   .checklist {
@@ -897,10 +1709,6 @@
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   }
 
-  .modal-card h3 {
-    margin-top: 0;
-  }
-
   .modal-commits-list {
     max-height: 240px;
     overflow-y: auto;
@@ -917,10 +1725,10 @@
     display: flex;
     justify-content: flex-end;
     gap: 12px;
+    margin-top: 20px;
   }
 
   .muted { color: var(--text-muted); }
   .text-sm { font-size: 12px; }
-  .warning-text { color: var(--warning); font-size: 13px; margin: 12px 0; }
-  .loading-state { text-align: center; padding: 64px; color: var(--text-muted); }
+  .loading-state { text-align: center; padding: 48px; color: var(--text-muted); }
 </style>
