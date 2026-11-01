@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/robertolupi/bottown/internal/webui"
 	"github.com/spf13/cobra"
 )
 
@@ -152,4 +153,58 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 		fmt.Fprintf(cmd.OutOrStdout(), "%s: installed %sbottown-%s\n", path, invoke, c.Kind)
 	}
 	return nil
+}
+
+// checkHarnessCurrent checks whether all commands for known harnesses are installed and up to date.
+func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
+	if home == "" {
+		return nil
+	}
+	var res []webui.HarnessCommandInfo
+	for _, harness := range []string{"claude", "agy", "kimi"} {
+		hc, ok := harnessCommands[harness]
+		if !ok {
+			continue
+		}
+		info := webui.HarnessCommandInfo{Harness: harness}
+		dir := hc.dir(home)
+		info.Path = dir
+
+		allInstalled := true
+		allCurrent := true
+
+		for _, c := range []commandData{
+			{Kind: "implement", Target: "issue"},
+			{Kind: "verify", Target: "pull request"},
+			{Kind: "discuss", Target: "issue"},
+		} {
+			c.Bottown, c.Marker = selfPath(), harnessMarker
+			tmpl := hc.template
+			if c.Kind == "discuss" {
+				tmpl = hc.discuss
+			}
+			var b bytes.Buffer
+			if err := harnessTmpl.ExecuteTemplate(&b, tmpl, c); err != nil {
+				allCurrent = false
+				continue
+			}
+			path := filepath.Join(dir, "bottown-"+c.Kind+".md")
+			if hc.skillDirs {
+				path = filepath.Join(dir, "bottown-"+c.Kind, "SKILL.md")
+			}
+			old, err := os.ReadFile(path)
+			if err != nil {
+				allInstalled = false
+				allCurrent = false
+				break
+			}
+			if !bytes.Equal(old, b.Bytes()) {
+				allCurrent = false
+			}
+		}
+		info.Installed = allInstalled
+		info.Current = allInstalled && allCurrent
+		res = append(res, info)
+	}
+	return res
 }

@@ -406,7 +406,7 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("reused login link: %v %v", err, resp.StatusCode)
 		}
 
-		ui := strings.TrimSpace(a.mustCmd("", "web", "ui", "--print"))
+		ui := strings.TrimSpace(a.mustCmd("", "web", "health", "--print"))
 		resp, err = (&http.Client{Jar: jar}).Get(ui)
 		if err != nil {
 			t.Fatal(err)

@@ -1,4 +1,7 @@
-.PHONY: build install test e2e vet check
+.PHONY: build install test e2e vet check web
+
+web:
+	cd web && npm run build
 
 VERSION ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/robertolupi/bottown/internal/cli.Version=$(VERSION)

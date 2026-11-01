@@ -54,11 +54,10 @@ dropped.
 
 ### Designs
 
-Planned, not built yet:
-
 - [Local web UI and supervisor](design/web-ui.md) — `bottown flow` takes an
   issue through implement and cross-family verify; `bottown web ui` is a
-  local view of runs, the inbox and the repository's host state.
+  local view of runs, the inbox and the repository's host state (Phase 3:
+  host UI and health view built).
 
 ### History
 
