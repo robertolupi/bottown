@@ -103,9 +103,14 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	audit, err := server.OpenAudit(e.Data)
+	if err != nil {
+		return err
+	}
 	srv := &server.Server{
 		Instance: e.Instance, Version: Version, ForgejoURL: fu, Owner: e.Owner.Login,
 		Store: store, Rec: rec, Policy: policy.Default(e.Owner.Login), Log: log,
+		Audit:            audit,
 		PublicForgejoURL: e.PublicURL,
 		ForgejoCookie:    config.ForgejoCookie(e.Instance),
 		UICookie:         config.UICookie(e.Instance),

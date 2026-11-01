@@ -143,6 +143,17 @@ export interface LiveRunInfo {
   timeout: string;
   flow?: FlowInfo;
   log_tail: string[];
+  denials: Denial[];
+}
+
+export interface Denial {
+  time: string;
+  run?: string;
+  op: string;
+  method?: string;
+  path?: string;
+  rule?: string;
+  detail?: string;
 }
 
 export interface UsageInfo {
@@ -171,6 +182,7 @@ export interface HistoryRunInfo {
   summary: string;
   usage?: UsageInfo;
   purged: boolean;
+  denials: Denial[];
 }
 
 export interface TimelineEvent {

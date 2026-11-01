@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 
@@ -159,9 +158,6 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 			out.Body = v
 		} else {
 			out.Body = string(raw)
-		}
-		if rec.Code == http.StatusForbidden {
-			s.toolAudit(p, "forge_api", "deny", in.Method+" "+path)
 		}
 		return nil, out, nil
 	})

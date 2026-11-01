@@ -31,6 +31,8 @@ type Server struct {
 	Rec        *provision.Reconciler
 	Policy     policy.Policy
 	Log        *slog.Logger
+	// Audit stores policy decisions (audit.go); nil only logs them.
+	Audit *AuditLog
 
 	// Browser sign-in (web.go). PublicForgejoURL is what the owner's
 	// browser uses; the cookie names are per instance because every
@@ -96,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/runs/{id}", s.authed(http.HandlerFunc(s.getRun)))
 	mux.Handle("DELETE /v1/runs/{id}", s.authed(http.HandlerFunc(s.endRun)))
 	mux.Handle("POST /v1/runs/purge", s.authed(s.ownerOnly(http.HandlerFunc(s.purgeRuns))))
+	mux.Handle("GET /v1/audit", s.authed(s.ownerOnly(http.HandlerFunc(s.listAudit))))
 	s.forgeRoutes(mux)
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
 	mcpH := s.ready(s.specRead(s.mcpHandler()))
@@ -308,22 +311,23 @@ func (s *statusRecorder) Flush() {
 }
 
 func (s *Server) apiProxy(w http.ResponseWriter, r *http.Request) {
-	actor := Actor(r.Context())
+	p := Who(r.Context())
+	actor := p.Actor
 	apiPath, ok := policy.Clean(strings.TrimPrefix(r.URL.Path, "/forgejo/api/v1"))
 	if !ok || r.URL.RawPath != "" {
-		s.audit(actor, r.Method, r.URL.Path, "reject", "unclean-path", http.StatusBadRequest)
+		s.audit(p, "api", r.Method, r.URL.Path, "", "reject", "unclean-path", http.StatusBadRequest)
 		writeError(w, http.StatusBadRequest, "path must be clean and unencoded")
 		return
 	}
 	d := s.Policy.Decide(actor, r.Method, apiPath)
-	if run := Who(r.Context()).Run; d.Allow && run != nil {
+	if run := p.Run; d.Allow && run != nil {
 		d = runScope(run).DecideAPI(r.Method, apiPath)
 	}
-	if p := Who(r.Context()); d.Allow && p.ReadOnly && p.Run == nil && r.Method != "GET" && r.Method != "HEAD" {
+	if d.Allow && p.ReadOnly && p.Run == nil && r.Method != "GET" && r.Method != "HEAD" {
 		d = policy.Decision{Allow: false, Rule: "read-only-key"}
 	}
 	if !d.Allow {
-		s.audit(actor, r.Method, apiPath, "deny", d.Rule, http.StatusForbidden)
+		s.audit(p, "api", r.Method, apiPath, apiRepo(apiPath), "deny", d.Rule, http.StatusForbidden)
 		writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
 		return
 	}
@@ -336,25 +340,27 @@ func (s *Server) apiProxy(w http.ResponseWriter, r *http.Request) {
 	s.proxy("/api/v1"+apiPath, func(out *http.Request) {
 		out.Header.Set("Authorization", "token "+token)
 	}).ServeHTTP(rec, r)
-	s.audit(actor, r.Method, apiPath, "allow", d.Rule, rec.status)
+	s.audit(p, "api", r.Method, apiPath, apiRepo(apiPath), "allow", d.Rule, rec.status)
 }
 
 func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
-	actor := Actor(r.Context())
+	p := Who(r.Context())
+	actor := p.Actor
 	gitPath, ok := policy.Clean(strings.TrimPrefix(r.URL.Path, "/git"))
 	if !ok || r.URL.RawPath != "" {
+		s.audit(p, "git", r.Method, r.URL.Path, "", "reject", "unclean-path", http.StatusBadRequest)
 		writeError(w, http.StatusBadRequest, "path must be clean and unencoded")
 		return
 	}
-	if p := Who(r.Context()); p.ReadOnly && p.Run == nil &&
+	if p.ReadOnly && p.Run == nil &&
 		(r.URL.Query().Get("service") == "git-receive-pack" || strings.HasSuffix(gitPath, "/git-receive-pack")) {
-		s.audit(actor, r.Method, gitPath, "deny", "read-only-key", http.StatusForbidden)
+		s.audit(p, "git", r.Method, gitPath, gitRepo(gitPath), "deny", "read-only-key", http.StatusForbidden)
 		writeError(w, http.StatusForbidden, "read-only outside a run: start one with `bottown run start`")
 		return
 	}
-	if run := Who(r.Context()).Run; run != nil {
+	if run := p.Run; run != nil {
 		if d := runScope(run).DecideGit(gitPath, r.URL.Query().Get("service")); !d.Allow {
-			s.audit(actor, r.Method, gitPath, "deny", d.Rule, http.StatusForbidden)
+			s.audit(p, "git", r.Method, gitPath, gitRepo(gitPath), "deny", d.Rule, http.StatusForbidden)
 			writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
 			return
 		}
@@ -369,7 +375,7 @@ func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
 		out.SetBasicAuth(actor, token)
 	}).ServeHTTP(rec, r)
 	if strings.HasSuffix(gitPath, "/git-receive-pack") {
-		s.audit(actor, r.Method, gitPath, "allow", "git-push", rec.status)
+		s.audit(p, "git", r.Method, gitPath, gitRepo(gitPath), "allow", "git-push", rec.status)
 	}
 }
 
@@ -394,8 +400,15 @@ func runScope(run *secrets.Run) policy.RunScope {
 	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind}
 }
 
-func (s *Server) audit(actor, method, path, decision, rule string, status int) {
-	s.Log.Info("forge", "actor", actor, "method", method, "path", path, "decision", decision, "rule", rule, "status", status)
+// audit logs a proxy decision, and stores it unless it is an allowed read:
+// the audit trail is of writes and refusals, not of every page view.
+func (s *Server) audit(p secrets.Principal, op, method, path, repo, decision, rule string, status int) {
+	if decision == "allow" && (method == http.MethodGet || method == http.MethodHead) {
+		s.Log.Info("forge", "actor", p.Actor, "run", runID(p), "method", method, "path", path, "decision", decision, "rule", rule, "status", status)
+		return
+	}
+	s.record(AuditEntry{Actor: p.Actor, Run: runID(p), Repo: repo, Op: op, Method: method, Path: path,
+		Decision: decision, Rule: rule, Status: status})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
