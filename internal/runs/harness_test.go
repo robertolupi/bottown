@@ -331,6 +331,8 @@ func TestCodexPrepareMCP(t *testing.T) {
 	t.Setenv("CODEX_HOME", home)
 	os.WriteFile(filepath.Join(home, "config.toml"), []byte(`[mcp_servers.botfam]
 url = "https://stale.example"
+[mcp_servers."special.server"]
+url = "https://stale.example"
 [mcp_servers.bottown]
 url = "https://stale.example"
 `), 0o600)
@@ -352,6 +354,7 @@ url = "https://stale.example"
 		`bearer_token_env_var = "BOTTOWN_RUN_KEY"`,
 		`[mcp_servers.botfam]`,
 		`enabled = false`,
+		`[mcp_servers."special.server"]`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config lacks %q:\n%s", want, s)
@@ -371,6 +374,8 @@ func TestCodexCommand(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	os.WriteFile(filepath.Join(home, "config.toml"), []byte(`[mcp_servers.botfam]
+url = "https://stale.example"
+[mcp_servers."special.server"]
 url = "https://stale.example"
 `), 0o600)
 
@@ -395,7 +400,7 @@ url = "https://stale.example"
 	l.Interactive = true
 	c, _ = (codexHarness{}).Command(t.Context(), l)
 	got = strings.Join(c.Args[1:], " ")
-	want = `-s danger-full-access -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" -c mcp_servers.botfam.enabled=false do it`
+	want = `-s danger-full-access -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" -c mcp_servers.botfam.enabled=false -c mcp_servers."special.server".enabled=false do it`
 	if got != want {
 		t.Errorf("interactive args:\n got %s\nwant %s", got, want)
 	}

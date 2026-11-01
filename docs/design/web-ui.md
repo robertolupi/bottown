@@ -431,6 +431,7 @@ log has, at run end, into the digest:
 | claude | the `result` event | tokens (summed over every model the run used), cost, turns and duration from the `result` event |
 | agy | the `result` event | tokens (thinking counted as output), turns and duration from the `result` event; no cost |
 | kimi | the last assistant message without tool calls | none known |
+| codex | the last completed `agent_message` item | input (excluding cached), cached input as cache reads, output and turns, summed over `turn.completed` events; no cost or duration |
 
 The live tail renders the same events, one line per assistant message or
 tool call. Unknown usage stays unknown.

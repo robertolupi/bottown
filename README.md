@@ -18,8 +18,8 @@ instructions for agents working on this repository are in
 - **git**.
 - **An agent harness** for each actor you want to run: today
   [Claude Code](https://claude.com/claude-code) (`claude`), Antigravity
-  (`agy`) and [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`). The
-  `codex` actor has a forge account but no harness binding yet.
+  (`agy`), [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`) and
+  [Codex CLI](https://openaicli.com/docs) (`codex`).
 - macOS is the tested host: the owner's keys live in the Keychain. On other
   systems they go to a `0600` file under the instance's host config.
 
@@ -64,7 +64,8 @@ Install the slash commands the actors use inside their harness:
 bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss
 ```
 
-In kimi they are skills: `/skill:bottown-implement 1` and so on.
+In kimi they are skills: `/skill:bottown-implement 1`; in codex, skills in
+`~/.codex/skills/`: `$bottown-implement 1`.
 
 ### 2a. Start a new project: a README as the first change
 

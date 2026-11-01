@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -596,11 +597,14 @@ func (codexHarness) PrepareMCP(l *Launch, _ string) error {
 		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a codex run", CodexMCPPath)
 	}
 	var b strings.Builder
+	// In batch mode, Command sets the bottown MCP server via -c CLI flags which
+	// take precedence. PrepareMCP writes .codex/config.toml for interactive runs
+	// and sessions started without CLI flags.
 	fmt.Fprintf(&b, "[mcp_servers.bottown]\nurl = %q\nbearer_token_env_var = %q\n", l.MCPURL, "BOTTOWN_RUN_KEY")
 	if userServers, err := codexUserServers(); err == nil {
 		for _, name := range userServers {
 			if name != "bottown" {
-				fmt.Fprintf(&b, "\n[mcp_servers.%s]\nenabled = false\n", name)
+				fmt.Fprintf(&b, "\n[mcp_servers.%s]\nenabled = false\n", tomlKeySegment(name))
 			}
 		}
 	}
@@ -613,6 +617,17 @@ func (codexHarness) PrepareMCP(l *Launch, _ string) error {
 	}
 	l.MCPConfig = path
 	return nil
+}
+
+// tomlKeySegment formats a bare key segment, quoting it if it contains
+// non-bare key characters like dots or spaces.
+func tomlKeySegment(s string) string {
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 // codexUserServers returns the names of the owner's MCP servers (from
@@ -672,7 +687,7 @@ func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 		if userServers, err := codexUserServers(); err == nil {
 			for _, name := range userServers {
 				if name != "bottown" {
-					args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.enabled=false", name))
+					args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.enabled=false", tomlKeySegment(name)))
 				}
 			}
 		}
@@ -683,6 +698,10 @@ func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 		// key. The sandbox is bypassed so implementers and verifiers can run
 		// the bottown CLI (network), git push, make check (build cache), and
 		// make e2e (Docker socket), and discuss runs can post comments.
+		// Note: l.ReadOnly deliberately does not select a restricted sandbox
+		// here because local read-only sandboxes block network access needed
+		// for bottown comment; read-only scope is enforced by the server's
+		// policy on the run key.
 		args = []string{
 			"exec",
 			"--dangerously-bypass-approvals-and-sandbox",
