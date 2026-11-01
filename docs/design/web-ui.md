@@ -317,7 +317,8 @@ forge's `main`. When the checkout is behind (the owner merged in Forgejo
 and has not pulled), the UI says so and offers **Pull**: `git pull
 --ff-only bottown main`. After a pull it shows the steps the repository
 declares for "after pulling" (§4.4); bottown itself would declare only
-`make install` (#56).
+`make install`, which installs the CLI, refreshes the harness commands and
+upgrades prod.
 
 **Health checklist:**
 
