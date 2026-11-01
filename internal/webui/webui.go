@@ -26,12 +26,13 @@ var distFS embed.FS
 
 // Config configures the host-side web UI.
 type Config struct {
-	Instance   config.Instance
-	RepoTop    string
-	FullRepo   string
-	OwnerKey   string
-	Port       int
-	CLIVersion string
+	Instance       config.Instance
+	RepoTop        string
+	FullRepo       string
+	OwnerKey       string
+	Port           int
+	CLIVersion     string
+	HarnessChecker func(home string) []HarnessCommandInfo
 }
 
 // Server is the local HTTP server for the bottown web UI.
@@ -43,9 +44,9 @@ type Server struct {
 	tokenUsed    bool
 	sessionToken string
 	cookieName   string
-	mu           sync.Mutex
+	mu           sync.Mutex // guards auth state (token/cookie)
+	statusMu     sync.Mutex // guards git fetch and status computation
 	httpServer   *http.Server
-	lastStatus   *UIStatusResponse
 	lastFetch    time.Time
 }
 
@@ -255,7 +256,7 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.ComputeStatus(r.Context(), false)
+	st, err := s.ComputeStatus(r.Context(), true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -286,8 +287,16 @@ func (s *Server) handleActionPull(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+type pushRequest struct {
+	Head string `json:"head"`
+}
+
 func (s *Server) handleActionPush(w http.ResponseWriter, r *http.Request) {
-	out, err := s.ExecutePush(r.Context())
+	var req pushRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	out, err := s.ExecutePush(r.Context(), req.Head)
 	res := ActionResult{
 		Success: err == nil,
 		Output:  out,

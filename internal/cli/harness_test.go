@@ -214,3 +214,72 @@ func TestDiscussHandover(t *testing.T) {
 		t.Errorf("handover without a question:\n%s", got)
 	}
 }
+
+func TestCheckHarnessCurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", "")
+
+	// 1. Initially nothing is installed
+	statuses := checkHarnessCurrent(home)
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 harnesses, got %d", len(statuses))
+	}
+	for _, s := range statuses {
+		if s.Installed || s.Current {
+			t.Errorf("harness %s should not be installed in empty home: %+v", s.Harness, s)
+		}
+	}
+
+	// 2. Install all three harnesses
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	for _, h := range []string{"claude", "agy", "kimi"} {
+		if err := installCommands(cmd, home, h, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	statuses = checkHarnessCurrent(home)
+	for _, s := range statuses {
+		if !s.Installed || !s.Current {
+			t.Errorf("harness %s should be installed and current: %+v", s.Harness, s)
+		}
+	}
+
+	// 3. Stale file (claude command modified/stale)
+	stalePath := filepath.Join(home, ".claude", "commands", "bottown-verify.md")
+	if err := os.WriteFile(stalePath, []byte("stale content with marker "+harnessMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	statuses = checkHarnessCurrent(home)
+	for _, s := range statuses {
+		if s.Harness == "claude" {
+			if !s.Installed {
+				t.Errorf("claude should be installed")
+			}
+			if s.Current {
+				t.Errorf("claude should be marked stale/not current when template differs")
+			}
+		} else {
+			if !s.Current {
+				t.Errorf("harness %s should still be current: %+v", s.Harness, s)
+			}
+		}
+	}
+
+	// 4. Missing one command file (agy missing discuss)
+	missingPath := filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-discuss.md")
+	if err := os.Remove(missingPath); err != nil {
+		t.Fatal(err)
+	}
+
+	statuses = checkHarnessCurrent(home)
+	for _, s := range statuses {
+		if s.Harness == "agy" {
+			if s.Installed || s.Current {
+				t.Errorf("agy should not be installed/current when a command is missing: %+v", s)
+			}
+		}
+	}
+}

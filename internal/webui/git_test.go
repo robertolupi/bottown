@@ -65,8 +65,9 @@ func setupThrowawayRepos(t *testing.T) (mainCheckout, originDir, forgeDir string
 }
 
 func TestGitState_UpstreamAndActions(t *testing.T) {
-	mainCheckout, _, forgeDir := setupThrowawayRepos(t)
+	mainCheckout, originDir, forgeDir := setupThrowawayRepos(t)
 
+	mockHarnessCalled := false
 	cfg := Config{
 		Instance: config.Instance{
 			Name: "prod",
@@ -75,6 +76,12 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		FullRepo:   "bottown/bottown",
 		OwnerKey:   "",
 		CLIVersion: "dev",
+		HarnessChecker: func(home string) []HarnessCommandInfo {
+			mockHarnessCalled = true
+			return []HarnessCommandInfo{
+				{Harness: "claude", Installed: true, Current: true},
+			}
+		},
 	}
 
 	srv, err := NewServer(cfg)
@@ -102,6 +109,9 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 	if !st.Health.AgentInstructions.Found || st.Health.AgentInstructions.Filename != "AGENTS.md" {
 		t.Errorf("expected AGENTS.md to be found, got %+v", st.Health.AgentInstructions)
 	}
+	if !mockHarnessCalled || len(st.Health.HarnessCommands) != 1 || !st.Health.HarnessCommands[0].Current {
+		t.Errorf("expected HarnessChecker to be called and return current harness: %+v", st.Health.HarnessCommands)
+	}
 
 	// 2. Add an unpushed commit to main with PR reference
 	if err := os.WriteFile(filepath.Join(mainCheckout, "feature.txt"), []byte("new feature"), 0o644); err != nil {
@@ -110,7 +120,7 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 	runGit(t, mainCheckout, "add", "feature.txt")
 	runGit(t, mainCheckout, "commit", "-m", "Merge pull request 'add feature' (!42) from issue/40 into main")
 
-	st, err = srv.ComputeStatus(ctx, false)
+	st, err = srv.ComputeStatus(ctx, true)
 	if err != nil {
 		t.Fatalf("ComputeStatus after commit: %v", err)
 	}
@@ -128,8 +138,14 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		t.Errorf("expected subject to contain 'add feature', got %q", uc.Subject)
 	}
 
-	// 3. Test ExecutePush: push main to origin
-	pushOut, err := srv.ExecutePush(ctx)
+	// Test head mismatch protection: trying to push with a stale head SHA is refused
+	staleHead := "1111222233334444555566667777888899990000"
+	if _, err := srv.ExecutePush(ctx, staleHead); err == nil || !strings.Contains(err.Error(), "moved to") {
+		t.Fatalf("expected ExecutePush with stale head to be refused, got error: %v", err)
+	}
+
+	// 3. Test ExecutePush with matching head SHA: push main to origin
+	pushOut, err := srv.ExecutePush(ctx, st.Upstream.HeadSHA)
 	if err != nil {
 		t.Fatalf("ExecutePush: %v, out: %s", err, pushOut)
 	}
@@ -142,6 +158,27 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 	}
 	if st.Upstream.AheadCount != 0 {
 		t.Errorf("expected AheadCount=0 after push, got %d", st.Upstream.AheadCount)
+	}
+
+	// Test that forced fetch sees new commits pushed to bare origin (Issue 1)
+	originClone := filepath.Join(t.TempDir(), "origin-clone")
+	runGit(t, t.TempDir(), "clone", originDir, originClone)
+	runGit(t, originClone, "config", "user.name", "Upstreamer")
+	runGit(t, originClone, "config", "user.email", "up@example.com")
+	if err := os.WriteFile(filepath.Join(originClone, "upstream.txt"), []byte("from upstream"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, originClone, "add", "upstream.txt")
+	runGit(t, originClone, "commit", "-m", "upstream commit")
+	runGit(t, originClone, "push", "origin", "main")
+
+	// Forced status fetch must see the new commit on origin
+	st, err = srv.ComputeStatus(ctx, true)
+	if err != nil {
+		t.Fatalf("ComputeStatus after upstream push: %v", err)
+	}
+	if st.Upstream.BehindCount != 1 {
+		t.Fatalf("expected Upstream.BehindCount=1 after forced fetch, got %d", st.Upstream.BehindCount)
 	}
 
 	// 4. Test Behind Forge & ExecutePull

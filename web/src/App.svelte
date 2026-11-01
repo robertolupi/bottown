@@ -57,7 +57,11 @@
     actionMessage = null;
 
     try {
-      const res = await fetch('/api/actions/push', { method: 'POST' });
+      const res = await fetch('/api/actions/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ head: status?.upstream?.head_sha }),
+      });
       const data: ActionResult = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || data.output || 'Push failed');

@@ -77,12 +77,13 @@ func newWeb(g *globals) *cobra.Command {
 				return err
 			}
 			srv, err := webui.NewServer(webui.Config{
-				Instance:   inst,
-				RepoTop:    top,
-				FullRepo:   repo,
-				OwnerKey:   key,
-				Port:       port,
-				CLIVersion: Version,
+				Instance:       inst,
+				RepoTop:        top,
+				FullRepo:       repo,
+				OwnerKey:       key,
+				Port:           port,
+				CLIVersion:     Version,
+				HarnessChecker: checkHarnessCurrent,
 			})
 			if err != nil {
 				return err

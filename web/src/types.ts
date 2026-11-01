@@ -11,6 +11,7 @@ export interface UpstreamStatus {
   has_upstream: boolean;
   origin_url?: string;
   fetched_at?: string;
+  head_sha?: string;
   ahead_count: number;
   behind_count: number;
   unpushed_commits: UnpushedCommit[];

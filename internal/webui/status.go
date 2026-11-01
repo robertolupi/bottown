@@ -33,6 +33,7 @@ type UpstreamStatus struct {
 	HasUpstream     bool             `json:"has_upstream"`
 	OriginURL       string           `json:"origin_url,omitempty"`
 	FetchedAt       *time.Time       `json:"fetched_at,omitempty"`
+	HeadSHA         string           `json:"head_sha,omitempty"`
 	AheadCount      int              `json:"ahead_count"`
 	BehindCount     int              `json:"behind_count"`
 	UnpushedCommits []UnpushedCommit `json:"unpushed_commits"`
@@ -132,8 +133,8 @@ func git(dir string, args ...string) (string, error) {
 
 // ComputeStatus calculates the Upstream and Health view data.
 func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
 
 	res := &UIStatusResponse{
 		Instance: s.cfg.Instance.Name,
@@ -175,7 +176,12 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		}
 	}
 
-	// 2. Upstream Status
+	// 2. Upstream Status (evaluated against refs/heads/<base>, not HEAD)
+	localRef := "refs/heads/" + base
+	if headSHA, err := s.git("rev-parse", localRef); err == nil {
+		res.Upstream.HeadSHA = headSHA
+	}
+
 	originURL, err := s.git("remote", "get-url", "origin")
 	if err == nil && originURL != "" {
 		res.Upstream.HasUpstream = true
@@ -195,16 +201,16 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		}
 
 		originRef := "refs/remotes/origin/" + base
-		if _, err := s.git("rev-parse", "--verify", originRef); err == nil {
-			if out, err := s.git("rev-list", "--count", originRef+"..HEAD"); err == nil {
+		if _, err := s.git("rev-parse", "--verify", originRef); err == nil && res.Upstream.HeadSHA != "" {
+			if out, err := s.git("rev-list", "--count", originRef+".."+localRef); err == nil {
 				res.Upstream.AheadCount, _ = strconv.Atoi(out)
 			}
-			if out, err := s.git("rev-list", "--count", "HEAD.."+originRef); err == nil {
+			if out, err := s.git("rev-list", "--count", localRef+".."+originRef); err == nil {
 				res.Upstream.BehindCount, _ = strconv.Atoi(out)
 			}
 
 			if res.Upstream.AheadCount > 0 {
-				logOut, err := s.git("log", "--format=%H%x1f%s%x1f%an%x1f%ad", "--date=short", originRef+"..HEAD")
+				logOut, err := s.git("log", "--format=%H%x1f%s%x1f%an%x1f%ad", "--date=short", originRef+".."+localRef)
 				if err == nil && logOut != "" {
 					lines := strings.Split(logOut, "\n")
 					for _, line := range lines {
@@ -278,7 +284,11 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 
 	// 3d. Harness slash commands
 	home, _ := os.UserHomeDir()
-	res.Health.HarnessCommands = checkHarnessCommands(home)
+	if s.cfg.HarnessChecker != nil {
+		res.Health.HarnessCommands = s.cfg.HarnessChecker(home)
+	} else {
+		res.Health.HarnessCommands = checkHarnessCommands(home)
+	}
 
 	// 3e. Versions
 	res.Health.Version.CLIVersion = s.cfg.CLIVersion
@@ -293,7 +303,6 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		res.Health.Version.Matches = false
 	}
 
-	s.lastStatus = res
 	return res, nil
 }
 
@@ -303,14 +312,15 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		return nil
 	}
 
-	// Get active runs from server
+	// Get active runs for this repository from server
 	activeRuns := map[string]string{} // actor -> run ID
 	var runsList []struct {
 		ID     string `json:"id"`
 		Actor  string `json:"actor"`
 		Status string `json:"status"`
 	}
-	if err := s.callServer(ctx, http.MethodGet, "/v1/runs", nil, &runsList); err == nil {
+	runsPath := "/v1/runs?state=live&repo=" + s.cfg.FullRepo
+	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &runsList); err == nil {
 		for _, r := range runsList {
 			if r.Status == "live" || r.Status == "" {
 				activeRuns[r.Actor] = r.ID
@@ -378,19 +388,31 @@ func (s *Server) ExecutePull(ctx context.Context) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// ExecutePush runs `git push origin <base>` from the main checkout.
-func (s *Server) ExecutePush(ctx context.Context) (string, error) {
+// ExecutePush runs `git push origin <head>:refs/heads/<base>` from the main checkout,
+// verifying that refs/heads/<base> has not moved if expectedHead is specified.
+func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, error) {
 	remote := s.cfg.Instance.Remote()
 	base := "main"
 	if b, err := remoteDefaultBranch(s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "-C", s.cfg.RepoTop, "push", "origin", base)
+	localRef := "refs/heads/" + base
+	currentHead, err := s.git("rev-parse", localRef)
+	if err != nil {
+		return "", fmt.Errorf("rev-parse %s: %w", localRef, err)
+	}
+
+	if expectedHead != "" && currentHead != expectedHead {
+		return "", fmt.Errorf("branch %s moved to %s (was %s); refresh and review commits before pushing", base, currentHead, expectedHead)
+	}
+
+	refspec := fmt.Sprintf("%s:refs/heads/%s", currentHead, base)
+	cmd := exec.CommandContext(ctx, "git", "-C", s.cfg.RepoTop, "push", "origin", refspec)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git push origin %s: %w: %s", base, err, strings.TrimSpace(out.String()))
+		return "", fmt.Errorf("git push origin %s: %w: %s", refspec, err, strings.TrimSpace(out.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
