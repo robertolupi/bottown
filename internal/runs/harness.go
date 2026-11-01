@@ -6,6 +6,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -85,8 +86,10 @@ func LookupHarness(name string) (Harness, error) {
 		return claudeHarness{}, nil
 	case "antigravity":
 		return agyHarness{}, nil
+	case "kimi":
+		return kimiHarness{}, nil
 	}
-	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity)", name)
+	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi)", name)
 }
 
 // RunEnv is the environment of a harness process: the user's, minus forge
@@ -279,6 +282,182 @@ func (agyHarness) Summary(log []byte) string {
 		}
 	}
 	return ""
+}
+
+// kimiHarness runs Kimi Code CLI. Like agy it has no per-run MCP flag, so
+// the launcher writes the workspace file <worktree>/.kimi-code/mcp.json
+// (excluded from git like agy's). That file names the variable holding the
+// run key instead of the key, and disables the owner's own servers by name:
+// kimi lets a project entry override a same-named user one.
+type kimiHarness struct{}
+
+// KimiMCPPath is the workspace MCP config path inside a worktree.
+const KimiMCPPath = ".kimi-code/mcp.json"
+
+func (kimiHarness) PrepareMCP(l *Launch, _ string) error {
+	if out, err := Git(l.Dir, nil, "ls-files", "--", KimiMCPPath); err == nil && out != "" {
+		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a kimi run", KimiMCPPath)
+	}
+	servers, err := kimiUserServers()
+	if err != nil {
+		return err
+	}
+	servers["bottown"] = map[string]any{"url": l.MCPURL, "bearerTokenEnvVar": "BOTTOWN_RUN_KEY"}
+	b, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(l.Dir, KimiMCPPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	l.MCPConfig = path
+	if l.ReadOnly {
+		return os.WriteFile(kimiAgentFile(*l), []byte(kimiReadOnlyAgent), 0o600)
+	}
+	return nil
+}
+
+// kimiUserServers returns the owner's MCP servers (from
+// $KIMI_CODE_HOME/mcp.json, default ~/.kimi-code/mcp.json), each reduced to
+// what identifies it plus "enabled": false. Their env, headers and args stay
+// out of the worktree. Servers declared by kimi plugins are not in that file
+// and stay enabled.
+func kimiUserServers() (map[string]any, error) {
+	home := os.Getenv("KIMI_CODE_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		home = filepath.Join(h, ".kimi-code")
+	}
+	out := map[string]any{}
+	b, err := os.ReadFile(filepath.Join(home, "mcp.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("kimi user MCP config: %w", err)
+	}
+	for name, s := range cfg.MCPServers {
+		off := map[string]any{"enabled": false}
+		for _, k := range []string{"command", "url", "transport"} {
+			if v, ok := s[k]; ok {
+				off[k] = v
+			}
+		}
+		out[name] = off
+	}
+	return out, nil
+}
+
+// kimiReadOnlyAgent is the main agent of read-only (discuss) runs: kimi's
+// default prompt, without the file-editing tools. kimi -p approves every
+// other tool, so this is the only tier there is.
+const kimiReadOnlyAgent = `---
+name: bottown-read-only
+description: A bottown run that must not change the worktree
+disallowedTools:
+  - Write
+  - Edit
+---
+${base_prompt}
+`
+
+func kimiAgentFile(l Launch) string {
+	return strings.TrimSuffix(l.RecordFile, ".json") + ".kimi-agent.md"
+}
+
+// kimiBinary is kimi on PATH, else where its installer puts it.
+func kimiBinary() string {
+	if _, err := exec.LookPath("kimi"); err == nil {
+		return "kimi"
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(h, ".kimi-code", "bin", "kimi"); fileExists(p) {
+			return p
+		}
+	}
+	return "kimi"
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func (kimiHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
+	if l.Interactive {
+		return nil, errors.New("kimi cannot start its TUI with a prompt: start kimi in the actor worktree and type /skill:bottown-<kind> N (bottown harness setup kimi installs them)")
+	}
+	// kimi -p never asks: it approves tool calls itself, and no allowlist
+	// flag exists. Forge access is still bounded by the run key.
+	args := []string{"--output-format", "stream-json"}
+	if l.ReadOnly {
+		args = append(args, "--agent-file", kimiAgentFile(l))
+	}
+	args = append(args, "-p", l.Prompt) // -p takes the next argument: keep it last
+	cmd := exec.CommandContext(ctx, kimiBinary(), args...)
+	cmd.Dir = l.Dir
+	cmd.Env = append(RunEnv(l),
+		"KIMI_CODE_TRUST_WORKSPACE=1", // else -p ignores the workspace MCP config
+		"KIMI_CODE_NO_AUTO_UPDATE=1",
+		// Wait for background tasks (a backgrounded make e2e) before exiting.
+		"KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE=drain",
+	)
+	return cmd, nil
+}
+
+// Summary is the content of the last assistant message that calls no tools.
+// kimi's stream-json lines are chat messages ({"role":"assistant",
+// "content":...}); "meta" lines, such as the closing resume hint, also carry
+// a content field and are skipped.
+func (kimiHarness) Summary(log []byte) string {
+	var last string
+	sc := bufio.NewScanner(bytes.NewReader(log))
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		var m struct {
+			Role      string            `json:"role"`
+			Content   json.RawMessage   `json:"content"`
+			ToolCalls []json.RawMessage `json:"tool_calls"`
+		}
+		if json.Unmarshal(sc.Bytes(), &m) != nil || m.Role != "assistant" || len(m.ToolCalls) > 0 {
+			continue
+		}
+		if s := kimiText(m.Content); s != "" {
+			last = s
+		}
+	}
+	return last
+}
+
+// kimiText reads message content: a string, or a list of text parts.
+func kimiText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var parts []struct{ Type, Text string }
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == "text" {
+			b.WriteString(p.Text)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 type scriptHarness struct{ cmd string }

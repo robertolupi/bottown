@@ -161,3 +161,105 @@ func TestDiscussPromptQuestion(t *testing.T) {
 		t.Errorf("prompt without a question:\n%s", without)
 	}
 }
+
+func TestKimiPrepareMCP(t *testing.T) {
+	dir, runsDir, home := t.TempDir(), t.TempDir(), t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	t.Setenv("KIMI_CODE_HOME", home)
+	os.WriteFile(filepath.Join(home, "mcp.json"), []byte(`{"mcpServers": {
+		"local": {"command": "/bin/srv", "args": ["--token", "s3cret"], "env": {"K": "s3cret"}},
+		"remote": {"url": "https://mcp.example", "headers": {"Authorization": "s3cret"}},
+		"bottown": {"url": "https://stale.example"}}}`), 0o600)
+	l := Launch{Dir: dir, MCPURL: "http://127.0.0.1:3041/mcp", Key: "btk_x", RunID: "r-1", RecordFile: filepath.Join(runsDir, "r-1.json")}
+	if err := (kimiHarness{}).PrepareMCP(&l, runsDir); err != nil {
+		t.Fatal(err)
+	}
+	if l.MCPConfig != filepath.Join(dir, KimiMCPPath) {
+		t.Fatalf("config path %s", l.MCPConfig)
+	}
+	b, _ := os.ReadFile(l.MCPConfig)
+	if strings.Contains(string(b), "btk_x") || strings.Contains(string(b), "s3cret") {
+		t.Errorf("config holds a secret:\n%s", b)
+	}
+	var cfg struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	bt := cfg.MCPServers["bottown"]
+	if bt["url"] != l.MCPURL || bt["bearerTokenEnvVar"] != "BOTTOWN_RUN_KEY" || bt["enabled"] != nil {
+		t.Errorf("bottown entry %v", bt)
+	}
+	if s := cfg.MCPServers["local"]; s["enabled"] != false || s["command"] != "/bin/srv" {
+		t.Errorf("local entry %v", s)
+	}
+	if s := cfg.MCPServers["remote"]; s["enabled"] != false || s["url"] != "https://mcp.example" {
+		t.Errorf("remote entry %v", s)
+	}
+	if fi, _ := os.Stat(l.MCPConfig); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	if fileExists(kimiAgentFile(l)) {
+		t.Error("a writing run got the read-only agent file")
+	}
+
+	l.ReadOnly = true
+	if err := (kimiHarness{}).PrepareMCP(&l, runsDir); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := os.ReadFile(kimiAgentFile(l)); !strings.Contains(string(a), "  - Write\n  - Edit\n") || !strings.Contains(string(a), "${base_prompt}") {
+		t.Errorf("read-only agent file:\n%s", a)
+	}
+
+	exec.Command("git", "-C", dir, "add", KimiMCPPath).Run()
+	if err := (kimiHarness{}).PrepareMCP(&l, runsDir); err == nil || !strings.Contains(err.Error(), "tracks") {
+		t.Fatalf("tracked config: %v", err)
+	}
+}
+
+func TestKimiCommand(t *testing.T) {
+	l := Launch{Dir: t.TempDir(), Prompt: "do it", RecordFile: "/x/r-1.json", Key: "k"}
+	c, err := (kimiHarness{}).Command(t.Context(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.Args[1:], " "); got != "--output-format stream-json -p do it" {
+		t.Errorf("args %q", got)
+	}
+	env := strings.Join(c.Env, "\n")
+	for _, want := range []string{"KIMI_CODE_TRUST_WORKSPACE=1", "BOTTOWN_RUN_KEY=k", "KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE=drain"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %s", want)
+		}
+	}
+	l.ReadOnly = true
+	c, _ = (kimiHarness{}).Command(t.Context(), l)
+	if got := strings.Join(c.Args[1:], " "); got != "--output-format stream-json --agent-file /x/r-1.kimi-agent.md -p do it" {
+		t.Errorf("read-only args %q", got)
+	}
+	l.Interactive = true
+	if _, err := (kimiHarness{}).Command(t.Context(), l); err == nil || !strings.Contains(err.Error(), "/skill:bottown-") {
+		t.Errorf("interactive: %v", err)
+	}
+}
+
+// The log of a real kimi 2.3.0 run (stream-json on stdout).
+func TestKimiSummary(t *testing.T) {
+	log := `{"role":"meta","type":"system.version","version":"2.3.0"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"tool_1","function":{"name":"Bash","arguments":"{\"command\":\"echo hi\"}"}}]}
+{"role":"tool","tool_call_id":"tool_1","content":"hi\n"}
+• thinking goes to stderr, which shares the log
+{"role":"assistant","content":"DONE"}
+{"role":"meta","type":"session.resume_hint","session_id":"session_1","command":"kimi -r session_1","content":"To resume this session: kimi -r session_1"}
+`
+	if got := (kimiHarness{}).Summary([]byte(log)); got != "DONE" {
+		t.Fatalf("summary = %q", got)
+	}
+	parts := `{"role":"assistant","content":[{"type":"text","text":"Opened "},{"type":"text","text":"PR !4."}]}`
+	if got := (kimiHarness{}).Summary([]byte(parts)); got != "Opened PR !4." {
+		t.Fatalf("parts summary = %q", got)
+	}
+}
