@@ -9,7 +9,8 @@ owner_token_scopes = ["all"]
 
 # Actors are the forge identities of coding agents. They are defined by the
 # [[actors]] tables below (family = model vendor, for the cross-family review
-# rule; harness = which CLI runs it).
+# rule; harness = which CLI runs it). max_batch_runs limits an actor's live
+# batch runs (default 1; 0 means no limit). Interactive runs do not count.
 actor_team = "actors"
 # Forgejo gates PR reviews on write:repository, so every actor needs it.
 actor_token_scopes = ["write:repository", "write:issue", "read:user", "read:organization", "read:notification"]

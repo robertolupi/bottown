@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -179,8 +180,21 @@ func (s *Store) NewAPIKey(actor, label, scope string) (string, error) {
 	return key, nil
 }
 
-// NewRun stores run and mints its key in one update.
-func (s *Store) NewRun(run Run) (string, error) {
+// RunLimitError reports that an actor is at its limit on live batch runs.
+type RunLimitError struct {
+	Actor string
+	Limit int
+	Runs  []string
+}
+
+func (e *RunLimitError) Error() string {
+	return fmt.Sprintf("actor %s is at its limit of %d live batch runs: %s", e.Actor, e.Limit, strings.Join(e.Runs, ", "))
+}
+
+// NewRun stores run and mints its key in one update. The batch run limit is
+// checked in the same update; zero means no limit, and interactive runs are
+// neither limited nor counted.
+func (s *Store) NewRun(run Run, batchRunLimit int) (string, error) {
 	key := KeyPrefix + RandomString(32)
 	err := s.Update(func(st *State) error {
 		if st.Keys == nil {
@@ -191,6 +205,19 @@ func (s *Store) NewRun(run Run) (string, error) {
 		}
 		if _, dup := st.Runs[run.ID]; dup || st.History[run.ID].ID != "" {
 			return fmt.Errorf("run %s exists", run.ID)
+		}
+		if !run.Interactive && batchRunLimit > 0 {
+			now := time.Now().UTC()
+			var live []string
+			for _, existing := range st.Runs {
+				if existing.Actor == run.Actor && !existing.Interactive && existing.Active(now) {
+					live = append(live, existing.ID)
+				}
+			}
+			if len(live) >= batchRunLimit {
+				slices.Sort(live)
+				return &RunLimitError{Actor: run.Actor, Limit: batchRunLimit, Runs: live}
+			}
 		}
 		st.Runs[run.ID] = run
 		st.Keys[HashKey(key)] = APIKey{Actor: run.Actor, Label: "run " + run.ID, RunID: run.ID, Created: run.Created}
