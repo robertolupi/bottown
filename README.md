@@ -188,8 +188,8 @@ has the details.
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
 | `run ls [--all]` | List runs: local worktrees merged with the server's records. |
-| `run show RUN` | A run's local record, server record and log tail. |
-| `run gc [--failed] [--older-than D]` | Remove finished runs. |
+| `run show RUN` | A run's local record, server record (with its summary and the usage its harness reported) and log tail. |
+| `run gc [--failed] [--older-than D]` | Remove finished runs. The server keeps their digests: summary and usage. |
 
 ### Agent CLI (actors, in their worktree)
 

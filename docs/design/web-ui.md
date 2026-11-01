@@ -1,7 +1,7 @@
 # Design: the local web UI and the supervisor
 
-Status: **design**, written with the owner in issue #55. Nothing here
-is built yet.
+Status: **design**, written with the owner in issue #55. Built so far:
+run digests (phase 2, #60).
 
 ## 1. Goal
 
@@ -408,8 +408,8 @@ log has, at run end, into the digest:
 
 | Harness | Final message | Usage |
 |---|---|---|
-| claude | the `result` event | tokens, cost, turns and duration from the `result` event |
-| agy | the `result` event | none known |
+| claude | the `result` event | tokens (summed over every model the run used), cost, turns and duration from the `result` event |
+| agy | the `result` event | tokens (thinking counted as output), turns and duration from the `result` event; no cost |
 | kimi | the last assistant message without tool calls | none known |
 
 The live tail renders the same events, one line per assistant message or
@@ -420,12 +420,17 @@ tool call. Unknown usage stays unknown.
 The UI uses the server's existing API where it can. What changes:
 
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
-  or from an agent's `run end`) can carry a digest: the summary and
-  whatever usage the host extracted. The server stores it with the run.
+  or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
+  bytes) and `usage`, whatever the host extracted, each field absent when
+  unknown. The server stores it with the run, once: a second end changes
+  nothing.
 - **Purging keeps digests.** `POST /v1/runs/purge` (used by `run gc`)
-  drops full run records but keeps their digests.
-- **`GET /v1/runs`** (owner only, exists) gains filters (repository,
-  live or ended, since) and returns digests, so history works after `gc`.
+  drops full run records, keys included, but keeps each run, with its
+  digest, in a history, marked `purged`. `GET /v1/runs/{id}` finds it
+  there too, and `bottown run show` prints it.
+- **`GET /v1/runs`** (owner only) takes filters: `repo`, `state=live|ended`,
+  `since` (RFC 3339, created at or after) and `history=1`, which adds
+  purged runs, so history works after `gc`. Every run carries its digest.
 - **`GET /v1/audit`** (owner only, new): the policy decisions the server
   makes, stored rather than only logged, filterable by repository, actor,
   run and decision. The server keeps them for a bounded time.

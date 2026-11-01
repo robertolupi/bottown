@@ -188,10 +188,12 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	run := created.Run
 	// From here on, always end the run on the server, whatever happens.
 	status := runs.StatusFailed
+	var digest secrets.Digest
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, map[string]string{"status": status}, nil); e != nil && err == nil {
+		end := server.EndRunRequest{Status: status, Digest: digest}
+		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil); e != nil && err == nil {
 			err = fmt.Errorf("end run %s: %w", run.ID, e)
 		}
 	}()
@@ -283,7 +285,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 
 	logBytes, _ := os.ReadFile(rc.ws.Path(run.ID, ".log"))
-	if err := handover(ctx, rc, run, rec, created.Key, status, code, h.Summary(logBytes)); err != nil {
+	summary := h.Summary(logBytes)
+	digest = secrets.Digest{Summary: cleanSummary(rec, summary), Usage: h.Usage(logBytes)}
+	if err := handover(ctx, rc, run, rec, created.Key, status, code, summary); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 	}
 
@@ -373,6 +377,15 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": handoverText(rec, status, code, summary)}, nil)
 }
 
+// cleanSummary is an agent's summary as the forge and the digest show it.
+// Agents link files by absolute local path; on the forge, repo-relative
+// paths are what make sense.
+func cleanSummary(rec runs.Record, summary string) string {
+	summary = strings.ReplaceAll(summary, "file://"+rec.Worktree+"/", "")
+	summary = strings.ReplaceAll(summary, rec.Worktree+"/", "")
+	return strings.TrimSpace(summary)
+}
+
 // handoverText is the handover comment for a finished run.
 func handoverText(rec runs.Record, status string, code int, summary string) string {
 	var b strings.Builder
@@ -397,11 +410,7 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 	if rec.Interactive {
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")
 	}
-	// Agents link files by absolute local path; on the forge, repo-relative
-	// paths are what make sense.
-	summary = strings.ReplaceAll(summary, "file://"+rec.Worktree+"/", "")
-	summary = strings.ReplaceAll(summary, rec.Worktree+"/", "")
-	if s := strings.TrimSpace(summary); s != "" {
+	if s := cleanSummary(rec, summary); s != "" {
 		const max = 4000
 		if len(s) > max {
 			s = s[:max] + "…"
@@ -702,7 +711,17 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 		if sr.AllowSameFamily {
 			fmt.Fprint(out, ", same-family override")
 		}
+		if sr.Purged {
+			fmt.Fprint(out, ", purged (digest kept)")
+		}
 		fmt.Fprintln(out)
+		if sr.Usage != nil {
+			fmt.Fprintf(out, "        usage %s\n", formatUsage(*sr.Usage))
+		}
+		if sr.Summary != "" {
+			first, _, _ := strings.Cut(sr.Summary, "\n")
+			fmt.Fprintf(out, "        summary %s\n", truncate(first, 200))
+		}
 	} else if srErr != nil {
 		fmt.Fprintf(out, "%s %v\n", st.Bold.Render("server:"), srErr)
 	}
@@ -717,6 +736,38 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 			fmt.Fprintf(out, "  %s\n", truncate(l, 200))
 		}
 	}
+}
+
+// formatUsage renders what a harness reported, leaving out what it did not:
+// "1174 in, 20 out, 11383 cache read, 5834 cache write tokens · $0.0492 ·
+// 1 turns · 2.752s".
+func formatUsage(u secrets.Usage) string {
+	var tok []string
+	for _, f := range []struct {
+		n    *int64
+		name string
+	}{{u.InputTokens, "in"}, {u.OutputTokens, "out"}, {u.CacheReadTokens, "cache read"}, {u.CacheWriteTokens, "cache write"}} {
+		if f.n != nil {
+			tok = append(tok, fmt.Sprintf("%d %s", *f.n, f.name))
+		}
+	}
+	var parts []string
+	if len(tok) > 0 {
+		parts = append(parts, strings.Join(tok, ", ")+" tokens")
+	}
+	if u.CostUSD != nil {
+		parts = append(parts, fmt.Sprintf("$%.4f", *u.CostUSD))
+	}
+	if u.Turns != nil {
+		parts = append(parts, fmt.Sprintf("%d turns", *u.Turns))
+	}
+	if u.DurationMS != nil {
+		parts = append(parts, (time.Duration(*u.DurationMS) * time.Millisecond).String())
+	}
+	if len(parts) == 0 {
+		return "none reported"
+	}
+	return strings.Join(parts, " · ")
 }
 
 // quoteLines renders s as a Markdown blockquote, starting on its own line.

@@ -20,6 +20,7 @@ import (
 	"slices"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // KeyPrefix marks bottown API keys so they are recognisable in logs and greps.
@@ -45,9 +46,10 @@ type APIKey struct {
 	Created time.Time `json:"created"`
 }
 
-// Run is the server's record of one agent run: who, in which role, on what.
-// It is operational state, not tracker state: losing it only invalidates
-// in-flight run keys.
+// Run is the server's record of one agent run: who, in which role, on what,
+// and once it ends, its digest. It is operational state, not tracker state:
+// losing it invalidates in-flight run keys and loses run history, nothing
+// the forge holds.
 type Run struct {
 	ID              string `json:"id"`
 	Kind            string `json:"kind"` // implement | verify | discuss
@@ -71,6 +73,33 @@ type Run struct {
 	Expires   time.Time  `json:"expires"`
 	Ended     *time.Time `json:"ended,omitempty"`
 	Status    string     `json:"status,omitempty"` // set when ended: succeeded | failed | revoked
+	// Digest is what the run's ender reported: set once, when it ends.
+	Digest
+	// Purged runs were dropped by PurgeRuns: only their digest is kept.
+	Purged bool `json:"purged,omitempty"`
+}
+
+// Digest is what is known of a run's outcome once it ends: the agent's
+// final message or handover summary, and the usage its harness reported.
+type Digest struct {
+	Summary string `json:"summary,omitempty"`
+	Usage   *Usage `json:"usage,omitempty"`
+}
+
+// MaxSummary bounds a stored digest summary, in bytes.
+const MaxSummary = 4000
+
+// Usage is what a harness reported a run used. A field is nil when the
+// harness does not report it: unknown stays unknown, never estimated.
+type Usage struct {
+	InputTokens      *int64 `json:"input_tokens,omitempty"`
+	OutputTokens     *int64 `json:"output_tokens,omitempty"` // thinking included
+	CacheReadTokens  *int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	// CostUSD is the harness's own figure, at list price.
+	CostUSD    *float64 `json:"cost_usd,omitempty"`
+	Turns      *int64   `json:"turns,omitempty"`
+	DurationMS *int64   `json:"duration_ms,omitempty"` // as the harness measured it
 }
 
 // Active reports whether the run's key is usable at t.
@@ -83,6 +112,8 @@ type State struct {
 	OwnerPassword string                `json:"owner_password,omitempty"`
 	Keys          map[string]APIKey     `json:"keys,omitempty"` // sha256(key) hex -> key
 	Runs          map[string]Run        `json:"runs,omitempty"` // run id -> run
+	// History holds the digests of purged runs, by id.
+	History map[string]Run `json:"history,omitempty"`
 }
 
 // Store is a lock-protected JSON file of State.
@@ -158,7 +189,7 @@ func (s *Store) NewRun(run Run) (string, error) {
 		if st.Runs == nil {
 			st.Runs = map[string]Run{}
 		}
-		if _, dup := st.Runs[run.ID]; dup {
+		if _, dup := st.Runs[run.ID]; dup || st.History[run.ID].ID != "" {
 			return fmt.Errorf("run %s exists", run.ID)
 		}
 		st.Runs[run.ID] = run
@@ -171,9 +202,10 @@ func (s *Store) NewRun(run Run) (string, error) {
 	return key, nil
 }
 
-// EndRun marks a run ended with status and deletes its key. It reports
-// false if the run does not exist.
-func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
+// EndRun marks a run ended with status and digest, and deletes its key. A
+// run that has already ended keeps its status and digest. It reports false
+// if the run does not exist.
+func (s *Store) EndRun(id, status string, at time.Time, d Digest) (Run, bool, error) {
 	var run Run
 	var ok bool
 	err := s.Update(func(st *State) error {
@@ -182,7 +214,8 @@ func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
 			return nil
 		}
 		if run.Ended == nil {
-			run.Ended, run.Status = &at, status
+			d.Summary = truncateUTF8(d.Summary, MaxSummary)
+			run.Ended, run.Status, run.Digest = &at, status, d
 			st.Runs[id] = run
 		}
 		for h, k := range st.Keys {
@@ -195,9 +228,10 @@ func (s *Store) EndRun(id, status string, at time.Time) (Run, bool, error) {
 	return run, ok, err
 }
 
-// PurgeRuns deletes the ended runs for which match is true, with any keys
-// left for them, and returns their ids. Runs that have not ended (live, or
-// expired without ending) are never deleted.
+// PurgeRuns drops the ended runs for which match is true, with any keys
+// left for them, and returns their ids. Each one's digest moves to History,
+// so what happened outlives the run. Runs that have not ended (live, or
+// expired without ending) are never purged.
 func (s *Store) PurgeRuns(match func(Run) bool) ([]string, error) {
 	var ids []string
 	err := s.Update(func(st *State) error {
@@ -205,6 +239,11 @@ func (s *Store) PurgeRuns(match func(Run) bool) ([]string, error) {
 			if run.Ended == nil || !match(run) {
 				continue
 			}
+			if st.History == nil {
+				st.History = map[string]Run{}
+			}
+			run.Purged = true
+			st.History[id] = run
 			delete(st.Runs, id)
 			ids = append(ids, id)
 		}
@@ -248,6 +287,19 @@ func (s *Store) Lookup(key string, now time.Time) (Principal, bool, error) {
 		return Principal{}, false, nil
 	}
 	return Principal{Actor: k.Actor, Run: &run}, true, nil
+}
+
+// truncateUTF8 cuts s to at most n bytes, on a rune boundary, marking the
+// cut with an ellipsis.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n-len("…")]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s + "…"
 }
 
 // HashKey is the storage form of an API key.

@@ -342,6 +342,33 @@ func TestPrintRunShow(t *testing.T) {
 			t.Errorf("unexpected stripped local line:\n%s", stripped)
 		}
 	})
+
+	t.Run("PurgedDigest", func(t *testing.T) {
+		var buf bytes.Buffer
+		in, turns := int64(15775), int64(1)
+		d := sr
+		d.Purged = true
+		d.Digest = secrets.Digest{Summary: "Opened PR !4.\nDetails.", Usage: &secrets.Usage{InputTokens: &in, Turns: &turns}}
+		printRunShow(&buf, lipgloss.NewRenderer(&buf), nil, &d, nil, "", "")
+		got := buf.String()
+		for _, want := range []string{", purged (digest kept)\n", "usage 15775 in tokens · 1 turns\n", "summary Opened PR !4.\n"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("lacks %q:\n%s", want, got)
+			}
+		}
+	})
+}
+
+func TestFormatUsage(t *testing.T) {
+	in, out, cr, cw, turns, ms := int64(1174), int64(20), int64(11383), int64(5834), int64(1), int64(2752)
+	cost := 0.0491618
+	full := secrets.Usage{InputTokens: &in, OutputTokens: &out, CacheReadTokens: &cr, CacheWriteTokens: &cw, CostUSD: &cost, Turns: &turns, DurationMS: &ms}
+	if got := formatUsage(full); got != "1174 in, 20 out, 11383 cache read, 5834 cache write tokens · $0.0492 · 1 turns · 2.752s" {
+		t.Errorf("full: %q", got)
+	}
+	if got := formatUsage(secrets.Usage{}); got != "none reported" {
+		t.Errorf("empty: %q", got)
+	}
 }
 
 func TestPrintIssueShowAndList(t *testing.T) {

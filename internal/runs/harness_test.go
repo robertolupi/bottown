@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 func TestAgyPrepareMCP(t *testing.T) {
@@ -261,5 +264,54 @@ func TestKimiSummary(t *testing.T) {
 	parts := `{"role":"assistant","content":[{"type":"text","text":"Opened "},{"type":"text","text":"PR !4."}]}`
 	if got := (kimiHarness{}).Summary([]byte(parts)); got != "Opened PR !4." {
 		t.Fatalf("parts summary = %q", got)
+	}
+}
+
+// TestHarnessDigests reads real batch logs, one per harness (init events,
+// which hold only local setup, removed).
+func TestHarnessDigests(t *testing.T) {
+	i64 := func(n int64) *int64 { return &n }
+	cost := 0.0491618
+	for _, tc := range []struct {
+		h       Harness
+		file    string
+		summary string
+		usage   *secrets.Usage
+	}{
+		// Tokens summed over both models the run used.
+		{claudeHarness{}, "claude-2.1.316.stream.jsonl", "hello", &secrets.Usage{
+			InputTokens: i64(1174), OutputTokens: i64(20), CacheReadTokens: i64(11383), CacheWriteTokens: i64(5834),
+			CostUSD: &cost, Turns: i64(1), DurationMS: i64(2752),
+		}},
+		// No cost, and no cache writes.
+		{agyHarness{}, "agy-1.4.12.stream.jsonl", "hello", &secrets.Usage{
+			InputTokens: i64(15775), OutputTokens: i64(5), CacheReadTokens: i64(0), Turns: i64(1), DurationMS: i64(4991),
+		}},
+		{kimiHarness{}, "kimi-2.4.1.stream.jsonl", "hello", nil},
+	} {
+		log, err := os.ReadFile(filepath.Join("testdata", tc.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(tc.h.Summary(log)); got != tc.summary {
+			t.Errorf("%s: summary %q", tc.file, got)
+		}
+		if got := tc.h.Usage(log); !reflect.DeepEqual(got, tc.usage) {
+			g, _ := json.Marshal(got)
+			w, _ := json.Marshal(tc.usage)
+			t.Errorf("%s: usage\n got %s\nwant %s", tc.file, g, w)
+		}
+	}
+	// What a result event leaves out stays unknown.
+	u := (claudeHarness{}).Usage([]byte(`{"type":"result","num_turns":3,"usage":{"input_tokens":100,"output_tokens":7}}`))
+	if u == nil || *u.InputTokens != 100 || u.CacheReadTokens != nil || u.CacheWriteTokens != nil || u.CostUSD != nil {
+		t.Errorf("partial claude usage: %+v", u)
+	}
+	// No result event: unknown, not zero.
+	if u := (claudeHarness{}).Usage([]byte("{\"type\":\"assistant\"}\ncrashed\n")); u != nil {
+		t.Errorf("claude without a result: %+v", u)
+	}
+	if u := (agyHarness{}).Usage([]byte("plain text\n")); u != nil {
+		t.Errorf("agy without a result: %+v", u)
 	}
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -206,19 +207,57 @@ func newRunID() string {
 	return "r-" + hex.EncodeToString(b)
 }
 
+// listRuns lists runs, newest first. Query filters: repo (name within the
+// org), state (live: not ended; ended), since (RFC 3339: created at or
+// after), and history=1 to include the digests of purged runs.
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo, state := q.Get("repo"), q.Get("state")
+	if state != "" && state != "live" && state != "ended" {
+		writeError(w, http.StatusBadRequest, "state must be live or ended")
+		return
+	}
+	var since time.Time
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "since: "+err.Error())
+			return
+		}
+		since = t
+	}
+	history := q.Get("history") == "1" || q.Get("history") == "true"
 	st, err := s.Store.Read()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	match := func(run secrets.Run) bool {
+		switch {
+		case repo != "" && run.Repo != repo,
+			state == "live" && run.Ended != nil,
+			state == "ended" && run.Ended == nil,
+			run.Created.Before(since):
+			return false
+		}
+		return true
+	}
 	runs := make([]secrets.Run, 0, len(st.Runs))
 	for _, run := range st.Runs {
-		if repo := r.URL.Query().Get("repo"); repo == "" || run.Repo == repo {
+		if match(run) {
 			runs = append(runs, run)
 		}
 	}
-	slices.SortFunc(runs, func(a, b secrets.Run) int { return b.Created.Compare(a.Created) })
+	if history {
+		for _, run := range st.History {
+			if match(run) {
+				runs = append(runs, run)
+			}
+		}
+	}
+	slices.SortFunc(runs, func(a, b secrets.Run) int {
+		return cmp.Or(b.Created.Compare(a.Created), strings.Compare(a.ID, b.ID))
+	})
 	writeJSON(w, http.StatusOK, runs)
 }
 
@@ -230,9 +269,10 @@ type PurgeRequest struct {
 	Keep        []string  `json:"keep,omitempty"`
 }
 
-// purgeRuns deletes ended runs of one repository that ended before
-// EndedBefore. Runs that have not ended are never purged: the owner should
-// see a stuck run before it disappears.
+// purgeRuns drops ended runs of one repository that ended before
+// EndedBefore, keeping their digests in the history. Runs that have not
+// ended are never purged: the owner should see a stuck run before it
+// disappears.
 func (s *Server) purgeRuns(w http.ResponseWriter, r *http.Request) {
 	var req PurgeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -264,6 +304,9 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := st.Runs[r.PathValue("id")]
+	if !ok {
+		run, ok = st.History[r.PathValue("id")]
+	}
 	if p := Who(r.Context()); !ok || (p.Actor != s.Owner && p.Actor != run.Actor) {
 		writeError(w, http.StatusNotFound, "no such run")
 		return
@@ -271,12 +314,16 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, run)
 }
 
-// endRun ends a run and deletes its key. Body: {"status": "succeeded" |
-// "failed" | "revoked"} (default "revoked").
+// EndRunRequest is the optional body of DELETE /v1/runs/{id}: the outcome
+// (succeeded, failed or revoked; default revoked) and the run's digest.
+type EndRunRequest struct {
+	Status string `json:"status"`
+	secrets.Digest
+}
+
+// endRun ends a run, stores its digest and deletes its key.
 func (s *Server) endRun(w http.ResponseWriter, r *http.Request) {
-	body := struct {
-		Status string `json:"status"`
-	}{Status: "revoked"}
+	body := EndRunRequest{Status: "revoked"}
 	if r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -299,7 +346,7 @@ func (s *Server) endRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	run, ok, err := s.Store.EndRun(r.PathValue("id"), body.Status, time.Now().UTC())
+	run, ok, err := s.Store.EndRun(r.PathValue("id"), body.Status, time.Now().UTC(), body.Digest)
 	switch {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())

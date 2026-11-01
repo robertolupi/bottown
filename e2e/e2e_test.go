@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -1136,11 +1137,19 @@ func TestE2E(t *testing.T) {
 
 		implement := "set -e; test -n \"$BOTTOWN_RUN_KEY\"; grep -q 'scripted run' \"$BOTTOWN_PROMPT_FILE\"; " +
 			"echo cli > cli.txt; git add cli.txt; git -c commit.gpgsign=false commit -qm 'cli change'; git push -q origin HEAD; " +
-			bin + ` mcp call pr_create '{"title":"cli PR","body":"scripted"}' > /dev/null; echo 'implemented by script'`
+			bin + ` mcp call pr_create '{"title":"cli PR","body":"scripted"}' > /dev/null; ` +
+			// The script harness reads usage from claude-style result events.
+			`echo '{"type":"result","num_turns":3,"total_cost_usd":0.25,"usage":{"input_tokens":100,"output_tokens":7}}'; ` +
+			`echo 'implemented by script'`
 		out, err := withHarness(implement, "run", "implement", "-a", "claude", fmt.Sprint(issue.Number))
 		if err != nil || !strings.Contains(out, "succeeded (worktree removed)") {
 			t.Fatalf("run implement: %v\n%s", err, out)
 		}
+		m := regexp.MustCompile(`run (r-[0-9a-f]+): implement`).FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("no run id in: %s", out)
+		}
+		implRun := m[1]
 		if _, err := os.Stat(filepath.Join(demo, ".bottown", "mirror.git")); err != nil {
 			t.Fatalf("no mirror: %v", err)
 		}
@@ -1213,6 +1222,31 @@ func TestE2E(t *testing.T) {
 		}
 		if n, kimi := endedInDemo(); n != 1 || !kimi {
 			t.Errorf("after gc: %d ended demo runs (kimi %v), want only kimi's", n, kimi)
+		}
+		// Their digests survive: the launcher's with the harness's usage, and
+		// the actor-worktree run's with its handover.
+		if out := a.mustCmd(demo, "run", "show", implRun); !strings.Contains(out, "ended succeeded, purged (digest kept)") ||
+			!strings.Contains(out, "usage 100 in, 7 out tokens · $0.2500 · 3 turns") || !strings.Contains(out, "summary implemented by script") {
+			t.Errorf("run show of a purged run:\n%s", out)
+		}
+		var history []struct {
+			ID, Actor, Summary string
+			Purged             bool
+		}
+		hreq, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs?repo=demo&state=ended&history=1", nil)
+		hreq.Header.Set("Authorization", "Bearer "+owner)
+		if resp, err := http.DefaultClient.Do(hreq); err != nil {
+			t.Fatal(err)
+		} else {
+			json.NewDecoder(resp.Body).Decode(&history)
+			resp.Body.Close()
+		}
+		var agentDigest bool
+		for _, h := range history {
+			agentDigest = agentDigest || (h.Purged && h.Actor == "claude" && h.Summary == "implemented agent.txt")
+		}
+		if !agentDigest {
+			t.Errorf("no digest of the actor-worktree run in the history: %+v", history)
 		}
 		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs, purged 1 ended runs") {
 			t.Errorf("gc --failed: %s", out)
