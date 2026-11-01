@@ -54,7 +54,7 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 		case p == "/v1/runs":
 			_ = json.NewEncoder(w).Encode(fix.runs)
 		case strings.HasSuffix(p, "/pulls"):
-			_ = json.NewEncoder(w).Encode(fix.prs)
+			_ = json.NewEncoder(w).Encode(paginate(r, fix.prs))
 		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
 			// /forgejo/api/v1/repos/{org}/{repo}/pulls/{number}/reviews
 			parts := strings.Split(p, "/")
@@ -65,7 +65,7 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			}
 			_ = json.NewEncoder(w).Encode(revs)
 		case strings.HasSuffix(p, "/issues"):
-			_ = json.NewEncoder(w).Encode(fix.issues)
+			_ = json.NewEncoder(w).Encode(paginate(r, fix.issues))
 		case strings.Contains(p, "/issues/") && strings.HasSuffix(p, "/comments"):
 			// /forgejo/api/v1/repos/{org}/{repo}/issues/{number}/comments
 			parts := strings.Split(p, "/")
@@ -85,6 +85,28 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv, port
+}
+
+// paginate returns the slice of items a Forgejo list endpoint would send for
+// the request's page/limit, mirroring the real server's windowing.
+func paginate[T any](r *http.Request, items []T) []T {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	start := (page - 1) * limit
+	if start >= len(items) {
+		return []T{}
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
 }
 
 func defaultFixture() *fixtureForge {
@@ -839,5 +861,97 @@ func TestInbox_FetchError(t *testing.T) {
 	}
 	if len(status.Inbox) != 0 {
 		t.Fatalf("expected status.Inbox to be empty on error, got: %+v", status.Inbox)
+	}
+}
+
+func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
+	fix := defaultFixture()
+	_, port := newFixtureServer(t, fix)
+
+	now := time.Now()
+	sha := "1111222233334444555566667777888899990000"
+
+	// 60 filler PRs that produce no inbox items, then a ready-to-merge PR
+	// that would fall off a single limit=50 page.
+	for i := 1; i <= 60; i++ {
+		fix.prs = append(fix.prs, &sdk.PullRequest{
+			Index:     int64(i),
+			State:     sdk.StateOpen,
+			Mergeable: true,
+			Poster:    &sdk.User{UserName: "claude"},
+			Head:      &sdk.PRBranchInfo{Ref: "issue/filler", Sha: sha},
+			Created:   &now,
+		})
+	}
+	fix.prs = append(fix.prs, &sdk.PullRequest{
+		Index:     61,
+		State:     sdk.StateOpen,
+		Mergeable: true,
+		Poster:    &sdk.User{UserName: "agy"}, // google
+		Head:      &sdk.PRBranchInfo{Ref: "issue/61", Sha: sha},
+		Created:   &now,
+	})
+	fix.reviews[61] = []*sdk.PullReview{{
+		ID:        1,
+		Reviewer:  &sdk.User{UserName: "claude"}, // anthropic, cross-family
+		State:     sdk.ReviewStateApproved,
+		CommitID:  sha,
+		Official:  true,
+		Submitted: now,
+	}}
+
+	// 60 filler issues by the owner (not actor-filed), then an actor-filed
+	// issue beyond the first limit=50 page.
+	for i := 1; i <= 60; i++ {
+		fix.issues = append(fix.issues, &sdk.Issue{
+			Index:   int64(i),
+			State:   sdk.StateOpen,
+			Title:   "filler",
+			Poster:  &sdk.User{UserName: "rlupi"},
+			Created: now,
+		})
+	}
+	fix.issues = append(fix.issues, &sdk.Issue{
+		Index:   61,
+		State:   sdk.StateOpen,
+		Title:   "actor-filed beyond page 1",
+		Poster:  &sdk.User{UserName: "claude"},
+		Created: now,
+	})
+
+	cfg := Config{
+		Instance: config.Instance{
+			Name:       "prod",
+			ServerPort: port,
+			OwnerLogin: "rlupi",
+		},
+		RepoTop:  t.TempDir(),
+		FullRepo: "bottown/bottown",
+	}
+	s, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	items, err := s.ComputeInbox(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ready, filed bool
+	for _, it := range items {
+		if it.Kind == InboxReadyToMerge && it.Target == "!61" {
+			ready = true
+		}
+		if it.Kind == InboxActorFiledIssue && it.Target == "#61" {
+			filed = true
+		}
+	}
+	if !ready {
+		t.Fatalf("ready-to-merge PR on page 2 missing; items: %+v", items)
+	}
+	if !filed {
+		t.Fatalf("actor-filed issue on page 2 missing; items: %+v", items)
 	}
 }
