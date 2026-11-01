@@ -116,18 +116,24 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 
 - **Build:** `make build` writes `bin/bottown`. The web UI's built assets
   (`internal/webui/dist/ui`) are not tracked: `make web` builds them from
-  `web/` (needs npm); without them the binary serves a stub page. Change
-  `web/src`, not built output.
+  `web/` (needs Node and npm, running `npm ci` when `web/node_modules` is
+  missing or out of date); without them the binary serves a stub page.
+  Change `web/src`, not built output.
 - **Install:** `make install` builds the web UI, writes
   `~/.local/bin/bottown`, which the harness commands and credential helpers
   use, runs `bottown harness setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
   --if-changed` (`UP=0` skips it). `--if-changed` keeps prod's image when
   the commits differ only in docs.
-- **Tests:** `make test` runs the unit tests. `make e2e` needs Docker and
-  starts throwaway `e2e-*` instances; it never touches prod or dev.
+- **Tests:** `make test` runs the Go unit tests (`go test ./...`) and the
+  frontend behavioral tests (`cd web && npm test`, after `npm ci` if
+  needed). `make e2e` needs Docker and starts throwaway `e2e-*` instances;
+  it never touches prod or dev.
 - **Checks:** `make check` is what "the repository's checks" means to
-  implementers and verifiers: `gofmt -l` clean, `go mod tidy -diff` clean,
-  `make vet` (including `-tags e2e`) and `make test`.
+  implementers and verifiers (needs Go, Node and npm; installs
+  `web/node_modules` reproducibly with `npm ci` on a clean checkout):
+  `gofmt -l` clean, `go mod tidy -diff` clean, `make vet` (including
+  `-tags e2e`), `make test` (Go and frontend tests) and `cd web && npm run
+  check` (`svelte-check`).
 - **Before a PR:** `make check` and `make e2e` pass. New behaviour gets a
   test. Keep the docs in `docs/` true to the code; `docs/history/` is a
   record and is not kept current.

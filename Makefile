@@ -7,8 +7,8 @@
 web: web/node_modules
 	cd web && npm run build
 
-web/node_modules: web/package-lock.json
-	cd web && npm ci
+web/node_modules: web/package.json web/package-lock.json
+	cd web && (npm ci || (rm -rf node_modules && exit 1))
 	@touch $@
 
 VERSION ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo dev)
@@ -53,14 +53,17 @@ install:
 vet:
 	go vet ./... && go vet -tags e2e ./e2e/
 
-test:
+test: web/node_modules
 	go test ./...
+	cd web && npm test
 
 # The repository's checks, run before a PR and by verifiers: gofmt clean,
-# go.mod/go.sum tidy, vet (incl. the e2e build tag) and the unit tests.
-check: vet test
+# go.mod/go.sum tidy, vet (incl. the e2e build tag), Go and web unit tests,
+# and svelte-check on web/ (installing web/node_modules with npm ci first).
+check: vet test web/node_modules
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	go mod tidy -diff
+	cd web && npm run check
 
 # Needs Docker. Uses throwaway e2e-* instances; never touches prod or dev.
 e2e:
