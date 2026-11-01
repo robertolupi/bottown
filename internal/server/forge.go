@@ -10,8 +10,10 @@ import (
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/forgejo"
 	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -144,19 +146,21 @@ type CommentOut struct {
 
 // PROut is a pull request with what a reviewer needs.
 type PROut struct {
-	Number        int64       `json:"number"`
-	Title         string      `json:"title"`
-	Body          string      `json:"body"`
-	State         string      `json:"state"`
-	Merged        bool        `json:"merged"`
-	Author        string      `json:"author"`
-	HeadBranch    string      `json:"head_branch"`
-	HeadSHA       string      `json:"head_sha"`
-	BaseBranch    string      `json:"base_branch"`
-	Mergeable     bool        `json:"mergeable"`
-	Reviews       []ReviewOut `json:"reviews"`
-	Diff          string      `json:"diff,omitempty"`
-	DiffTruncated bool        `json:"diff_truncated,omitempty"`
+	Number     int64       `json:"number"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	State      string      `json:"state"`
+	Merged     bool        `json:"merged"`
+	Author     string      `json:"author"`
+	HeadBranch string      `json:"head_branch"`
+	HeadSHA    string      `json:"head_sha"`
+	BaseBranch string      `json:"base_branch"`
+	Mergeable  bool        `json:"mergeable"`
+	Reviews    []ReviewOut `json:"reviews"`
+	// Assessment is where the reviews leave the PR (internal/review).
+	Assessment    review.Assessment `json:"assessment"`
+	Diff          string            `json:"diff,omitempty"`
+	DiffTruncated bool              `json:"diff_truncated,omitempty"`
 }
 
 // ReviewOut is one review.
@@ -422,6 +426,11 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 			Body: r.Body, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official,
 		})
 	}
+	runs, err := s.runRecords()
+	if err != nil {
+		return PROut{}, err
+	}
+	out.Assessment = assessReviews(s.desired(), s.Owner, runs, repo, pr, rs)
 	if withDiff {
 		diff, _, err := c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
 		if err != nil {
@@ -484,6 +493,10 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 	} else if err != nil {
 		return nil, err
 	}
+	runs, err := s.runRecords()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]PRItem, 0, len(prs))
 	for _, pr := range prs {
 		item := PRItem{
@@ -506,7 +519,7 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 			if err != nil {
 				item.ReviewState = "unknown"
 			} else {
-				item.ReviewState = reviewState(rs)
+				item.ReviewState = string(assessReviews(s.desired(), s.Owner, runs, repo, pr, rs).Decision)
 			}
 		}
 		out = append(out, item)
@@ -514,27 +527,40 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 	return out, nil
 }
 
-func reviewState(reviews []*sdk.PullReview) string {
-	hasChangesRequested := false
-	hasApproved := false
-	for _, r := range reviews {
-		if r.Stale || r.Dismissed {
-			continue
-		}
-		switch r.State {
-		case sdk.ReviewStateRequestChanges:
-			hasChangesRequested = true
-		case sdk.ReviewStateApproved:
-			hasApproved = true
-		}
+// runRecords lists every run record, purged ones included: the review
+// assessment reads owner overrides from them.
+func (s *Server) runRecords() ([]secrets.Run, error) {
+	if s.Store == nil {
+		return nil, nil
 	}
-	if hasChangesRequested {
-		return "changes requested"
+	st, err := s.Store.Read()
+	if err != nil {
+		return nil, err
 	}
-	if hasApproved {
-		return "approved"
+	runs := make([]secrets.Run, 0, len(st.Runs)+len(st.History))
+	for _, run := range st.Runs {
+		runs = append(runs, run)
 	}
-	return "needs review"
+	for _, run := range st.History {
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+// assessReviews applies the shared review assessment (internal/review) to
+// an open PR's reviews, with the owner overrides from runs.
+func assessReviews(d config.Desired, owner string, runs []secrets.Run, repo string, pr *sdk.PullRequest, rs []*sdk.PullReview) review.Assessment {
+	families := map[string]string{}
+	for _, a := range d.Actors {
+		families[a.Name] = a.Family
+	}
+	head := ""
+	if pr.Head != nil {
+		head = pr.Head.Sha
+	}
+	return review.Assess(head, review.FromForge(rs), review.Policy{
+		Author: login(pr.Poster), Owner: owner, Families: families, Grants: review.Grants(runs, repo, pr.Index),
+	})
 }
 
 func parseState(s string) (sdk.StateType, error) {

@@ -1168,7 +1168,104 @@ func TestE2E(t *testing.T) {
 		if c, errMsg := call(vs2, "comment", map[string]any{"body": "handover"}); errMsg != "" || c["author"] != "codex" {
 			t.Fatalf("comment: %v %s", c, errMsg)
 		}
-		for _, run := range []map[string]any{ver2, impl} {
+
+		// Pin the Forgejo review semantics internal/review relies on. The
+		// approval above may already be dismissed: Forgejo dismisses every
+		// approval when it processes a push, and that runs after the head
+		// moves.
+		prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
+		assessment := func(sess *mcp.ClientSession) string {
+			t.Helper()
+			got, errMsg := call(sess, "pr_get", nil)
+			if errMsg != "" {
+				t.Fatalf("pr_get: %s", errMsg)
+			}
+			as, _ := got["assessment"].(map[string]any)
+			return fmt.Sprint(as["decision"])
+		}
+		reviews := func() []map[string]any {
+			t.Helper()
+			var rs []map[string]any
+			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+			return rs
+		}
+		// Forgejo computes a new review's stale flag from the pull ref, which
+		// the push task also updates, so reviews at this head may be born
+		// stale: assert only after the next push has settled.
+		var request map[string]any
+		a.mustAPI(owner, "POST", prPath+"/reviews", map[string]string{"event": "REQUEST_CHANGES", "body": "not yet", "commit_id": ver2["sha"].(string)}, &request)
+		if request["official"] != true {
+			t.Errorf("owner request for changes: %v", request)
+		}
+		endRun(ver2["id"].(string))
+		// A push makes the request stale, but it stays official and
+		// undismissed, so the forge keeps blocking on it; approvals are
+		// dismissed.
+		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("3\n"), 0o644)
+		git(t, demo, "commit", "-q", "-am", "mcp change 3")
+		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
+			t.Fatalf("push 3: %v\n%s", err, out)
+		}
+		var rs []map[string]any
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+			rs = reviews()
+			settled := true
+			for _, r := range rs {
+				if r["state"] == "REQUEST_CHANGES" {
+					request = r
+				}
+				if r["state"] == "APPROVED" && r["dismissed"] != true {
+					settled = false
+				}
+			}
+			if settled && request["stale"] == true || time.Now().After(deadline) {
+				break
+			}
+		}
+		if request["stale"] != true || request["official"] != true || request["dismissed"] == true {
+			t.Fatalf("request for changes after a push: %v (reviews %v)", request, rs)
+		}
+		ver3 := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
+		vs3 := connect(a.cfg.ServerURL()+"/mcp", ver3["key"].(string))
+		if d := assessment(vs3); d != "needs review" {
+			t.Errorf("assessment after a push: %s", d)
+		}
+		// A COMMENT is never official: an actor's is an undecided verdict.
+		if rv, errMsg := call(vs3, "review_submit", map[string]any{"event": "COMMENT", "body": "unsure", "commit_id": ver3["sha"]}); errMsg != "" || rv["official"] == true {
+			t.Fatalf("COMMENT review: %v %s", rv, errMsg)
+		}
+		if d := assessment(vs3); d != "commented" {
+			t.Errorf("assessment after a comment: %s", d)
+		}
+		// An approval at the new head is still held back by the stale request.
+		if _, errMsg := call(vs3, "review_submit", map[string]any{"event": "APPROVED", "body": "verified", "commit_id": ver3["sha"]}); errMsg != "" {
+			t.Fatalf("approve: %s", errMsg)
+		}
+		if _, errMsg := call(vs3, "review_submit", map[string]any{"event": "COMMENT", "body": "one more note", "commit_id": ver3["sha"]}); errMsg != "" {
+			t.Fatalf("second COMMENT: %s", errMsg)
+		}
+		for _, r := range reviews() {
+			if r["state"] == "APPROVED" && r["dismissed"] != true && r["official"] != true {
+				t.Errorf("approval lost official after a COMMENT: %v", r)
+			}
+		}
+		if d := assessment(vs3); d != "changes requested" {
+			t.Errorf("assessment with a stale request and an approval: %s", d)
+		}
+		if code, b := a.api(owner, "POST", prPath+"/merge", map[string]string{"Do": "merge"}); code < 400 {
+			t.Fatalf("merge with a stale request for changes accepted: %d %s", code, b)
+		}
+		// A request for changes at the head wins over the approval there.
+		a.mustAPI(owner, "POST", prPath+"/reviews", map[string]string{"event": "REQUEST_CHANGES", "body": "still not", "commit_id": ver3["sha"].(string)}, nil)
+		if d := assessment(vs3); d != "changes requested" {
+			t.Errorf("assessment after a request for changes at the head: %s (reviews %v)", d, reviews())
+		}
+		// The owner's new verdict replaces their request.
+		a.mustAPI(owner, "POST", prPath+"/reviews", map[string]string{"event": "APPROVED", "body": "ok now", "commit_id": ver3["sha"].(string)}, nil)
+		if d := assessment(vs3); d != "approved" {
+			t.Errorf("assessment after the owner approves: %s", d)
+		}
+		for _, run := range []map[string]any{ver3, impl} {
 			endRun(run["id"].(string))
 		}
 	})

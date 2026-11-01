@@ -145,6 +145,7 @@ the owner sees it in Forgejo and in the UI:
 | out of rounds | changes were still requested after N rounds | read the reviews; re-run with more rounds, steer it interactively, or take over |
 | run failed | a run failed, crashed or timed out | read its handover; fix the issue text or the environment, then re-run the flow |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
+| changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | the PR no longer merges cleanly, because `main` moved | re-run the flow: its implement run brings `main` in and resolves the conflict |
 
 ### 3.3 State and restart
@@ -158,16 +159,61 @@ again:
    naming the run (the supervisor never runs two steps of one issue at
    once).
 2. No open PR from `issue/<n>` → implement.
-3. An open PR at head H:
+3. An open PR at head H, by its review assessment (below):
    - the PR conflicts with `main` → an implement run to resolve it, if
      rounds are left (a conflict fix counts as a round);
-   - the verifier's official review at H is `APPROVED` → stop: ready to
-     merge;
-   - `REQUEST_CHANGES` at H → a follow-up implement run, if rounds are
+   - approved → stop: ready to merge;
+   - changes requested at H → a follow-up implement run, if rounds are
      left;
-   - no review at H → verify.
+   - changes requested at an older head, while H is approved → stop:
+     changes requested;
+   - commented → stop: verifier undecided;
+   - needs review → verify.
 4. Rounds are counted from the PR's `REQUEST_CHANGES` reviews, so a resumed
    flow does not get fresh rounds.
+
+**Review assessment.** One function, `review.Assess` (`internal/review`),
+decides where a PR's reviews leave it, and the flow, the PR list's review
+state and the owner inbox all use it; the server computes it for `pr show`
+(`assessment`) and `pr list` (`review_state`). It follows the forge's
+branch protection (one approval from the allow-list, dismiss stale
+approvals, block on rejected reviews) and adds the cross-family rule; it
+never counts a review the forge would not:
+
+- Dismissed reviews never count.
+- `APPROVED` and `REQUEST_CHANGES` count only when official. Forgejo keeps
+  one official verdict per reviewer, its latest, so a reviewer's new
+  verdict replaces its earlier one. `COMMENT` reviews are never official.
+- An official `REQUEST_CHANGES` blocks at any commit: the forge keeps
+  blocking the merge after a push, until its reviewer reviews again or it
+  is dismissed.
+- An approval counts only at H and not stale, and only from the owner, an
+  actor of another family than the author's, or an actor whose verify run
+  at H the owner allowed to be same-family (`--allow-same-family`, read
+  from the server's run records, never from review text).
+- An actor's `COMMENT` at H is an undecided verdict; the owner's is
+  discussion.
+
+Precedence, first match: a request for changes at H → changes requested;
+a qualifying approval with a request for changes at an older head →
+changes requested (held back); a qualifying approval → approved; an
+actor's comment at H → commented; otherwise needs review, even when an
+older head's request still blocks, because the next step is a verdict at
+H. The decision names the review behind it: the newest of its kind.
+
+Each surface presents the same decision its own way, on purpose:
+
+| Decision | Flow | Inbox (mergeable, no live run) | PR list |
+|---|---|---|---|
+| approved | stop: ready to merge | ready to merge | `approved` |
+| changes requested at H | follow-up implement run, or out of rounds | stopped flow: changes requested | `changes requested` |
+| changes requested, older head | stop: changes requested | stopped flow: changes requested | `changes requested` |
+| commented | stop: verifier undecided | stopped flow: verifier undecided | `commented` |
+| needs review | verify run | nothing | `needs review` |
+
+The shared fixtures in `internal/review/reviewtest` run through all three.
+With `required_approvals` above 1 the forge asks for more approvals than
+"approved" here means.
 
 ### 3.4 Concurrency
 
@@ -261,9 +307,9 @@ be recomputed.
 
 | Item | Shown when | Goes away when |
 |---|---|---|
-| Ready to merge | an open PR's current head has an official `APPROVED` review from a family other than the author's, and it merges cleanly | merged or closed, the head moves, or it starts to conflict |
+| Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), and it merges cleanly | merged or closed, the head moves, a request for changes, or it starts to conflict |
 | Conflicts with main | an open PR no longer merges cleanly | the flow is re-run and resolves it, or the PR is closed |
-| Stopped flow | a flow stopped as out of rounds, run failed or verifier undecided (§3.2) | the flow is re-run, or the issue is closed |
+| Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided) (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/review"
+	"github.com/robertolupi/bottown/internal/review/reviewtest"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -30,8 +32,18 @@ func (f *fakeAPI) OpenPR(context.Context, string, string) (server.PRItem, bool, 
 	return server.PRItem{Number: f.pr.Number, HeadBranch: "issue/9"}, true, nil
 }
 
+// PR assesses the reviews the way the server does, with the shared
+// fixtures' families: claude (anthropic) is the author.
 func (f *fakeAPI) PR(context.Context, string, int64) (server.PROut, error) {
-	return f.pr, nil
+	pr := f.pr
+	reviews := make([]review.Review, 0, len(pr.Reviews))
+	for _, r := range pr.Reviews {
+		reviews = append(reviews, review.Review{ID: r.ID, Reviewer: r.Reviewer, State: r.State, CommitID: r.CommitID, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official})
+	}
+	pr.Assessment = review.Assess(pr.HeadSHA, reviews, review.Policy{
+		Author: reviewtest.Author, Owner: reviewtest.Owner, Families: reviewtest.Families, Grants: review.Grants(f.runs, "demo", pr.Number),
+	})
+	return pr, nil
 }
 
 func (f *fakeAPI) LiveRuns(context.Context, string) ([]secrets.Run, error) {
@@ -55,7 +67,7 @@ func openPR() server.PROut {
 }
 
 func approve(api *fakeAPI) {
-	api.pr.Reviews = append(api.pr.Reviews, server.ReviewOut{ID: int64(len(api.pr.Reviews) + 1), Official: true, State: "APPROVED", CommitID: api.pr.HeadSHA})
+	api.pr.Reviews = append(api.pr.Reviews, server.ReviewOut{ID: int64(len(api.pr.Reviews) + 1), Reviewer: "agy", Official: true, State: "APPROVED", CommitID: api.pr.HeadSHA})
 }
 
 func TestFlowApproveFirstTime(t *testing.T) {
@@ -98,9 +110,11 @@ func TestFlowFollowUpAndOutOfRounds(t *testing.T) {
 			runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
 				if req.Kind == policy.Implement {
 					implements++
+					// A push makes earlier reviews stale; Forgejo does not
+					// dismiss requests for changes, which stay official.
 					reviews := api.pr.Reviews
 					for i := range reviews {
-						reviews[i].Stale, reviews[i].Dismissed, reviews[i].Official = true, true, false
+						reviews[i].Stale = true
 					}
 					api.open, api.pr = true, openPR()
 					api.pr.HeadSHA = string(rune('a' + implements))
@@ -108,13 +122,15 @@ func TestFlowFollowUpAndOutOfRounds(t *testing.T) {
 					return nil
 				}
 				verifies++
-				state := "REQUEST_CHANGES"
+				// The verifier's new verdict replaces its earlier one as official.
+				for i := range api.pr.Reviews {
+					api.pr.Reviews[i].Official = false
+				}
 				if tc.approve && verifies == 2 {
 					approve(api)
-					api.pr.Reviews[len(api.pr.Reviews)-1].Dismissed = true
 					return nil
 				}
-				api.pr.Reviews = append(api.pr.Reviews, server.ReviewOut{ID: int64(verifies), Official: true, State: state, CommitID: api.pr.HeadSHA})
+				api.pr.Reviews = append(api.pr.Reviews, server.ReviewOut{ID: int64(len(api.pr.Reviews) + 1), Reviewer: "agy", Official: true, State: "REQUEST_CHANGES", CommitID: api.pr.HeadSHA})
 				return nil
 			})
 			result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
@@ -148,7 +164,7 @@ func TestFlowResumeStartsAtVerify(t *testing.T) {
 
 func TestFlowVerifierUndecided(t *testing.T) {
 	api := &fakeAPI{open: true, pr: openPR()}
-	api.pr.Reviews = []server.ReviewOut{{ID: 1, Official: true, State: "COMMENT", CommitID: api.pr.HeadSHA}}
+	api.pr.Reviews = []server.ReviewOut{{ID: 1, Reviewer: "agy", State: "COMMENT", CommitID: api.pr.HeadSHA}}
 	called := false
 	runner := RunnerFunc(func(context.Context, RunRequest) error { called = true; return nil })
 	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())

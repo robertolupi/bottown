@@ -12,6 +12,7 @@ import (
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -151,14 +152,27 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		return nil, fmt.Errorf("fetch open pull requests: %w", err)
 	}
 
-	// Fetch reviews for each open PR
-	prReviews := make(map[int64][]*sdk.PullReview)
+	// Assess each open PR's reviews as the server does for the flow and
+	// the PR list (internal/review). Owner overrides come from every run
+	// record, purged ones included.
+	var allRuns []secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, runsPath+"&history=1", nil, &allRuns); err != nil {
+		return nil, fmt.Errorf("fetch run history: %w", err)
+	}
+	assessments := make(map[int64]review.Assessment)
 	for _, pr := range prs {
 		revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
 		revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
-		if err == nil {
-			prReviews[pr.Index] = revs
+		if err != nil {
+			continue
 		}
+		head := ""
+		if pr.Head != nil {
+			head = pr.Head.Sha
+		}
+		assessments[pr.Index] = review.Assess(head, review.FromForge(revs), review.Policy{
+			Author: userLogin(pr.Poster), Owner: ownerLogin, Families: actors, Grants: review.Grants(allRuns, repo, pr.Index),
+		})
 	}
 
 	// 6. Open Issues from Forgejo
@@ -172,7 +186,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 
 	// ----------------------------------------------------
 	// Item 1: Ready to merge (§4.1)
-	// Open PR, mergeable, approved at current head by another family
+	// Open PR, mergeable, and its reviews assess as approved
 	// ----------------------------------------------------
 	for _, pr := range prs {
 		if pr.State != sdk.StateOpen || pr.HasMerged {
@@ -181,31 +195,15 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		if !pr.Mergeable {
 			continue
 		}
-		authorLogin := userLogin(pr.Poster)
-		authorFamily := actors[authorLogin]
-		revs := prReviews[pr.Index]
-
-		var approvedReview *sdk.PullReview
-		var reviewerFamily string
-		for _, r := range revs {
-			if r.Stale || r.Dismissed || !r.Official {
-				continue
+		if a := assessments[pr.Index]; a.Decision == review.Approved {
+			approval := a.Review
+			approver := actors[approval.Reviewer]
+			switch {
+			case approval.Reviewer == ownerLogin:
+				approver = "owner"
+			case approver == actors[userLogin(pr.Poster)]:
+				approver += ", same-family override"
 			}
-			if pr.Head == nil || r.CommitID != pr.Head.Sha {
-				continue
-			}
-			if r.State == sdk.ReviewStateApproved {
-				revLogin := userLogin(r.Reviewer)
-				fam := actors[revLogin]
-				if fam != "" && fam != authorFamily {
-					approvedReview = r
-					reviewerFamily = fam
-					break
-				}
-			}
-		}
-
-		if approvedReview != nil {
 			prURL := pr.HTMLURL
 			if prURL == "" {
 				prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
@@ -214,7 +212,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			if pr.Head != nil {
 				headSHA = pr.Head.Sha
 			}
-			created := approvedReview.Submitted
+			created := approval.Submitted
 			if created.IsZero() && pr.Created != nil {
 				created = *pr.Created
 			}
@@ -222,7 +220,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				ID:          fmt.Sprintf("ready-to-merge-pr-%d", pr.Index),
 				Kind:        InboxReadyToMerge,
 				Title:       fmt.Sprintf("PR !%d is ready to merge", pr.Index),
-				Description: fmt.Sprintf("Approved at %s by %s (%s)", shortSHA(headSHA), userLogin(approvedReview.Reviewer), reviewerFamily),
+				Description: fmt.Sprintf("Approved at %s by %s (%s)", shortSHA(headSHA), approval.Reviewer, approver),
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
 				Created:     created,
@@ -263,7 +261,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 
 	// ----------------------------------------------------
 	// Item 3: Stopped flow (§4.1, §3.2)
-	// Stopped as out of rounds, run failed, or verifier undecided
+	// Stopped as run failed, or where the flow stops on the reviews:
+	// changes requested (out of rounds, or held back by an older head's
+	// request) and verifier undecided
 	// ----------------------------------------------------
 	for _, pr := range prs {
 		if pr.State != sdk.StateOpen || pr.HasMerged {
@@ -273,16 +273,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			continue
 		}
 
-		revs := prReviews[pr.Index]
-		var latestHeadReview *sdk.PullReview
-		for _, r := range revs {
-			if r.Dismissed {
-				continue
-			}
-			if pr.Head != nil && r.CommitID == pr.Head.Sha && !r.Stale {
-				latestHeadReview = r
-			}
-		}
+		a := assessments[pr.Index]
 
 		// Check server runs for this PR
 		var latestRun *secrets.Run
@@ -310,25 +301,25 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   prURL,
 				Created:     latestRun.Created,
 			})
-		} else if latestHeadReview != nil && latestHeadReview.State == sdk.ReviewStateComment {
+		} else if a.Decision == review.Commented {
 			items = append(items, InboxItem{
 				ID:          fmt.Sprintf("stopped-flow-undecided-pr-%d", pr.Index),
 				Kind:        InboxStoppedFlow,
 				Title:       fmt.Sprintf("Flow stopped on !%d: verifier undecided", pr.Index),
-				Description: fmt.Sprintf("Verifier %s ended review with COMMENT at %s", userLogin(latestHeadReview.Reviewer), shortSHA(latestHeadReview.CommitID)),
+				Description: fmt.Sprintf("Verifier %s ended review with COMMENT at %s", a.Review.Reviewer, shortSHA(a.Review.CommitID)),
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
-				Created:     latestHeadReview.Submitted,
+				Created:     a.Review.Submitted,
 			})
-		} else if latestHeadReview != nil && latestHeadReview.State == sdk.ReviewStateRequestChanges {
+		} else if a.Decision == review.ChangesRequested {
 			items = append(items, InboxItem{
 				ID:          fmt.Sprintf("stopped-flow-rounds-pr-%d", pr.Index),
 				Kind:        InboxStoppedFlow,
 				Title:       fmt.Sprintf("Flow stopped on !%d: changes requested", pr.Index),
-				Description: fmt.Sprintf("Changes requested at %s by %s", shortSHA(latestHeadReview.CommitID), userLogin(latestHeadReview.Reviewer)),
+				Description: fmt.Sprintf("Changes requested at %s by %s", shortSHA(a.Review.CommitID), a.Review.Reviewer),
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
-				Created:     latestHeadReview.Submitted,
+				Created:     a.Review.Submitted,
 			})
 		}
 	}
