@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -108,16 +107,13 @@ func openRunContext(g *globals) (*runContext, error) {
 }
 
 func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
-	inst, err := g.loadInstance()
+	top, err := mainCheckout()
 	if err != nil {
 		return nil, err
 	}
-	top, err := git(".", "rev-parse", "--show-toplevel")
+	inst, err := g.loadInstance()
 	if err != nil {
-		return nil, errors.New("not inside a git checkout")
-	}
-	if strings.Contains(filepath.ToSlash(top), "/.bottown/runs/") {
-		return nil, errors.New("this is a run worktree; run bottown from the hosted checkout")
+		return nil, err
 	}
 	full, ok := repoOnInstance(top, inst)
 	if !ok {
