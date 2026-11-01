@@ -668,3 +668,31 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 		t.Fatalf("expected 200 for gc, got %d: %s", resp.StatusCode, body)
 	}
 }
+
+func TestHistoryTableScrollStyles(t *testing.T) {
+	entries, err := distFS.ReadDir("dist/assets")
+	if err != nil {
+		t.Fatalf("ReadDir dist/assets: %v", err)
+	}
+	var cssContent, jsContent string
+	for _, e := range entries {
+		data, err := distFS.ReadFile("dist/assets/" + e.Name())
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", e.Name(), err)
+		}
+		switch {
+		case strings.HasSuffix(e.Name(), ".css"):
+			cssContent += string(data)
+		case strings.HasSuffix(e.Name(), ".js"):
+			jsContent += string(data)
+		}
+	}
+	if !strings.Contains(jsContent, "history-table-container") {
+		t.Errorf("expected built JS bundle to include history-table-container class")
+	}
+	for _, want := range []string{"history-table-container", "max-height:440px", "max-block-size:440px", "overflow:auto", "position:sticky"} {
+		if !strings.Contains(cssContent, want) {
+			t.Errorf("expected built CSS bundle to contain %q", want)
+		}
+	}
+}
