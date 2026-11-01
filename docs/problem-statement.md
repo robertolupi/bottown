@@ -282,6 +282,10 @@ design is needed for the pilot.
 - Supporting a forge bottown did not deploy (the existing NAS Gitea is a
   migration source, not a target).
 - A planner role, more than two LLM roles, more than one repo per sprint.
+  (Narrowed by the [milestones design](design/milestones.md): a `plan` run
+  only proposes a static plan file in a PR, forbidden by policy from creating
+  issues; a verifier and the owner approve it, `bottown milestone apply`
+  creates the epic and child issues, and a mechanical scheduler runs them.)
 - Dashboards, OpenTelemetry, simulation. (Narrowed by the
   [local web UI design](design/web-ui.md): a host-side view of runs and
   host state the forge cannot show, linking to the forge for the rest.)

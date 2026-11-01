@@ -60,6 +60,12 @@ dropped.
   Phase 3, host UI and health view; Phase 4, inbox; Phase 5, runs, live and
   history, with flow and run actions; Phase 6, `.bottown.toml`
   with after-pull steps; Phase 7, the audit trail and run denials).
+- [Milestones: plan, check, apply and run](design/milestones.md) — two-step
+  milestone pipeline: Step 1 turns a kickoff/design issue into a reviewed plan
+  file on `main`, applies it to create an implementation epic and dependency-wired
+  child issues, and visualizes the DAG in `bottown web ui`; Step 2 runs an
+  implementation epic on a protected `milestone/<epic>` branch with auto-merge
+  of verified child PRs and a final pull request into `main`.
 
 ### History
 
