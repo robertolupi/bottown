@@ -72,17 +72,67 @@ func itoa(n int64) string {
 // Path of a run's file with the given suffix (".json", ".log", ...).
 func (w *Workspace) Path(id, suffix string) string { return filepath.Join(w.RunsDir, id+suffix) }
 
-// Save writes the record with 0600.
+// Save creates a record with 0600. Existing records must be changed with Update.
 func (w *Workspace) Save(r Record) error {
+	return w.withRecordLock(r.ID, func() error {
+		if _, err := os.Stat(w.Path(r.ID, ".json")); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return os.ErrExist
+		}
+		return w.writeRecord(r)
+	})
+}
+
+// Update serializes a read-modify-write across processes. The callback must not
+// call Save or Update for this record. An error leaves the record unchanged.
+func (w *Workspace) Update(id string, change func(*Record) error) error {
+	return w.withRecordLock(id, func() error {
+		r, err := w.Load(id)
+		if err != nil {
+			return err
+		}
+		if err := change(&r); err != nil {
+			return err
+		}
+		return w.writeRecord(r)
+	})
+}
+
+func (w *Workspace) withRecordLock(id string, fn func() error) error {
+	// Keep the lock file: unlinking it could give waiters different inodes.
+	f, err := os.OpenFile(w.Path(id, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+func (w *Workspace) writeRecord(r Record) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := w.Path(r.ID, ".json.tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.CreateTemp(w.RunsDir, r.ID+".json.tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, w.Path(r.ID, ".json"))
+	defer os.Remove(f.Name())
+	_, err = f.Write(b)
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), w.Path(r.ID, ".json"))
 }
 
 // Load reads one record.
