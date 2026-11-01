@@ -220,6 +220,10 @@ the issue) is designed with the queue.
 
 ### 3.7 Later: milestones
 
+See the [milestones design](milestones.md) for the full design of
+`bottown milestone plan`, `check`, `apply`, the Web UI dependency DAG view,
+and `bottown milestone run` on a `milestone/<epic>` integration branch.
+
 ```
 bottown milestone M --agents agy,claude,kimi
 ```
