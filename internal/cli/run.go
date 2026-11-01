@@ -24,6 +24,7 @@ import (
 
 type runOpts struct {
 	actor           string
+	repo            string
 	interactive     bool
 	allowSameFamily bool
 	allow           []string
@@ -103,6 +104,10 @@ type runContext struct {
 }
 
 func openRunContext(g *globals) (*runContext, error) {
+	return openRunContextRepo(g, "")
+}
+
+func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
 	inst, err := g.loadInstance()
 	if err != nil {
 		return nil, err
@@ -119,6 +124,15 @@ func openRunContext(g *globals) (*runContext, error) {
 		return nil, fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
 	}
 	org, name, _ := strings.Cut(full, "/")
+	if repoOverride != "" {
+		if o, r, ok := strings.Cut(repoOverride, "/"); ok {
+			if o != org {
+				return nil, fmt.Errorf("repository %q is not in org %s", repoOverride, org)
+			}
+			repoOverride = r
+		}
+		name, full = repoOverride, org+"/"+repoOverride
+	}
 	key, err := ownerKey(g)
 	if err != nil {
 		return nil, err
@@ -168,7 +182,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err != nil {
 		return err
 	}
-	rc, err := openRunContext(g)
+	rc, err := openRunContextRepo(g, o.repo)
 	if err != nil {
 		return err
 	}

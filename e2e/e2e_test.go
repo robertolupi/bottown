@@ -1419,6 +1419,213 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("flow with a scripted harness", func(t *testing.T) {
+		withHarness := func(script string, args ...string) (string, error) {
+			c := exec.Command(bin, args...)
+			c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+script)
+			c.Dir = demo
+			out, err := c.CombinedOutput()
+			return string(out), err
+		}
+		newIssue := func(title string) int64 {
+			t.Helper()
+			var issue struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": title}, &issue)
+			return issue.Number
+		}
+		assertStopComment := func(issue int64, want string) {
+			t.Helper()
+			var comments []struct{ Body string }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
+			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "bottown flow: "+want) {
+				t.Errorf("flow stop comment on #%d, want %q: %+v", issue, want, comments)
+			}
+		}
+		flowScript := func(dir, mode string) string {
+			implementCount := filepath.Join(dir, "implements")
+			verifyCount := filepath.Join(dir, "verifies")
+			verdict := "event=APPROVED"
+			if mode == "follow" {
+				verdict = `if [ "$n" = 1 ]; then event=REQUEST_CHANGES; else event=APPROVED; fi`
+			} else if mode == "reject" {
+				verdict = "event=REQUEST_CHANGES"
+			}
+			return `set -e
+if grep -Fq 'working as the **implementer**' "$BOTTOWN_PROMPT_FILE"; then
+  n=$(cat ` + implementCount + ` 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > ` + implementCount + `
+  echo "change $n" > flow.txt
+  git add flow.txt
+  git -c commit.gpgsign=false commit -qm "flow change $n"
+  git push -q origin HEAD
+  if [ "$n" = 1 ]; then
+    ` + bin + ` mcp call pr_create '{"title":"flow PR","body":"scripted"}' > /dev/null
+  fi
+  echo implemented
+else
+  n=$(cat ` + verifyCount + ` 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > ` + verifyCount + `
+  ` + verdict + `
+  ` + bin + ` mcp call review_submit "{\"event\":\"$event\",\"body\":\"flow verdict\",\"commit_id\":\"$(git rev-parse HEAD)\"}" > /dev/null
+  echo "$event"
+fi`
+		}
+		readCount := func(path string) string {
+			t.Helper()
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.TrimSpace(string(b))
+		}
+
+		t.Run("approve first time", func(t *testing.T) {
+			issue := newIssue("flow approve")
+			dir := t.TempDir()
+			out, err := withHarness(flowScript(dir, "approve"), "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "ready to merge") {
+				t.Fatalf("flow approve: %v\n%s", err, out)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
+				t.Error("approve-first-time used more than one round")
+			}
+			assertStopComment(issue, "ready to merge")
+		})
+
+		t.Run("follow-up round", func(t *testing.T) {
+			issue := newIssue("flow follow-up")
+			dir := t.TempDir()
+			out, err := withHarness(flowScript(dir, "follow"), "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "ready to merge") {
+				var prs []struct {
+					Number int64
+					Head   struct{ Ref, Sha string }
+				}
+				a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+				for _, pr := range prs {
+					if pr.Head.Ref == fmt.Sprintf("issue/%d", issue) {
+						var reviews []map[string]any
+						a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/pulls/%d/reviews", pr.Number), nil, &reviews)
+						t.Logf("follow-up PR !%d at %s: reviews %+v", pr.Number, pr.Head.Sha, reviews)
+					}
+				}
+				t.Fatalf("flow follow-up: %v\n%s", err, out)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "2" || readCount(filepath.Join(dir, "verifies")) != "2" {
+				t.Error("follow-up did not use exactly two implement and verify runs")
+			}
+			assertStopComment(issue, "ready to merge")
+		})
+
+		t.Run("out of rounds", func(t *testing.T) {
+			issue := newIssue("flow out of rounds")
+			dir := t.TempDir()
+			out, err := withHarness(flowScript(dir, "reject"), "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--rounds", "2", "--timeout", "10s")
+			if err == nil || !strings.Contains(out, "out of rounds") {
+				t.Fatalf("flow out of rounds: %v\n%s", err, out)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "2" || readCount(filepath.Join(dir, "verifies")) != "2" {
+				t.Error("out-of-rounds used the wrong number of runs")
+			}
+			assertStopComment(issue, "out of rounds")
+		})
+
+		t.Run("failed run", func(t *testing.T) {
+			issue := newIssue("flow failure")
+			out, err := withHarness("exit 3", "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err == nil || !strings.Contains(out, "run failed") {
+				t.Fatalf("flow failure: %v\n%s", err, out)
+			}
+			assertStopComment(issue, "run failed")
+		})
+
+		t.Run("resume killed flow while waiting for an actor", func(t *testing.T) {
+			issue := newIssue("flow resume")
+			blockerIssue := newIssue("actor slot blocker")
+			dir := t.TempDir()
+			idFile := filepath.Join(dir, "blocker-id")
+			blockerScript := `echo "$BOTTOWN_RUN_ID" > ` + idFile + `; trap 'exit 0' TERM; while :; do sleep 1; done`
+			blocker := exec.Command(bin, "run", "discuss", "-a", "agy", fmt.Sprint(blockerIssue))
+			blocker.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+blockerScript)
+			blocker.Dir = demo
+			var blockerOut bytes.Buffer
+			blocker.Stdout, blocker.Stderr = &blockerOut, &blockerOut
+			if err := blocker.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if blocker.Process != nil {
+					_ = blocker.Process.Kill()
+					_ = blocker.Wait()
+				}
+			})
+			deadline := time.Now().Add(10 * time.Second)
+			var blockerID string
+			for blockerID == "" {
+				b, _ := os.ReadFile(idFile)
+				blockerID = strings.TrimSpace(string(b))
+				if blockerID == "" {
+					if time.Now().After(deadline) {
+						t.Fatal("blocker did not start")
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+
+			startFlow := func(name string) (*exec.Cmd, *os.File) {
+				log, err := os.Create(filepath.Join(dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd := exec.Command(bin, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+				cmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+flowScript(dir, "approve"))
+				cmd.Dir = demo
+				cmd.Stdout, cmd.Stderr = log, log
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if cmd.Process != nil {
+						_ = cmd.Process.Kill()
+						_ = cmd.Wait()
+					}
+					_ = log.Close()
+				})
+				return cmd, log
+			}
+			waitFor := func(name, want string) {
+				t.Helper()
+				deadline := time.Now().Add(15 * time.Second)
+				for {
+					b, _ := os.ReadFile(filepath.Join(dir, name))
+					if strings.Contains(string(b), want) {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("%s did not contain %q:\n%s", name, want, b)
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+
+			first, firstLog := startFlow("first.log")
+			waitFor("first.log", "waiting for agy's actor slot")
+			_ = first.Process.Kill()
+			_ = first.Wait()
+			_ = firstLog.Close()
+
+			resumed, _ := startFlow("resumed.log")
+			waitFor("resumed.log", "waiting for agy's actor slot")
+			a.mustCmd(demo, "run", "stop", blockerID)
+			if err := resumed.Wait(); err != nil {
+				b, _ := os.ReadFile(filepath.Join(dir, "resumed.log"))
+				t.Fatalf("resumed flow: %v\n%s", err, b)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
+				t.Error("resume repeated the implement run or added a verify run")
+			}
+			assertStopComment(issue, "ready to merge")
+		})
+	})
+
 	t.Run("git gc-branches deletes only unguarded merged branches", func(t *testing.T) {
 		remote := "bottown-" + a.name
 		wt := filepath.Join(fam, "claude")

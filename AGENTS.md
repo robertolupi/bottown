@@ -100,6 +100,7 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 | Package | Role |
 |---|---|
 | `internal/cli` | All commands: host (`up`, `clone`, `actor`, `run`, `web`, …), container (`serve`, `admin`), agent CLI |
+| `internal/flow` | Single-issue supervisor: implement, cross-family verify, rounds, resume and stop reasons |
 | `internal/server` | bottown's HTTP server: health, runs, `/v1/forge`, MCP, the API and git proxies |
 | `internal/policy` | Proxy policy: the base deny-list, and run scope by role and repo |
 | `internal/provision` | Reconciler that converges Forgejo to the desired state |

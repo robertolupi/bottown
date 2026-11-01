@@ -1,0 +1,378 @@
+// Package flow supervises one issue through implement and cross-family
+// verification, rebuilding its position from the forge and run records.
+package flow
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/secrets"
+	"github.com/robertolupi/bottown/internal/server"
+)
+
+// StopReason is why a flow stopped.
+type StopReason string
+
+const (
+	ReadyToMerge      StopReason = "ready to merge"
+	OutOfRounds       StopReason = "out of rounds"
+	RunFailed         StopReason = "run failed"
+	VerifierUndecided StopReason = "verifier undecided"
+	ConflictsWithMain StopReason = "conflicts with main"
+)
+
+// ErrActorLimit marks a run creation refused by the per-actor batch limit.
+var ErrActorLimit = errors.New("actor at live batch run limit")
+
+// Options selects the issue, actors, and budgets for one flow.
+type Options struct {
+	Issue     int64
+	Repo      string
+	Implement string
+	Verify    string
+	Rounds    int
+	Timeout   time.Duration
+}
+
+// Result is the flow's final position.
+type Result struct {
+	Issue  int64
+	Repo   string
+	PR     int64
+	Reason StopReason
+	Detail string
+}
+
+// StopError is returned for every ordinary stop other than ready to merge.
+type StopError struct{ Result Result }
+
+func (e *StopError) Error() string {
+	if e.Result.Detail != "" {
+		return fmt.Sprintf("flow #%d stopped: %s (%s)", e.Result.Issue, e.Result.Reason, e.Result.Detail)
+	}
+	return fmt.Sprintf("flow #%d stopped: %s", e.Result.Issue, e.Result.Reason)
+}
+
+// RunRequest is one batch run requested by the supervisor.
+type RunRequest struct {
+	Kind  string
+	Repo  string
+	Actor string
+	Issue int64
+	PR    int64
+}
+
+// Runner executes a batch run and waits for it to finish.
+type Runner interface {
+	Run(context.Context, RunRequest) error
+}
+
+// RunnerFunc adapts a function to Runner.
+type RunnerFunc func(context.Context, RunRequest) error
+
+func (f RunnerFunc) Run(ctx context.Context, req RunRequest) error { return f(ctx, req) }
+
+// API is the owner-authenticated state the supervisor reads and writes.
+type API interface {
+	Actors(context.Context) ([]server.ActorInfo, error)
+	OpenPR(context.Context, string, string) (server.PRItem, bool, error)
+	PR(context.Context, string, int64) (server.PROut, error)
+	LiveRuns(context.Context, string) ([]secrets.Run, error)
+	Comment(context.Context, string, int64, string) error
+}
+
+// Supervisor drives one issue. RetryDelay is how long to wait before trying
+// an actor-limited run again; zero uses a short default suitable for tests.
+type Supervisor struct {
+	API        API
+	Runner     Runner
+	Out        io.Writer
+	RetryDelay time.Duration
+}
+
+// Run executes or resumes a flow. It returns nil only at ready to merge;
+// ordinary non-success stops return StopError after commenting on the issue.
+func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
+	result := Result{Issue: opts.Issue, Repo: opts.Repo}
+	if opts.Issue <= 0 || opts.Repo == "" || opts.Implement == "" || opts.Verify == "" {
+		return result, errors.New("issue, repo, implementer and verifier are required")
+	}
+	if opts.Rounds <= 0 {
+		return result, errors.New("rounds must be positive")
+	}
+	if opts.Timeout <= 0 {
+		return result, errors.New("timeout must be positive")
+	}
+	if s.API == nil || s.Runner == nil {
+		return result, errors.New("flow API and runner are required")
+	}
+	if err := s.checkFamilies(ctx, opts); err != nil {
+		return result, err
+	}
+	resuming := true
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		item, open, err := s.API.OpenPR(ctx, opts.Repo, fmt.Sprintf("issue/%d", opts.Issue))
+		if err != nil {
+			return result, err
+		}
+		var pr server.PROut
+		if open {
+			pr, err = s.API.PR(ctx, opts.Repo, item.Number)
+			if err != nil {
+				return result, err
+			}
+			result.PR = pr.Number
+		}
+		if err := s.checkLiveRuns(ctx, opts, pr.Number); err != nil {
+			return result, err
+		}
+		if !open {
+			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
+				return s.runFailure(ctx, result, err)
+			}
+			resuming = false
+			_, open, err = s.API.OpenPR(ctx, opts.Repo, fmt.Sprintf("issue/%d", opts.Issue))
+			if err != nil {
+				return result, err
+			}
+			if !open {
+				return s.stop(ctx, result, RunFailed, "the implement run ended without opening a PR")
+			}
+			continue
+		}
+
+		pr, err = s.waitMergeable(ctx, opts, pr)
+		if err != nil {
+			return result, err
+		}
+		if !pr.Mergeable {
+			if !resuming {
+				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("!%d no longer merges cleanly; rerun the flow to resolve it", pr.Number))
+			}
+			if countRounds(pr.Reviews) >= opts.Rounds {
+				return s.stop(ctx, result, OutOfRounds, "the PR conflicts with main and no implement rounds remain")
+			}
+			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
+				return s.runFailure(ctx, result, err)
+			}
+			resuming = false
+			continue
+		}
+
+		review, reviewed := latestReview(pr)
+		switch {
+		case reviewed && review.State == "APPROVED":
+			return s.stop(ctx, result, ReadyToMerge, fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA)))
+		case reviewed && review.State == "REQUEST_CHANGES":
+			if countRounds(pr.Reviews) >= opts.Rounds {
+				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("%d implement rounds used", countRounds(pr.Reviews)))
+			}
+			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
+				return s.runFailure(ctx, result, err)
+			}
+			resuming = false
+		case reviewed && review.State == "COMMENT":
+			return s.stop(ctx, result, VerifierUndecided, fmt.Sprintf("the verifier left a comment on !%d", pr.Number))
+		default:
+			head := pr.HeadSHA
+			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number}); err != nil {
+				return s.runFailure(ctx, result, err)
+			}
+			resuming = false
+			after, err := s.waitReview(ctx, opts, pr.Number, head)
+			if err != nil {
+				return result, err
+			}
+			if after.HeadSHA == head {
+				if _, ok := latestReview(after); !ok {
+					return s.stop(ctx, result, VerifierUndecided, "the verify run ended without a verdict")
+				}
+			}
+		}
+	}
+}
+
+func (s *Supervisor) waitMergeable(ctx context.Context, opts Options, pr server.PROut) (server.PROut, error) {
+	for range 50 {
+		if pr.Mergeable {
+			return pr, nil
+		}
+		if err := waitForge(ctx); err != nil {
+			return pr, err
+		}
+		var err error
+		pr, err = s.API.PR(ctx, opts.Repo, pr.Number)
+		if err != nil {
+			return pr, err
+		}
+	}
+	return pr, nil
+}
+
+func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64, head string) (server.PROut, error) {
+	for range 50 {
+		pr, err := s.API.PR(ctx, opts.Repo, number)
+		if err != nil {
+			return pr, err
+		}
+		_, reviewed := latestReview(pr)
+		if pr.HeadSHA != head || reviewed {
+			return pr, nil
+		}
+		if err := waitForge(ctx); err != nil {
+			return pr, err
+		}
+	}
+	return s.API.PR(ctx, opts.Repo, number)
+}
+
+func waitForge(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+		return nil
+	}
+}
+
+func (s *Supervisor) checkFamilies(ctx context.Context, opts Options) error {
+	actors, err := s.API.Actors(ctx)
+	if err != nil {
+		return err
+	}
+	families := map[string]string{}
+	for _, actor := range actors {
+		families[actor.Name] = actor.Family
+	}
+	implement, ok := families[opts.Implement]
+	if !ok {
+		return fmt.Errorf("unknown implementer %q", opts.Implement)
+	}
+	verify, ok := families[opts.Verify]
+	if !ok {
+		return fmt.Errorf("unknown verifier %q", opts.Verify)
+	}
+	if implement == verify {
+		return fmt.Errorf("implementer %s and verifier %s are both %s; cross-family verification is required", opts.Implement, opts.Verify, implement)
+	}
+	return nil
+}
+
+func (s *Supervisor) checkLiveRuns(ctx context.Context, opts Options, pr int64) error {
+	runs, err := s.API.LiveRuns(ctx, opts.Repo)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, run := range runs {
+		if run.Active(now) && (run.Issue == opts.Issue || pr > 0 && run.PR == pr) {
+			return fmt.Errorf("run %s is still live for this issue; end it before resuming the flow", run.ID)
+		}
+	}
+	return nil
+}
+
+func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) error {
+	delay := s.RetryDelay
+	if delay == 0 {
+		delay = time.Second
+	}
+	for {
+		if s.Out != nil {
+			target := fmt.Sprintf("#%d", req.Issue)
+			if req.PR > 0 {
+				target = fmt.Sprintf("!%d", req.PR)
+			}
+			fmt.Fprintf(s.Out, "flow #%d: %s %s with %s\n", opts.Issue, req.Kind, target, req.Actor)
+		}
+		runCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+		err := s.Runner.Run(runCtx, req)
+		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, ErrActorLimit) {
+			if s.Out != nil {
+				fmt.Fprintf(s.Out, "flow #%d: waiting for %s's actor slot\n", opts.Issue, req.Actor)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			continue
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if timedOut {
+			return fmt.Errorf("%s run timed out after %s", req.Kind, opts.Timeout)
+		}
+		return err
+	}
+}
+
+func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (Result, error) {
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	return s.stop(ctx, result, RunFailed, err.Error())
+}
+
+func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason, detail string) (Result, error) {
+	result.Reason, result.Detail = reason, detail
+	body := fmt.Sprintf("**bottown flow: %s**\n\n%s", reason, detail)
+	if result.PR > 0 {
+		body += fmt.Sprintf("\n\nPull request: !%d", result.PR)
+	}
+	if err := s.API.Comment(ctx, result.Repo, result.Issue, body); err != nil {
+		return result, fmt.Errorf("flow stopped: %s, but posting the stop comment failed: %w", reason, err)
+	}
+	if reason == ReadyToMerge {
+		return result, nil
+	}
+	return result, &StopError{Result: result}
+}
+
+func latestReview(pr server.PROut) (server.ReviewOut, bool) {
+	var latest server.ReviewOut
+	found := false
+	for _, review := range pr.Reviews {
+		if !review.Official || review.Stale || review.CommitID != pr.HeadSHA {
+			continue
+		}
+		if !found || review.ID > latest.ID {
+			latest, found = review, true
+		}
+	}
+	return latest, found
+}
+
+// countRounds includes stale and dismissed reviews: each requested change
+// consumed an implement round, even when it no longer gates the current head.
+func countRounds(reviews []server.ReviewOut) int {
+	count := 0
+	for _, review := range reviews {
+		if review.State == "REQUEST_CHANGES" {
+			count++
+		}
+	}
+	return count
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 10 {
+		return sha[:10]
+	}
+	return strings.TrimSpace(sha)
+}
