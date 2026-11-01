@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -228,5 +229,54 @@ func TestSecurity_CSPHeader(t *testing.T) {
 	}
 	if strings.Contains(csp, "'unsafe-inline'") && strings.Contains(csp, "script-src") && strings.Index(csp, "'unsafe-inline'") < strings.Index(csp, "style-src") {
 		t.Errorf("CSP must not permit unsafe-inline scripts: %s", csp)
+	}
+}
+
+func TestPush_Validation(t *testing.T) {
+	s := newTestServer(t)
+	client := &http.Client{}
+
+	pushURL := fmt.Sprintf("http://127.0.0.1:%d/api/actions/push", s.Port())
+
+	doPost := func(body io.Reader) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, pushURL, body)
+		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
+		req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", s.Port()))
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("POST push: %v", err)
+		}
+		return resp
+	}
+
+	// 1. Missing body -> 400
+	resp := doPost(nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for nil body, got %d", resp.StatusCode)
+	}
+
+	// 2. Empty / invalid JSON -> 400
+	resp = doPost(strings.NewReader("{invalid-json"))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid JSON body, got %d", resp.StatusCode)
+	}
+
+	// 3. Missing head field -> 400
+	resp = doPost(strings.NewReader(`{}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty head field, got %d", resp.StatusCode)
+	}
+
+	// 4. Blank head field -> 400
+	resp = doPost(strings.NewReader(`{"head": "   "}`))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for blank head field, got %d", resp.StatusCode)
 	}
 }

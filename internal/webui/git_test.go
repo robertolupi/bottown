@@ -2,6 +2,10 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +142,11 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		t.Errorf("expected subject to contain 'add feature', got %q", uc.Subject)
 	}
 
+	// Test head required: empty head is refused
+	if _, err := srv.ExecutePush(ctx, ""); err == nil || !strings.Contains(err.Error(), "head commit SHA is required") {
+		t.Fatalf("expected ExecutePush with empty head to be refused, got error: %v", err)
+	}
+
 	// Test head mismatch protection: trying to push with a stale head SHA is refused
 	staleHead := "1111222233334444555566667777888899990000"
 	if _, err := srv.ExecutePush(ctx, staleHead); err == nil || !strings.Contains(err.Error(), "moved to") {
@@ -221,9 +230,43 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 func TestGitState_ActorWorktrees(t *testing.T) {
 	mainCheckout, _, _ := setupThrowawayRepos(t)
 
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	mockServerCalled := false
+	mockServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs" {
+			mockServerCalled = true
+			repo := r.URL.Query().Get("repo")
+			state := r.URL.Query().Get("state")
+			if repo != "bottown" {
+				t.Errorf("expected repo query 'bottown', got %q", repo)
+			}
+			if state != "live" {
+				t.Errorf("expected state query 'live', got %q", state)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"id":    "r-live-1234",
+					"actor": "claude",
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	mockServer.Listener = listener
+	mockServer.Start()
+	defer mockServer.Close()
+
 	cfg := Config{
 		Instance: config.Instance{
-			Name: "prod",
+			Name:       "prod",
+			ServerPort: port,
 		},
 		RepoTop:  mainCheckout,
 		FullRepo: "bottown/bottown",
@@ -245,6 +288,9 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	runGit(t, actorPath, "config", "--worktree", "bottown.run", "r-98765")
 
 	wts := srv.computeWorktrees(context.Background())
+	if !mockServerCalled {
+		t.Fatalf("expected /v1/runs mock server to be queried")
+	}
 	if len(wts) != 1 {
 		t.Fatalf("expected 1 actor worktree, got %d", len(wts))
 	}
@@ -254,6 +300,9 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	}
 	if wt.LastRun != "r-98765" {
 		t.Errorf("expected last run r-98765, got %s", wt.LastRun)
+	}
+	if wt.ActiveRun != "r-live-1234" {
+		t.Errorf("expected active run r-live-1234, got %s", wt.ActiveRun)
 	}
 	if wt.IsDirty {
 		t.Errorf("expected clean worktree, got dirty")

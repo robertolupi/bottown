@@ -292,11 +292,27 @@ type pushRequest struct {
 }
 
 func (s *Server) handleActionPush(w http.ResponseWriter, r *http.Request) {
-	var req pushRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	if r.Body == nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{
+			Error: "missing request body",
+		})
+		return
 	}
-	out, err := s.ExecutePush(r.Context(), req.Head)
+	var req pushRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{
+			Error: "invalid JSON body: " + err.Error(),
+		})
+		return
+	}
+	head := strings.TrimSpace(req.Head)
+	if head == "" {
+		writeJSON(w, http.StatusBadRequest, ActionResult{
+			Error: "head commit SHA is required",
+		})
+		return
+	}
+	out, err := s.ExecutePush(r.Context(), head)
 	res := ActionResult{
 		Success: err == nil,
 		Output:  out,

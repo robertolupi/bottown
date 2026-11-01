@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 )
-
-const harnessMarker = "written by `bottown harness setup`; re-run it to refresh"
 
 // UIStatusResponse is returned by GET /api/status.
 type UIStatusResponse struct {
@@ -283,11 +281,9 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	res.Health.Worktrees = s.computeWorktrees(ctx)
 
 	// 3d. Harness slash commands
-	home, _ := os.UserHomeDir()
 	if s.cfg.HarnessChecker != nil {
+		home, _ := os.UserHomeDir()
 		res.Health.HarnessCommands = s.cfg.HarnessChecker(home)
-	} else {
-		res.Health.HarnessCommands = checkHarnessCommands(home)
 	}
 
 	// 3e. Versions
@@ -315,14 +311,17 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 	// Get active runs for this repository from server
 	activeRuns := map[string]string{} // actor -> run ID
 	var runsList []struct {
-		ID     string `json:"id"`
-		Actor  string `json:"actor"`
-		Status string `json:"status"`
+		ID    string `json:"id"`
+		Actor string `json:"actor"`
 	}
-	runsPath := "/v1/runs?state=live&repo=" + s.cfg.FullRepo
+	repoName := s.cfg.FullRepo
+	if _, repo, ok := strings.Cut(s.cfg.FullRepo, "/"); ok {
+		repoName = repo
+	}
+	runsPath := "/v1/runs?state=live&repo=" + url.QueryEscape(repoName)
 	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &runsList); err == nil {
 		for _, r := range runsList {
-			if r.Status == "live" || r.Status == "" {
+			if r.Actor != "" {
 				activeRuns[r.Actor] = r.ID
 			}
 		}
@@ -403,7 +402,10 @@ func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, 
 		return "", fmt.Errorf("rev-parse %s: %w", localRef, err)
 	}
 
-	if expectedHead != "" && currentHead != expectedHead {
+	if expectedHead == "" {
+		return "", fmt.Errorf("head commit SHA is required")
+	}
+	if currentHead != expectedHead {
 		return "", fmt.Errorf("branch %s moved to %s (was %s); refresh and review commits before pushing", base, currentHead, expectedHead)
 	}
 
@@ -465,70 +467,4 @@ func remoteDefaultBranch(top, remote string) (string, error) {
 		}
 	}
 	return "main", nil
-}
-
-func checkHarnessCommands(home string) []HarnessCommandInfo {
-	if home == "" {
-		return nil
-	}
-
-	type checkSpec struct {
-		harness   string
-		dir       string
-		filename  string
-		skillDirs bool
-	}
-
-	specs := []checkSpec{
-		{
-			harness:  "claude",
-			dir:      filepath.Join(home, ".claude", "commands"),
-			filename: "bottown-implement.md",
-		},
-		{
-			harness:  "agy",
-			dir:      filepath.Join(home, ".gemini", "config", "global_workflows"),
-			filename: "bottown-implement.md",
-		},
-		{
-			harness:   "kimi",
-			dir:       kimiDir(home),
-			filename:  "bottown-implement",
-			skillDirs: true,
-		},
-	}
-
-	var res []HarnessCommandInfo
-	for _, sp := range specs {
-		info := HarnessCommandInfo{
-			Harness: sp.harness,
-		}
-
-		targetPath := filepath.Join(sp.dir, sp.filename)
-		if sp.skillDirs {
-			targetPath = filepath.Join(sp.dir, sp.filename, "SKILL.md")
-		}
-		info.Path = targetPath
-
-		content, err := os.ReadFile(targetPath)
-		if errors.Is(err, os.ErrNotExist) {
-			info.Installed = false
-			info.Current = false
-		} else if err != nil {
-			info.Installed = false
-			info.Error = err.Error()
-		} else {
-			info.Installed = true
-			info.Current = bytes.Contains(content, []byte(harnessMarker))
-		}
-		res = append(res, info)
-	}
-	return res
-}
-
-func kimiDir(home string) string {
-	if h := os.Getenv("KIMI_CODE_HOME"); h != "" {
-		return filepath.Join(h, "skills")
-	}
-	return filepath.Join(home, ".kimi-code", "skills")
 }
