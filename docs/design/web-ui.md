@@ -1,8 +1,8 @@
 # Design: the local web UI and the supervisor
 
 Status: **design**, written with the owner in issue #55. Built so far:
-run digests (phase 2, #60), and per-actor run limits and `run stop`
-(phase 1a, #58).
+run digests (phase 2, #60), per-actor run limits and `run stop`
+(phase 1a, #58), and the single-issue supervisor (phase 1, #59).
 
 ## 1. Goal
 

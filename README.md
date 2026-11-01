@@ -188,6 +188,7 @@ has the details.
 
 | Command | What it does |
 |---|---|
+| `flow N --implement ACTOR --verify ACTOR [--rounds N] [--timeout D]` | Drive one issue through batch implement and cross-family verify runs, stopping at the owner action. |
 | `run implement -a ACTOR [-I] ISSUE` | An agent implements the issue: pushes `issue/N`, opens a PR. |
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
