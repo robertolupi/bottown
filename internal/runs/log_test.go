@@ -16,6 +16,7 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 		{"claude", "claude-2.1.316.stream.jsonl", []string{"hello"}},
 		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello"}},
 		{"kimi", "kimi-2.4.1.stream.jsonl", []string{"hello"}},
+		{"codex", "codex-0.166.0.stream.jsonl", []string{"hello"}},
 	}
 
 	for _, tt := range tests {
@@ -78,6 +79,28 @@ func TestRenderLog_Agy(t *testing.T) {
 		"All done",
 	}
 	got := RenderLog("agy", []byte(log))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRenderLog_Codex(t *testing.T) {
+	log := `{"type":"thread.started","thread_id":"01a1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I will check git status."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"git status","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git status","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"bottown","tool":"issue_show","arguments":{"issue":67},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done with checks."}}
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}
+`
+	want := []string{
+		"I will check git status.",
+		"Bash: git status",
+		"issue_show: 67",
+		"Done with checks.",
+	}
+	got := RenderLog("codex", []byte(log))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

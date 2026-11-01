@@ -12,9 +12,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -94,8 +96,10 @@ func LookupHarness(name string) (Harness, error) {
 		return agyHarness{}, nil
 	case "kimi":
 		return kimiHarness{}, nil
+	case "codex":
+		return codexHarness{}, nil
 	}
-	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi)", name)
+	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi, codex)", name)
 }
 
 // RunEnv is the environment of a harness process: the user's, minus forge
@@ -577,6 +581,211 @@ func kimiText(raw json.RawMessage) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// codexHarness runs OpenAI's Codex CLI. Like agy and kimi, the launcher writes
+// the workspace file <worktree>/.codex/config.toml (excluded from git), which
+// names the variable holding the run key instead of the key. Batch runs execute
+// non-interactively via `codex exec`.
+type codexHarness struct{}
+
+// CodexMCPPath is the workspace config path inside a worktree.
+const CodexMCPPath = ".codex/config.toml"
+
+func (codexHarness) PrepareMCP(l *Launch, _ string) error {
+	if out, err := Git(l.Dir, nil, "ls-files", "--", CodexMCPPath); err == nil && out != "" {
+		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a codex run", CodexMCPPath)
+	}
+	var b strings.Builder
+	// In batch mode, Command sets the bottown MCP server via -c CLI flags which
+	// take precedence. PrepareMCP writes .codex/config.toml for interactive runs
+	// and sessions started without CLI flags.
+	fmt.Fprintf(&b, "[mcp_servers.bottown]\nurl = %q\nbearer_token_env_var = %q\n", l.MCPURL, "BOTTOWN_RUN_KEY")
+	if userServers, err := codexUserServers(); err == nil {
+		for _, name := range userServers {
+			if name != "bottown" {
+				fmt.Fprintf(&b, "\n[mcp_servers.%s]\nenabled = false\n", tomlKeySegment(name))
+			}
+		}
+	}
+	path := filepath.Join(l.Dir, CodexMCPPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return err
+	}
+	l.MCPConfig = path
+	return nil
+}
+
+// tomlKeySegment formats a bare key segment, quoting it if it contains
+// non-bare key characters like dots or spaces.
+func tomlKeySegment(s string) string {
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return strconv.Quote(s)
+		}
+	}
+	return s
+}
+
+// codexUserServers returns the names of the owner's MCP servers (from
+// $CODEX_HOME/config.toml, default ~/.codex/config.toml).
+func codexUserServers() ([]string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	b, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		MCPServers map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("codex user config: %w", err)
+	}
+	var names []string
+	for name := range cfg.MCPServers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// codexBinary is codex on PATH, else where its installer puts it.
+func codexBinary() string {
+	if _, err := exec.LookPath("codex"); err == nil {
+		return "codex"
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(h, ".local", "bin", "codex"); fileExists(p) {
+			return p
+		}
+	}
+	return "codex"
+}
+
+func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
+	mcpURL := fmt.Sprintf("mcp_servers.bottown.url=%q", l.MCPURL)
+	mcpKey := `mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY"`
+	var args []string
+	if l.Interactive {
+		args = []string{
+			"-s", "danger-full-access",
+			"-c", mcpURL,
+			"-c", mcpKey,
+		}
+		if userServers, err := codexUserServers(); err == nil {
+			for _, name := range userServers {
+				if name != "bottown" {
+					args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.enabled=false", tomlKeySegment(name)))
+				}
+			}
+		}
+		args = append(args, l.Prompt)
+	} else {
+		// codex exec --dangerously-bypass-approvals-and-sandbox runs without
+		// local approvals or sandboxing; forge access is bounded by the run
+		// key. The sandbox is bypassed so implementers and verifiers can run
+		// the bottown CLI (network), git push, make check (build cache), and
+		// make e2e (Docker socket), and discuss runs can post comments.
+		// Note: l.ReadOnly deliberately does not select a restricted sandbox
+		// here because local read-only sandboxes block network access needed
+		// for bottown comment; read-only scope is enforced by the server's
+		// policy on the run key.
+		args = []string{
+			"exec",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--json",
+			"--ephemeral",
+			"--ignore-user-config",
+			"-c", mcpURL,
+			"-c", mcpKey,
+			l.Prompt,
+		}
+	}
+	cmd := exec.CommandContext(ctx, codexBinary(), args...)
+	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
+	return cmd, nil
+}
+
+// Summary is the text of the last completed agent_message item, else the last
+// non-JSON output line.
+func (codexHarness) Summary(log []byte) string {
+	var last string
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type string `json:"type"`
+			Item *struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(line, &ev) == nil && ev.Type == "item.completed" && ev.Item != nil && ev.Item.Type == "agent_message" && ev.Item.Text != "" {
+			last = strings.TrimSpace(ev.Item.Text)
+		}
+	})
+	if last != "" {
+		return last
+	}
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && !strings.HasPrefix(l, "{") {
+			return l
+		}
+	}
+	return ""
+}
+
+// Usage sums usage from all turn.completed events. InputTokens stores the
+// non-cached input tokens (input_tokens - cached_input_tokens), matching the
+// semantics used by other harnesses in the digest.
+func (codexHarness) Usage(log []byte) *secrets.Usage {
+	var (
+		u     *secrets.Usage
+		turns int64
+	)
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type  string `json:"type"`
+			Usage *struct {
+				InputTokens           *int64 `json:"input_tokens"`
+				CachedInputTokens     *int64 `json:"cached_input_tokens"`
+				CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
+				OutputTokens          *int64 `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Type != "turn.completed" || ev.Usage == nil {
+			return
+		}
+		turns++
+		if u == nil {
+			u = &secrets.Usage{}
+		}
+		if ev.Usage.InputTokens != nil {
+			in := *ev.Usage.InputTokens
+			if ev.Usage.CachedInputTokens != nil {
+				in -= *ev.Usage.CachedInputTokens
+			}
+			addTokens(&u.InputTokens, &in)
+		}
+		addTokens(&u.OutputTokens, ev.Usage.OutputTokens)
+		addTokens(&u.CacheReadTokens, ev.Usage.CachedInputTokens)
+		addTokens(&u.CacheWriteTokens, ev.Usage.CacheWriteInputTokens)
+	})
+	if u != nil {
+		u.Turns = &turns
+	}
+	return u
 }
 
 type scriptHarness struct{ cmd string }
