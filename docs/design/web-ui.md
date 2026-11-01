@@ -260,8 +260,8 @@ be recomputed.
 | Ready to merge | an open PR's current head has an official `APPROVED` review from a family other than the author's, and it merges cleanly | merged or closed, the head moves, or it starts to conflict |
 | Conflicts with main | an open PR no longer merges cleanly | the flow is re-run and resolves it, or the PR is closed |
 | Stopped flow | a flow stopped as out of rounds, run failed or verifier undecided (§3.2) | the flow is re-run, or the issue is closed |
-| Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up |
-| Discuss answer | a discuss run answered on an issue, and the owner has not commented there since | the owner comments, or closes the issue |
+| Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
+| Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
 
 Each row links to the issue or PR in Forgejo (merging happens there) and

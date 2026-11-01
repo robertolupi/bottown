@@ -46,6 +46,10 @@ type InboxAction struct {
 	Command string `json:"command"`
 }
 
+// discussAnswerMargin is how long after a discuss run's end a comment by
+// its actor still counts as the answer.
+const discussAnswerMargin = time.Minute
+
 // ComputeInbox recomputes the owner inbox items from forge and run state (§4.1).
 func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	org, repo, ok := strings.Cut(s.cfg.FullRepo, "/")
@@ -364,6 +368,8 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 2. Server runs with key expired while live
+	// Ended (revoked) by `bottown run gc`: the run key no longer
+	// authenticates, so `run end` cannot end them.
 	for _, sr := range serverRuns {
 		if sr.Ended == nil && !sr.Expires.IsZero() && now.After(sr.Expires) {
 			if seenBrokenRun[sr.ID] {
@@ -374,10 +380,14 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				ID:          fmt.Sprintf("broken-run-expired-%s", sr.ID),
 				Kind:        InboxBrokenRun,
 				Title:       fmt.Sprintf("Run %s key expired while live", sr.ID),
-				Description: fmt.Sprintf("Run %s (%s by %s) expired while live; end it with `bottown run end` in its worktree", sr.ID, sr.Kind, sr.Actor),
+				Description: fmt.Sprintf("Run %s (%s by %s) expired while live; `bottown run gc` ends it as revoked", sr.ID, sr.Kind, sr.Actor),
 				Target:      sr.ID,
 				TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
-				Created:     sr.Expires,
+				Action: &InboxAction{
+					Label:   "Clean up",
+					Command: "bottown run gc",
+				},
+				Created: sr.Expires,
 			})
 		}
 	}
@@ -433,11 +443,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		var comments []*sdk.Comment
 		_ = s.callServer(ctx, http.MethodGet, cPath, nil, &comments)
 
+		// The answer is the discussant's last comment by the run's end
+		// (plus a margin for clock skew): a later comment by the same
+		// actor, such as an implement handover, is not the answer and
+		// must not hide an owner reply made before it.
 		discussActor := discussRun.Actor
 		answerTime := *discussRun.Ended
+		answerBy := discussRun.Ended.Add(discussAnswerMargin)
 		for _, c := range comments {
 			poster := userLogin(c.Poster)
-			if poster == discussActor {
+			if poster == discussActor && !c.Created.After(answerBy) {
 				answerTime = c.Created
 			}
 		}

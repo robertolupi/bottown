@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bufio"
+	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 func TestStoppedHandover(t *testing.T) {
@@ -89,5 +92,26 @@ func TestSignalHarnessNoGroup(t *testing.T) {
 	}
 	if syscall.Kill(child, 0) != nil {
 		t.Errorf("child %d outside a harness group was signalled", child)
+	}
+}
+
+func TestExpiredLive(t *testing.T) {
+	now := time.Now().UTC()
+	ended := now.Add(-time.Hour)
+	live := []secrets.Run{
+		{ID: "r-active", Expires: now.Add(time.Hour)},
+		{ID: "r-expired", Expires: now.Add(-time.Minute)},
+		{ID: "r-launched", Expires: now.Add(-time.Minute)},
+		{ID: "r-dead-launcher", Expires: now.Add(-time.Minute)},
+		{ID: "r-ended", Expires: now.Add(-time.Minute), Ended: &ended},
+		{ID: "r-no-expiry"},
+	}
+	local := []runs.Record{
+		{ID: "r-launched", Status: runs.StatusRunning, PID: os.Getpid()},
+		{ID: "r-dead-launcher", Status: runs.StatusDead},
+	}
+	got := expiredLive(live, local, now)
+	if want := []string{"r-expired", "r-dead-launcher"}; !slices.Equal(got, want) {
+		t.Errorf("expiredLive = %v, want %v", got, want)
 	}
 }

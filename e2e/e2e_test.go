@@ -1246,9 +1246,43 @@ func TestE2E(t *testing.T) {
 			}
 			return n, kimi
 		}
+		// ownerRuns calls /v1/runs with the owner key.
+		ownerRuns := func(method, path string, body any, out any) {
+			t.Helper()
+			var r io.Reader
+			if body != nil {
+				b, _ := json.Marshal(body)
+				r = bytes.NewReader(b)
+			}
+			req, _ := http.NewRequest(method, a.cfg.ServerURL()+path, r)
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode/100 != 2 {
+				t.Fatalf("%s %s: %s", method, path, resp.Status)
+			}
+			if out != nil {
+				json.NewDecoder(resp.Body).Decode(out)
+			}
+		}
+		// A run whose key expired while live cannot end itself: gc revokes it.
+		var expired struct{ ID string }
+		ownerRuns("POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number, "ttl_seconds": 1}, &expired)
+		time.Sleep(1500 * time.Millisecond)
 		// Everything here ended moments ago: --older-than purges nothing.
-		if out := a.mustCmd(demo, "run", "gc", "--older-than", "1h"); !strings.Contains(out, "removed 2 runs, purged 0 ended runs") {
+		if out := a.mustCmd(demo, "run", "gc", "--older-than", "1h"); !strings.Contains(out, "removed 2 runs, purged 0 ended runs") || !strings.Contains(out, "whose key expired while live") {
 			t.Errorf("gc --older-than: %s", out)
+		}
+		var revoked struct {
+			Status string
+			Ended  *time.Time
+		}
+		ownerRuns("GET", "/v1/runs/"+expired.ID, nil, &revoked)
+		if revoked.Status != "revoked" || revoked.Ended == nil {
+			t.Errorf("expired run after gc: %+v, want ended revoked", revoked)
 		}
 		if n, _ := endedInDemo(); n < 2 {
 			t.Errorf("ended demo runs before purge: %d", n)
