@@ -848,43 +848,52 @@
             </li>
           </ul>
 
-          <div class="worktrees-section">
-            <h3>Actor Worktrees</h3>
-            <div class="table-container">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Actor</th>
-                    <th>Head</th>
-                    <th>Status</th>
-                    <th>Active Run</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each status.health.worktrees as wt}
+          {#if status.health.worktrees.length > 0}
+            <div class="worktrees-section">
+              <h3>Actor Worktrees</h3>
+              <div class="table-container">
+                <table class="data-table">
+                  <thead>
                     <tr>
-                      <td class="font-mono"><strong>{wt.actor}</strong></td>
-                      <td class="font-mono text-sm">{wt.head}</td>
-                      <td>
-                        {#if wt.is_dirty}
-                          <span class="badge badge-warning">dirty</span>
-                        {:else}
-                          <span class="badge badge-success">clean</span>
-                        {/if}
-                      </td>
-                      <td>
-                        {#if wt.active_run}
-                          <span class="badge badge-accent">{wt.active_run}</span>
-                        {:else}
-                          <span class="muted text-sm">idle</span>
-                        {/if}
-                      </td>
+                      <th>Actor</th>
+                      <th>HEAD</th>
+                      <th>Status</th>
+                      <th>Run</th>
+                      <th>Path</th>
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {#each status.health.worktrees as wt}
+                      <tr>
+                        <td>
+                          <strong>{wt.actor}</strong>
+                          {#if wt.ephemeral}
+                            <span class="badge" title="Worktree of a launched run under .bottown/runs">{wt.kind} {wt.target}</span>
+                          {/if}
+                        </td>
+                        <td class="font-mono text-sm">{wt.head}</td>
+                        <td>
+                          <span class="badge {wt.is_dirty ? 'badge-warning' : 'badge-success'}">
+                            {wt.is_dirty ? 'dirty' : 'clean'}
+                          </span>
+                        </td>
+                        <td>
+                          {#if wt.active_run}
+                            <span class="badge badge-accent">live: {wt.active_run}</span>
+                          {:else if wt.last_run}
+                            <span class="text-sm muted">{wt.last_run}</span>
+                          {:else}
+                            <span class="muted">-</span>
+                          {/if}
+                        </td>
+                        <td class="text-sm muted"><code>{wt.path}</code></td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          {/if}
         </div>
       </section>
     </div>

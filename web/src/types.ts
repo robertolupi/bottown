@@ -36,6 +36,9 @@ export interface ActorWorktreeInfo {
   is_dirty: boolean;
   active_run?: string;
   last_run?: string;
+  ephemeral?: boolean;
+  kind?: string;
+  target?: string;
 }
 
 export interface HarnessCommandInfo {
