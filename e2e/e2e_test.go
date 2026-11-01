@@ -1390,6 +1390,41 @@ func TestE2E(t *testing.T) {
 			t.Errorf("gc killed run: %s", out)
 		}
 
+		// A record whose launcher is dead may name a harness pid since
+		// reused by an unrelated process: stop refuses and signals nothing.
+		deadLauncher := exec.Command("true")
+		if err := deadLauncher.Run(); err != nil {
+			t.Fatal(err)
+		}
+		unrelated := exec.Command("sleep", "300")
+		unrelated.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := unrelated.Start(); err != nil {
+			t.Fatal(err)
+		}
+		unrelatedExited := make(chan struct{})
+		go func() { _ = unrelated.Wait(); close(unrelatedExited) }()
+		t.Cleanup(func() { _ = unrelated.Process.Kill(); <-unrelatedExited })
+		stale := map[string]any{
+			"id": "r-stale", "kind": "implement", "actor": "claude", "instance": a.cfg.Name, "repo": "bottown/demo",
+			"issue": stopIssue.Number, "harness": "claude", "status": "running", "started": time.Now().UTC(),
+			"pid": deadLauncher.Process.Pid, "harness_pid": unrelated.Process.Pid,
+		}
+		staleFile := filepath.Join(demo, ".bottown", "runs", "r-stale.json")
+		if b, err := json.Marshal(stale); err != nil {
+			t.Fatal(err)
+		} else if err := os.WriteFile(staleFile, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := a.cmd(demo, "run", "stop", "--grace", "1s", "r-stale"); err == nil || !strings.Contains(out, "launcher") || !strings.Contains(out, "is dead") {
+			t.Errorf("run stop with a dead launcher: %v\n%s", err, out)
+		}
+		select {
+		case <-unrelatedExited:
+			t.Errorf("run stop signalled the unrelated process %d", unrelated.Process.Pid)
+		case <-time.After(500 * time.Millisecond):
+		}
+		_ = os.Remove(staleFile)
+
 		// A batch discuss run from main: the question reaches the prompt
 		// through stdin, the agent comments, and it cannot push.
 		discuss := "set -e; grep -q '## Question to discuss' \"$BOTTOWN_PROMPT_FILE\"; grep -q \"what's best: blah or foo?\" \"$BOTTOWN_PROMPT_FILE\"; " +
