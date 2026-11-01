@@ -15,6 +15,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -594,16 +595,55 @@ func (codexHarness) PrepareMCP(l *Launch, _ string) error {
 	if out, err := Git(l.Dir, nil, "ls-files", "--", CodexMCPPath); err == nil && out != "" {
 		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a codex run", CodexMCPPath)
 	}
-	content := fmt.Sprintf("[mcp_servers.bottown]\nurl = %q\nbearer_token_env_var = %q\n", l.MCPURL, "BOTTOWN_RUN_KEY")
+	var b strings.Builder
+	fmt.Fprintf(&b, "[mcp_servers.bottown]\nurl = %q\nbearer_token_env_var = %q\n", l.MCPURL, "BOTTOWN_RUN_KEY")
+	if userServers, err := codexUserServers(); err == nil {
+		for _, name := range userServers {
+			if name != "bottown" {
+				fmt.Fprintf(&b, "\n[mcp_servers.%s]\nenabled = false\n", name)
+			}
+		}
+	}
 	path := filepath.Join(l.Dir, CodexMCPPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 		return err
 	}
 	l.MCPConfig = path
 	return nil
+}
+
+// codexUserServers returns the names of the owner's MCP servers (from
+// $CODEX_HOME/config.toml, default ~/.codex/config.toml).
+func codexUserServers() ([]string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	b, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		MCPServers map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("codex user config: %w", err)
+	}
+	var names []string
+	for name := range cfg.MCPServers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // codexBinary is codex on PATH, else where its installer puts it.
@@ -620,28 +660,35 @@ func codexBinary() string {
 }
 
 func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
-	sandbox := "workspace-write"
-	if l.ReadOnly {
-		sandbox = "read-only"
-	}
 	mcpURL := fmt.Sprintf("mcp_servers.bottown.url=%q", l.MCPURL)
 	mcpKey := `mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY"`
 	var args []string
 	if l.Interactive {
 		args = []string{
-			"-s", sandbox,
+			"-s", "danger-full-access",
 			"-c", mcpURL,
 			"-c", mcpKey,
-			l.Prompt,
 		}
+		if userServers, err := codexUserServers(); err == nil {
+			for _, name := range userServers {
+				if name != "bottown" {
+					args = append(args, "-c", fmt.Sprintf("mcp_servers.%s.enabled=false", name))
+				}
+			}
+		}
+		args = append(args, l.Prompt)
 	} else {
+		// codex exec --dangerously-bypass-approvals-and-sandbox runs without
+		// local approvals or sandboxing; forge access is bounded by the run
+		// key. The sandbox is bypassed so implementers and verifiers can run
+		// the bottown CLI (network), git push, make check (build cache), and
+		// make e2e (Docker socket), and discuss runs can post comments.
 		args = []string{
 			"exec",
+			"--dangerously-bypass-approvals-and-sandbox",
 			"--json",
 			"--ephemeral",
 			"--ignore-user-config",
-			"--sandbox", sandbox,
-			"-c", `approval_policy="never"`,
 			"-c", mcpURL,
 			"-c", mcpKey,
 			l.Prompt,
@@ -680,7 +727,9 @@ func (codexHarness) Summary(log []byte) string {
 	return ""
 }
 
-// Usage sums usage from all turn.completed events.
+// Usage sums usage from all turn.completed events. InputTokens stores the
+// non-cached input tokens (input_tokens - cached_input_tokens), matching the
+// semantics used by other harnesses in the digest.
 func (codexHarness) Usage(log []byte) *secrets.Usage {
 	var (
 		u     *secrets.Usage
@@ -703,7 +752,13 @@ func (codexHarness) Usage(log []byte) *secrets.Usage {
 		if u == nil {
 			u = &secrets.Usage{}
 		}
-		addTokens(&u.InputTokens, ev.Usage.InputTokens)
+		if ev.Usage.InputTokens != nil {
+			in := *ev.Usage.InputTokens
+			if ev.Usage.CachedInputTokens != nil {
+				in -= *ev.Usage.CachedInputTokens
+			}
+			addTokens(&u.InputTokens, &in)
+		}
 		addTokens(&u.OutputTokens, ev.Usage.OutputTokens)
 		addTokens(&u.CacheReadTokens, ev.Usage.CachedInputTokens)
 		addTokens(&u.CacheWriteTokens, ev.Usage.CacheWriteInputTokens)

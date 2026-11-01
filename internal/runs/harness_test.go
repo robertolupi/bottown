@@ -289,7 +289,7 @@ func TestHarnessDigests(t *testing.T) {
 		}},
 		{kimiHarness{}, "kimi-2.4.1.stream.jsonl", "hello", nil},
 		{codexHarness{}, "codex-0.166.0.stream.jsonl", "hello", &secrets.Usage{
-			InputTokens: i64(10), OutputTokens: i64(2), CacheReadTokens: i64(5), CacheWriteTokens: i64(0),
+			InputTokens: i64(186), OutputTokens: i64(5), CacheReadTokens: i64(17536), CacheWriteTokens: i64(0),
 			Turns: i64(1),
 		}},
 	} {
@@ -324,10 +324,16 @@ func TestHarnessDigests(t *testing.T) {
 }
 
 func TestCodexPrepareMCP(t *testing.T) {
-	dir := t.TempDir()
+	dir, home := t.TempDir(), t.TempDir()
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
+	t.Setenv("CODEX_HOME", home)
+	os.WriteFile(filepath.Join(home, "config.toml"), []byte(`[mcp_servers.botfam]
+url = "https://stale.example"
+[mcp_servers.bottown]
+url = "https://stale.example"
+`), 0o600)
 	l := Launch{Dir: dir, MCPURL: "http://127.0.0.1:3041/mcp", Key: "btk_x", RunID: "r-1"}
 	if err := (codexHarness{}).PrepareMCP(&l, t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -340,7 +346,13 @@ func TestCodexPrepareMCP(t *testing.T) {
 	if strings.Contains(s, "btk_x") {
 		t.Errorf("config holds key: %s", s)
 	}
-	for _, want := range []string{`[mcp_servers.bottown]`, `url = "http://127.0.0.1:3041/mcp"`, `bearer_token_env_var = "BOTTOWN_RUN_KEY"`} {
+	for _, want := range []string{
+		`[mcp_servers.bottown]`,
+		`url = "http://127.0.0.1:3041/mcp"`,
+		`bearer_token_env_var = "BOTTOWN_RUN_KEY"`,
+		`[mcp_servers.botfam]`,
+		`enabled = false`,
+	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config lacks %q:\n%s", want, s)
 		}
@@ -356,13 +368,19 @@ func TestCodexPrepareMCP(t *testing.T) {
 }
 
 func TestCodexCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	os.WriteFile(filepath.Join(home, "config.toml"), []byte(`[mcp_servers.botfam]
+url = "https://stale.example"
+`), 0o600)
+
 	l := Launch{Dir: t.TempDir(), Prompt: "do it", MCPURL: "http://127.0.0.1:3041/mcp", Key: "k"}
 	c, err := (codexHarness{}).Command(t.Context(), l)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(c.Args[1:], " ")
-	want := `exec --json --ephemeral --ignore-user-config --sandbox workspace-write -c approval_policy="never" -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" do it`
+	want := `exec --dangerously-bypass-approvals-and-sandbox --json --ephemeral --ignore-user-config -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" do it`
 	if got != want {
 		t.Errorf("batch args:\n got %s\nwant %s", got, want)
 	}
@@ -370,7 +388,6 @@ func TestCodexCommand(t *testing.T) {
 	l.ReadOnly = true
 	c, _ = (codexHarness{}).Command(t.Context(), l)
 	got = strings.Join(c.Args[1:], " ")
-	want = `exec --json --ephemeral --ignore-user-config --sandbox read-only -c approval_policy="never" -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" do it`
 	if got != want {
 		t.Errorf("read-only args:\n got %s\nwant %s", got, want)
 	}
@@ -378,7 +395,7 @@ func TestCodexCommand(t *testing.T) {
 	l.Interactive = true
 	c, _ = (codexHarness{}).Command(t.Context(), l)
 	got = strings.Join(c.Args[1:], " ")
-	want = `-s read-only -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" do it`
+	want = `-s danger-full-access -c mcp_servers.bottown.url="http://127.0.0.1:3041/mcp" -c mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY" -c mcp_servers.botfam.enabled=false do it`
 	if got != want {
 		t.Errorf("interactive args:\n got %s\nwant %s", got, want)
 	}

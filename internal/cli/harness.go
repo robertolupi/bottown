@@ -44,8 +44,8 @@ var harnessCommands = map[string]struct {
 	// runs `bottown run start` like agy's.
 	"kimi": {kimiSkillsDir, "kimi-skill.md", "kimi-discuss.md", true, "/skill:"},
 	// Codex user skills: ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md,
-	// invoked as /bottown-implement.
-	"codex": {codexSkillsDir, "codex-skill.md", "codex-discuss.md", true, "/"},
+	// invoked as $bottown-implement.
+	"codex": {codexSkillsDir, "codex-skill.md", "codex-discuss.md", true, "$"},
 }
 
 // kimiSkillsDir is $KIMI_CODE_HOME/skills, default ~/.kimi-code/skills.
@@ -82,6 +82,7 @@ harness (default: all):
   kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss}/SKILL.md
           (invoked as /skill:bottown-implement 12)
   codex   ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md
+          (invoked as $bottown-implement 12)
 
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12

@@ -4,12 +4,8 @@ description: Start a bottown {{.Kind}} run in this actor worktree, then do it
 ---
 <!-- {{.Marker}} -->
 
-The user's request, as typed after `/bottown-{{.Kind}}`:
-
-> $ARGUMENTS
-
-1. Take the {{.Target}} number from the request. If there is none, ask for it
-   and stop.
+1. Take the {{.Target}} number from the user's message. If there is none, ask
+   for it and stop.
 2. In this workspace, run `{{.Bottown}} run start {{.Kind}} <number>`, with
    the number as digits only (`12`, not `#12`: the shell reads `#` as the
    start of a comment).

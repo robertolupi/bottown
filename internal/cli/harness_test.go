@@ -74,10 +74,13 @@ func TestInstallCommands(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"name: bottown-" + kind + "\n", "\n> $ARGUMENTS\n", self + " run start " + kind + " <number>", harnessMarker} {
+		for _, want := range []string{"name: bottown-" + kind + "\n", "user's message", self + " run start " + kind + " <number>", harnessMarker} {
 			if !strings.Contains(string(skill), want) {
 				t.Errorf("codex %s skill lacks %q:\n%s", kind, want, skill)
 			}
+		}
+		if strings.Contains(string(skill), "$ARGUMENTS") {
+			t.Errorf("codex %s skill should not use literal $ARGUMENTS:\n%s", kind, skill)
 		}
 	}
 

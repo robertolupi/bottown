@@ -4,12 +4,8 @@ description: Start a bottown discuss run in this actor worktree, to review and d
 ---
 <!-- {{.Marker}} -->
 
-The user's request, as typed after `/bottown-discuss`:
-
-> $ARGUMENTS
-
-1. Take the issue number from the start of the request; the words after it
-   are the question to discuss. If there is no number, ask for it and stop.
+1. Take the issue number from the start of the user's message; the words after
+   it are the question to discuss. If there is no number, ask for it and stop.
 2. In this workspace, run `{{.Bottown}} run start discuss <number>`, with
    the number as digits only (`12`, not `#12`). Do not pass the question to
    the command: it may hold quotes or `#`, which the shell would misread.
