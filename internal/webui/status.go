@@ -68,6 +68,7 @@ type HealthChecklist struct {
 	Worktrees         []ActorWorktreeInfo    `json:"worktrees"`
 	HarnessCommands   []HarnessCommandInfo   `json:"harness_commands"`
 	Version           VersionCheck           `json:"version"`
+	RepoSettings      RepoSettingsCheck      `json:"repo_settings"`
 }
 
 type AgentInstructionsCheck struct {
@@ -302,6 +303,9 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		res.Health.Version.ServerVersion = "unreachable"
 		res.Health.Version.Matches = false
 	}
+
+	// 3f. Repository settings (§4.4), from the forge's default branch
+	res.Health.RepoSettings = s.LoadRepoSettings(ctx)
 
 	// 4. Owner inbox (§4.1)
 	inbox, err := s.ComputeInbox(ctx)

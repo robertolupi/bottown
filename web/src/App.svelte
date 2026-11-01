@@ -15,6 +15,9 @@
   let showStopModal = $state<boolean>(false);
   let showGCModal = $state<boolean>(false);
   let showTimelineModal = $state<boolean>(false);
+  // After-pull confirmation modal (§4.4): the steps from main's .bottown.toml
+  let showAfterPullModal = $state<boolean>(false);
+  let afterPullOutput = $state<string | null>(null);
   let actionLoading = $state<boolean>(false);
 
   // Stop modal state
@@ -134,6 +137,11 @@
       }
       actionMessage = { type: 'success', text: `Pull succeeded: ${data.output || 'up to date'}` };
       await loadStatus(true);
+      // Show the declared after-pull steps; they run only on confirmation.
+      if (status?.health?.repo_settings?.after_pull?.length) {
+        afterPullOutput = null;
+        showAfterPullModal = true;
+      }
     } catch (e: any) {
       actionMessage = { type: 'error', text: e.message };
     } finally {
@@ -164,6 +172,37 @@
     } finally {
       actionLoading = false;
     }
+  }
+
+  async function handleConfirmAfterPull() {
+    if (actionLoading) return;
+    actionLoading = true;
+    actionMessage = null;
+    afterPullOutput = null;
+
+    try {
+      const res = await fetch('/api/actions/after-pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps: status?.health?.repo_settings?.after_pull ?? [] }),
+      });
+      const data: ActionResult = await res.json();
+      afterPullOutput = data.output || null;
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'After-pull steps failed');
+      }
+      actionMessage = { type: 'success', text: 'After-pull steps succeeded' };
+      await loadStatus(true);
+    } catch (e: any) {
+      actionMessage = { type: 'error', text: e.message };
+    } finally {
+      actionLoading = false;
+    }
+  }
+
+  function openAfterPull() {
+    afterPullOutput = null;
+    showAfterPullModal = true;
   }
 
   async function handleStartFlow() {
@@ -708,6 +747,22 @@
               </button>
             </div>
           {/if}
+
+          {#if status.health.repo_settings.after_pull.length > 0}
+            <div class="commits-list">
+              <h3>After-pull steps (<code>{status.health.repo_settings.file}</code> on <code>{status.health.repo_settings.branch}</code>):</h3>
+              <ul>
+                {#each status.health.repo_settings.after_pull as step}
+                  <li class="commit-item"><code>{step}</code></li>
+                {/each}
+              </ul>
+            </div>
+            <div class="actions-row">
+              <button class="btn btn-secondary" onclick={openAfterPull} disabled={actionLoading}>
+                Run after-pull steps…
+              </button>
+            </div>
+          {/if}
         </div>
       </section>
 
@@ -743,6 +798,25 @@
                   {status.health.protected_main.protected
                     ? 'Forgejo main is protected'
                     : status.health.protected_main.error || 'Main branch unprotected'}
+                </span>
+              </div>
+            </li>
+
+            <li class="check-item">
+              <span class="check-icon {status.health.repo_settings.error ? 'icon-error' : status.health.repo_settings.found ? 'icon-success' : 'icon-warning'}">
+                {status.health.repo_settings.error ? '✗' : status.health.repo_settings.found ? '✓' : '!'}
+              </span>
+              <div class="check-content">
+                <strong>Repository Settings</strong>
+                <span class="muted text-sm">
+                  {#if status.health.repo_settings.error}
+                    {status.health.repo_settings.error}
+                  {:else if status.health.repo_settings.found}
+                    <code>{status.health.repo_settings.file}</code> on {status.health.repo_settings.branch}:
+                    {status.health.repo_settings.after_pull.length} after-pull step{status.health.repo_settings.after_pull.length === 1 ? '' : 's'}
+                  {:else}
+                    No <code>{status.health.repo_settings.file}</code> on {status.health.repo_settings.branch}; using the defaults
+                  {/if}
                 </span>
               </div>
             </li>
@@ -1092,6 +1166,47 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick={() => (showTimelineModal = false)}>
           Close
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showAfterPullModal}
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    onclick={() => { if (!actionLoading) showAfterPullModal = false; }}
+    onkeydown={(e) => { if (e.key === 'Escape' && !actionLoading) showAfterPullModal = false; }}
+  >
+    <div
+      class="modal-card"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3>Run the after-pull steps</h3>
+      <p>
+        <code>{status?.health?.repo_settings?.file}</code> on <code>{status?.health?.repo_settings?.branch}</code>
+        ({status?.health?.repo_settings?.commit?.slice(0, 12)}) declares these commands. They run one at a time,
+        with <code>sh -c</code>, in the main checkout, stopping at the first that fails:
+      </p>
+      <ul class="modal-commits-list">
+        {#each status?.health?.repo_settings?.after_pull || [] as step}
+          <li><code>{step}</code></li>
+        {/each}
+      </ul>
+      {#if afterPullOutput}
+        <pre class="modal-output">{afterPullOutput}</pre>
+      {/if}
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick={() => (showAfterPullModal = false)} disabled={actionLoading}>
+          Close
+        </button>
+        <button class="btn btn-accent" onclick={handleConfirmAfterPull} disabled={actionLoading}>
+          {actionLoading ? 'Running...' : 'Confirm & Run'}
         </button>
       </div>
     </div>
@@ -1719,6 +1834,17 @@
 
   .modal-commits-list li {
     margin-bottom: 6px;
+  }
+
+  .modal-output {
+    max-height: 240px;
+    overflow: auto;
+    font-size: 12px;
+    padding: 8px;
+    margin: 0 0 16px;
+    background: rgba(125, 125, 125, 0.1);
+    border-radius: 6px;
+    white-space: pre-wrap;
   }
 
   .modal-actions {

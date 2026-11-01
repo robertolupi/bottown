@@ -63,6 +63,17 @@ export interface HealthChecklist {
     server_version: string;
     matches: boolean;
   };
+  repo_settings: RepoSettingsCheck;
+}
+
+export interface RepoSettingsCheck {
+  checked: boolean;
+  found: boolean;
+  file: string;
+  branch: string;
+  commit?: string;
+  after_pull: string[];
+  error?: string;
 }
 
 export type InboxItemKind =

@@ -351,6 +351,15 @@ The file names commands; bottown runs them only when the owner asks
 (after-pull steps are shown, or run on the owner's click with the command
 in full view).
 
+bottown resolves `main`'s head commit and reads the file at that commit,
+through the API proxy as the owner; the checkout's own copy is never read.
+Unknown keys are an error, shown in the health checklist, so a misspelt
+key is not silently ignored. After a Pull, the UI shows the steps in a
+confirmation; on confirm it sends back the steps it showed, and the host
+reads the file again and runs nothing unless they are still exactly
+those. The steps run one at a time, with `sh -c`, in the main checkout,
+and stop at the first that fails.
+
 ### 4.5 Later: declared checks
 
 Today the verifier runs "the repository's checks" as the repository's
