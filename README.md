@@ -18,8 +18,9 @@ instructions for agents working on this repository are in
 - **git**.
 - **An agent harness** for each actor you want to run: today
   [Claude Code](https://claude.com/claude-code) (`claude`), Antigravity
-  (`agy`), [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`) and
-  [Codex CLI](https://openaicli.com/docs) (`codex`).
+  (`agy`), [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`),
+  [Codex CLI](https://openaicli.com/docs) (`codex`) and
+  [Crush](https://github.com/charmbracelet/crush) (`crush`).
 - macOS is the tested host: the owner's keys live in the Keychain. On other
   systems they go to a `0600` file under the instance's host config.
 
@@ -65,7 +66,8 @@ bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss
 ```
 
 In kimi they are skills: `/skill:bottown-implement 1`; in codex, skills in
-`~/.codex/skills/`: `$bottown-implement 1`. Codex setup also adds allow rules
+`~/.codex/skills/`: `$bottown-implement 1`; in crush, skills in
+`~/.config/crush/skills/`: `/bottown-implement 1`. Codex setup also adds allow rules
 for plain `bottown` and the setup binary’s absolute path to
 `~/.codex/rules/default.rules`, preserving other rules. `CODEX_HOME` relocates
 both skills and rules. Restart Codex after setup to load the rules; more
@@ -191,7 +193,7 @@ has the details.
 | `repo add [NAME]` | Host the current checkout on the instance under a `bottown` remote, with labels and protection. |
 | `actor setup ACTOR…` | Create or repair actor worktrees (in the main checkout). |
 | `actor ls` | List the main checkout's actor worktrees. |
-| `harness setup [claude\|agy\|kimi\|codex]…` | Install the `/bottown-*` slash commands into the harnesses. |
+| `harness setup [claude\|agy\|kimi\|codex\|crush]…` | Install the `/bottown-*` slash commands into the harnesses. |
 | `git gc-branches [--dry-run] [--pattern P]` | Delete `issue/*` branches merged into the default branch, on the forge and locally (in the main checkout). Keeps any branch checked out in a worktree, with a live run, or with an open PR. |
 
 ### Runs (owner, from the main checkout)

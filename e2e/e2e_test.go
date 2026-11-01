@@ -233,7 +233,7 @@ func TestE2E(t *testing.T) {
 	owner := a.ownerKey()
 
 	t.Run("accounts, org and labels match the spec", func(t *testing.T) {
-		for _, u := range []string{"owner", "claude", "codex", "agy", "kimi", "manager"} {
+		for _, u := range []string{"owner", "claude", "codex", "agy", "kimi", "crush", "manager"} {
 			a.mustAPI(owner, "GET", "/users/"+u, nil, nil)
 		}
 		var labels []struct{ Name string }

@@ -46,6 +46,9 @@ var harnessCommands = map[string]struct {
 	// Codex user skills: ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md,
 	// invoked as $bottown-implement.
 	"codex": {codexSkillsDir, "codex-skill.md", "codex-discuss.md", true, "$"},
+	// Crush user skills: ~/.config/crush/skills/bottown-{implement,verify,discuss}/SKILL.md,
+	// invoked as /bottown-implement.
+	"crush": {crushSkillsDir, "crush-skill.md", "crush-discuss.md", true, "/"},
 }
 
 // kimiSkillsDir is $KIMI_CODE_HOME/skills, default ~/.kimi-code/skills.
@@ -64,6 +67,14 @@ func codexSkillsDir(home string) string {
 	return filepath.Join(home, ".codex", "skills")
 }
 
+// crushSkillsDir is $CRUSH_SKILLS_DIR, default ~/.config/crush/skills.
+func crushSkillsDir(home string) string {
+	if d := os.Getenv("CRUSH_SKILLS_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".config", "crush", "skills")
+}
+
 type commandData struct {
 	Kind, Target, Bottown, Marker string
 }
@@ -72,7 +83,7 @@ func newHarness() *cobra.Command {
 	h := &cobra.Command{Use: "harness", Short: "Set up agent harnesses for bottown"}
 	var force bool
 	setup := &cobra.Command{
-		Use:   "setup [claude|agy|kimi|codex]...",
+		Use:   "setup [claude|agy|kimi|codex|crush]...",
 		Short: "Install /bottown-implement, /bottown-verify and /bottown-discuss in harnesses' global commands",
 		Long: `Install /bottown-implement, /bottown-verify and /bottown-discuss for each
 harness (default: all):
@@ -83,6 +94,8 @@ harness (default: all):
           (invoked as /skill:bottown-implement 12)
   codex   ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md
           (invoked as $bottown-implement 12)
+  crush   ~/.config/crush/skills/bottown-{implement,verify,discuss}/SKILL.md
+          (invoked as /bottown-implement 12)
 
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
@@ -96,7 +109,7 @@ $CODEX_HOME/rules/default.rules (default ~/.codex/rules/default.rules), preservi
 other rules. Restart Codex to load them.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				args = []string{"claude", "agy", "kimi", "codex"}
+				args = []string{"claude", "agy", "kimi", "codex", "crush"}
 			}
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -182,7 +195,7 @@ func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
 		return nil
 	}
 	var res []webui.HarnessCommandInfo
-	for _, harness := range []string{"claude", "agy", "kimi", "codex"} {
+	for _, harness := range []string{"claude", "agy", "kimi", "codex", "crush"} {
 		hc, ok := harnessCommands[harness]
 		if !ok {
 			continue

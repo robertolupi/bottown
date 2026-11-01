@@ -432,6 +432,7 @@ log has, at run end, into the digest:
 | agy | the `result` event | tokens (thinking counted as output), turns and duration from the `result` event; no cost |
 | kimi | the last assistant message without tool calls | none known |
 | codex | the last completed `agent_message` item | input (excluding cached), cached input as cache reads, output and turns, summed over `turn.completed` events; no cost or duration |
+| crush | the last completed assistant message or plain text output | prompt and completion tokens, turns and cost from session meta; no cache or duration |
 
 The live tail renders the same events, one line per assistant message or
 tool call. Unknown usage stays unknown.

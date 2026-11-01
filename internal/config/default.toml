@@ -61,6 +61,11 @@ name = "kimi"
 family = "moonshot"
 harness = "kimi"
 
+[[actors]]
+name = "crush"
+family = "deepseek"
+harness = "crush"
+
 # The manager acts only inside bottown (merges, statuses) and never gets an
 # API key.
 [manager]

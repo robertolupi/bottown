@@ -17,6 +17,7 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello"}},
 		{"kimi", "kimi-2.4.1.stream.jsonl", []string{"hello"}},
 		{"codex", "codex-0.166.0.stream.jsonl", []string{"hello"}},
+		{"crush", "crush-0.99.0.log", []string{"hello"}},
 	}
 
 	for _, tt := range tests {
@@ -103,6 +104,46 @@ func TestRenderLog_Codex(t *testing.T) {
 	got := RenderLog("codex", []byte(log))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRenderLog_Crush(t *testing.T) {
+	jsonLog := `{
+  "messages": [
+    {
+      "role": "user",
+      "parts": [{"type": "text", "text": "start"}]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {"type": "text", "text": "I will check git status."},
+        {"type": "tool_call", "tool_call": {"name": "bash", "arguments": {"command": "git status"}}},
+        {"type": "text", "text": "All checks passed."}
+      ]
+    }
+  ]
+}`
+	wantJSON := []string{
+		"I will check git status.",
+		"bash: git status",
+		"All checks passed.",
+	}
+	gotJSON := RenderLog("crush", []byte(jsonLog))
+	if !reflect.DeepEqual(gotJSON, wantJSON) {
+		t.Fatalf("jsonLog got %v, want %v", gotJSON, wantJSON)
+	}
+
+	textLog := `I will check git status.
+All checks passed.
+`
+	wantText := []string{
+		"I will check git status.",
+		"All checks passed.",
+	}
+	gotText := RenderLog("crush", []byte(textLog))
+	if !reflect.DeepEqual(gotText, wantText) {
+		t.Fatalf("textLog got %v, want %v", gotText, wantText)
 	}
 }
 

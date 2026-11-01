@@ -22,7 +22,7 @@ func TestInstallCommands(t *testing.T) {
 	cmd.SetOut(&out)
 	t.Setenv("KIMI_CODE_HOME", "")
 	t.Setenv("CODEX_HOME", "")
-	for _, h := range []string{"claude", "agy", "kimi", "codex"} {
+	for _, h := range []string{"claude", "agy", "kimi", "codex", "crush"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
 		}
@@ -82,6 +82,21 @@ func TestInstallCommands(t *testing.T) {
 		}
 		if strings.Contains(string(skill), "$ARGUMENTS") {
 			t.Errorf("codex %s skill should not use literal $ARGUMENTS:\n%s", kind, skill)
+		}
+	}
+
+	for _, kind := range []string{"implement", "verify", "discuss"} {
+		skill, err := os.ReadFile(filepath.Join(home, ".config", "crush", "skills", "bottown-"+kind, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"name: bottown-" + kind + "\n", "user-invocable: true", "disable-model-invocation: true", "user's message", self + " run start " + kind + " <number>", harnessMarker} {
+			if !strings.Contains(string(skill), want) {
+				t.Errorf("crush %s skill lacks %q:\n%s", kind, want, skill)
+			}
+		}
+		if strings.Contains(string(skill), "$ARGUMENTS") {
+			t.Errorf("crush %s skill should not use literal $ARGUMENTS:\n%s", kind, skill)
 		}
 	}
 
@@ -239,8 +254,8 @@ func TestCheckHarnessCurrent(t *testing.T) {
 
 	// 1. Initially nothing is installed
 	statuses := checkHarnessCurrent(home)
-	if len(statuses) != 4 {
-		t.Fatalf("expected 4 harnesses, got %d", len(statuses))
+	if len(statuses) != 5 {
+		t.Fatalf("expected 5 harnesses, got %d", len(statuses))
 	}
 	for _, s := range statuses {
 		if s.Installed || s.Current {
@@ -251,7 +266,7 @@ func TestCheckHarnessCurrent(t *testing.T) {
 	// 2. Install all four harnesses
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	for _, h := range []string{"claude", "agy", "kimi", "codex"} {
+	for _, h := range []string{"claude", "agy", "kimi", "codex", "crush"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
 		}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -292,6 +293,7 @@ func TestHarnessDigests(t *testing.T) {
 			InputTokens: i64(186), OutputTokens: i64(5), CacheReadTokens: i64(17536), CacheWriteTokens: i64(0),
 			Turns: i64(1),
 		}},
+		{crushHarness{}, "crush-0.99.0.log", "hello", nil},
 	} {
 		log, err := os.ReadFile(filepath.Join("testdata", tc.file))
 		if err != nil {
@@ -418,5 +420,126 @@ func TestCodexSummary(t *testing.T) {
 	}
 	if got := (codexHarness{}).Summary([]byte("plain text fallback\n")); got != "plain text fallback" {
 		t.Fatalf("fallback summary = %q", got)
+	}
+}
+
+func TestCrushPrepareMCP(t *testing.T) {
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	l := Launch{Dir: dir, MCPURL: "http://127.0.0.1:3041/mcp", Key: "btk_x", RunID: "r-1"}
+	if err := (crushHarness{}).PrepareMCP(&l, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if l.MCPConfig != filepath.Join(dir, CrushMCPPath) {
+		t.Fatalf("config path %s", l.MCPConfig)
+	}
+	b, err := os.ReadFile(l.MCPConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MCP         map[string]map[string]any `json:"mcp"`
+		Permissions struct {
+			AllowedTools []string `json:"allowed_tools"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	headers, _ := cfg.MCP["bottown"]["headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer $BOTTOWN_RUN_KEY" {
+		t.Errorf("headers %v", headers)
+	}
+	if strings.Contains(string(b), "btk_x") {
+		t.Error("config contains raw token")
+	}
+	hasEdit := slices.Contains(cfg.Permissions.AllowedTools, "edit")
+	if !hasEdit {
+		t.Error("writing run lacked edit tool")
+	}
+
+	l.ReadOnly = true
+	if err := (crushHarness{}).PrepareMCP(&l, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(l.MCPConfig)
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(cfg.Permissions.AllowedTools, "edit") || slices.Contains(cfg.Permissions.AllowedTools, "multiedit") || slices.Contains(cfg.Permissions.AllowedTools, "write") {
+		t.Errorf("read-only run contains write tools: %v", cfg.Permissions.AllowedTools)
+	}
+
+	exec.Command("git", "-C", dir, "add", CrushMCPPath).Run()
+	if err := (crushHarness{}).PrepareMCP(&l, t.TempDir()); err == nil || !strings.Contains(err.Error(), "tracks") {
+		t.Fatalf("tracked config: %v", err)
+	}
+}
+
+func TestCrushCommand(t *testing.T) {
+	l := Launch{Dir: t.TempDir(), Prompt: "do it", Key: "k"}
+	c, err := (crushHarness{}).Command(t.Context(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.Args[1:], " "); got != "run --quiet do it" {
+		t.Errorf("args %q", got)
+	}
+	env := strings.Join(c.Env, "\n")
+	if !strings.Contains(env, "BOTTOWN_RUN_KEY=k") {
+		t.Errorf("env lacks BOTTOWN_RUN_KEY")
+	}
+
+	l.Interactive = true
+	if _, err := (crushHarness{}).Command(t.Context(), l); err == nil || !strings.Contains(err.Error(), "/bottown-") {
+		t.Errorf("interactive: %v", err)
+	}
+}
+
+func TestCrushSummary(t *testing.T) {
+	sess := `{
+  "messages": [
+    {
+      "role": "user",
+      "parts": [{"type": "text", "text": "start"}]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {"type": "text", "text": "I will check git status."},
+        {"type": "text", "text": "All checks passed."}
+      ]
+    }
+  ]
+}`
+	if got := (crushHarness{}).Summary([]byte(sess)); got != "All checks passed." {
+		t.Fatalf("summary = %q", got)
+	}
+	if got := (crushHarness{}).Summary([]byte("plain text summary\n")); got != "plain text summary" {
+		t.Fatalf("fallback summary = %q", got)
+	}
+}
+
+func TestCrushUsage(t *testing.T) {
+	sess := `{
+  "meta": {
+    "cost": 0.005,
+    "prompt_tokens": 100,
+    "completion_tokens": 20,
+    "total_tokens": 120
+  },
+  "messages": [
+    {"role": "user"},
+    {"role": "assistant"}
+  ]
+}`
+	u := (crushHarness{}).Usage([]byte(sess))
+	if u == nil {
+		t.Fatal("usage is nil")
+	}
+	if *u.InputTokens != 100 || *u.OutputTokens != 20 || *u.CostUSD != 0.005 || *u.Turns != 1 {
+		t.Fatalf("usage: %+v", u)
 	}
 }
