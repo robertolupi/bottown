@@ -1288,35 +1288,43 @@ func TestE2E(t *testing.T) {
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "stop run"}, &stopIssue)
 		// The harness spawns a child, as harnesses spawn MCP servers, and
 		// exits cleanly on TERM: stopping the run must reach the child too.
-		idFile := filepath.Join(t.TempDir(), "run-id")
-		childFile := filepath.Join(t.TempDir(), "child-pid")
-		longRun := `sleep 300 & trap 'exit 0' TERM; echo $! > ` + childFile + `; echo "$BOTTOWN_RUN_ID" > ` + idFile + `; while :; do sleep 1; done`
-		stopCmd := exec.Command(bin, "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
-		stopCmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+longRun)
-		stopCmd.Dir = demo
-		var runOut bytes.Buffer
-		stopCmd.Stdout, stopCmd.Stderr = &runOut, &runOut
-		if err := stopCmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			if stopCmd.Process != nil {
-				_ = stopCmd.Process.Kill()
-				_ = stopCmd.Wait()
+		// startLong starts a batch run of script, which writes its run id to
+		// the file named by $ID_FILE, and returns the launcher, its output
+		// and the run id.
+		startLong := func(script string) (*exec.Cmd, *bytes.Buffer, string) {
+			t.Helper()
+			idFile := filepath.Join(t.TempDir(), "run-id")
+			c := exec.Command(bin, "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
+			c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+script, "ID_FILE="+idFile)
+			c.Dir = demo
+			var out bytes.Buffer
+			c.Stdout, c.Stderr = &out, &out
+			if err := c.Start(); err != nil {
+				t.Fatal(err)
 			}
-		})
-		var stopID string
-		deadline := time.Now().Add(10 * time.Second)
-		for stopID == "" {
-			b, _ := os.ReadFile(idFile)
-			stopID = strings.TrimSpace(string(b))
-			if stopID == "" {
-				if time.Now().After(deadline) {
-					t.Fatal("long run did not write its id")
+			t.Cleanup(func() {
+				if c.Process != nil {
+					_ = c.Process.Kill()
+					_ = c.Wait()
 				}
-				time.Sleep(100 * time.Millisecond)
+			})
+			var id string
+			deadline := time.Now().Add(10 * time.Second)
+			for id == "" {
+				b, _ := os.ReadFile(idFile)
+				id = strings.TrimSpace(string(b))
+				if id == "" {
+					if time.Now().After(deadline) {
+						t.Fatalf("long run did not write its id\n%s", out.String())
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
 			}
+			return c, &out, id
 		}
+		childFile := filepath.Join(t.TempDir(), "child-pid")
+		longRun := `sleep 300 & trap 'exit 0' TERM; echo $! > ` + childFile + `; echo "$BOTTOWN_RUN_ID" > "$ID_FILE"; while :; do sleep 1; done`
+		stopCmd, runOut, stopID := startLong(longRun)
 		out, err = withHarness("exit 99", "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
 		if err == nil || !strings.Contains(out, "actor claude") || !strings.Contains(out, stopID) {
 			t.Fatalf("second batch run at limit: %v\n%s", err, out)
@@ -1351,6 +1359,35 @@ func TestE2E(t *testing.T) {
 		}
 		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 2 runs, purged 2 ended runs") {
 			t.Errorf("gc stopped run: %s", out)
+		}
+
+		// A harness that ignores TERM, children included, is killed after
+		// the grace period, and the run still ends as a stopped failure.
+		stubborn, stubbornOut, stubbornID := startLong(`trap '' TERM; echo "$BOTTOWN_RUN_ID" > "$ID_FILE"; while :; do sleep 1; done`)
+		if out, err := a.cmd(demo, "run", "stop", "--grace", "1s", stubbornID); err != nil || !strings.Contains(out, "killing its harness") || !strings.Contains(out, "stopped") {
+			t.Errorf("run stop of a TERM-ignoring harness: %v\n%s", err, out)
+		}
+		if err := stubborn.Wait(); err == nil || !strings.Contains(stubbornOut.String(), "failed") {
+			t.Errorf("killed launcher: %v\n%s", err, stubbornOut.String())
+		}
+		var killedRun struct{ Status string }
+		kreq, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs/"+stubbornID, nil)
+		kreq.Header.Set("Authorization", "Bearer "+owner)
+		if resp, err := http.DefaultClient.Do(kreq); err != nil {
+			t.Fatal(err)
+		} else {
+			json.NewDecoder(resp.Body).Decode(&killedRun)
+			resp.Body.Close()
+		}
+		if killedRun.Status != "failed" {
+			t.Errorf("killed run on the server: %+v", killedRun)
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", stopIssue.Number), nil, &comments)
+		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "Stopped by the owner.") || !strings.Contains(comments[len(comments)-1].Body, "**failed**") {
+			t.Errorf("killed run's stopped handover: %+v", comments)
+		}
+		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 1 runs, purged 1 ended runs") {
+			t.Errorf("gc killed run: %s", out)
 		}
 
 		// A batch discuss run from main: the question reaches the prompt
