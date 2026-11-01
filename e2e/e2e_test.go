@@ -581,6 +581,17 @@ func TestE2E(t *testing.T) {
 		if code, _ := a.api(ik, "GET", "/repos/bottown/demo/issues/1", nil); code != 200 {
 			t.Errorf("implement run read own repo: %d", code)
 		}
+		for _, sub := range []string{"dependencies", "blocks"} {
+			p := fmt.Sprintf("/repos/bottown/demo/issues/%d/%s", issue.Number, sub)
+			if code, b := a.api(ik, "GET", p, nil); code != 200 {
+				t.Errorf("implement run GET %s: %d %s", sub, code, b)
+			}
+			for _, m := range []string{"POST", "DELETE"} {
+				if code, _ := a.api(ik, m, p, map[string]any{"index": 1}); code != 403 {
+					t.Errorf("implement run %s %s: %d, want 403", m, sub, code)
+				}
+			}
+		}
 		if code, _ := a.api(ik, "GET", "/repos/bottown/elsewhere", nil); code != 403 {
 			t.Errorf("implement run read other repo: %d, want 403", code)
 		}

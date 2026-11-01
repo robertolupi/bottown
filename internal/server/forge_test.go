@@ -1,11 +1,17 @@
 package server
 
 import (
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/provision"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -185,5 +191,75 @@ func TestResolveTarget(t *testing.T) {
 	org, repo, n, err = s.resolve(noRunP, Target{Repo: "bottown/demo", Number: 15}, 0)
 	if err != nil || org != "bottown" || repo != "demo" || n != 15 {
 		t.Errorf("outside run valid: got (%s, %s, %d, %v), want (bottown, demo, 15, nil)", org, repo, n, err)
+	}
+}
+
+func TestAPIProxyIssueDependencies(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer upstream.Close()
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *secrets.State) error {
+		st.Tokens = map[string]secrets.ActorToken{"claude": {Token: "tok_claude"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	runKey, err := store.NewRun(secrets.Run{
+		ID:      "r-1",
+		Kind:    policy.Implement,
+		Actor:   "claude",
+		Org:     "bottown",
+		Repo:    "demo",
+		Issue:   4,
+		Created: now,
+		Expires: now.Add(time.Hour),
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		Owner:      "owner",
+		ForgejoURL: u,
+		Store:      store,
+		Rec:        &provision.Reconciler{Desired: config.Desired{Org: "bottown"}},
+		Policy:     policy.Default("owner"),
+		Log:        slog.Default(),
+	}
+	srv.health.Reconciled = true
+	h := srv.Handler()
+
+	for _, p := range []string{
+		"/forgejo/api/v1/repos/bottown/demo/issues/4/dependencies",
+		"/forgejo/api/v1/repos/bottown/demo/issues/4/blocks",
+	} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Authorization", "Bearer "+runKey)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s = %d (%s), want 200", p, w.Code, w.Body.String())
+		}
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			req := httptest.NewRequest(method, p, strings.NewReader(`{"index":1}`))
+			req.Header.Set("Authorization", "Bearer "+runKey)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("%s %s = %d (%s), want 403", method, p, w.Code, w.Body.String())
+			}
+		}
 	}
 }
