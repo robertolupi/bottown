@@ -13,6 +13,9 @@ instructions for agents working on this repository are in
 ## Requirements
 
 - **Go** (the version in [go.mod](go.mod)), to build the CLI.
+- **Node and npm**, to build the web UI (`make web`, which `make install`
+  runs). The built UI is not tracked: a binary built without it, such as
+  `make build`'s, serves a page that says to run `make web`.
 - **Docker**, running: each instance is one container with Forgejo and the
   bottown server. `make e2e` also needs it.
 - **git**.
@@ -32,10 +35,10 @@ cd bottown
 make install            # writes ~/.local/bin/bottown; put it on your PATH
 ```
 
-`make install` also refreshes the harness slash commands (`bottown harness
-setup`, below) and, in a fam's main checkout whose HEAD is `bottown/main`,
-upgrades the prod server to that commit (`bottown up --ref HEAD
---if-changed`); `UP=0` skips that step. It refuses to run from a linked
+`make install` also builds the web UI (`make web`), refreshes the harness
+slash commands (`bottown harness setup`, below) and, in a fam's main
+checkout whose HEAD is `bottown/main`, upgrades the prod server to that
+commit (`bottown up --ref HEAD --if-changed`); `UP=0` skips that step. It refuses to run from a linked
 worktree, such as an actor's. `make build` writes `bin/bottown` instead,
 without replacing the installed binary.
 
@@ -240,7 +243,8 @@ helper), `serve` and `admin` (inside the container), and `mcp call`.
 ## Development
 
 ```sh
-make build    # bin/bottown
+make build    # bin/bottown (the web UI only if make web ran)
+make web      # the web UI, from web/ into internal/webui/dist/ui (needs npm)
 make check    # gofmt, go mod tidy, vet, unit tests
 make e2e      # end-to-end tests on throwaway e2e-* instances (needs Docker)
 ```

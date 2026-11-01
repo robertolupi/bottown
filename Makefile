@@ -1,7 +1,15 @@
 .PHONY: build install test e2e vet check web
 
-web:
+# The web UI, built by vite into internal/webui/dist/ui, which is not
+# tracked. Needs Node and npm. make build does not depend on it: without
+# it the binary serves a stub page that says to run make web. make install
+# builds it.
+web: web/node_modules
 	cd web && npm run build
+
+web/node_modules: web/package-lock.json
+	cd web && npm ci
+	@touch $@
 
 VERSION ?= $(shell git describe --always --dirty --abbrev=12 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/robertolupi/bottown/internal/cli.Version=$(VERSION)
@@ -10,8 +18,8 @@ BINDIR  ?= $(HOME)/.local/bin
 build:
 	go build -buildvcs=false -ldflags "$(LDFLAGS)" -o bin/bottown ./cmd/bottown
 
-# The one step after pulling a change: install the CLI, refresh the harness
-# slash commands, and upgrade the prod server when HEAD is bottown/main.
+# The one step after pulling a change: build the web UI, install the CLI,
+# refresh the harness slash commands, and upgrade the prod server when HEAD is bottown/main.
 #
 # The binary is built to a temporary name and renamed: overwriting a running
 # binary in place can get it killed on macOS. In each fam's main, re-run
@@ -29,6 +37,7 @@ install:
 	@if [ "$$(git rev-parse --git-dir)" != "$$(git rev-parse --git-common-dir)" ] && [ -z "$(FORCE)" ]; then \
 	  echo "refusing to install from a linked worktree: it replaces the shared $(BINDIR)/bottown."; \
 	  echo "use make build (bin/bottown), or make install FORCE=1"; exit 1; fi
+	$(MAKE) web
 	mkdir -p $(BINDIR)
 	go build -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BINDIR)/.bottown.new ./cmd/bottown
 	mv $(BINDIR)/.bottown.new $(BINDIR)/bottown

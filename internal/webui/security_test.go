@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/robertolupi/bottown/internal/config"
 )
@@ -232,40 +235,79 @@ func TestSecurity_CSPHeader(t *testing.T) {
 	}
 }
 
-// The built assets have fixed names (web/vite.config.ts): index.html must
-// reference them, they must be embedded, and browsers must revalidate them.
-func TestStaticAssets_FixedNames(t *testing.T) {
-	s := newTestServer(t)
-	client := &http.Client{}
-	get := func(path string) (*http.Response, string) {
-		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), path), nil)
-		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return resp, string(body)
+// The built assets have fixed names (web/vite.config.ts): browsers must
+// revalidate them, and unknown paths fall back to index.html.
+func TestStaticHandler_Built(t *testing.T) {
+	ui := uiFS(fstest.MapFS{
+		"dist/README.md":           {Data: []byte("placeholder")},
+		"dist/ui/index.html":       {Data: []byte(`<script src="/assets/index.js"></script>`)},
+		"dist/ui/assets/index.js":  {Data: []byte("console.log(1)")},
+		"dist/ui/assets/index.css": {Data: []byte("body{}")},
+	})
+	if ui == nil {
+		t.Fatal("uiFS: nil for a built dist/ui")
 	}
-
-	resp, index := get("/")
-	for _, ref := range []string{`src="/assets/index.js"`, `href="/assets/index.css"`} {
-		if !strings.Contains(index, ref) {
-			t.Errorf("index.html does not reference %s:\n%s", ref, index)
+	h := staticHandler(ui)
+	for path, want := range map[string]string{
+		"/":                 "/assets/index.js",
+		"/runs":             "/assets/index.js",
+		"/assets/index.js":  "console.log(1)",
+		"/assets/index.css": "body{}",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("GET %s: %d %q, want 200 containing %q", path, rec.Code, rec.Body.String(), want)
 		}
-	}
-	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
-		t.Errorf("GET /: Cache-Control = %q, want no-cache", cc)
-	}
-	for path, ctype := range map[string]string{"/assets/index.js": "javascript", "/assets/index.css": "text/css"} {
-		resp, _ := get(path)
-		if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), ctype) {
-			t.Errorf("GET %s: %d %s, want 200 %s", path, resp.StatusCode, resp.Header.Get("Content-Type"), ctype)
-		}
-		if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
 			t.Errorf("GET %s: Cache-Control = %q, want no-cache", path, cc)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nope", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /api/nope: %d, want 404", rec.Code)
+	}
+}
+
+// dist/ui is not tracked: a binary built without `make web` serves a stub
+// page that says how to build the UI.
+func TestStaticHandler_NotBuilt(t *testing.T) {
+	if ui := uiFS(fstest.MapFS{"dist/README.md": {Data: []byte("placeholder")}}); ui != nil {
+		t.Fatal("uiFS: non-nil without dist/ui/index.html")
+	}
+	h := staticHandler(nil)
+	for _, path := range []string{"/", "/runs", "/assets/index.js"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "make web") {
+			t.Errorf("GET %s: %d %q, want 200 stub page", path, rec.Code, rec.Body.String())
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("GET %s: Content-Type = %q, want text/html", path, ct)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nope", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /api/nope: %d, want 404", rec.Code)
+	}
+}
+
+// When this checkout ran `make web`, the embedded index.html references
+// the fixed asset names.
+func TestStaticAssets_FixedNames(t *testing.T) {
+	ui := uiFS(distFS)
+	if ui == nil {
+		t.Skip("dist/ui not built (make web)")
+	}
+	index, err := fs.ReadFile(ui, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{`src="/assets/index.js"`, `href="/assets/index.css"`} {
+		if !strings.Contains(string(index), ref) {
+			t.Errorf("index.html does not reference %s:\n%s", ref, index)
 		}
 	}
 }
