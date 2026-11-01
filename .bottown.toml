@@ -1,0 +1,6 @@
+# bottown's settings for this repository (docs/design/web-ui.md §4.4).
+# bottown reads this file from the forge's main only, never from a branch.
+
+# What the owner runs in the main checkout after pulling: install the CLI,
+# refresh the harness commands, and upgrade prod to HEAD.
+after_pull = ["make install"]
