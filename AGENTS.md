@@ -88,6 +88,11 @@ bottown run end [--failed] --summary-file -
 - **After a run,** your worktree stays where the run left it, often on code
   that has since merged. Run `bottown whoami`: it shows the last run and how
   HEAD compares with `main`.
+- **Interrupted actor runs:** retry `bottown run end` after a startup or
+  ending failure. It uses the actor credential to reconcile the recorded
+  run, revoke an interrupted startup, and finish local cleanup even when
+  the run key is already revoked. `run start` also performs this recovery
+  before starting another run; it never replaces a live, prepared run.
 - **Never run `make install` from an actor worktree.** It replaces the
   shared `~/.local/bin/bottown`, which every actor and the harness commands
   use, with your branch's build, and can upgrade prod. It refuses to run

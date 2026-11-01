@@ -237,6 +237,13 @@ repository. They hold no token: the server enforces the policy.
 | `review submit --event E --commit SHA --body-file -` | A verify run's one verdict: `APPROVED`, `REQUEST_CHANGES` or `COMMENT`. |
 | `api METHOD PATH [--data JSON]` | Any Forgejo API endpoint, under the same policy. |
 
+If actor run startup or ending fails, retry `bottown run end`. It reconciles
+the recorded run using the permanent actor credential, revokes interrupted
+startup, and finishes local cleanup even if the run key is already revoked.
+Repeating it after cleanup succeeds is harmless. `run start` also recovers
+interrupted startup or an already ended run before starting another; a live,
+prepared run must still be ended explicitly.
+
 Plumbing that bottown sets up for itself: `credential` (git credential
 helper), `serve` and `admin` (inside the container), and `mcp call`.
 
