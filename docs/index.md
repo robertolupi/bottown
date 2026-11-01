@@ -46,6 +46,14 @@ days building agent-to-agent coordination and never shipped a milestone
 unattended. The problem statement below says what carries over and what was
 dropped.
 
+Forge reads through the CLI, MCP, and `/v1/forge` return complete issue and
+pull-request lists, issue comments, and pull-request reviews. The server follows
+Forgejo pages internally; callers do not supply page numbers. A failed later
+page fails the read rather than returning a partial list. PR list review status
+is `unknown` when reviews cannot be read completely. The local UI also follows
+pages for its inbox, run views, and issue timeline, retaining its existing
+best-effort behavior when a read fails.
+
 ## Documents
 
 - [Problem statement](problem-statement.md) — what bottown solves, constraints,

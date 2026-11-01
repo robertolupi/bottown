@@ -286,7 +286,7 @@ func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (I
 	for _, l := range is.Labels {
 		out.Labels = append(out.Labels, l.Name)
 	}
-	cs, _, err := c.ListIssueComments(org, repo, n, sdk.ListIssueCommentOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
+	cs, _, err := c.AllComments(org, repo, n, sdk.ListIssueCommentOptions{})
 	if err != nil {
 		return IssueOut{}, err
 	}
@@ -356,10 +356,9 @@ func (s *Server) opIssueList(ctx context.Context, p secrets.Principal, in IssueL
 	if err != nil {
 		return nil, err
 	}
-	issues, resp, err := c.ListRepoIssues(org, repo, sdk.ListIssueOption{
-		State:       state,
-		Type:        sdk.IssueTypeIssue,
-		ListOptions: sdk.ListOptions{PageSize: 50},
+	issues, resp, err := c.AllIssues(org, repo, sdk.ListIssueOption{
+		State: state,
+		Type:  sdk.IssueTypeIssue,
 	})
 	if forgejo.IsNotFound(resp, err) {
 		return nil, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
@@ -413,7 +412,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	if pr.Base != nil {
 		out.BaseBranch = pr.Base.Ref
 	}
-	rs, _, err := c.ListPullReviews(org, repo, n, sdk.ListPullReviewsOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
+	rs, _, err := c.AllReviews(org, repo, n, sdk.ListPullReviewsOptions{})
 	if err != nil {
 		return PROut{}, err
 	}
@@ -477,9 +476,8 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 	if err != nil {
 		return nil, err
 	}
-	prs, resp, err := c.ListRepoPullRequests(org, repo, sdk.ListPullRequestsOptions{
-		State:       state,
-		ListOptions: sdk.ListOptions{PageSize: 50},
+	prs, resp, err := c.AllPullRequests(org, repo, sdk.ListPullRequestsOptions{
+		State: state,
 	})
 	if forgejo.IsNotFound(resp, err) {
 		return nil, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
@@ -504,7 +502,7 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 		} else if pr.State == sdk.StateClosed {
 			item.ReviewState = "closed"
 		} else {
-			rs, _, err := c.ListPullReviews(org, repo, pr.Index, sdk.ListPullReviewsOptions{ListOptions: sdk.ListOptions{PageSize: 50}})
+			rs, _, err := c.AllReviews(org, repo, pr.Index, sdk.ListPullReviewsOptions{})
 			if err != nil {
 				item.ReviewState = "unknown"
 			} else {
