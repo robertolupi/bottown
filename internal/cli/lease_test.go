@@ -141,9 +141,14 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 			if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
 				t.Fatal(err)
 			}
-			obstruction := filepath.Join(f.a.KeyDir, "r-test.json.tmp")
+			obstruction := filepath.Join(f.a.KeyDir, "r-test.lock")
 			if stage == "config" {
 				obstruction = filepath.Join(f.a.Worktree, ".git", "config.worktree.lock")
+			}
+			if stage == "record" {
+				if err := os.Remove(obstruction); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := os.Mkdir(obstruction, 0700); err != nil {
 				t.Fatal(err)

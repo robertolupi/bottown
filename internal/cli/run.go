@@ -290,8 +290,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := c.Start(); err != nil {
 		return err
 	}
-	rec.HarnessPID = c.Process.Pid
-	if err := rc.ws.Save(rec); err != nil {
+	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
+		current.HarnessPID = c.Process.Pid
+		return nil
+	}); err != nil {
 		_ = c.Process.Kill()
 		_ = c.Wait()
 		return err
@@ -317,16 +319,23 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 
 	logBytes, _ := os.ReadFile(rc.ws.Path(run.ID, ".log"))
 	summary := h.Summary(logBytes)
+
+	now := time.Now().UTC()
+	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
+		if current.StopRequested {
+			status = runs.StatusFailed
+		}
+		current.Status, current.ExitCode, current.Ended, current.Key = status, &code, &now, ""
+		rec = *current
+		return nil
+	}); err != nil {
+		return err
+	}
 	digest = secrets.Digest{Summary: cleanSummary(rec, summary), Usage: h.Usage(logBytes)}
 	if err := handover(ctx, rc, run, rec, created.Key, status, code, summary); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 	}
 
-	now := time.Now().UTC()
-	rec.Status, rec.ExitCode, rec.Ended, rec.Key = status, &code, &now, ""
-	if err := rc.ws.Save(rec); err != nil {
-		return err
-	}
 	st := newStyles(lipgloss.NewRenderer(out))
 	if status == runs.StatusSucceeded && !o.keep {
 		if err := rc.ws.Remove(run.ID); err != nil {
@@ -864,13 +873,23 @@ handover.`,
 			if err != nil || process.Signal(syscall.Signal(0)) != nil {
 				return fmt.Errorf("run %s has no live harness process", id)
 			}
-			rec.StopRequested = true
-			if err := rc.ws.Save(rec); err != nil {
+			if err := rc.ws.Update(id, func(current *runs.Record) error {
+				if current.Status != runs.StatusRunning || current.Ended != nil {
+					return fmt.Errorf("run %s is no longer live", id)
+				}
+				current.StopRequested = true
+				rec = *current
+				return nil
+			}); err != nil {
 				return err
 			}
 			if err := signalHarness(rec.HarnessPID, syscall.SIGTERM); err != nil {
-				rec.StopRequested = false
-				_ = rc.ws.Save(rec)
+				_ = rc.ws.Update(id, func(current *runs.Record) error {
+					if current.Ended == nil {
+						current.StopRequested = false
+					}
+					return nil
+				})
 				return fmt.Errorf("stop run %s: %w", id, err)
 			}
 
