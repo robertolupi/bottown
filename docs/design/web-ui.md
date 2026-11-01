@@ -52,7 +52,7 @@ browser ──localhost, one-time token──▶ bottown web ui   (host, owner's
   CLI's actions, through the same Go code and the same checks.
 - **The server stays authoritative:** runs, keys, policy, the audit trail
   and the forge. Section 7 lists the read APIs it needs. The container's own
-  page stays as a small health page.
+  page stays as a small health page (`bottown web health`).
 - **The UI never duplicates Forgejo.** Whatever Forgejo already does
   (merging, reading and editing issues and PRs, reviews, milestones) is a
   link into Forgejo, where the owner is signed in with `bottown web

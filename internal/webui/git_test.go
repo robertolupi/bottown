@@ -1,0 +1,233 @@
+package webui
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/robertolupi/bottown/internal/config"
+)
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git -C %s %v failed: %v\nOutput: %s", dir, args, err, out)
+	}
+	return string(out)
+}
+
+func setupThrowawayRepos(t *testing.T) (mainCheckout, originDir, forgeDir string) {
+	t.Helper()
+	tmp := t.TempDir()
+
+	originDir = filepath.Join(tmp, "origin.git")
+	forgeDir = filepath.Join(tmp, "forge.git")
+	mainCheckout = filepath.Join(tmp, "main")
+
+	// 1. Create bare repos for origin and forge
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tmp, "init", "--bare", "-b", "main", originDir)
+
+	if err := os.MkdirAll(forgeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tmp, "init", "--bare", "-b", "main", forgeDir)
+
+	// 2. Setup main checkout
+	if err := os.MkdirAll(mainCheckout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, mainCheckout, "init", "-b", "main")
+	runGit(t, mainCheckout, "config", "user.name", "Tester")
+	runGit(t, mainCheckout, "config", "user.email", "tester@example.com")
+	runGit(t, mainCheckout, "remote", "add", "origin", originDir)
+	runGit(t, mainCheckout, "remote", "add", "bottown", forgeDir)
+
+	// Initial commit with AGENTS.md
+	if err := os.WriteFile(filepath.Join(mainCheckout, "AGENTS.md"), []byte("# Agents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, mainCheckout, "add", "AGENTS.md")
+	runGit(t, mainCheckout, "commit", "-m", "initial commit")
+
+	// Push main to both remotes
+	runGit(t, mainCheckout, "push", "origin", "main")
+	runGit(t, mainCheckout, "push", "bottown", "main")
+
+	return mainCheckout, originDir, forgeDir
+}
+
+func TestGitState_UpstreamAndActions(t *testing.T) {
+	mainCheckout, _, forgeDir := setupThrowawayRepos(t)
+
+	cfg := Config{
+		Instance: config.Instance{
+			Name: "prod",
+		},
+		RepoTop:    mainCheckout,
+		FullRepo:   "bottown/bottown",
+		OwnerKey:   "",
+		CLIVersion: "dev",
+	}
+
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer srv.Close()
+
+	ctx := context.Background()
+
+	// 1. Initial status: Up to date
+	st, err := srv.ComputeStatus(ctx, true)
+	if err != nil {
+		t.Fatalf("ComputeStatus: %v", err)
+	}
+	if !st.Upstream.HasUpstream {
+		t.Errorf("expected HasUpstream to be true")
+	}
+	if st.Upstream.AheadCount != 0 {
+		t.Errorf("expected AheadCount=0, got %d", st.Upstream.AheadCount)
+	}
+	if st.Upstream.BehindCount != 0 {
+		t.Errorf("expected BehindCount=0, got %d", st.Upstream.BehindCount)
+	}
+	if !st.Health.AgentInstructions.Found || st.Health.AgentInstructions.Filename != "AGENTS.md" {
+		t.Errorf("expected AGENTS.md to be found, got %+v", st.Health.AgentInstructions)
+	}
+
+	// 2. Add an unpushed commit to main with PR reference
+	if err := os.WriteFile(filepath.Join(mainCheckout, "feature.txt"), []byte("new feature"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, mainCheckout, "add", "feature.txt")
+	runGit(t, mainCheckout, "commit", "-m", "Merge pull request 'add feature' (!42) from issue/40 into main")
+
+	st, err = srv.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus after commit: %v", err)
+	}
+	if st.Upstream.AheadCount != 1 {
+		t.Fatalf("expected AheadCount=1, got %d", st.Upstream.AheadCount)
+	}
+	if len(st.Upstream.UnpushedCommits) != 1 {
+		t.Fatalf("expected 1 unpushed commit, got %d", len(st.Upstream.UnpushedCommits))
+	}
+	uc := st.Upstream.UnpushedCommits[0]
+	if uc.PRNumber != 42 {
+		t.Errorf("expected PRNumber=42, got %d", uc.PRNumber)
+	}
+	if !strings.Contains(uc.Subject, "add feature") {
+		t.Errorf("expected subject to contain 'add feature', got %q", uc.Subject)
+	}
+
+	// 3. Test ExecutePush: push main to origin
+	pushOut, err := srv.ExecutePush(ctx)
+	if err != nil {
+		t.Fatalf("ExecutePush: %v, out: %s", err, pushOut)
+	}
+	// Also push to bottown forge so base is synchronized
+	runGit(t, mainCheckout, "push", "bottown", "main")
+
+	st, err = srv.ComputeStatus(ctx, true)
+	if err != nil {
+		t.Fatalf("ComputeStatus after push: %v", err)
+	}
+	if st.Upstream.AheadCount != 0 {
+		t.Errorf("expected AheadCount=0 after push, got %d", st.Upstream.AheadCount)
+	}
+
+	// 4. Test Behind Forge & ExecutePull
+	// Clone a secondary worktree to simulate a commit pushed to forge from elsewhere
+	otherClone := filepath.Join(t.TempDir(), "other")
+	runGit(t, t.TempDir(), "clone", forgeDir, otherClone)
+	runGit(t, otherClone, "config", "user.name", "Other")
+	runGit(t, otherClone, "config", "user.email", "other@example.com")
+	if err := os.WriteFile(filepath.Join(otherClone, "remote.txt"), []byte("from forge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, otherClone, "add", "remote.txt")
+	runGit(t, otherClone, "commit", "-m", "commit from forge")
+	runGit(t, otherClone, "push", "origin", "main")
+
+	// Main checkout fetches forge and should see BehindCount=1
+	st, err = srv.ComputeStatus(ctx, true)
+	if err != nil {
+		t.Fatalf("ComputeStatus after remote push: %v", err)
+	}
+	if st.Forge.BehindCount != 1 {
+		t.Fatalf("expected Forge.BehindCount=1, got %d", st.Forge.BehindCount)
+	}
+
+	// ExecutePull
+	pullOut, err := srv.ExecutePull(ctx)
+	if err != nil {
+		t.Fatalf("ExecutePull: %v, out: %s", err, pullOut)
+	}
+
+	st, err = srv.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus after pull: %v", err)
+	}
+	if st.Forge.BehindCount != 0 {
+		t.Errorf("expected Forge.BehindCount=0 after pull, got %d", st.Forge.BehindCount)
+	}
+}
+
+func TestGitState_ActorWorktrees(t *testing.T) {
+	mainCheckout, _, _ := setupThrowawayRepos(t)
+
+	cfg := Config{
+		Instance: config.Instance{
+			Name: "prod",
+		},
+		RepoTop:  mainCheckout,
+		FullRepo: "bottown/bottown",
+	}
+
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer srv.Close()
+
+	// Enable worktreeConfig extension so --worktree config can be set
+	runGit(t, mainCheckout, "config", "extensions.worktreeConfig", "true")
+
+	// Create an actor worktree
+	actorPath := filepath.Join(t.TempDir(), "claude")
+	runGit(t, mainCheckout, "worktree", "add", actorPath, "-b", "issue/10")
+	runGit(t, actorPath, "config", "--worktree", "bottown.actor", "claude")
+	runGit(t, actorPath, "config", "--worktree", "bottown.run", "r-98765")
+
+	wts := srv.computeWorktrees(context.Background())
+	if len(wts) != 1 {
+		t.Fatalf("expected 1 actor worktree, got %d", len(wts))
+	}
+	wt := wts[0]
+	if wt.Actor != "claude" {
+		t.Errorf("expected actor claude, got %s", wt.Actor)
+	}
+	if wt.LastRun != "r-98765" {
+		t.Errorf("expected last run r-98765, got %s", wt.LastRun)
+	}
+	if wt.IsDirty {
+		t.Errorf("expected clean worktree, got dirty")
+	}
+
+	// Make it dirty by creating an uncommitted file
+	if err := os.WriteFile(filepath.Join(actorPath, "scratch.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wts = srv.computeWorktrees(context.Background())
+	if len(wts) != 1 || !wts[0].IsDirty {
+		t.Errorf("expected worktree to be dirty after untracked file")
+	}
+}

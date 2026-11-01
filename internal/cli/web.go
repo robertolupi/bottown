@@ -13,6 +13,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/server"
+	"github.com/robertolupi/bottown/internal/webui"
 	"github.com/spf13/cobra"
 )
 
@@ -53,9 +54,53 @@ func newWeb(g *globals) *cobra.Command {
 		},
 	}
 	forgejoCmd.Flags().BoolVar(&reset, "reset-password", false, "set a new owner password first (if it was changed in Forgejo)")
+	var port int
 	uiCmd := &cobra.Command{
 		Use:   "ui",
-		Short: "Open the bottown web UI signed in as the owner",
+		Short: "Start the local web UI for this checkout and open it in the browser",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			inst, err := g.loadInstance()
+			if err != nil {
+				return err
+			}
+			top, err := mainCheckout()
+			if err != nil {
+				return err
+			}
+			repo, ok := repoOnInstance(top, inst)
+			if !ok {
+				return fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
+			}
+			key, err := ownerKey(g)
+			if err != nil {
+				return err
+			}
+			srv, err := webui.NewServer(webui.Config{
+				Instance:   inst,
+				RepoTop:    top,
+				FullRepo:   repo,
+				OwnerKey:   key,
+				Port:       port,
+				CLIVersion: Version,
+			})
+			if err != nil {
+				return err
+			}
+			defer srv.Close()
+
+			loginURL := srv.LoginURL()
+			if err := openLogin(cmd, loginURL, srv.BaseURL(), printOnly); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "bottown web ui listening on %s (press Ctrl+C to stop)\n", srv.BaseURL())
+			return srv.Serve(cmd.Context())
+		},
+	}
+	uiCmd.Flags().IntVar(&port, "port", 0, "port to listen on (default: random free port)")
+	healthCmd := &cobra.Command{
+		Use:   "health",
+		Short: "Open the instance's container health page signed in as the owner",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			inst, err := g.loadInstance()
@@ -69,10 +114,10 @@ func newWeb(g *globals) *cobra.Command {
 			return openLogin(cmd, inst.ServerURL()+res.LoginPath, inst.ServerURL()+"/", printOnly)
 		},
 	}
-	for _, c := range []*cobra.Command{forgejoCmd, uiCmd} {
+	for _, c := range []*cobra.Command{forgejoCmd, uiCmd, healthCmd} {
 		c.Flags().BoolVar(&printOnly, "print", false, "print the one-time login URL instead of opening a browser")
 	}
-	web.AddCommand(forgejoCmd, uiCmd)
+	web.AddCommand(forgejoCmd, uiCmd, healthCmd)
 	return web
 }
 
