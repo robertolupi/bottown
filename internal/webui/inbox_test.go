@@ -452,6 +452,7 @@ func TestInbox_StoppedFlow(t *testing.T) {
 			ID:        11,
 			Reviewer:  &sdk.User{UserName: "claude"},
 			State:     sdk.ReviewStateRequestChanges, // changes requested
+			Official:  true,                          // Forgejo's mark on an allowed reviewer's verdict
 			CommitID:  shaHead,
 			Submitted: now,
 		},

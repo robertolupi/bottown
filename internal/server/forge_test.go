@@ -45,64 +45,6 @@ func TestParseState(t *testing.T) {
 	}
 }
 
-func TestReviewState(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		reviews []*sdk.PullReview
-		want    string
-	}{
-		{
-			name:    "no reviews",
-			reviews: nil,
-			want:    "needs review",
-		},
-		{
-			name: "only comments",
-			reviews: []*sdk.PullReview{
-				{State: sdk.ReviewStateComment},
-			},
-			want: "needs review",
-		},
-		{
-			name: "approved",
-			reviews: []*sdk.PullReview{
-				{State: sdk.ReviewStateApproved},
-			},
-			want: "approved",
-		},
-		{
-			name: "changes requested",
-			reviews: []*sdk.PullReview{
-				{State: sdk.ReviewStateRequestChanges},
-			},
-			want: "changes requested",
-		},
-		{
-			name: "approved but also changes requested",
-			reviews: []*sdk.PullReview{
-				{State: sdk.ReviewStateApproved},
-				{State: sdk.ReviewStateRequestChanges},
-			},
-			want: "changes requested",
-		},
-		{
-			name: "stale or dismissed reviews ignored",
-			reviews: []*sdk.PullReview{
-				{State: sdk.ReviewStateRequestChanges, Stale: true},
-				{State: sdk.ReviewStateApproved, Dismissed: true},
-			},
-			want: "needs review",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := reviewState(tc.reviews)
-			if got != tc.want {
-				t.Errorf("reviewState() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func testServer() *Server {
 	return &Server{
 		Rec: &provision.Reconciler{
@@ -281,14 +223,16 @@ func TestForgeCompleteReads(t *testing.T) {
 			}
 			items := []map[string]any{}
 			for i := start; i < end; i++ {
-				state := "open"
+				state, user := "open", "claude"
 				if strings.HasSuffix(path, "/reviews") {
-					state = "COMMENT"
+					state, user = "COMMENT", "codex"
 					if i == 50 {
 						state = "APPROVED"
 					}
 				}
-				items = append(items, map[string]any{"id": i + 1, "number": i + 1, "body": "context", "state": state, "head": map[string]string{"ref": fmt.Sprintf("issue/%d", i+1)}})
+				items = append(items, map[string]any{"id": i + 1, "number": i + 1, "body": "context", "state": state,
+					"head": map[string]string{"ref": fmt.Sprintf("issue/%d", i+1), "sha": "h"},
+					"user": map[string]string{"login": user}, "commit_id": "h", "official": state == "APPROVED"})
 			}
 			_ = json.NewEncoder(w).Encode(items)
 		default:
@@ -306,7 +250,7 @@ func TestForgeCompleteReads(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL, Desired: config.Desired{Org: "bottown"}}}
+	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL, Desired: config.Desired{Org: "bottown", Actors: []config.Actor{{Name: "codex", Family: "openai"}, {Name: "claude", Family: "anthropic"}}}}}
 	p := secrets.Principal{Actor: "codex"}
 	ctx := context.Background()
 	issues, err := s.opIssueList(ctx, p, IssueListIn{Repo: "demo"})

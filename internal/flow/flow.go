@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -24,6 +25,9 @@ const (
 	RunFailed         StopReason = "run failed"
 	VerifierUndecided StopReason = "verifier undecided"
 	ConflictsWithMain StopReason = "conflicts with main"
+	// ChangesRequested: the head is approved, but a request for changes at
+	// an older head still blocks the merge.
+	ChangesRequested StopReason = "changes requested"
 )
 
 // ErrActorLimit marks a run creation refused by the per-actor batch limit.
@@ -168,11 +172,19 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			continue
 		}
 
-		review, reviewed := latestReview(pr)
+		// The server assesses the reviews (internal/review), so the flow,
+		// the PR list and the inbox agree on where the PR stands.
+		assessment := pr.Assessment
 		switch {
-		case reviewed && review.State == "APPROVED":
+		case assessment.Decision == review.Approved:
 			return s.stop(ctx, result, ReadyToMerge, fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA)))
-		case reviewed && review.State == "REQUEST_CHANGES":
+		case assessment.Decision == review.ChangesRequested && !assessment.AtHead(pr.HeadSHA):
+			// A follow-up cannot clear an older head's request: only its
+			// reviewer, reviewing again, or the owner, dismissing it.
+			blocking := assessment.Review
+			return s.stop(ctx, result, ChangesRequested, fmt.Sprintf("!%d is approved at %s, but %s's request for changes at %s still blocks it; %s must review again, or the owner dismisses it",
+				pr.Number, shortSHA(pr.HeadSHA), blocking.Reviewer, shortSHA(blocking.CommitID), blocking.Reviewer))
+		case assessment.Decision == review.ChangesRequested:
 			if countRounds(pr.Reviews) >= opts.Rounds {
 				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("%d implement rounds used", countRounds(pr.Reviews)))
 			}
@@ -180,8 +192,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return s.runFailure(ctx, result, err)
 			}
 			resuming = false
-		case reviewed && review.State == "COMMENT":
-			return s.stop(ctx, result, VerifierUndecided, fmt.Sprintf("the verifier left a comment on !%d", pr.Number))
+		case assessment.Decision == review.Commented:
+			return s.stop(ctx, result, VerifierUndecided, fmt.Sprintf("%s left a comment on !%d", assessment.Review.Reviewer, pr.Number))
 		default:
 			head := pr.HeadSHA
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number}); err != nil {
@@ -193,7 +205,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return result, err
 			}
 			if after.HeadSHA == head {
-				if _, ok := latestReview(after); !ok {
+				if after.Assessment.Decision == review.NeedsReview {
 					return s.stop(ctx, result, VerifierUndecided, "the verify run ended without a verdict")
 				}
 			}
@@ -224,8 +236,7 @@ func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64,
 		if err != nil {
 			return pr, err
 		}
-		_, reviewed := latestReview(pr)
-		if pr.HeadSHA != head || reviewed {
+		if pr.HeadSHA != head || pr.Assessment.Decision != review.NeedsReview {
 			return pr, nil
 		}
 		if err := waitForge(ctx); err != nil {
@@ -342,20 +353,6 @@ func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason,
 		return result, nil
 	}
 	return result, &StopError{Result: result}
-}
-
-func latestReview(pr server.PROut) (server.ReviewOut, bool) {
-	var latest server.ReviewOut
-	found := false
-	for _, review := range pr.Reviews {
-		if !review.Official || review.Stale || review.CommitID != pr.HeadSHA {
-			continue
-		}
-		if !found || review.ID > latest.ID {
-			latest, found = review, true
-		}
-	}
-	return latest, found
 }
 
 // countRounds includes stale and dismissed reviews: each requested change
