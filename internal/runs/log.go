@@ -20,6 +20,8 @@ func RenderLog(harness string, log []byte) []string {
 		return renderKimiLog(log)
 	case "codex":
 		return renderCodexLog(log)
+	case "crush":
+		return renderScriptLog(log)
 	default:
 		return renderScriptLog(log)
 	}
@@ -218,6 +220,19 @@ func renderScriptLog(log []byte) []string {
 func formatToolCall(name string, input any) string {
 	if input == nil {
 		return name
+	}
+	if raw, ok := input.(json.RawMessage); ok {
+		var m map[string]any
+		if json.Unmarshal(raw, &m) == nil {
+			input = m
+		} else {
+			var s string
+			if json.Unmarshal(raw, &s) == nil {
+				input = s
+			} else {
+				input = string(raw)
+			}
+		}
 	}
 	if s, ok := input.(string); ok {
 		var m map[string]any

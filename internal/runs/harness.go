@@ -98,8 +98,10 @@ func LookupHarness(name string) (Harness, error) {
 		return kimiHarness{}, nil
 	case "codex":
 		return codexHarness{}, nil
+	case "crush":
+		return crushHarness{}, nil
 	}
-	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi, codex)", name)
+	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi, codex, crush)", name)
 }
 
 // RunEnv is the environment of a harness process: the user's, minus forge
@@ -787,6 +789,130 @@ func (codexHarness) Usage(log []byte) *secrets.Usage {
 	}
 	return u
 }
+
+// crushHarness runs Charm's Crush CLI. Like agy, kimi, and codex, the launcher
+// writes the workspace file <worktree>/.crush.json (excluded from git), which
+// references BOTTOWN_RUN_KEY via shell expansion instead of holding the raw key.
+// Batch runs execute non-interactively via `crush run --quiet`.
+type crushHarness struct{}
+
+// CrushMCPPath is the workspace config path inside a worktree.
+const CrushMCPPath = ".crush.json"
+
+func (crushHarness) PrepareMCP(l *Launch, _ string) error {
+	if out, err := Git(l.Dir, nil, "ls-files", "--", CrushMCPPath); err == nil && out != "" {
+		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a crush run", CrushMCPPath)
+	}
+
+	mcpServers := map[string]any{
+		"bottown": map[string]any{
+			"type": "http",
+			"url":  l.MCPURL,
+			"headers": map[string]string{
+				"Authorization": "Bearer $BOTTOWN_RUN_KEY",
+			},
+		},
+	}
+	if userServers, err := crushUserServers(); err == nil {
+		for _, name := range userServers {
+			if name != "bottown" {
+				mcpServers[name] = map[string]any{
+					"disabled": true,
+				}
+			}
+		}
+	}
+
+	// crush run automatically approves all permissions for non-interactive
+	// sessions (AutoApproveSession), so permissions.allowed_tools has no effect
+	// in batch mode. Like codex and kimi, read-only scope is not enforced
+	// locally; it is bounded by the server's policy on the run key.
+	cfg := map[string]any{
+		"$schema": "https://charm.land/crush.json",
+		"mcp":     mcpServers,
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	path := filepath.Join(l.Dir, CrushMCPPath)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	l.MCPConfig = path
+	return nil
+}
+
+func crushUserServers() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	for _, p := range []string{
+		filepath.Join(home, ".config", "crush", "crush.json"),
+		filepath.Join(home, ".local", "share", "crush", "crush.json"),
+	} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			MCP map[string]any `json:"mcp"`
+		}
+		if json.Unmarshal(b, &cfg) == nil && cfg.MCP != nil {
+			for name := range cfg.MCP {
+				seen[name] = true
+			}
+		}
+	}
+	var names []string
+	for name := range seen {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+func crushBinary() string {
+	if _, err := exec.LookPath("crush"); err == nil {
+		return "crush"
+	}
+	for _, p := range []string{
+		"/opt/homebrew/bin/crush",
+		"/usr/local/bin/crush",
+	} {
+		if fileExists(p) {
+			return p
+		}
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(h, ".local", "bin", "crush"); fileExists(p) {
+			return p
+		}
+	}
+	return "crush"
+}
+
+func (crushHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
+	if l.Interactive {
+		return nil, errors.New("crush cannot start its TUI with a prompt: start crush in the actor worktree and select /bottown-<kind> N (bottown harness setup crush installs them)")
+	}
+	args := []string{"run", "--quiet", l.Prompt}
+	cmd := exec.CommandContext(ctx, crushBinary(), args...)
+	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
+	return cmd, nil
+}
+
+// Summary is the agent's text response from stdout.
+func (crushHarness) Summary(log []byte) string {
+	return strings.TrimSpace(string(log))
+}
+
+// Usage is nil: crush run outputs model text and does not report token usage
+// on stdout.
+func (crushHarness) Usage([]byte) *secrets.Usage { return nil }
 
 type scriptHarness struct{ cmd string }
 
