@@ -14,8 +14,10 @@ instructions for agents working on this repository are in
 
 - **Go** (the version in [go.mod](go.mod)), to build the CLI.
 - **Node and npm**, to build the web UI (`make web`, which `make install`
-  runs). The built UI is not tracked: a binary built without it, such as
-  `make build`'s, serves a page that says to run `make web`.
+  runs) and to run the frontend checks and tests in `make test` and
+  `make check` (which install `web/node_modules` reproducibly with `npm ci`
+  on a clean checkout). The built UI is not tracked: a binary built without
+  it, such as `make build`'s, serves a page that says to run `make web`.
 - **Docker**, running: each instance is one container with Forgejo and the
   bottown server. `make e2e` also needs it.
 - **git**.
@@ -251,8 +253,9 @@ helper), `serve` and `admin` (inside the container), and `mcp call`.
 
 ```sh
 make build    # bin/bottown (the web UI only if make web ran)
-make web      # the web UI, from web/ into internal/webui/dist/ui (needs npm)
-make check    # gofmt, go mod tidy, vet, unit tests
+make web      # the web UI, from web/ into internal/webui/dist/ui (runs npm ci if needed)
+make test     # Go unit tests and frontend behavioral tests (runs npm ci if needed)
+make check    # gofmt, go mod tidy, vet, Go and frontend tests, svelte-check
 make e2e      # end-to-end tests on throwaway e2e-* instances (needs Docker)
 ```
 

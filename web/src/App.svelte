@@ -1,7 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo, ActiveFlowInfo, Denial } from './types';
+  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, Denial } from './types';
   import { lifecycleChange } from './lifecycle';
+  import {
+    buildFlowActionPayload,
+    buildRunActionPayload,
+    filterHistoryRuns,
+    groupLiveFlows,
+    isSameFamilyPair,
+    nextPollDelayMs,
+    parseIssueNumber,
+    parseLivePollSnapshot,
+    resolveInboxAction,
+    selectDefaultActors,
+    standaloneLiveRuns,
+  } from './state';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -58,16 +71,7 @@
   let timelineData = $state<IssueTimeline | null>(null);
   let timelineLoading = $state<boolean>(false);
 
-  function getActor(name: string): ActorDetail | undefined {
-    return status?.actors?.find((a) => a.name === name);
-  }
-
-  let flowSameFamily = $derived(
-    flowImplement !== '' &&
-    flowVerify !== '' &&
-    getActor(flowImplement)?.family !== undefined &&
-    getActor(flowImplement)?.family === getActor(flowVerify)?.family
-  );
+  let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowImplement, flowVerify));
 
   function formatElapsed(createdIso: string): string {
     if (!createdIso) return '';
@@ -78,47 +82,9 @@
     return `${m}m ${s < 10 ? '0' : ''}${s}s`;
   }
 
-  let flowGroups = $derived(() => {
-    const flows = status?.active_flows || [];
-    const runs = status?.live_runs || [];
-    if (flows.length > 0) {
-      return flows.map((f) => ({
-        flow: f,
-        runs: runs.filter((r) => r.flow && r.flow.issue === f.issue),
-      }));
-    }
-    const groups: { flow: ActiveFlowInfo; runs: LiveRunInfo[] }[] = [];
-    const map = new Map<number, { flow: ActiveFlowInfo; runs: LiveRunInfo[] }>();
-    for (const r of runs) {
-      if (r.flow) {
-        let g = map.get(r.flow.issue);
-        if (!g) {
-          g = {
-            flow: {
-              issue: r.flow.issue,
-              implement: '',
-              verify: '',
-              round: r.flow.round,
-              max_rounds: r.flow.max_rounds,
-              step: r.flow.step,
-              label: r.flow.label,
-              waiting: false,
-            },
-            runs: [],
-          };
-          map.set(r.flow.issue, g);
-          groups.push(g);
-        }
-        g.runs.push(r);
-      }
-    }
-    return groups;
-  });
+  let flowGroups = $derived(() => groupLiveFlows(status?.active_flows, status?.live_runs));
 
-  let standaloneRuns = $derived(() => {
-    if (!status?.live_runs) return [];
-    return status.live_runs.filter((r) => !r.flow);
-  });
+  let standaloneRuns = $derived(() => standaloneLiveRuns(status?.live_runs));
 
   async function toggleHistoryLog(id: string) {
     if (expandedLogs[id]) {
@@ -140,32 +106,17 @@
   }
 
   let filteredHistory = $derived(
-    historyRuns.filter((h) => {
-      if (filterActor && h.actor !== filterActor) return false;
-      if (filterKind && h.kind !== filterKind) return false;
-      if (filterStatus && h.status !== filterStatus) return false;
-      if (filterDate) {
-        const timeMs = new Date(h.ended || h.created).getTime();
-        let maxAgeMs = 0;
-        switch (filterDate) {
-          case '1h': maxAgeMs = 3600 * 1000; break;
-          case '24h': maxAgeMs = 24 * 3600 * 1000; break;
-          case '7d': maxAgeMs = 7 * 24 * 3600 * 1000; break;
-          case '30d': maxAgeMs = 30 * 24 * 3600 * 1000; break;
-        }
-        if (maxAgeMs > 0 && nowTime - timeMs > maxAgeMs) return false;
-      }
-      if (filterSearch) {
-        const s = filterSearch.toLowerCase();
-        return (
-          h.target.toLowerCase().includes(s) ||
-          h.summary.toLowerCase().includes(s) ||
-          h.id.toLowerCase().includes(s) ||
-          h.actor.toLowerCase().includes(s)
-        );
-      }
-      return true;
-    })
+    filterHistoryRuns(
+      historyRuns,
+      {
+        actor: filterActor,
+        kind: filterKind,
+        status: filterStatus,
+        date: filterDate,
+        search: filterSearch,
+      },
+      nowTime,
+    )
   );
 
   async function loadStatus(isRefresh = false) {
@@ -180,14 +131,11 @@
       }
       status = await res.json();
       // Set default actor in forms if available and unset
-      if (status?.actors && status.actors.length > 0) {
-        if (!flowImplement) flowImplement = status.actors[0].name;
-        if (!flowVerify && status.actors.length > 1) {
-          const diffFamily = status.actors.find((a) => a.family !== status!.actors![0].family);
-          flowVerify = diffFamily ? diffFamily.name : status.actors[1].name;
-        }
-        if (!runActor) runActor = status.actors[0].name;
-      }
+      ({ flowImplement, flowVerify, runActor } = selectDefaultActors(status?.actors, {
+        flowImplement,
+        flowVerify,
+        runActor,
+      }));
     } catch (e: any) {
       errorMessage = e.message || 'Unknown error loading status';
     } finally {
@@ -301,13 +249,15 @@
       const res = await fetch('/api/actions/flow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          issue: Number(flowIssue),
-          implement: flowImplement,
-          verify: flowVerify,
-          rounds: Number(flowRounds) || 3,
-          timeout: flowTimeout || '60m',
-        }),
+        body: JSON.stringify(
+          buildFlowActionPayload({
+            issue: flowIssue,
+            implement: flowImplement,
+            verify: flowVerify,
+            rounds: flowRounds,
+            timeout: flowTimeout,
+          }),
+        ),
       });
       const data: ActionResult = await res.json();
       if (!res.ok || !data.success) {
@@ -333,13 +283,15 @@
       const res = await fetch('/api/actions/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: runKind,
-          target: Number(runTarget),
-          actor: runActor,
-          question: runKind === 'discuss' ? runQuestion : undefined,
-          allow_same_family: runKind === 'verify' ? runAllowSameFamily : undefined,
-        }),
+        body: JSON.stringify(
+          buildRunActionPayload({
+            kind: runKind,
+            target: runTarget,
+            actor: runActor,
+            question: runQuestion,
+            allowSameFamily: runAllowSameFamily,
+          }),
+        ),
       });
       const data: ActionResult = await res.json();
       if (!res.ok || !data.success) {
@@ -428,8 +380,8 @@
   }
 
   function extractIssueAndOpenTimeline(target: string) {
-    const num = parseInt(target.replace(/^[#!]/, ''), 10);
-    if (!isNaN(num) && num > 0) {
+    const num = parseIssueNumber(target);
+    if (num !== null) {
       openTimeline(num);
     }
   }
@@ -478,8 +430,7 @@
         const res = await fetch('/api/runs?state=live');
         if (res.ok) {
           const data = await res.json();
-          const liveRuns: LiveRunInfo[] = Array.isArray(data) ? data : (data.live_runs || []);
-          const activeFlows: ActiveFlowInfo[] = Array.isArray(data) ? [] : (data.active_flows || []);
+          const { liveRuns, activeFlows } = parseLivePollSnapshot(data);
 
           if (status) {
             const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
@@ -497,10 +448,7 @@
         // Ignore background polling errors
       } finally {
         if (!destroyed) {
-          const hasActive =
-            (status?.live_runs && status.live_runs.length > 0) ||
-            (status?.active_flows && status.active_flows.length > 0);
-          const delay = hasActive ? 2500 : 10000;
+          const delay = nextPollDelayMs(status?.live_runs, status?.active_flows);
           pollTimeout = setTimeout(poll, delay);
         }
       }
@@ -634,11 +582,12 @@
                       <button
                         class="btn btn-sm btn-secondary"
                         onclick={() => {
-                          if (item.action?.command.includes('gc')) {
-                            gcIncludeFailed = item.action.command.includes('--failed');
+                          const resolved = resolveInboxAction(item);
+                          if (resolved?.modal === 'gc') {
+                            gcIncludeFailed = resolved.includeFailed;
                             showGCModal = true;
-                          } else if (item.action?.command.includes('stop')) {
-                            stopRunId = item.target;
+                          } else if (resolved?.modal === 'stop') {
+                            stopRunId = resolved.stopRunId;
                             showStopModal = true;
                           }
                         }}
