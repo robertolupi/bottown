@@ -50,6 +50,32 @@ type InboxAction struct {
 // its actor still counts as the answer.
 const discussAnswerMargin = time.Minute
 
+// forgejoPageLimit is the page size used when listing issues or pull
+// requests from Forgejo. Paging stops at the first page shorter than this.
+const forgejoPageLimit = 50
+
+// listAll fetches every item from a Forgejo list endpoint by paging with
+// ?page=N until a page shorter than forgejoPageLimit comes back. path must
+// already carry its query filters (state, type, …).
+func listAll[T any](ctx context.Context, s *Server, path string) ([]T, error) {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	var all []T
+	for page := 1; ; page++ {
+		var items []T
+		p := fmt.Sprintf("%s%slimit=%d&page=%d", path, sep, forgejoPageLimit, page)
+		if err := s.callServer(ctx, http.MethodGet, p, nil, &items); err != nil {
+			return nil, err
+		}
+		all = append(all, items...)
+		if len(items) < forgejoPageLimit {
+			return all, nil
+		}
+	}
+}
+
 // ComputeInbox recomputes the owner inbox items from forge and run state (§4.1).
 func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	org, repo, ok := strings.Cut(s.cfg.FullRepo, "/")
@@ -119,9 +145,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 5. Open PRs from Forgejo
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
-	var prs []*sdk.PullRequest
-	if err := s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs); err != nil {
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
+	prs, err := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	if err != nil {
 		return nil, fmt.Errorf("fetch open pull requests: %w", err)
 	}
 
@@ -136,9 +162,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 6. Open Issues from Forgejo
-	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues&limit=50", org, repo)
-	var issues []*sdk.Issue
-	if err := s.callServer(ctx, http.MethodGet, issuesPath, nil, &issues); err != nil {
+	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues", org, repo)
+	issues, err := listAll[*sdk.Issue](ctx, s, issuesPath)
+	if err != nil {
 		return nil, fmt.Errorf("fetch open issues: %w", err)
 	}
 
