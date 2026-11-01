@@ -17,9 +17,9 @@ instructions for agents working on this repository are in
   bottown server. `make e2e` also needs it.
 - **git**.
 - **An agent harness** for each actor you want to run: today
-  [Claude Code](https://claude.com/claude-code) (`claude`) and Antigravity
-  (`agy`). The `codex` and `kimi` actors have forge accounts but no harness
-  binding yet.
+  [Claude Code](https://claude.com/claude-code) (`claude`), Antigravity
+  (`agy`) and [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`). The
+  `codex` actor has a forge account but no harness binding yet.
 - macOS is the tested host: the owner's keys live in the Keychain. On other
   systems they go to a `0600` file under the instance's host config.
 
@@ -60,6 +60,8 @@ Install the slash commands the actors use inside their harness:
 bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss
 ```
 
+In kimi they are skills: `/skill:bottown-implement 1` and so on.
+
 ### 2a. Start a new project: a README as the first change
 
 A repository needs one commit before it can be hosted. Make an empty one,
@@ -98,7 +100,8 @@ cd ~/src/fams/hello/claude && claude
 ```
 
 or from `main`, where bottown starts the harness in a fresh run worktree
-(`-I` gives you its interactive UI):
+(`-I` gives you its interactive UI, except for kimi, which cannot start
+its UI with a prompt):
 
 ```sh
 cd ~/src/fams/hello/main
@@ -174,7 +177,7 @@ has the details.
 | `repo add [NAME]` | Host the current checkout on the instance under a `bottown` remote, with labels and protection. |
 | `actor setup ACTOR…` | Create or repair actor worktrees (in the main checkout). |
 | `actor ls` | List the main checkout's actor worktrees. |
-| `harness setup [claude\|agy]…` | Install the `/bottown-*` slash commands into the harnesses. |
+| `harness setup [claude\|agy\|kimi]…` | Install the `/bottown-*` slash commands into the harnesses. |
 | `git gc-branches [--dry-run] [--pattern P]` | Delete `issue/*` branches merged into the default branch, on the forge and locally (in the main checkout). Keeps any branch checked out in a worktree, with a live run, or with an open PR. |
 
 ### Runs (owner, from the main checkout)

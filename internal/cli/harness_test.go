@@ -19,7 +19,8 @@ func TestInstallCommands(t *testing.T) {
 	cmd := &cobra.Command{}
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	for _, h := range []string{"claude", "agy"} {
+	t.Setenv("KIMI_CODE_HOME", "")
+	for _, h := range []string{"claude", "agy", "kimi"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
 		}
@@ -53,6 +54,18 @@ func TestInstallCommands(t *testing.T) {
 	adis, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-discuss.md"))
 	if err != nil || !strings.Contains(string(adis), self+" run start discuss <number>") {
 		t.Errorf("agy discuss workflow: %v\n%s", err, adis)
+	}
+
+	for _, kind := range []string{"implement", "verify", "discuss"} {
+		skill, err := os.ReadFile(filepath.Join(home, ".kimi-code", "skills", "bottown-"+kind, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"name: bottown-" + kind + "\n", "disableModelInvocation: true", "\n> $ARGUMENTS\n", self + " run start " + kind + " <number>", harnessMarker} {
+			if !strings.Contains(string(skill), want) {
+				t.Errorf("kimi %s skill lacks %q:\n%s", kind, want, skill)
+			}
+		}
 	}
 
 	// Re-running is a no-op; a foreign file is protected unless --force.
