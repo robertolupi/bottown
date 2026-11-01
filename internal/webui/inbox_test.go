@@ -491,6 +491,9 @@ func TestInbox_BrokenRun(t *testing.T) {
 	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-dead-1" {
 		t.Fatalf("expected broken_run for r-dead-1, got: %+v", items)
 	}
+	if items[0].Action == nil || items[0].Action.Command != "bottown run gc" {
+		t.Fatalf("expected dead run action 'bottown run gc', got: %+v", items[0].Action)
+	}
 
 	// Go-away condition for dead run: file removed or run cleaned up
 	_ = os.Remove(filepath.Join(runsDir, "r-dead-1.json"))
@@ -517,6 +520,9 @@ func TestInbox_BrokenRun(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-expired-1" {
 		t.Fatalf("expected broken_run for r-expired-1, got: %+v", items)
+	}
+	if items[0].Action != nil {
+		t.Fatalf("expected expired server run to have nil action, got: %+v", items[0].Action)
 	}
 
 	// Go-away: Ended is set
@@ -550,6 +556,9 @@ func TestInbox_BrokenRun(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-failed-wt" {
 		t.Fatalf("expected broken_run for failed run with worktree, got: %+v", items)
+	}
+	if items[0].Action == nil || items[0].Action.Command != "bottown run gc --failed" {
+		t.Fatalf("expected failed run action 'bottown run gc --failed', got: %+v", items[0].Action)
 	}
 
 	// Go-away: Worktree cleaned up
@@ -650,6 +659,17 @@ func TestInbox_DiscussAnswer(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatalf("expected discuss answer to go away after issue closed, got: %+v", items)
 	}
+
+	// 4. Non-discuss run comments must NOT trigger discuss answer
+	fix.mu.Lock()
+	issue.State = sdk.StateOpen
+	fix.runs[0].Kind = "implement" // not a discuss run!
+	fix.mu.Unlock()
+
+	items, _ = s.ComputeInbox(ctx)
+	if len(items) != 0 {
+		t.Fatalf("expected actor comment without discuss run to not trigger discuss_answer, got: %+v", items)
+	}
 }
 
 func TestInbox_ActorFiledIssue(t *testing.T) {
@@ -710,14 +730,23 @@ func TestInbox_ActorFiledIssue(t *testing.T) {
 	issue.Milestone = nil
 	fix.mu.Unlock()
 
-	// 3. Go-away condition 2: Queued (e.g. implement/agy label)
+	// 3. Go-away condition 2: Queued (requires both implement/<actor> AND verify/<actor> labels per §3.6)
 	fix.mu.Lock()
 	issue.Labels = []*sdk.Label{{Name: "implement/agy"}}
 	fix.mu.Unlock()
 
 	items, _ = s.ComputeInbox(ctx)
+	if len(items) != 1 {
+		t.Fatalf("expected actor filed issue to remain in inbox when only implement label is set, got: %+v", items)
+	}
+
+	fix.mu.Lock()
+	issue.Labels = []*sdk.Label{{Name: "implement/agy"}, {Name: "verify/claude"}}
+	fix.mu.Unlock()
+
+	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 0 {
-		t.Fatalf("expected actor filed issue to go away when queued, got: %+v", items)
+		t.Fatalf("expected actor filed issue to go away when fully queued (both implement and verify), got: %+v", items)
 	}
 
 	// Reset label
@@ -744,5 +773,50 @@ func TestInbox_ActorFiledIssue(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 0 {
 		t.Fatalf("expected human-filed issue to not be considered actor_filed_issue, got: %+v", items)
+	}
+}
+
+func TestInbox_FetchError(t *testing.T) {
+	// A server that returns 500 Internal Server Error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server unreachable", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	cfg := Config{
+		Instance: config.Instance{
+			Name:       "prod",
+			ServerPort: port,
+			OwnerLogin: "rlupi",
+		},
+		RepoTop:  t.TempDir(),
+		FullRepo: "bottown/bottown",
+	}
+	s, err := NewServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// ComputeInbox directly must return an error
+	items, err := s.ComputeInbox(ctx)
+	if err == nil {
+		t.Fatalf("expected error from ComputeInbox when server returns 500, got items: %+v", items)
+	}
+
+	// ComputeStatus must catch the error, populate InboxError, and leave Inbox empty
+	status, err := s.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus should not return top-level error: %v", err)
+	}
+	if status.InboxError == "" {
+		t.Fatalf("expected status.InboxError to be set, got empty")
+	}
+	if len(status.Inbox) != 0 {
+		t.Fatalf("expected status.Inbox to be empty on error, got: %+v", status.Inbox)
 	}
 }

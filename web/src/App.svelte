@@ -138,7 +138,9 @@
         <div class="card-header">
           <div class="card-header-left">
             <h2>Owner Inbox</h2>
-            {#if status.inbox && status.inbox.length > 0}
+            {#if status.inbox_error}
+              <span class="badge badge-error">Error</span>
+            {:else if status.inbox && status.inbox.length > 0}
               <span class="badge badge-warning">{status.inbox.length} item{status.inbox.length > 1 ? 's' : ''}</span>
             {:else}
               <span class="badge badge-success">Inbox zero</span>
@@ -147,7 +149,11 @@
         </div>
 
         <div class="card-body">
-          {#if !status.inbox || status.inbox.length === 0}
+          {#if status.inbox_error}
+            <div class="banner banner-error">
+              <span>Failed to load inbox: {status.inbox_error}</span>
+            </div>
+          {:else if !status.inbox || status.inbox.length === 0}
             <div class="inbox-zero">
               <span class="inbox-zero-icon">✓</span>
               <span>Nothing waiting on the owner in this repository.</span>

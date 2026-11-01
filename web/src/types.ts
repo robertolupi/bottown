@@ -102,6 +102,7 @@ export interface UIStatusResponse {
     commits: string;
   };
   inbox: InboxItem[];
+  inbox_error?: string;
 }
 
 export interface ActionResult {

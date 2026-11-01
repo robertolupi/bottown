@@ -61,10 +61,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		Harness string `json:"harness"`
 	}
 	actors := make(map[string]string) // name -> family
-	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actorList); err == nil {
-		for _, a := range actorList {
-			actors[a.Name] = a.Family
-		}
+	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actorList); err != nil {
+		return nil, fmt.Errorf("fetch actors: %w", err)
+	}
+	for _, a := range actorList {
+		actors[a.Name] = a.Family
 	}
 
 	// 2. Owner login
@@ -81,7 +82,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// 3. Server runs for this repo
 	var serverRuns []secrets.Run
 	runsPath := "/v1/runs?repo=" + url.QueryEscape(repo)
-	_ = s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns)
+	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
+		return nil, fmt.Errorf("fetch runs: %w", err)
+	}
 
 	now := time.Now()
 	activeByIssue := make(map[int64]bool)
@@ -112,9 +115,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 5. Open PRs from Forgejo
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
 	var prs []*sdk.PullRequest
-	_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
+	if err := s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs); err != nil {
+		return nil, fmt.Errorf("fetch open pull requests: %w", err)
+	}
 
 	// Fetch reviews for each open PR
 	prReviews := make(map[int64][]*sdk.PullReview)
@@ -127,9 +132,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 6. Open Issues from Forgejo
-	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues", org, repo)
+	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues&limit=50", org, repo)
 	var issues []*sdk.Issue
-	_ = s.callServer(ctx, http.MethodGet, issuesPath, nil, &issues)
+	if err := s.callServer(ctx, http.MethodGet, issuesPath, nil, &issues); err != nil {
+		return nil, fmt.Errorf("fetch open issues: %w", err)
+	}
 
 	var items []InboxItem
 
@@ -238,13 +245,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 
 		revs := prReviews[pr.Index]
 		var latestHeadReview *sdk.PullReview
-		changesRequestedCount := 0
 		for _, r := range revs {
 			if r.Dismissed {
 				continue
-			}
-			if r.State == sdk.ReviewStateRequestChanges {
-				changesRequestedCount++
 			}
 			if pr.Head != nil && r.CommitID == pr.Head.Sha && !r.Stale {
 				latestHeadReview = r
@@ -291,8 +294,8 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			items = append(items, InboxItem{
 				ID:          fmt.Sprintf("stopped-flow-rounds-pr-%d", pr.Index),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on !%d: out of rounds", pr.Index),
-				Description: fmt.Sprintf("Changes requested at %s by %s (%d review round%s)", shortSHA(latestHeadReview.CommitID), userLogin(latestHeadReview.Reviewer), changesRequestedCount, pluralS(changesRequestedCount)),
+				Title:       fmt.Sprintf("Flow stopped on !%d: changes requested", pr.Index),
+				Description: fmt.Sprintf("Changes requested at %s by %s", shortSHA(latestHeadReview.CommitID), userLogin(latestHeadReview.Reviewer)),
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
 				Created:     latestHeadReview.Submitted,
@@ -340,6 +343,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	seenBrokenRun := make(map[string]bool)
 
 	// 1. Local dead runs (process exited without run end)
+	// Cleaned up by `bottown run gc`
 	for _, r := range localRuns {
 		if r.Status == runs.StatusDead {
 			seenBrokenRun[r.ID] = true
@@ -351,8 +355,8 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				Target:      r.ID,
 				TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
 				Action: &InboxAction{
-					Label:   "Stop run",
-					Command: "bottown run stop " + r.ID,
+					Label:   "Clean up",
+					Command: "bottown run gc",
 				},
 				Created: r.Started,
 			})
@@ -370,19 +374,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				ID:          fmt.Sprintf("broken-run-expired-%s", sr.ID),
 				Kind:        InboxBrokenRun,
 				Title:       fmt.Sprintf("Run %s key expired while live", sr.ID),
-				Description: fmt.Sprintf("Run %s (%s by %s) expired", sr.ID, sr.Kind, sr.Actor),
+				Description: fmt.Sprintf("Run %s (%s by %s) expired while live; end it with `bottown run end` in its worktree", sr.ID, sr.Kind, sr.Actor),
 				Target:      sr.ID,
 				TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
-				Action: &InboxAction{
-					Label:   "Stop run",
-					Command: "bottown run stop " + sr.ID,
-				},
-				Created: sr.Expires,
+				Created:     sr.Expires,
 			})
 		}
 	}
 
 	// 3. Failed run left its worktree behind
+	// Cleaned up by `bottown run gc --failed`
 	for _, r := range localRuns {
 		if r.Status == runs.StatusFailed {
 			wtPath := r.Worktree
@@ -399,7 +400,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 					TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
 					Action: &InboxAction{
 						Label:   "Clean up",
-						Command: "bottown run gc",
+						Command: "bottown run gc --failed",
 					},
 					Created: r.Started,
 				})
@@ -418,53 +419,33 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		var discussRun *secrets.Run
 		for i := range serverRuns {
 			sr := &serverRuns[i]
-			if sr.Issue == issue.Index && sr.Kind == "discuss" && sr.Status == "succeeded" {
+			if sr.Issue == issue.Index && sr.Kind == "discuss" && sr.Status == "succeeded" && sr.Ended != nil {
 				if discussRun == nil || sr.Created.After(discussRun.Created) {
 					discussRun = sr
 				}
 			}
 		}
+		if discussRun == nil {
+			continue // Only issues with an ended discuss run count!
+		}
 
 		cPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issue.Index)
 		var comments []*sdk.Comment
-		if err := s.callServer(ctx, http.MethodGet, cPath, nil, &comments); err != nil {
-			continue
-		}
+		_ = s.callServer(ctx, http.MethodGet, cPath, nil, &comments)
 
-		var latestDiscussTime time.Time
-		var discussActor string
-		if discussRun != nil {
-			discussActor = discussRun.Actor
-		}
-
+		discussActor := discussRun.Actor
+		answerTime := *discussRun.Ended
 		for _, c := range comments {
 			poster := userLogin(c.Poster)
-			if actors[poster] != "" {
-				if discussActor == "" || poster == discussActor || discussRun != nil {
-					if c.Created.After(latestDiscussTime) {
-						latestDiscussTime = c.Created
-						discussActor = poster
-					}
-				}
+			if poster == discussActor {
+				answerTime = c.Created
 			}
-		}
-
-		if latestDiscussTime.IsZero() && discussRun != nil {
-			if discussRun.Ended != nil {
-				latestDiscussTime = *discussRun.Ended
-			} else {
-				latestDiscussTime = discussRun.Created
-			}
-		}
-
-		if latestDiscussTime.IsZero() {
-			continue
 		}
 
 		ownerReplied := false
 		for _, c := range comments {
 			poster := userLogin(c.Poster)
-			if poster == ownerLogin && c.Created.After(latestDiscussTime) {
+			if poster == ownerLogin && c.Created.After(answerTime) {
 				ownerReplied = true
 				break
 			}
@@ -482,7 +463,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				Description: fmt.Sprintf("Discussant %s answered; owner has not replied", discussActor),
 				Target:      fmt.Sprintf("#%d", issue.Index),
 				TargetURL:   issueURL,
-				Created:     latestDiscussTime,
+				Created:     answerTime,
 			})
 		}
 	}
@@ -505,16 +486,20 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			continue
 		}
 
-		isQueued := false
+		// §3.6: an issue is queued when it has both implement/<actor> and verify/<actor> labels
+		hasImplement := false
+		hasVerify := false
 		for _, lbl := range issue.Labels {
 			if lbl != nil {
-				if strings.HasPrefix(lbl.Name, "implement/") || strings.HasPrefix(lbl.Name, "verify/") || lbl.Name == "queued" {
-					isQueued = true
-					break
+				if strings.HasPrefix(lbl.Name, "implement/") {
+					hasImplement = true
+				}
+				if strings.HasPrefix(lbl.Name, "verify/") {
+					hasVerify = true
 				}
 			}
 		}
-		if isQueued {
+		if hasImplement && hasVerify {
 			continue
 		}
 
@@ -556,11 +541,4 @@ func shortSHA(sha string) string {
 		return sha[:10]
 	}
 	return sha
-}
-
-func pluralS(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
