@@ -393,7 +393,12 @@
                   <tbody>
                     {#each status.health.worktrees as wt}
                       <tr>
-                        <td><strong>{wt.actor}</strong></td>
+                        <td>
+                          <strong>{wt.actor}</strong>
+                          {#if wt.ephemeral}
+                            <span class="badge" title="Worktree of a launched run under .bottown/runs">{wt.kind} {wt.target}</span>
+                          {/if}
+                        </td>
                         <td><code>{wt.head}</code></td>
                         <td>
                           <span class="badge {wt.is_dirty ? 'badge-warning' : 'badge-success'}">
