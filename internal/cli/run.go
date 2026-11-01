@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -87,7 +88,7 @@ leaves alone. Without a question, the agent reviews the issue.`,
 	}
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
-	run.AddCommand(implement, verify, discuss, newRunLs(g), newRunShow(g), newRunGC(g))
+	run.AddCommand(implement, verify, discuss, newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
 	run.AddCommand(agentCmds(newRunStart(), newRunEnd())...)
 	return run
 }
@@ -268,7 +269,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		c.Stdout, c.Stderr = logf, logf
 		fmt.Fprintf(out, "  log: %s\n", rc.ws.Path(run.ID, ".log"))
 	}
-	runErr := c.Run()
+	if err := c.Start(); err != nil {
+		return err
+	}
+	rec.HarnessPID = c.Process.Pid
+	if err := rc.ws.Save(rec); err != nil {
+		_ = c.Process.Kill()
+		_ = c.Wait()
+		return err
+	}
+	runErr := c.Wait()
 	code := 0
 	if c.ProcessState != nil {
 		code = c.ProcessState.ExitCode()
@@ -276,8 +286,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if runErr != nil && code == 0 {
 		code = -1
 	}
+	if current, loadErr := rc.ws.Load(run.ID); loadErr == nil {
+		rec.StopRequested = current.StopRequested
+	}
 	status = runs.StatusFailed
-	if code == 0 {
+	if code == 0 && !rec.StopRequested {
 		status = runs.StatusSucceeded
 	}
 	if o.interactive {
@@ -394,6 +407,9 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		fmt.Fprintf(&b, " (exit %d)", code)
 	}
 	b.WriteString("\n\n")
+	if rec.StopRequested {
+		b.WriteString("Stopped by the owner.\n\n")
+	}
 	switch rec.Kind {
 	case policy.Implement:
 		if head, err := runs.Git(rec.Worktree, nil, "rev-parse", "--short", "HEAD"); err == nil {
@@ -780,6 +796,81 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func newRunStop(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop ID",
+		Short: "Stop a live batch run started from this checkout",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, err := openRunContext(g)
+			if err != nil {
+				return err
+			}
+			id := args[0]
+			rec, err := rc.ws.Load(id)
+			if err != nil {
+				return fmt.Errorf("load local run %s: %w", id, err)
+			}
+			if rec.Instance != rc.inst.Name || rec.Repo != rc.org+"/"+rc.repo {
+				return fmt.Errorf("run %s does not belong to this checkout", id)
+			}
+			if rec.Interactive {
+				return fmt.Errorf("run %s is interactive; stop it in its terminal", id)
+			}
+			if rec.Status != runs.StatusRunning || rec.Ended != nil {
+				return fmt.Errorf("run %s is not live (local status %s)", id, rec.Status)
+			}
+			var serverRun secrets.Run
+			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+id, nil, &serverRun); err != nil {
+				return err
+			}
+			if serverRun.Interactive || serverRun.Ended != nil || !serverRun.Active(time.Now().UTC()) {
+				return fmt.Errorf("run %s is not a live batch run on the server", id)
+			}
+			if rec.HarnessPID <= 0 {
+				return fmt.Errorf("run %s has no harness process yet", id)
+			}
+			process, err := os.FindProcess(rec.HarnessPID)
+			if err != nil || process.Signal(syscall.Signal(0)) != nil {
+				return fmt.Errorf("run %s has no live harness process", id)
+			}
+			rec.StopRequested = true
+			if err := rc.ws.Save(rec); err != nil {
+				return err
+			}
+			if err := process.Signal(syscall.SIGTERM); err != nil {
+				rec.StopRequested = false
+				_ = rc.ws.Save(rec)
+				return fmt.Errorf("stop run %s: %w", id, err)
+			}
+
+			deadline := time.Now().Add(30 * time.Second)
+			for {
+				var ended secrets.Run
+				if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+id, nil, &ended); err != nil {
+					return err
+				}
+				current, localErr := rc.ws.Load(id)
+				if localErr == nil && current.Ended != nil && ended.Ended != nil {
+					if ended.Status != runs.StatusFailed {
+						return fmt.Errorf("run %s stopped with unexpected server status %s", id, ended.Status)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "run %s stopped\n", id)
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("run %s was signalled but has not finished", id)
+				}
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		},
+	}
 }
 
 func newRunGC(g *globals) *cobra.Command {

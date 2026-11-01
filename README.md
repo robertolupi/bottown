@@ -189,7 +189,15 @@ has the details.
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
 | `run ls [--all]` | List runs: local worktrees merged with the server's records. |
 | `run show RUN` | A run's local record, server record (with its summary and the usage its harness reported) and log tail. |
+| `run stop RUN` | Kill a live batch run's harness, end it as failed and post a stopped handover. |
 | `run gc [--failed] [--older-than D]` | Remove finished runs. The server keeps their digests: summary and usage. |
+
+Each actor can have one live batch run by default; interactive runs do not
+count. To change this, set `max_batch_runs = N` in the actor's `[[actors]]`
+table in the desired-state `bottown.toml` mounted at
+`/data/bottown/bottown.toml` in the container. Set it to `0` for no limit.
+The server checks and creates runs atomically, so concurrent commands cannot
+exceed the limit.
 
 ### Agent CLI (actors, in their worktree)
 

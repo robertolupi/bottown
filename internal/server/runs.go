@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -85,9 +86,15 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.StartedBy = p.Actor
-	key, err := s.Store.NewRun(run)
+	actor, _ := s.desired().Actor(run.Actor)
+	key, err := s.Store.NewRun(run, actor.BatchRunLimit())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		var limit *secrets.RunLimitError
+		if errors.As(err, &limit) {
+			writeError(w, http.StatusConflict, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "repo", run.Org+"/"+run.Repo,

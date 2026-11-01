@@ -13,8 +13,21 @@ func TestDefaultDesiredIsValid(t *testing.T) {
 	if _, ok := d.Actor("manager"); ok {
 		t.Fatal("manager must not be an actor (actors can get API keys)")
 	}
-	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" {
+	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" || a.BatchRunLimit() != 1 {
 		t.Fatalf("claude = %+v", a)
+	}
+}
+
+func TestActorBatchRunLimit(t *testing.T) {
+	zero := 0
+	if got := (Actor{MaxBatchRuns: &zero}).BatchRunLimit(); got != 0 {
+		t.Fatalf("explicit zero = %d", got)
+	}
+	negative := -1
+	d := DefaultDesired()
+	d.Actors[0].MaxBatchRuns = &negative
+	if err := d.validate(); err == nil {
+		t.Fatal("negative max_batch_runs accepted")
 	}
 }
 

@@ -1,7 +1,10 @@
 package secrets
 
 import (
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -13,7 +16,7 @@ func TestRunKeyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	key, err := s.NewRun(Run{ID: "r-1", Kind: "implement", Actor: "claude", Created: now, Expires: now.Add(time.Hour)})
+	key, err := s.NewRun(Run{ID: "r-1", Kind: "implement", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +61,7 @@ func TestPurgeRuns(t *testing.T) {
 		{ID: "r-live", Repo: "demo", Created: now, Expires: now.Add(time.Hour)},
 		{ID: "r-stuck", Repo: "demo", Created: now.Add(-5 * time.Hour), Expires: now.Add(-time.Hour)},
 	} {
-		if _, err := s.NewRun(r); err != nil {
+		if _, err := s.NewRun(r, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,7 +93,7 @@ func TestPurgeRuns(t *testing.T) {
 		t.Fatalf("history: %+v", st.History)
 	}
 	// A purged run's id is not reused.
-	if _, err := s.NewRun(Run{ID: "r-old", Created: now, Expires: now.Add(time.Hour)}); err == nil {
+	if _, err := s.NewRun(Run{ID: "r-old", Created: now, Expires: now.Add(time.Hour)}, 0); err == nil {
 		t.Fatal("NewRun reused a purged id")
 	}
 }
@@ -101,7 +104,7 @@ func TestEndRunDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)})
+	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, 1)
 	long := strings.Repeat("é", MaxSummary)
 	run, _, _ := s.EndRun("r-1", "failed", now, Digest{Summary: long})
 	if len(run.Summary) > MaxSummary || !utf8.ValidString(run.Summary) || !strings.HasSuffix(run.Summary, "…") {
@@ -111,5 +114,89 @@ func TestEndRunDigest(t *testing.T) {
 	run, _, _ = s.EndRun("r-1", "revoked", now.Add(time.Minute), Digest{Summary: "later"})
 	if run.Status != "failed" || run.Summary == "later" {
 		t.Fatalf("second end: %+v", run)
+	}
+}
+
+func TestBatchRunLimit(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	newRun := func(id, actor string, interactive bool, expires time.Time, limit int) error {
+		_, err := s.NewRun(Run{ID: id, Actor: actor, Interactive: interactive, Created: now, Expires: expires}, limit)
+		return err
+	}
+	if err := newRun("r-live", "claude", false, now.Add(time.Hour), 1); err != nil {
+		t.Fatal(err)
+	}
+	err = newRun("r-refused", "claude", false, now.Add(time.Hour), 1)
+	var limit *RunLimitError
+	if !errors.As(err, &limit) || limit.Actor != "claude" || len(limit.Runs) != 1 || limit.Runs[0] != "r-live" {
+		t.Fatalf("second batch run: %+v", err)
+	}
+	st, readErr := s.Read()
+	if readErr != nil || st.Runs["r-refused"].ID != "" {
+		t.Fatalf("refused run was stored: %v", readErr)
+	}
+	if err := newRun("r-interactive", "claude", true, now.Add(time.Hour), 1); err != nil {
+		t.Fatalf("interactive run: %v", err)
+	}
+	if err := newRun("r-other", "agy", false, now.Add(time.Hour), 1); err != nil {
+		t.Fatalf("other actor: %v", err)
+	}
+	if err := newRun("r-unlimited", "claude", false, now.Add(time.Hour), 0); err != nil {
+		t.Fatalf("unlimited run: %v", err)
+	}
+	if err := newRun("r-expired", "kimi", false, now.Add(-time.Hour), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := newRun("r-after-expiry", "kimi", false, now.Add(time.Hour), 1); err != nil {
+		t.Fatalf("expired run counted as live: %v", err)
+	}
+	if _, ok, err := s.EndRun("r-live", "succeeded", now, Digest{}); err != nil || !ok {
+		t.Fatalf("end live run: %v %v", ok, err)
+	}
+	if err := newRun("r-after-end", "claude", false, now.Add(time.Hour), 2); err != nil {
+		t.Fatalf("ended run counted as live: %v", err)
+	}
+}
+
+func TestBatchRunLimitAtomic(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const attempts = 12
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			now := time.Now()
+			_, err := s.NewRun(Run{ID: fmt.Sprintf("r-%d", i), Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var succeeded, refused int
+	for err := range results {
+		var limit *RunLimitError
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.As(err, &limit):
+			refused++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if succeeded != 1 || refused != attempts-1 {
+		t.Fatalf("concurrent creations: %d succeeded, %d refused", succeeded, refused)
 	}
 }
