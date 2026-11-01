@@ -88,6 +88,11 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	if err != nil {
 		return err
 	}
+	if a.Worktree != "" {
+		if _, err := recoverLease(a); err != nil {
+			return err
+		}
+	}
 	switch {
 	case a.Worktree == "":
 		return errors.New("`bottown run start` works in an actor worktree; this is a launched run")
@@ -115,85 +120,79 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		return err
 	}
 	run := created.Run
-	// If preparing the worktree fails, end the run rather than leave a live key.
-	defer func() {
-		if err != nil {
-			rk := *a
-			rk.Key = created.Key
-			_ = rk.call("DELETE", "/v1/runs/"+run.ID, map[string]string{"status": "revoked"}, nil)
-		}
-	}()
-
-	if _, err := runs.GitCtx(cmd.Context(), a.Worktree, nil, "fetch", "-q", "--prune", a.Remote); err != nil {
-		return err
-	}
-	if kind == policy.Implement {
-		start := a.Remote + "/" + run.Branch
-		if _, err := git(a.Worktree, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
-			top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
-			base, err := remoteDefaultBranch(top, a.Remote)
-			if err != nil {
-				return err
-			}
-			start = a.Remote + "/" + base
-		}
-		if _, err := git(a.Worktree, "checkout", "-q", "-B", run.Branch, start); err != nil {
-			return err
-		}
-		for _, kv := range [][2]string{
-			{"branch." + run.Branch + ".remote", a.Remote},
-			{"branch." + run.Branch + ".merge", "refs/heads/" + run.Branch},
-		} {
-			if _, err := git(a.Worktree, "config", kv[0], kv[1]); err != nil {
-				return err
-			}
-		}
-	} else {
-		if _, err := git(a.Worktree, "checkout", "-q", "--detach", run.SHA); err != nil {
-			return err
-		}
-	}
-
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: true, Harness: run.Harness, Status: runs.StatusRunning, Started: time.Now().UTC(),
+		Interactive: true, Harness: run.Harness, Status: runs.StatusPreparing, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 	}
 	if inst, _ := git(a.Worktree, "config", "--get", gitInstanceKey); inst != "" {
 		rec.Instance = inst
 	}
-	if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
-		return err
-	}
-	if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, run.ID); err != nil {
-		return err
-	}
+	return prepareLease(a, rec, func() (err error) {
+		if _, err := runs.GitCtx(cmd.Context(), a.Worktree, nil, "fetch", "-q", "--prune", a.Remote); err != nil {
+			return err
+		}
+		if kind == policy.Implement {
+			start := a.Remote + "/" + run.Branch
+			if _, err := git(a.Worktree, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
+				top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
+				base, err := remoteDefaultBranch(top, a.Remote)
+				if err != nil {
+					return err
+				}
+				start = a.Remote + "/" + base
+			}
+			if _, err := git(a.Worktree, "checkout", "-q", "-B", run.Branch, start); err != nil {
+				return err
+			}
+			for _, kv := range [][2]string{
+				{"branch." + run.Branch + ".remote", a.Remote},
+				{"branch." + run.Branch + ".merge", "refs/heads/" + run.Branch},
+			} {
+				if _, err := git(a.Worktree, "config", kv[0], kv[1]); err != nil {
+					return err
+				}
+			}
+		} else {
+			if _, err := git(a.Worktree, "checkout", "-q", "--detach", run.SHA); err != nil {
+				return err
+			}
+		}
 
-	// The goal prompt, from the issue or PR text.
-	rk := *a
-	rk.Key = created.Key
-	var item server.IssueOut
-	if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &item); err != nil {
+		if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, run.ID); err != nil {
+			return err
+		}
+
+		// The goal prompt, from the issue or PR text.
+		rk := *a
+		rk.Key = created.Key
+		var item server.IssueOut
+		if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &item); err != nil {
+			return err
+		}
+		top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
+		base, _ := remoteDefaultBranch(top, a.Remote)
+		self, _ := os.Executable()
+		prompt, err := runs.Prompt(run.Kind, runs.PromptData{
+			RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
+			Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
+			Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
+			Bottown: self, Remote: a.Remote, SelfEnd: true,
+		})
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(a.KeyDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
+			return err
+		}
+		rec.Status = runs.StatusRunning
+		if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
+			return err
+		}
+		_, err = fmt.Fprint(cmd.OutOrStdout(), prompt)
 		return err
-	}
-	top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
-	base, _ := remoteDefaultBranch(top, a.Remote)
-	self, _ := os.Executable()
-	prompt, err := runs.Prompt(run.Kind, runs.PromptData{
-		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
-		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
-		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: self, Remote: a.Remote, SelfEnd: true,
 	})
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(a.KeyDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
-		return err
-	}
-	fmt.Fprint(cmd.OutOrStdout(), prompt)
-	return nil
 }
 
 func saveRecord(path string, rec runs.Record) error {
@@ -219,7 +218,24 @@ func newRunEnd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if a.Worktree != "" {
+				recovered, err := recoverLease(a)
+				if err != nil {
+					return err
+				}
+				if recovered {
+					fmt.Fprintln(cmd.OutOrStdout(), "run cleanup recovered; key revoked")
+					return nil
+				}
+			}
 			if a.Worktree == "" || a.RunID == "" {
+				if a.Worktree != "" {
+					rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json"))
+					if err == nil && rec.Ended != nil && rec.Key == "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "run %s already ended; key revoked\n", rec.ID)
+						return nil
+					}
+				}
 				return errors.New("no run to end in this worktree")
 			}
 			file := filepath.Join(a.KeyDir, "run.json")
@@ -240,15 +256,7 @@ func newRunEnd() *cobra.Command {
 			}
 			// In-harness runs leave no log: the digest is the handover.
 			end := server.EndRunRequest{Status: status, Digest: secrets.Digest{Summary: cleanSummary(rec, text)}}
-			if err := a.call("DELETE", "/v1/runs/"+rec.ID, end, nil); err != nil {
-				return err
-			}
-			now := time.Now().UTC()
-			rec.Status, rec.Ended, rec.Key = status, &now, ""
-			if err := saveRecord(file, rec); err != nil {
-				return err
-			}
-			if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, ""); err != nil {
+			if err := endLease(a, rec, end); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "run %s %s; key revoked\n", rec.ID, status)
@@ -259,4 +267,112 @@ func newRunEnd() *cobra.Command {
 	cmd.Flags().StringVar(&summary, "summary", "", "handover summary")
 	cmd.Flags().StringVar(&summaryFile, "summary-file", "", "read the handover summary from a file, or - for stdin")
 	return cmd
+}
+
+// leaseActor uses the permanent actor credential, which remains usable after
+// a run key has been revoked. It may only inspect/end this actor's runs.
+func leaseActor(a *agentCtx) (*agentCtx, error) {
+	rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "actor.json"))
+	if err != nil {
+		return nil, err
+	}
+	if rec.Key == "" || rec.Actor != a.Actor || rec.ServerURL != a.ServerURL {
+		return nil, errors.New("actor credential does not match the lease")
+	}
+	actor := *a
+	actor.Key, actor.RunID = rec.Key, ""
+	return &actor, nil
+}
+
+func finishLease(a *agentCtx, rec runs.Record, ended secrets.Run) error {
+	if ended.ID != rec.ID || ended.Actor != a.Actor || ended.Ended == nil {
+		return errors.New("server did not confirm this run ended")
+	}
+	actor, err := leaseActor(a)
+	if err != nil {
+		return err
+	}
+	// Clear config first: if saving fails, run.json still identifies the run
+	// for the next retry. resolveAgent selects records, not this config value.
+	id, _ := git(a.Worktree, "config", "--worktree", "--get", gitRunKey)
+	if id != "" && id != rec.ID {
+		return fmt.Errorf("worktree now belongs to run %s; refusing cleanup of %s", id, rec.ID)
+	}
+	if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, ""); err != nil {
+		return err
+	}
+	rec.Status, rec.Ended, rec.Key = ended.Status, ended.Ended, ""
+	if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
+		return err
+	}
+	a.RunID, a.Key = "", actor.Key
+	return nil
+}
+
+func endLease(a *agentCtx, rec runs.Record, end server.EndRunRequest) error {
+	actor, err := leaseActor(a)
+	if err != nil {
+		return err
+	}
+	var ended secrets.Run
+	if err := actor.call("DELETE", "/v1/runs/"+rec.ID, end, &ended); err != nil {
+		return err
+	}
+	return finishLease(a, rec, ended)
+}
+
+// recoverLease reconciles only the durable local run ID, never a different
+// active run. Startup interrupted before the prompt is delivered is revoked;
+// an already ended run only needs its local metadata finalized.
+func recoverLease(a *agentCtx) (bool, error) {
+	file := filepath.Join(a.KeyDir, "run.json")
+	rec, err := runs.LoadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if rec.Key == "" {
+		return false, nil
+	}
+	if rec.ID != a.RunID || rec.Actor != a.Actor || rec.Worktree != a.Worktree || rec.ServerURL != a.ServerURL {
+		return false, errors.New("local lease identity mismatch; refusing recovery")
+	}
+	actor, err := leaseActor(a)
+	if err != nil {
+		return false, err
+	}
+	var remote secrets.Run
+	if err := actor.call("GET", "/v1/runs/"+rec.ID, nil, &remote); err != nil {
+		return false, err
+	}
+	if remote.ID != rec.ID || remote.Actor != rec.Actor {
+		return false, errors.New("server lease identity mismatch; refusing recovery")
+	}
+	if remote.Ended != nil {
+		return true, finishLease(a, rec, remote)
+	}
+	if rec.Status == runs.StatusPreparing {
+		return true, endLease(a, rec, server.EndRunRequest{Status: "revoked"})
+	}
+	return false, nil
+}
+
+func prepareLease(a *agentCtx, rec runs.Record, setup func() error) (err error) {
+	// Keep a durable identity before setup. A later start/end can revoke a
+	// preparing run even if this process dies or rollback cannot reach the server.
+	defer func() {
+		if err != nil {
+			cleanupErr := endLease(a, rec, server.EndRunRequest{Status: "revoked"})
+			if cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("rollback run %s (retry run end): %w", rec.ID, cleanupErr))
+			}
+		}
+	}()
+	if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
+		return err
+	}
+
+	return setup()
 }

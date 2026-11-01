@@ -13,6 +13,7 @@ import (
 
 // Local run states. The server separately tracks whether the key is live.
 const (
+	StatusPreparing = "preparing"
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
