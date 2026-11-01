@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo, ActiveFlowInfo, Denial } from './types';
+  import { lifecycleChange } from './lifecycle';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -481,21 +482,15 @@
           const activeFlows: ActiveFlowInfo[] = Array.isArray(data) ? [] : (data.active_flows || []);
 
           if (status) {
-            const prevRunCount = status.live_runs?.length || 0;
-            const prevFlowCount = status.active_flows?.length || 0;
+            const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
 
             status.live_runs = liveRuns;
             status.active_flows = activeFlows;
 
-            // If a run or flow completed or started, refresh status & history
-            if (
-              (prevRunCount > 0 && liveRuns.length === 0) ||
-              (prevFlowCount > 0 && activeFlows.length === 0) ||
-              liveRuns.length > prevRunCount
-            ) {
-              await loadStatus(true);
-              await loadHistory();
-            }
+            // A run or flow started or ended: refresh status, and history
+            // when something ended.
+            if (change.status) await loadStatus(true);
+            if (change.history) await loadHistory();
           }
         }
       } catch {
