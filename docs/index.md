@@ -52,6 +52,14 @@ dropped.
   what v1 settled, the shape of the solution, identity and enforcement on the
   local forge, open decisions.
 
+### Designs
+
+Planned, not built yet:
+
+- [Local web UI and supervisor](design/web-ui.md) — `bottown flow` takes an
+  issue through implement and cross-family verify; `bottown web ui` is a
+  local view of runs, the inbox and the repository's host state.
+
 ### History
 
 Records of past work, not kept current:
