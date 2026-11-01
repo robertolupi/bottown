@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo, ActiveFlowInfo } from './types';
+  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo, ActiveFlowInfo, Denial } from './types';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -521,6 +521,22 @@
   });
 </script>
 
+{#snippet denialList(denials: Denial[] | undefined)}
+  {#if denials && denials.length > 0}
+    <div class="denials-box">
+      <div class="denials-header">Denied by policy ({denials.length})</div>
+      {#each denials as d}
+        <div class="denial-line">
+          <span class="muted">{formatTime(d.time)}</span>
+          <span>{d.method ? `${d.method} ${d.path}` : d.op}</span>
+          {#if d.rule}<span class="badge badge-error">{d.rule}</span>{/if}
+          {#if d.detail}<span class="muted">{d.detail}</span>{/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 <main class="container">
   <header class="header">
     <div class="header-left">
@@ -745,6 +761,7 @@
                             </div>
                           </div>
                         {/if}
+                        {@render denialList(run.denials)}
                       </div>
                     {/each}
                     {/if}
@@ -792,6 +809,7 @@
                       </div>
                     </div>
                   {/if}
+                  {@render denialList(run.denials)}
                 </div>
               {/each}
             </div>
@@ -884,6 +902,11 @@
                         <span class="badge badge-{h.status === 'succeeded' ? 'success' : h.status === 'failed' ? 'error' : 'warning'}">
                           {h.status}
                         </span>
+                        {#if h.denials && h.denials.length > 0}
+                          <span class="badge badge-error" title="Operations the server's policy refused this run; expand the log to see them">
+                            {h.denials.length} denied
+                          </span>
+                        {/if}
                       </td>
                       <td class="muted">{h.duration || '—'}</td>
                       <td class="muted text-sm">{formatUsage(h.usage)}</td>
@@ -912,6 +935,7 @@
                       {@const logState = expandedLogs[h.id]}
                       <tr class="log-expand-row">
                         <td colspan="9">
+                          {@render denialList(h.denials)}
                           <div class="log-tail-box history-log-box">
                             <div class="log-tail-header">
                               <span>Run Log ({h.id})</span>
@@ -1896,6 +1920,29 @@
 
   .log-line {
     white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .denials-box {
+    border-top: 1px solid var(--error-bg);
+    padding: 8px 12px;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .denials-header {
+    color: var(--error);
+    font-weight: 600;
+  }
+
+  .denial-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-family: monospace;
     word-break: break-all;
   }
 

@@ -41,6 +41,19 @@ type LiveRunInfo struct {
 	Timeout     string    `json:"timeout"` // e.g. "60m"
 	Flow        *FlowInfo `json:"flow,omitempty"`
 	LogTail     []string  `json:"log_tail"`
+	Denials     []Denial  `json:"denials"`
+}
+
+// Denial is an operation the server's policy refused a run, from
+// GET /v1/audit.
+type Denial struct {
+	Time   time.Time `json:"time"`
+	Run    string    `json:"run,omitempty"`
+	Op     string    `json:"op"`
+	Method string    `json:"method,omitempty"`
+	Path   string    `json:"path,omitempty"`
+	Rule   string    `json:"rule,omitempty"`
+	Detail string    `json:"detail,omitempty"`
 }
 
 // FlowInfo describes the flow grouping for a live run.
@@ -81,6 +94,7 @@ type HistoryRunInfo struct {
 	Summary   string         `json:"summary"`  // first line of handover
 	Usage     *secrets.Usage `json:"usage,omitempty"`
 	Purged    bool           `json:"purged"`
+	Denials   []Denial       `json:"denials"`
 }
 
 // HistoryFilter specifies criteria for filtering ended runs.
@@ -154,6 +168,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	if len(serverRuns) == 0 {
 		return []LiveRunInfo{}, nil
 	}
+	denials := s.fetchDenials(ctx)
 
 	// 3. Fetch open PRs only if needed
 	var prs []*sdk.PullRequest
@@ -308,6 +323,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			Timeout:     timeout,
 			Flow:        flow,
 			LogTail:     logTail,
+			Denials:     orEmpty(denials[sr.ID]),
 		})
 	}
 
@@ -421,6 +437,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
 		return nil, fmt.Errorf("fetch history runs: %w", err)
 	}
+	denials := s.fetchDenials(ctx)
 
 	var history []HistoryRunInfo
 	for _, sr := range serverRuns {
@@ -485,6 +502,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			Summary:   summary,
 			Usage:     sr.Digest.Usage,
 			Purged:    sr.Purged,
+			Denials:   orEmpty(denials[sr.ID]),
 		})
 	}
 
@@ -637,6 +655,33 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 	})
 
 	return timeline, nil
+}
+
+// fetchDenials returns the policy refusals the server has kept, denials and
+// rejected requests, by run id. They are selected by run, not repository:
+// a run's refusals include its attempts outside its repository and the
+// ones with no repository at all. They are an addition to the runs view:
+// if the server cannot say, the runs show none rather than failing.
+func (s *Server) fetchDenials(ctx context.Context) map[string][]Denial {
+	var entries []Denial
+	path := "/v1/audit?decision=deny,reject"
+	if err := s.callServer(ctx, http.MethodGet, path, nil, &entries); err != nil {
+		return nil
+	}
+	out := map[string][]Denial{}
+	for _, e := range entries {
+		if e.Run != "" {
+			out[e.Run] = append(out[e.Run], e)
+		}
+	}
+	return out
+}
+
+func orEmpty(d []Denial) []Denial {
+	if d == nil {
+		return []Denial{}
+	}
+	return d
 }
 
 func (s *Server) fetchActorMap(ctx context.Context) (map[string]*ActorDetail, error) {

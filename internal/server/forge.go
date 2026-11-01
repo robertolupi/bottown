@@ -114,12 +114,13 @@ func requireWrite(p secrets.Principal) error {
 	return nil
 }
 
-func (s *Server) toolAudit(p secrets.Principal, op, decision, detail string) {
-	run := ""
-	if p.Run != nil {
-		run = p.Run.ID
+// toolAudit records the decision on one of the forge operations; repo is
+// org/name, empty when the operation did not get as far as resolving one.
+func (s *Server) toolAudit(p secrets.Principal, repo, op, decision, detail string) {
+	if repo == "" {
+		repo = runRepo(p)
 	}
-	s.Log.Info("forge-op", "actor", p.Actor, "run", run, "op", op, "decision", decision, "detail", detail)
+	s.record(AuditEntry{Actor: p.Actor, Run: runID(p), Repo: repo, Op: op, Decision: decision, Detail: detail})
 }
 
 // IssueOut is an issue with its discussion.
@@ -301,7 +302,7 @@ func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (I
 // from a conversation with the owner; run keys stay in their repository.
 func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in IssueCreateIn) (IssueCreateOut, error) {
 	if p.Actor != s.Owner && s.desired().DisableActorIssueCreate {
-		s.toolAudit(p, "issue_create", "deny", "disabled")
+		s.toolAudit(p, "", "issue_create", "deny", "disabled")
 		return IssueCreateOut{}, ferr(http.StatusForbidden, "actors may not file issues on this instance")
 	}
 	if strings.TrimSpace(in.Title) == "" {
@@ -309,6 +310,9 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 	}
 	org, repo, err := s.resolveRepo(p, in.Repo)
 	if err != nil {
+		if errStatus(err) == http.StatusForbidden {
+			s.toolAudit(p, "", "issue_create", "deny", err.Error())
+		}
 		return IssueCreateOut{}, err
 	}
 	c, err := s.actorClient(ctx, p.Actor)
@@ -335,7 +339,7 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 	} else if err != nil {
 		return IssueCreateOut{}, err
 	}
-	s.toolAudit(p, "issue_create", "allow", fmt.Sprintf("%s#%d", repo, is.Index))
+	s.toolAudit(p, org+"/"+repo, "issue_create", "allow", fmt.Sprintf("%s#%d", repo, is.Index))
 	return IssueCreateOut{Number: is.Index, URL: is.HTMLURL, Repo: repo}, nil
 }
 
@@ -434,7 +438,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 
 func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreateIn) (PRCreateOut, error) {
 	if err := requireRole(p, policy.Implement); err != nil {
-		s.toolAudit(p, "pr_create", "deny", err.Error())
+		s.toolAudit(p, "", "pr_create", "deny", err.Error())
 		return PRCreateOut{}, err
 	}
 	if strings.TrimSpace(in.Title) == "" {
@@ -456,7 +460,7 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	if err != nil {
 		return PRCreateOut{}, err
 	}
-	s.toolAudit(p, "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
+	s.toolAudit(p, "", "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
 	return PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch}, nil
 }
 
@@ -550,10 +554,14 @@ func parseState(s string) (sdk.StateType, error) {
 
 func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentIn) (CommentOut, error) {
 	if err := requireWrite(p); err != nil {
+		s.toolAudit(p, "", "comment", "deny", err.Error())
 		return CommentOut{}, err
 	}
 	org, repo, n, err := s.resolve(p, in.Target, runDefault(p))
 	if err != nil {
+		if errStatus(err) == http.StatusForbidden {
+			s.toolAudit(p, "", "comment", "deny", err.Error())
+		}
 		return CommentOut{}, err
 	}
 	if strings.TrimSpace(in.Body) == "" {
@@ -567,7 +575,7 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 	if err != nil {
 		return CommentOut{}, err
 	}
-	s.toolAudit(p, "comment", "allow", fmt.Sprintf("%s#%d", repo, n))
+	s.toolAudit(p, org+"/"+repo, "comment", "allow", fmt.Sprintf("%s#%d", repo, n))
 	return CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created}, nil
 }
 
@@ -576,7 +584,7 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 // would not cover the new commits.
 func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn) (ReviewOut, error) {
 	if err := requireRole(p, policy.Verify); err != nil {
-		s.toolAudit(p, "review_submit", "deny", err.Error())
+		s.toolAudit(p, "", "review_submit", "deny", err.Error())
 		return ReviewOut{}, err
 	}
 	run := p.Run
@@ -587,7 +595,7 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 		return ReviewOut{}, ferr(http.StatusBadRequest, "event must be APPROVED, REQUEST_CHANGES or COMMENT")
 	}
 	if in.CommitID != run.SHA {
-		s.toolAudit(p, "review_submit", "deny", "commit "+in.CommitID+" is not the run's "+run.SHA)
+		s.toolAudit(p, "", "review_submit", "deny", "commit "+in.CommitID+" is not the run's "+run.SHA)
 		return ReviewOut{}, ferr(http.StatusConflict, "commit_id %q is not the commit this run verifies (%s)", in.CommitID, run.SHA)
 	}
 	c, err := s.actorClient(ctx, p.Actor)
@@ -603,7 +611,7 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 		if pr.Head != nil {
 			head = pr.Head.Sha
 		}
-		s.toolAudit(p, "review_submit", "deny", "head moved to "+head)
+		s.toolAudit(p, "", "review_submit", "deny", "head moved to "+head)
 		return ReviewOut{}, ferr(http.StatusConflict, "pull request #%d moved to %s since this run started at %s; start a new verify run", run.PR, head, run.SHA)
 	}
 	body := strings.TrimSpace(in.Body)
@@ -615,6 +623,6 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 	if err != nil {
 		return ReviewOut{}, err
 	}
-	s.toolAudit(p, "review_submit", "allow", fmt.Sprintf("%s #%d at %s", event, run.PR, run.SHA))
+	s.toolAudit(p, "", "review_submit", "allow", fmt.Sprintf("%s #%d at %s", event, run.PR, run.SHA))
 	return ReviewOut{ID: rv.ID, Reviewer: login(rv.Reviewer), State: string(rv.State), CommitID: rv.CommitID, Body: rv.Body, Official: rv.Official}, nil
 }

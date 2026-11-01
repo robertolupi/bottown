@@ -283,6 +283,13 @@ mode, status, duration, usage where known, and the first line of the
 handover. It can be filtered by actor, kind, status and date. An issue's **timeline** lists every run on it in order, with the
 reviews and the merge between them.
 
+**Denials.** A live run's card and a history row (when expanded) list
+the operations the server's policy refused the run (denied or rejected),
+including those outside its repository: when, the request or operation,
+the rule, and why. History marks a run with denials with a count. They
+come from `GET /v1/audit` (§7); while the server cannot say,
+runs show none.
+
 In-harness runs (started with a harness's slash commands) leave no log:
 history shows them from the server's record and their handover comment,
 marked interactive, with no usage.
@@ -444,9 +451,19 @@ The UI uses the server's existing API where it can. What changes:
 - **`GET /v1/runs`** (owner only) takes filters: `repo`, `state=live|ended`,
   `since` (RFC 3339, created at or after) and `history=1`, which adds
   purged runs, so history works after `gc`. Every run carries its digest.
-- **`GET /v1/audit`** (owner only, new): the policy decisions the server
-  makes, stored rather than only logged, filterable by repository, actor,
-  run and decision. The server keeps them for a bounded time.
+- **`GET /v1/audit`** (owner only): the policy decisions the server
+  makes, stored rather than only logged: every refusal (`deny`, or
+  `reject` for an unclean path) by the API and git proxies and the forge
+  operations, and every write they let through (API writes, pushes,
+  issues, PRs, comments, reviews). Allowed reads are only logged. Each
+  entry has its time, actor, run, repository (`org/name`), operation
+  (`api`, `git` or e.g. `pr_create`), method and path, decision, rule,
+  detail and status. Filters: `repo` (`org/name`, or a name in the
+  instance's org), `actor`, `run`, `decision` (`allow`, `deny` or
+  `reject`, or a comma-separated list such as `deny,reject`), `since`
+  (RFC 3339) and `limit` (the newest N); entries come oldest first. The
+  server keeps them in `audit.jsonl` in its data directory for 14 days,
+  and at most the newest 20000.
 - **Per-actor run limits** (§3.4): `POST /v1/runs` refuses a batch run for
   an actor at its limit; the limit is part of the actor's configuration.
 - **Later, for the queue:** provisioning creates `implement/<actor>` and
