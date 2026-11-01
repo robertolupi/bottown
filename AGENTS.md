@@ -90,7 +90,8 @@ bottown run end [--failed] --summary-file -
   HEAD compares with `main`.
 - **Never run `make install` from an actor worktree.** It replaces the
   shared `~/.local/bin/bottown`, which every actor and the harness commands
-  use, with your branch's build. Build with `make build` (`bin/bottown`).
+  use, with your branch's build, and can upgrade prod. It refuses to run
+  from a linked worktree. Build with `make build` (`bin/bottown`).
 
 ## Code
 
@@ -109,7 +110,10 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 
 - **Build:** `make build` writes `bin/bottown`.
 - **Install:** `make install` writes `~/.local/bin/bottown`, which the
-  harness commands and credential helpers use.
+  harness commands and credential helpers use, runs `bottown harness
+  setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
+  --if-changed` (`UP=0` skips it). `--if-changed` keeps prod's image when
+  the commits differ only in docs.
 - **Tests:** `make test` runs the unit tests. `make e2e` needs Docker and
   starts throwaway `e2e-*` instances; it never touches prod or dev.
 - **Checks:** `make check` is what "the repository's checks" means to
@@ -132,11 +136,11 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 **After merging (owner),** in `main`:
 
 1. `git pull --ff-only bottown main`. The checkout does not track prod's
-   `main` by itself, and the steps below build from it.
-2. `make install` when the CLI changed (including the run prompts, which
-   the CLI renders).
-3. `bottown harness setup` when the slash-command templates changed.
-4. `bottown up -i prod --ref <commit>` when the server changed.
+   `main` by itself, and the next step builds from it.
+2. `make install`. It installs the CLI (including the run prompts, which
+   the CLI renders), refreshes the slash commands, and upgrades prod to
+   HEAD, which after step 1 is `bottown/main`. It skips the prod step,
+   saying so, when HEAD is not `bottown/main`.
 
 <!-- BEGIN TRANSITION: remove this section once every item below is done. -->
 ## Transition from the bootstrap (temporary)

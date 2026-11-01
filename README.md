@@ -31,8 +31,12 @@ cd bottown
 make install            # writes ~/.local/bin/bottown; put it on your PATH
 ```
 
-`make build` writes `bin/bottown` instead, without replacing the installed
-binary.
+`make install` also refreshes the harness slash commands (`bottown harness
+setup`, below) and, in a fam's main checkout whose HEAD is `bottown/main`,
+upgrades the prod server to that commit (`bottown up --ref HEAD
+--if-changed`); `UP=0` skips that step. It refuses to run from a linked
+worktree, such as an actor's. `make build` writes `bin/bottown` instead,
+without replacing the installed binary.
 
 ## Tutorial
 
@@ -160,7 +164,7 @@ has the details.
 
 | Command | What it does |
 |---|---|
-| `up [--ref COMMIT \| --image TAG]` | Create or converge an instance: image, container, provisioning. |
+| `up [--ref COMMIT [--if-changed] \| --image TAG]` | Create or converge an instance: image, container, provisioning. `--if-changed` keeps the current image when the commits differ only in docs. |
 | `status` | Container and provisioning state. |
 | `logs [-f] [--tail N]` | Container logs (Forgejo and bottown). |
 | `down [--purge]` | Stop an instance; `--purge` deletes its data for good. |
