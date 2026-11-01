@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -59,26 +58,76 @@ func TestToolOutputSchemas(t *testing.T) {
 		if schema["type"] != "object" {
 			t.Errorf("%s: output schema type = %v, want object", tool.Name, schema["type"])
 		}
-		var walk func(v any, path string)
-		walk = func(v any, path string) {
-			switch v := v.(type) {
-			case bool:
-				// additionalProperties: false is the Go SDK's idiom for
-				// structs and strict clients accept it; a boolean anywhere
-				// else is the `any` rendering that broke kimi.
-				if !strings.HasSuffix(path, ".additionalProperties") {
-					t.Errorf("%s: boolean schema at %s", tool.Name, path)
-				}
-			case map[string]any:
-				for k, sub := range v {
-					walk(sub, path+"."+k)
-				}
-			case []any:
-				for i, sub := range v {
-					walk(sub, fmt.Sprintf("%s[%d]", path, i))
-				}
-			}
+		for _, p := range booleanSchemaPaths(tool.Name, schema, false, tool.Name) {
+			t.Errorf("%s: boolean schema at %s", tool.Name, p)
 		}
-		walk(schema, tool.Name)
+	}
+}
+
+// booleanSchemaPaths returns the paths of boolean subschemas (what the Go
+// SDK renders for an `any` field, and strict MCP clients reject). The
+// additionalProperties keyword is exempt: false there is the SDK's idiom
+// for structs and strict clients accept it. inProps marks keys that are
+// property names, so a property merely named "additionalProperties" is not
+// mistaken for the keyword.
+func booleanSchemaPaths(key string, v any, inProps bool, path string) []string {
+	switch v := v.(type) {
+	case bool:
+		if key != "additionalProperties" || inProps {
+			return []string{path}
+		}
+	case map[string]any:
+		var out []string
+		for k, sub := range v {
+			out = append(out, booleanSchemaPaths(k, sub, key == "properties", path+"."+k)...)
+		}
+		return out
+	case []any:
+		var out []string
+		for i, sub := range v {
+			out = append(out, booleanSchemaPaths(key, sub, inProps, fmt.Sprintf("%s[%d]", path, i))...)
+		}
+		return out
+	}
+	return nil
+}
+
+func TestBooleanSchemaPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		schema map[string]any
+		want   []string
+	}{
+		{
+			name:   "additionalProperties keyword exempt",
+			schema: map[string]any{"type": "object", "additionalProperties": false},
+		},
+		{
+			name: "nested additionalProperties keyword exempt",
+			schema: map[string]any{"properties": map[string]any{
+				"foo": map[string]any{"type": "object", "additionalProperties": false},
+			}},
+		},
+		{
+			name: "property named additionalProperties flagged",
+			schema: map[string]any{"properties": map[string]any{
+				"additionalProperties": true,
+			}},
+			want: []string{"s.properties.additionalProperties"},
+		},
+		{
+			name: "boolean property schema flagged",
+			schema: map[string]any{"properties": map[string]any{
+				"body": true,
+			}},
+			want: []string{"s.properties.body"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := booleanSchemaPaths("s", tc.schema, false, "s")
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("booleanSchemaPaths() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
