@@ -1253,6 +1253,85 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("git gc-branches deletes only unguarded merged branches", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		wt := filepath.Join(fam, "claude")
+		// Fetches and pushes from main use the owner's credential helper,
+		// which needs the instance's environment.
+		ownerGit := func(args ...string) {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+		}
+		git(t, demo, "checkout", "-q", "main")
+		ownerGit("fetch", "-q", remote)
+		tip := git(t, demo, "rev-parse", remote+"/main")
+		older := git(t, demo, "rev-parse", remote+"/main~1")
+		// 901 merged; 903 merged and checked out in claude's worktree; 904
+		// merged but the head of an open PR (into side, which it is ahead
+		// of); 902 has a commit main lacks.
+		ownerGit("push", "-q", remote, tip+":refs/heads/issue/901", tip+":refs/heads/issue/903", tip+":refs/heads/issue/904", older+":refs/heads/side")
+		git(t, demo, "switch", "-q", "-c", "issue/902", tip)
+		os.WriteFile(filepath.Join(demo, "gc.txt"), []byte("unmerged\n"), 0o644)
+		git(t, demo, "add", "gc.txt")
+		git(t, demo, "commit", "-q", "-m", "unmerged")
+		ownerGit("push", "-q", remote, "issue/902")
+		git(t, demo, "switch", "-q", "main")
+		git(t, demo, "branch", "-q", "issue/901", tip) // a merged local branch too
+		ownerGit("fetch", "-q", remote)
+		git(t, wt, "switch", "-q", "-c", "issue/903", "--no-track", remote+"/issue/903")
+		defer git(t, wt, "switch", "-q", "--detach")
+		var pr struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/pulls", map[string]string{"head": "issue/904", "base": "side", "title": "gc guard"}, &pr)
+
+		exists := func(ref string) bool {
+			return exec.Command("git", "-C", demo, "rev-parse", "-q", "--verify", ref).Run() == nil
+		}
+		if out, err := a.cmd(wt, "git", "gc-branches"); err == nil || !strings.Contains(out, "main checkout") {
+			t.Errorf("gc-branches in an actor worktree: %v %s", err, out)
+		}
+		out := a.mustCmd(demo, "git", "gc-branches", "--dry-run")
+		for _, want := range []string{
+			"would delete " + remote + "/issue/901",
+			"would delete issue/901 (local)",
+			// git may report the worktree through a symlink (/private/var).
+			"kept issue/903: checked out in ",
+			filepath.Join(filepath.Base(fam), "claude") + "\n",
+			fmt.Sprintf("kept issue/904: open pull request !%d", pr.Number),
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("dry run lacks %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, "issue/902") || !exists("refs/remotes/"+remote+"/issue/901") || !exists("refs/heads/issue/901") {
+			t.Fatalf("dry run deleted or listed the wrong branches:\n%s", out)
+		}
+
+		out = a.mustCmd(demo, "git", "gc-branches")
+		if !strings.Contains(out, "deleted 1 remote and 1 local branches") {
+			t.Errorf("gc-branches:\n%s", out)
+		}
+		var branches []struct{ Name string }
+		a.mustAPI(owner, "GET", "/repos/bottown/demo/branches?limit=50", nil, &branches)
+		on := map[string]bool{}
+		for _, b := range branches {
+			on[b.Name] = true
+		}
+		if on["issue/901"] || !on["issue/902"] || !on["issue/903"] || !on["issue/904"] || !on["main"] {
+			t.Errorf("forge branches after gc: %v", on)
+		}
+		// Refs are shared with actor worktrees: one pass prunes the fam.
+		if exists("refs/heads/issue/901") || exists("refs/remotes/"+remote+"/issue/901") || !exists("refs/heads/issue/902") || !exists("refs/heads/issue/903") {
+			t.Errorf("local refs after gc are wrong")
+		}
+		if got := git(t, wt, "branch", "--show-current"); got != "issue/903" {
+			t.Errorf("claude's worktree switched to %q", got)
+		}
+	})
+
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {
 		if out, err := exec.Command("docker", "restart", a.cfg.Container()).CombinedOutput(); err != nil {
 			t.Fatalf("docker restart: %v %s", err, out)

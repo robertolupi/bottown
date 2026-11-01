@@ -175,6 +175,7 @@ has the details.
 | `actor setup ACTOR…` | Create or repair actor worktrees (in the main checkout). |
 | `actor ls` | List the main checkout's actor worktrees. |
 | `harness setup [claude\|agy]…` | Install the `/bottown-*` slash commands into the harnesses. |
+| `git gc-branches [--dry-run] [--pattern P]` | Delete `issue/*` branches merged into the default branch, on the forge and locally (in the main checkout). Keeps any branch checked out in a worktree, with a live run, or with an open PR. |
 
 ### Runs (owner, from the main checkout)
 
