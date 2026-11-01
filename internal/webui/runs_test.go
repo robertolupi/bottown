@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -263,6 +264,111 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if len(r.Denials) != 3 || r.Denials[0].Rule != "issue-dependencies" ||
 		r.Denials[1].Path != "/repos/bottown/other/issues/1/comments" || r.Denials[2].Rule != "unclean-path" {
 		t.Fatalf("expected the run's three refusals, got %+v", r.Denials)
+	}
+}
+
+// deadPID returns the PID of a process that has exited and been reaped.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestRuns_ActiveFlows(t *testing.T) {
+	fix := defaultRunsFixture()
+	now := time.Now().UTC()
+
+	// Issue 51 has a live verify run on PR 52. Issue 60 is between runs:
+	// its PR 61 has two REQUEST_CHANGES reviews, one dismissed, which
+	// both count, as in flow.countRounds, and reviews of other states,
+	// which do not.
+	fix.prs = []*sdk.PullRequest{
+		{Index: 52, State: sdk.StateOpen, Head: &sdk.PRBranchInfo{Ref: "issue/51", Sha: "11112222"}},
+		{Index: 61, State: sdk.StateOpen, Head: &sdk.PRBranchInfo{Ref: "issue/60", Sha: "33334444"}},
+	}
+	fix.reviews[52] = []*sdk.PullReview{
+		{ID: 1, State: sdk.ReviewStateRequestChanges, Submitted: now.Add(-30 * time.Minute)},
+	}
+	fix.reviews[61] = []*sdk.PullReview{
+		{ID: 2, State: sdk.ReviewStateRequestChanges, Dismissed: true, Submitted: now.Add(-50 * time.Minute)},
+		{ID: 3, State: sdk.ReviewStateComment, Submitted: now.Add(-40 * time.Minute)},
+		{ID: 4, State: sdk.ReviewStateRequestChanges, Submitted: now.Add(-20 * time.Minute)},
+		{ID: 5, State: sdk.ReviewStateApproved, Dismissed: true, Submitted: now.Add(-10 * time.Minute)},
+	}
+	fix.runs = []secrets.Run{
+		{
+			ID: "r-verify-1", Kind: "verify", Actor: "kimi", Family: "moonshot", Harness: "kimi",
+			Repo: "bottown", PR: 52, Created: now.Add(-5 * time.Minute), Expires: now.Add(55 * time.Minute),
+		},
+	}
+	_, port := newRunsFixtureServer(t, fix)
+
+	top := t.TempDir()
+	dir := filepath.Join(top, ".bottown")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFlow := func(issue int64, rounds, pid int) string {
+		t.Helper()
+		p := filepath.Join(dir, fmt.Sprintf("flow-%d.json", issue))
+		rec := fmt.Sprintf(`{"issue":%d,"implement":"agy","verify":"kimi","rounds":%d,"pid":%d}`, issue, rounds, pid)
+		if err := os.WriteFile(p, []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	writeFlow(51, 3, os.Getpid())
+	writeFlow(60, 4, os.Getpid())
+	stale := writeFlow(70, 3, deadPID(t))
+	// A record with no PID is malformed: it is not active, and stopping
+	// it must not signal kill(-0), the UI's own process group.
+	noPID := writeFlow(80, 3, 0)
+
+	s, err := NewServer(Config{
+		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
+		RepoTop:  top,
+		FullRepo: "bottown/bottown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	live, err := s.ComputeLiveRuns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flows := s.ComputeActiveFlows(ctx, live)
+	if len(flows) != 2 {
+		t.Fatalf("expected flows for #51 and #60, got %+v", flows)
+	}
+
+	f := flows[0]
+	if f.Issue != 51 || f.Waiting || f.Implement != "agy" || f.Verify != "kimi" ||
+		f.Round != 2 || f.MaxRounds != 3 || f.Step != "verifying with kimi" ||
+		f.Label != "#51 · round 2/3 · verifying with kimi" {
+		t.Fatalf("flow #51 should take its label from the live run, got %+v", f)
+	}
+
+	f = flows[1]
+	if f.Issue != 60 || !f.Waiting || f.Round != 3 || f.MaxRounds != 4 ||
+		f.Step != "waiting between rounds" || f.Label != "#60 · round 3/4 · waiting between rounds" {
+		t.Fatalf("flow #60 should be waiting in round 3/4, got %+v", f)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale flow-70.json should be removed, stat err=%v", err)
+	}
+
+	if _, err := s.ExecuteStop(ctx, "flow-80"); err == nil || !strings.Contains(err.Error(), "no active flow for issue #80") {
+		t.Fatalf("stopping a flow without a PID should fail, got err=%v", err)
+	}
+	if _, err := os.Stat(noPID); err != nil {
+		t.Fatalf("flow-80.json should be left alone, stat err=%v", err)
 	}
 }
 

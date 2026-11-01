@@ -139,11 +139,15 @@ func (s *Server) getActiveFlow(issue int64) *FlowRecord {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return nil
 	}
-	if rec.PID > 0 {
-		if err := syscall.Kill(rec.PID, 0); err != nil {
-			_ = os.Remove(infoPath)
-			return nil
-		}
+	// The UI always records a real PID. Without one there is no process
+	// to check or stop, and ExecuteStop's kill(-PID) would signal the
+	// UI's own process group for PID 0.
+	if rec.PID <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(rec.PID, 0); err != nil {
+		_ = os.Remove(infoPath)
+		return nil
 	}
 	return &rec
 }
