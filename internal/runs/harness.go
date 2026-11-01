@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 //go:embed prompts/*.md
@@ -70,6 +72,10 @@ type Harness interface {
 	// Summary extracts the agent's final message from a batch log, for the
 	// handover comment. Empty if unknown.
 	Summary(log []byte) string
+	// Usage extracts what the harness reported the run used from a batch
+	// log, for the run's digest. Nil if it reports nothing; fields it does
+	// not report stay nil.
+	Usage(log []byte) *secrets.Usage
 }
 
 // HarnessCmdEnv names a testing hook: when set, every run executes this
@@ -219,6 +225,75 @@ func (claudeHarness) Summary(log []byte) string {
 	return last
 }
 
+// Usage reads the last stream-json result event: its turns, duration and
+// total cost, and tokens summed over its per-model usage (which counts
+// helper models too), else its main usage.
+func (claudeHarness) Usage(log []byte) *secrets.Usage {
+	type tokens struct {
+		Input       *int64 `json:"input_tokens"`
+		Output      *int64 `json:"output_tokens"`
+		CacheRead   *int64 `json:"cache_read_input_tokens"`
+		CacheCreate *int64 `json:"cache_creation_input_tokens"`
+	}
+	type model struct {
+		Input       *int64 `json:"inputTokens"`
+		Output      *int64 `json:"outputTokens"`
+		CacheRead   *int64 `json:"cacheReadInputTokens"`
+		CacheCreate *int64 `json:"cacheCreationInputTokens"`
+	}
+	var last *secrets.Usage
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type       string           `json:"type"`
+			NumTurns   *int64           `json:"num_turns"`
+			DurationMS *int64           `json:"duration_ms"`
+			CostUSD    *float64         `json:"total_cost_usd"`
+			Usage      *tokens          `json:"usage"`
+			ModelUsage map[string]model `json:"modelUsage"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Type != "result" {
+			return
+		}
+		u := &secrets.Usage{Turns: ev.NumTurns, DurationMS: ev.DurationMS, CostUSD: ev.CostUSD}
+		if len(ev.ModelUsage) > 0 {
+			var t tokens
+			for _, m := range ev.ModelUsage {
+				addTokens(&t.Input, m.Input)
+				addTokens(&t.Output, m.Output)
+				addTokens(&t.CacheRead, m.CacheRead)
+				addTokens(&t.CacheCreate, m.CacheCreate)
+			}
+			ev.Usage = &t
+		}
+		if t := ev.Usage; t != nil {
+			u.InputTokens, u.OutputTokens = t.Input, t.Output
+			u.CacheReadTokens, u.CacheWriteTokens = t.CacheRead, t.CacheCreate
+		}
+		last = u
+	})
+	return last
+}
+
+// addTokens adds n to *sum, if n is known; *sum stays nil until one is.
+func addTokens(sum **int64, n *int64) {
+	if n == nil {
+		return
+	}
+	if *sum == nil {
+		*sum = new(int64)
+	}
+	**sum += *n
+}
+
+// eachJSONLine calls fn with each line of log, which may be long.
+func eachJSONLine(log []byte, fn func([]byte)) {
+	sc := bufio.NewScanner(bytes.NewReader(log))
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		fn(sc.Bytes())
+	}
+}
+
 // agyHarness runs Antigravity's CLI. Its only per-run MCP config is the
 // workspace file <worktree>/.agents/mcp_config.json, which the launcher
 // excludes from git (in the mirror's info/exclude) and deletes at the end.
@@ -282,6 +357,47 @@ func (agyHarness) Summary(log []byte) string {
 		}
 	}
 	return ""
+}
+
+// Usage reads agy's final result event: tokens (thinking counted as
+// output), turns and duration. agy reports no cost.
+func (agyHarness) Usage(log []byte) *secrets.Usage {
+	var last *secrets.Usage
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Event  string `json:"event"`
+			Result *struct {
+				NumTurns        *int64   `json:"num_turns"`
+				DurationSeconds *float64 `json:"duration_seconds"`
+				Usage           *struct {
+					Input     *int64 `json:"input_tokens"`
+					Output    *int64 `json:"output_tokens"`
+					Thinking  *int64 `json:"thinking_tokens"`
+					CacheRead *int64 `json:"cache_read_tokens"`
+				} `json:"usage"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Event != "result" || ev.Result == nil {
+			return
+		}
+		u := &secrets.Usage{Turns: ev.Result.NumTurns}
+		if d := ev.Result.DurationSeconds; d != nil {
+			ms := int64(*d * 1000)
+			u.DurationMS = &ms
+		}
+		if t := ev.Result.Usage; t != nil {
+			u.InputTokens, u.CacheReadTokens = t.Input, t.CacheRead
+			if t.Output != nil {
+				out := *t.Output
+				if t.Thinking != nil {
+					out += *t.Thinking
+				}
+				u.OutputTokens = &out
+			}
+		}
+		last = u
+	})
+	return last
 }
 
 // kimiHarness runs Kimi Code CLI. Like agy it has no per-run MCP flag, so
@@ -441,6 +557,9 @@ func (kimiHarness) Summary(log []byte) string {
 	return last
 }
 
+// Usage is nil: kimi's stream-json reports no usage.
+func (kimiHarness) Usage([]byte) *secrets.Usage { return nil }
+
 // kimiText reads message content: a string, or a list of text parts.
 func kimiText(raw json.RawMessage) string {
 	var s string
@@ -479,3 +598,6 @@ func (scriptHarness) Summary(log []byte) string {
 	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
 }
+
+// Usage reads claude-style result events, so tests can script usage.
+func (scriptHarness) Usage(log []byte) *secrets.Usage { return claudeHarness{}.Usage(log) }

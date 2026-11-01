@@ -12,6 +12,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -237,7 +238,9 @@ func newRunEnd() *cobra.Command {
 			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Body: handoverText(rec, status, 0, text)}, nil); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 			}
-			if err := a.call("DELETE", "/v1/runs/"+rec.ID, map[string]string{"status": status}, nil); err != nil {
+			// In-harness runs leave no log: the digest is the handover.
+			end := server.EndRunRequest{Status: status, Digest: secrets.Digest{Summary: cleanSummary(rec, text)}}
+			if err := a.call("DELETE", "/v1/runs/"+rec.ID, end, nil); err != nil {
 				return err
 			}
 			now := time.Now().UTC()

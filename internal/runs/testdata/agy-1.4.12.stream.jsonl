@@ -1,0 +1,4 @@
+{"event":"step_update","step_update":{"conversation_id":"3883ee58-b52b-4877-9aac-2405027037af","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"3883ee58-b52b-4877-9aac-2405027037af","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"hello"}}
+{"event":"step_update","step_update":{"conversation_id":"3883ee58-b52b-4877-9aac-2405027037af","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":4.827111,"usage":{"input_tokens":15775,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":15780}}}
+{"event":"result","result":{"conversation_id":"3883ee58-b52b-4877-9aac-2405027037af","status":"SUCCESS","response":"hello\n","duration_seconds":4.991755,"num_turns":1,"usage":{"input_tokens":15775,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":15780}}}
