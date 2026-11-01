@@ -51,6 +51,7 @@ func (g *globals) loadInstance() (config.Instance, error) {
 
 func newUp(g *globals) *cobra.Command {
 	var image, ref, src string
+	var ifChanged bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "up",
@@ -59,20 +60,29 @@ func newUp(g *globals) *cobra.Command {
 
 prod only runs an image chosen explicitly (--image, or --ref to build one from a
 commit), never a build of a working tree. Other instances default to a build of
-the current working tree.`,
+the current working tree.
+
+With --ref and --if-changed, up keeps the instance's current image when it was
+built from a commit that differs from --ref only in what never reaches the
+image (docs/ and Markdown outside the embedded templates), instead of
+building and switching to a new one. make install uses it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return up(cmd.Context(), g, cmd.OutOrStdout(), image, ref, src, timeout)
+			if ifChanged && ref == "" {
+				return errors.New("--if-changed needs --ref")
+			}
+			return up(cmd.Context(), g, cmd.OutOrStdout(), image, ref, src, ifChanged, timeout)
 		},
 	}
 	cmd.Flags().StringVar(&image, "image", "", "run this local image tag")
 	cmd.Flags().StringVar(&ref, "ref", "", "build the image from this git commit and run it")
+	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "with --ref: keep the current image if the commits differ only in docs")
 	cmd.Flags().StringVar(&src, "src", "", "bottown source checkout (default: the git checkout containing the current directory)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "how long to wait for the instance to become healthy")
 	return cmd
 }
 
-func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, timeout time.Duration) error {
+func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, ifChanged bool, timeout time.Duration) error {
 	d := g.docker()
 	if err := d.Ping(ctx); err != nil {
 		return err
@@ -91,6 +101,9 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 	case image != "" && ref != "":
 		return errors.New("--image and --ref are mutually exclusive")
 	case image != "":
+	case ref != "" && ifChanged && sameImageSource(src, inst.Image, ref) && hasImage(ctx, d, inst.Image):
+		image = inst.Image
+		fmt.Fprintf(out, "keeping image %s: nothing that goes into it changed up to %s\n", image, ref)
 	case ref != "":
 		if image, err = buildImage(ctx, d, src, ref, g.instance); err != nil {
 			return err
@@ -407,6 +420,37 @@ func findSource(src string) (string, error) {
 		return "", fmt.Errorf("%s is not a bottown source checkout; pass --src", src)
 	}
 	return src, nil
+}
+
+// imageInputs are the pathspecs, relative to the source checkout, of what
+// goes into a bottown image: everything but the docs. Markdown under
+// internal/ is embedded in the binary, so only docs/ and the top-level and
+// docker/ READMEs are left out.
+var imageInputs = []string{".", ":(exclude)docs", ":(exclude,glob)*.md", ":(exclude)docker/README.md"}
+
+// sameImageSource reports whether image is a commit image (bottown:<commit>,
+// as buildImage tags them) built from a commit whose image inputs equal ref's.
+func sameImageSource(src, image, ref string) bool {
+	built, ok := strings.CutPrefix(image, "bottown:")
+	if !ok || built == "" {
+		return false
+	}
+	src, err := findSource(src)
+	if err != nil {
+		return false
+	}
+	old := strings.TrimSpace(gitOut(src, "rev-parse", "--verify", "--quiet", built+"^{commit}"))
+	sha := strings.TrimSpace(gitOut(src, "rev-parse", "--verify", "--quiet", ref+"^{commit}"))
+	if old == "" || sha == "" || !strings.HasPrefix(old, built) {
+		return false
+	}
+	args := append([]string{"-C", src, "diff", "--quiet", old, sha, "--"}, imageInputs...)
+	return exec.Command("git", args...).Run() == nil
+}
+
+func hasImage(ctx context.Context, d hostctl.Docker, image string) bool {
+	id, err := d.ImageID(ctx, image)
+	return err == nil && id != ""
 }
 
 // buildImage builds bottown:<commit> from ref, or bottown:<instance>-wt from
