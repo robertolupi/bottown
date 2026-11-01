@@ -521,8 +521,13 @@ func TestInbox_BrokenRun(t *testing.T) {
 	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-expired-1" {
 		t.Fatalf("expected broken_run for r-expired-1, got: %+v", items)
 	}
-	if items[0].Action != nil {
-		t.Fatalf("expected expired server run to have nil action, got: %+v", items[0].Action)
+	// The run key no longer authenticates, so `run end` cannot end it:
+	// the action is gc, which revokes it with the owner key.
+	if items[0].Action == nil || items[0].Action.Command != "bottown run gc" {
+		t.Fatalf("expected expired run action 'bottown run gc', got: %+v", items[0].Action)
+	}
+	if strings.Contains(items[0].Description, "run end") {
+		t.Fatalf("expired run hint still suggests run end: %q", items[0].Description)
 	}
 
 	// Go-away: Ended is set
@@ -647,6 +652,22 @@ func TestInbox_DiscussAnswer(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 0 {
 		t.Fatalf("expected discuss answer to go away after owner replies, got: %+v", items)
+	}
+
+	// A later comment by the same actor (e.g. an implement handover) is
+	// not the answer: the owner's reply still counts.
+	fix.mu.Lock()
+	fix.comments[50] = append(fix.comments[50], &sdk.Comment{
+		ID:      3,
+		Poster:  &sdk.User{UserName: "kimi"},
+		Body:    "bottown implement run handover",
+		Created: now.Add(-5 * time.Minute),
+	})
+	fix.mu.Unlock()
+
+	items, _ = s.ComputeInbox(ctx)
+	if len(items) != 0 {
+		t.Fatalf("expected a later discussant comment not to revive the answer, got: %+v", items)
 	}
 
 	// 3. Go-away condition 2: Issue closed

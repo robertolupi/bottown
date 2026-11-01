@@ -936,9 +936,12 @@ func newRunGC(g *globals) *cobra.Command {
 		Long: `Remove finished runs: their local worktrees and files (succeeded and dead;
 with --failed also failed ones), then the server's records of this
 repository's ended runs, including those started in actor worktrees. A run
-whose local files are kept keeps its server record too. Runs that have not
-ended, live or expired, are never purged; --older-than keeps recently ended
-ones.`,
+whose local files are kept keeps its server record too.
+
+A run whose key expired while it was live cannot end itself, since its key
+no longer authenticates: gc ends it as revoked, unless its launcher in this
+checkout is still running. Live runs are never purged; --older-than keeps
+recently ended ones.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rc, err := openRunContext(g)
@@ -974,12 +977,29 @@ ones.`,
 				removed++
 			}
 			_, _ = runs.Git(rc.ws.Mirror, nil, "worktree", "prune")
+			// A run whose key expired while it was live cannot end itself:
+			// its key no longer authenticates. Revoke it with the owner key.
+			var live []secrets.Run
+			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs?state=live&repo="+rc.repo, nil, &live); err != nil {
+				return fmt.Errorf("removed %d runs; listing live server runs: %w", removed, err)
+			}
+			revoked := 0
+			for _, id := range expiredLive(live, recs, time.Now().UTC()) {
+				if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, map[string]string{"status": "revoked"}, nil); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
+					continue
+				}
+				revoked++
+			}
 			var purged struct {
 				Purged []string `json:"purged"`
 			}
 			req := server.PurgeRequest{Repo: rc.repo, EndedBefore: time.Now().Add(-olderThan), Keep: keep}
 			if err := callServer(cmd.Context(), rc.inst, rc.key, "POST", "/v1/runs/purge", req, &purged); err != nil {
 				return fmt.Errorf("removed %d runs; purging server records: %w", removed, err)
+			}
+			if revoked > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "revoked %d runs whose key expired while live\n", revoked)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
 				removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
@@ -989,6 +1009,25 @@ ones.`,
 	cmd.Flags().BoolVar(&failed, "failed", false, "also remove failed runs (kept by default for inspection)")
 	cmd.Flags().DurationVar(&olderThan, "older-than", 0, "purge only server records of runs that ended at least this long ago (e.g. 168h)")
 	return cmd
+}
+
+// expiredLive is the IDs of the server runs gc revokes: not ended, key
+// expired. A run whose launcher in this checkout is still alive is left to
+// it: the launcher ends the run with the owner key when the harness exits.
+func expiredLive(live []secrets.Run, local []runs.Record, now time.Time) []string {
+	launched := make(map[string]bool)
+	for _, r := range local {
+		if r.Status == runs.StatusRunning && r.Ended == nil && r.LauncherAlive() {
+			launched[r.ID] = true
+		}
+	}
+	var ids []string
+	for _, r := range live {
+		if r.Ended == nil && !r.Expires.IsZero() && !now.Before(r.Expires) && !launched[r.ID] {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
 }
 
 // mcpCall is `bottown mcp call TOOL [JSON]`: calls a bottown MCP tool with
