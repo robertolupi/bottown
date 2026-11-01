@@ -123,7 +123,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: true, Harness: run.Harness, Status: "preparing", Started: time.Now().UTC(),
+		Interactive: true, Harness: run.Harness, Status: runs.StatusPreparing, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 	}
 	if inst, _ := git(a.Worktree, "config", "--get", gitInstanceKey); inst != "" {
@@ -353,7 +353,7 @@ func recoverLease(a *agentCtx) (bool, error) {
 	if remote.Ended != nil {
 		return true, finishLease(a, rec, remote)
 	}
-	if rec.Status == "preparing" {
+	if rec.Status == runs.StatusPreparing {
 		return true, endLease(a, rec, server.EndRunRequest{Status: "revoked"})
 	}
 	return false, nil

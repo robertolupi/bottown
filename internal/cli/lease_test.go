@@ -26,6 +26,7 @@ type leaseFixture struct {
 
 func newLeaseFixture(t *testing.T) *leaseFixture {
 	t.Helper()
+	t.Setenv("BOTTOWN_RUN_FILE", "")
 	dir := t.TempDir()
 	if _, err := git(dir, "init", "-q"); err != nil {
 		t.Fatal(err)
@@ -69,7 +70,7 @@ func newLeaseFixture(t *testing.T) *leaseFixture {
 		t.Fatal(err)
 	}
 	f.a = &agentCtx{Actor: "codex", Worktree: dir, KeyDir: keyDir, ServerURL: srv.URL, Key: "run-key", RunID: "r-test"}
-	f.rec = runs.Record{ID: "r-test", Actor: "codex", Worktree: dir, ServerURL: srv.URL, Key: "run-key", Status: "preparing"}
+	f.rec = runs.Record{ID: "r-test", Actor: "codex", Worktree: dir, ServerURL: srv.URL, Key: "run-key", Status: runs.StatusPreparing}
 	f.remote = secrets.Run{ID: "r-test", Actor: "codex"}
 	if err := saveRecord(filepath.Join(keyDir, "actor.json"), runs.Record{ID: "actor", Actor: "codex", ServerURL: srv.URL, Key: "actor-key"}); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestLeaseRollbackFailureCanRecover(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	rec, err := runs.LoadFile(filepath.Join(f.a.KeyDir, "run.json"))
-	if err != nil || rec.Key == "" || rec.Status != "preparing" {
+	if err != nil || rec.Key == "" || rec.Status != runs.StatusPreparing {
 		t.Fatalf("lost recovery identity: %+v, %v", rec, err)
 	}
 	f.failEnd = false
