@@ -175,9 +175,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	denials := s.fetchDenials(ctx)
 
 	// 3. Fetch open PRs only if needed
-	var prs []*sdk.PullRequest
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
-	_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
+	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 
 	// PR by issue index
 	prByIssue := make(map[int64]*sdk.PullRequest)
@@ -210,8 +209,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		}
 		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Index] == nil {
 			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-			var revs []*sdk.PullReview
-			if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
+			revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
+			if err == nil {
 				prReviews[pr.Index] = revs
 			}
 		}
@@ -388,14 +387,13 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 
 		// When waiting between runs, compute current round from PR reviews
 		round := 1
-		pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
-		var prs []*sdk.PullRequest
-		_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
+		pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
+		prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 		for _, pr := range prs {
 			if pr.Head != nil && pr.Head.Ref == fmt.Sprintf("issue/%d", issueNum) {
 				revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-				var revs []*sdk.PullReview
-				if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
+				revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
+				if err == nil {
 					for _, r := range revs {
 						if r.State == sdk.ReviewStateRequestChanges {
 							round++
@@ -550,9 +548,8 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 	}
 
 	// 2. Fetch associated PR
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all&limit=50", org, repo)
-	var prs []*sdk.PullRequest
-	_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
+	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 
 	var matchedPR *sdk.PullRequest
 	for _, pr := range prs {
@@ -579,8 +576,8 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 
 		// Reviews
 		revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, prIndex)
-		var revs []*sdk.PullReview
-		if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
+		revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
+		if err == nil {
 			for _, r := range revs {
 				timeline.Events = append(timeline.Events, TimelineEvent{
 					Type:   "review",
@@ -637,8 +634,10 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 
 	// 4. Issue comments
 	commentsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issueNum)
+	// Forgejo returns all issue comments and ignores page/limit.
 	var comments []*sdk.Comment
-	if err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments); err == nil {
+	err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments)
+	if err == nil {
 		for _, c := range comments {
 			if c != nil && !c.Created.IsZero() {
 				timeline.Events = append(timeline.Events, TimelineEvent{

@@ -63,7 +63,7 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			if revs == nil {
 				revs = []*sdk.PullReview{}
 			}
-			_ = json.NewEncoder(w).Encode(revs)
+			_ = json.NewEncoder(w).Encode(paginate(r, revs))
 		case strings.HasSuffix(p, "/issues"):
 			_ = json.NewEncoder(w).Encode(paginate(r, fix.issues))
 		case strings.Contains(p, "/issues/") && strings.HasSuffix(p, "/comments"):
@@ -652,6 +652,14 @@ func TestInbox_DiscussAnswer(t *testing.T) {
 
 	ctx := context.Background()
 
+	// A long thread includes the answer and subsequent owner reply
+	// must still drive the inbox decision.
+	filler := make([]*sdk.Comment, 50)
+	for i := range filler {
+		filler[i] = &sdk.Comment{Poster: &sdk.User{UserName: "claude"}, Created: now.Add(-2 * time.Hour)}
+	}
+	fix.comments[50] = append(filler, fix.comments[50]...)
+
 	// 1. Show: Discuss answer waiting on owner reply
 	items, err := s.ComputeInbox(ctx)
 	if err != nil {
@@ -694,7 +702,7 @@ func TestInbox_DiscussAnswer(t *testing.T) {
 
 	// 3. Go-away condition 2: Issue closed
 	fix.mu.Lock()
-	fix.comments[50] = fix.comments[50][:1] // remove owner reply
+	fix.comments[50] = fix.comments[50][:51] // remove owner reply
 	issue.State = sdk.StateClosed
 	fix.mu.Unlock()
 
@@ -899,6 +907,11 @@ func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
 		Official:  true,
 		Submitted: now,
 	}}
+
+	// The decisive approval is on a later review page.
+	for i := 0; i < 50; i++ {
+		fix.reviews[61] = append([]*sdk.PullReview{{State: sdk.ReviewStateComment}}, fix.reviews[61]...)
+	}
 
 	// 60 filler issues by the owner (not actor-filed), then an actor-filed
 	// issue beyond the first limit=50 page.

@@ -739,6 +739,18 @@ func TestE2E(t *testing.T) {
 		if code, got := call(runKey, "POST", "/v1/forge/comment", map[string]any{"body": "working on it"}); code != 200 || got["author"] != "claude" {
 			t.Errorf("POST /v1/forge/comment with run key: %d %v", code, got)
 		}
+		// Forgejo's issue comments endpoint ignores pagination. Pin that
+		// behavior with two comments and a limit smaller than the thread.
+		if code, _ := call(runKey, "POST", "/v1/forge/comment", map[string]any{"body": "second comment"}); code != 200 {
+			t.Fatalf("second comment: %d", code)
+		}
+		for _, page := range []int{1, 99} {
+			var comments []map[string]any
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments?limit=1&page=%d", issue.Number, page), nil, &comments)
+			if len(comments) != 2 {
+				t.Fatalf("comments page %d: got %d, want complete thread", page, len(comments))
+			}
+		}
 		if code, _ := call(runKey, "POST", "/v1/forge/review", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "x"}); code != 403 {
 			t.Errorf("review from an implement run: %d, want 403", code)
 		}

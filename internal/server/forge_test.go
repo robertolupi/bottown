@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -261,5 +265,64 @@ func TestAPIProxyIssueDependencies(t *testing.T) {
 				t.Errorf("%s %s = %d (%s), want 403", method, p, w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+// Complete forge reads must keep later-page context and verdicts.
+func TestForgeCompleteReads(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "/comments"), strings.HasSuffix(path, "/reviews"), strings.HasSuffix(path, "/pulls"), strings.HasSuffix(path, "/issues"):
+			start, end := (page-1)*50, min(page*50, 51)
+			if strings.HasSuffix(path, "/comments") {
+				start, end = 0, 51 // This endpoint ignores page/limit.
+			}
+			items := []map[string]any{}
+			for i := start; i < end; i++ {
+				state := "open"
+				if strings.HasSuffix(path, "/reviews") {
+					state = "COMMENT"
+					if i == 50 {
+						state = "APPROVED"
+					}
+				}
+				items = append(items, map[string]any{"id": i + 1, "number": i + 1, "body": "context", "state": state, "head": map[string]string{"ref": fmt.Sprintf("issue/%d", i+1)}})
+			}
+			_ = json.NewEncoder(w).Encode(items)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "state": "open"})
+		}
+	}))
+	defer upstream.Close()
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *secrets.State) error {
+		st.Tokens = map[string]secrets.ActorToken{"codex": {Token: "token"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL, Desired: config.Desired{Org: "bottown"}}}
+	p := secrets.Principal{Actor: "codex"}
+	ctx := context.Background()
+	issues, err := s.opIssueList(ctx, p, IssueListIn{Repo: "demo"})
+	if err != nil || len(issues) != 51 {
+		t.Fatalf("issues=%d err=%v", len(issues), err)
+	}
+	issue, err := s.opIssue(ctx, p, Target{Repo: "demo", Number: 1})
+	if err != nil || len(issue.Comments) != 51 {
+		t.Fatalf("comments=%d err=%v", len(issue.Comments), err)
+	}
+	pr, err := s.opPR(ctx, p, Target{Repo: "demo", Number: 1}, false)
+	if err != nil || len(pr.Reviews) != 51 {
+		t.Fatalf("reviews=%d err=%v", len(pr.Reviews), err)
+	}
+	prs, err := s.opPRList(ctx, p, PRListIn{Repo: "demo"})
+	if err != nil || len(prs) != 51 || prs[50].HeadBranch != "issue/51" || prs[50].ReviewState != "approved" {
+		t.Fatalf("prs=%v err=%v", prs, err)
 	}
 }

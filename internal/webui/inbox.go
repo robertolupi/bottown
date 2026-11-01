@@ -155,8 +155,8 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	prReviews := make(map[int64][]*sdk.PullReview)
 	for _, pr := range prs {
 		revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-		var revs []*sdk.PullReview
-		if err := s.callServer(ctx, http.MethodGet, revPath, nil, &revs); err == nil {
+		revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
+		if err == nil {
 			prReviews[pr.Index] = revs
 		}
 	}
@@ -466,6 +466,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		}
 
 		cPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issue.Index)
+		// Forgejo returns all issue comments and ignores page/limit.
 		var comments []*sdk.Comment
 		_ = s.callServer(ctx, http.MethodGet, cPath, nil, &comments)
 

@@ -99,7 +99,7 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 			if revs == nil {
 				revs = []*sdk.PullReview{}
 			}
-			_ = json.NewEncoder(w).Encode(revs)
+			_ = json.NewEncoder(w).Encode(paginate(r, revs))
 		case strings.Contains(p, "/pulls/"):
 			parts := strings.Split(p, "/")
 			num, _ := strconv.ParseInt(parts[len(parts)-1], 10, 64)
@@ -119,7 +119,7 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 			if cmts == nil {
 				cmts = []*sdk.Comment{}
 			}
-			_ = json.NewEncoder(w).Encode(cmts)
+			_ = json.NewEncoder(w).Encode(paginate(r, cmts))
 		case strings.Contains(p, "/issues/"):
 			parts := strings.Split(p, "/")
 			num, _ := strconv.ParseInt(parts[len(parts)-1], 10, 64)
