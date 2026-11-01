@@ -276,6 +276,9 @@ func TestForgeCompleteReads(t *testing.T) {
 		switch {
 		case strings.HasSuffix(path, "/comments"), strings.HasSuffix(path, "/reviews"), strings.HasSuffix(path, "/pulls"), strings.HasSuffix(path, "/issues"):
 			start, end := (page-1)*50, min(page*50, 51)
+			if strings.HasSuffix(path, "/comments") {
+				start, end = 0, 51 // This endpoint ignores page/limit.
+			}
 			items := []map[string]any{}
 			for i := start; i < end; i++ {
 				state := "open"

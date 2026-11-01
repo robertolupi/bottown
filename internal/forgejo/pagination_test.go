@@ -13,7 +13,7 @@ import (
 )
 
 func TestCompleteLists(t *testing.T) {
-	for _, kind := range []string{"issues", "pulls", "comments", "reviews"} {
+	for _, kind := range []string{"issues", "pulls", "reviews"} {
 		for _, size := range []int{0, 50, 101} {
 			for _, fail := range []bool{false, true} {
 				if fail && size == 0 {
@@ -50,9 +50,6 @@ func TestCompleteLists(t *testing.T) {
 					case "pulls":
 						xs, _, e := c.AllPullRequests("o", "r", sdk.ListPullRequestsOptions{State: sdk.StateOpen})
 						n, err = len(xs), e
-					case "comments":
-						xs, _, e := c.AllComments("o", "r", 1, sdk.ListIssueCommentOptions{})
-						n, err = len(xs), e
 					case "reviews":
 						xs, _, e := c.AllReviews("o", "r", 1, sdk.ListPullReviewsOptions{})
 						n, err = len(xs), e
@@ -67,5 +64,35 @@ func TestCompleteLists(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// Forgejo ignores page/limit for issue comments, including long threads.
+func TestAllCommentsUnpaginated(t *testing.T) {
+	for _, size := range []int{0, 50, 101} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if calls > 1 {
+					http.Error(w, "unexpected repeated request", 500)
+					return
+				}
+				if r.URL.Query().Get("page") != "1" || r.URL.Query().Get("limit") != "0" {
+					t.Errorf("pagination parameters: %s", r.URL.RawQuery)
+				}
+				items := make([]*sdk.Comment, size)
+				for i := range items {
+					items[i] = &sdk.Comment{ID: int64(i + 1)}
+				}
+				_ = json.NewEncoder(w).Encode(items)
+			}))
+			defer srv.Close()
+			c := New(context.Background(), srv.URL, "")
+			items, _, err := c.AllComments("o", "r", 1, sdk.ListIssueCommentOptions{ListOptions: sdk.ListOptions{Page: 2, PageSize: 50}})
+			if err != nil || len(items) != size || calls != 1 {
+				t.Fatalf("items=%d calls=%d err=%v", len(items), calls, err)
+			}
+		})
 	}
 }

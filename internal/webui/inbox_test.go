@@ -74,7 +74,7 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			if cmts == nil {
 				cmts = []*sdk.Comment{}
 			}
-			_ = json.NewEncoder(w).Encode(paginate(r, cmts))
+			_ = json.NewEncoder(w).Encode(cmts)
 		case p == "/healthz":
 			_ = json.NewEncoder(w).Encode(map[string]any{"version": "dev"})
 		default:
@@ -652,7 +652,7 @@ func TestInbox_DiscussAnswer(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Earlier comments fill page one; the answer and subsequent owner reply
+	// A long thread includes the answer and subsequent owner reply
 	// must still drive the inbox decision.
 	filler := make([]*sdk.Comment, 50)
 	for i := range filler {

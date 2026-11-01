@@ -634,7 +634,9 @@ func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*Iss
 
 	// 4. Issue comments
 	commentsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issueNum)
-	comments, err := listAll[*sdk.Comment](ctx, s, commentsPath)
+	// Forgejo returns all issue comments and ignores page/limit.
+	var comments []*sdk.Comment
+	err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments)
 	if err == nil {
 		for _, c := range comments {
 			if c != nil && !c.Created.IsZero() {
