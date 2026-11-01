@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1284,8 +1286,11 @@ func TestE2E(t *testing.T) {
 
 		var stopIssue struct{ Number int64 }
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "stop run"}, &stopIssue)
+		// The harness spawns a child, as harnesses spawn MCP servers, and
+		// exits cleanly on TERM: stopping the run must reach the child too.
 		idFile := filepath.Join(t.TempDir(), "run-id")
-		longRun := `echo "$BOTTOWN_RUN_ID" > ` + idFile + `; trap 'exit 0' TERM; while :; do sleep 1; done`
+		childFile := filepath.Join(t.TempDir(), "child-pid")
+		longRun := `sleep 300 & trap 'exit 0' TERM; echo $! > ` + childFile + `; echo "$BOTTOWN_RUN_ID" > ` + idFile + `; while :; do sleep 1; done`
 		stopCmd := exec.Command(bin, "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
 		stopCmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+longRun)
 		stopCmd.Dir = demo
@@ -1324,6 +1329,18 @@ func TestE2E(t *testing.T) {
 		}
 		if err := stopCmd.Wait(); err == nil || !strings.Contains(runOut.String(), "failed") {
 			t.Errorf("stopped launcher: %v\n%s", err, runOut.String())
+		}
+		b, _ := os.ReadFile(childFile)
+		child, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			t.Fatalf("harness child pid %q: %v", b, err)
+		}
+		for deadline := time.Now().Add(5 * time.Second); syscall.Kill(child, 0) != syscall.ESRCH; time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				_ = syscall.Kill(child, syscall.SIGKILL)
+				t.Errorf("harness child %d survived run stop", child)
+				break
+			}
 		}
 		if out := a.mustCmd(demo, "run", "show", stopID); !strings.Contains(out, "failed") {
 			t.Errorf("stopped run record: %s", out)

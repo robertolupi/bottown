@@ -268,6 +268,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	} else {
 		c.Stdout, c.Stderr = logf, logf
 		fmt.Fprintf(out, "  log: %s\n", rc.ws.Path(run.ID, ".log"))
+		// A batch harness leads its own process group, so run stop and a
+		// cancelled launcher reach its MCP servers and tool shells too.
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
 	}
 	if err := c.Start(); err != nil {
 		return err
@@ -840,7 +844,7 @@ func newRunStop(g *globals) *cobra.Command {
 			if err := rc.ws.Save(rec); err != nil {
 				return err
 			}
-			if err := process.Signal(syscall.SIGTERM); err != nil {
+			if err := signalHarness(rec.HarnessPID, syscall.SIGTERM); err != nil {
 				rec.StopRequested = false
 				_ = rc.ws.Save(rec)
 				return fmt.Errorf("stop run %s: %w", id, err)
@@ -871,6 +875,16 @@ func newRunStop(g *globals) *cobra.Command {
 			}
 		},
 	}
+}
+
+// signalHarness signals a batch harness's process group, which it leads.
+// A harness started before batch runs had their own group has none, so
+// it falls back to the process alone.
+func signalHarness(pid int, sig syscall.Signal) error {
+	if err := syscall.Kill(-pid, sig); err != syscall.ESRCH {
+		return err
+	}
+	return syscall.Kill(pid, sig)
 }
 
 func newRunGC(g *globals) *cobra.Command {
