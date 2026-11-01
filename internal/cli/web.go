@@ -83,6 +83,7 @@ func newWeb(g *globals) *cobra.Command {
 				OwnerKey:       key,
 				Port:           port,
 				CLIVersion:     Version,
+				BottownPath:    selfPath(),
 				HarnessChecker: checkHarnessCurrent,
 			})
 			if err != nil {

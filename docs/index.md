@@ -57,7 +57,8 @@ dropped.
 - [Local web UI and supervisor](design/web-ui.md) — `bottown flow` takes an
   issue through implement and cross-family verify; `bottown web ui` is a
   local view of runs, the inbox and the repository's host state (built:
-  Phase 3, host UI and health view; Phase 4, inbox; Phase 6, `.bottown.toml`
+  Phase 3, host UI and health view; Phase 4, inbox; Phase 5, runs, live and
+  history, with flow and run actions; Phase 6, `.bottown.toml`
   with after-pull steps).
 
 ### History

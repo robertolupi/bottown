@@ -21,14 +21,17 @@ import (
 
 // UIStatusResponse is returned by GET /api/status.
 type UIStatusResponse struct {
-	Instance   string          `json:"instance"`
-	Repo       string          `json:"repo"`
-	Upstream   UpstreamStatus  `json:"upstream"`
-	Forge      ForgeStatus     `json:"forge"`
-	Health     HealthChecklist `json:"health"`
-	Links      RepoLinks       `json:"links"`
-	Inbox      []InboxItem     `json:"inbox"`
-	InboxError string          `json:"inbox_error,omitempty"`
+	Instance    string           `json:"instance"`
+	Repo        string           `json:"repo"`
+	Upstream    UpstreamStatus   `json:"upstream"`
+	Forge       ForgeStatus      `json:"forge"`
+	Health      HealthChecklist  `json:"health"`
+	Links       RepoLinks        `json:"links"`
+	Inbox       []InboxItem      `json:"inbox"`
+	InboxError  string           `json:"inbox_error,omitempty"`
+	LiveRuns    []LiveRunInfo    `json:"live_runs"`
+	ActiveFlows []ActiveFlowInfo `json:"active_flows"`
+	Actors      []ActorDetail    `json:"actors"`
 }
 
 type UpstreamStatus struct {
@@ -321,6 +324,23 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		res.Inbox = inbox
 	} else {
 		res.Inbox = []InboxItem{}
+	}
+
+	// 5. Live runs and active flows (§4.2)
+	liveRuns, err := s.ComputeLiveRuns(ctx)
+	if err == nil && liveRuns != nil {
+		res.LiveRuns = liveRuns
+	} else {
+		res.LiveRuns = []LiveRunInfo{}
+	}
+	res.ActiveFlows = s.ComputeActiveFlows(ctx, res.LiveRuns)
+
+	// 6. Actors
+	var actors []ActorDetail
+	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actors); err == nil && actors != nil {
+		res.Actors = actors
+	} else {
+		res.Actors = []ActorDetail{}
 	}
 
 	return res, nil

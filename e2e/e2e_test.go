@@ -26,6 +26,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/webui"
 )
 
 var (
@@ -1657,6 +1658,62 @@ fi`
 			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
 				t.Error("resume repeated the implement run or added a verify run")
 			}
+			assertStopComment(issue, "ready to merge")
+		})
+
+		t.Run("flow started from web ui handler", func(t *testing.T) {
+			issue := newIssue("flow from web ui")
+			dir := t.TempDir()
+
+			t.Setenv("BOTTOWN_HOME", home)
+			t.Setenv("BOTTOWN_SECRET_STORE", "file")
+			t.Setenv("BOTTOWN_OWNER_LOGIN", "owner")
+			t.Setenv("BOTTOWN_OWNER_EMAIL", "owner@e2e.test")
+			t.Setenv("BOTTOWN_INSTANCE", a.name)
+			t.Setenv("BOTTOWN_HARNESS_CMD", flowScript(dir, "approve"))
+
+			srv, err := webui.NewServer(webui.Config{
+				Instance:    a.cfg,
+				RepoTop:     demo,
+				FullRepo:    "bottown/demo",
+				OwnerKey:    owner,
+				BottownPath: bin,
+			})
+			if err != nil {
+				t.Fatalf("webui server: %v", err)
+			}
+			defer srv.Close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() { _ = srv.Serve(ctx) }()
+
+			out, err := srv.ExecuteFlow(context.Background(), webui.FlowRequest{
+				Issue:     issue,
+				Implement: "claude",
+				Verify:    "agy",
+				Timeout:   "20s",
+			})
+			if err != nil {
+				t.Fatalf("start flow from ui: %v", err)
+			}
+			if !strings.Contains(out, fmt.Sprintf("Flow started for issue #%d", issue)) {
+				t.Fatalf("unexpected flow output: %s", out)
+			}
+
+			deadline := time.Now().Add(30 * time.Second)
+			logFile := filepath.Join(demo, ".bottown", fmt.Sprintf("flow-%d.log", issue))
+			for {
+				b, _ := os.ReadFile(logFile)
+				if strings.Contains(string(b), "ready to merge") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("flow did not reach ready to merge within deadline; log:\n%s", b)
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+
 			assertStopComment(issue, "ready to merge")
 		})
 	})
