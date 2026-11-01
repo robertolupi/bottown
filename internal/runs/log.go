@@ -21,7 +21,7 @@ func RenderLog(harness string, log []byte) []string {
 	case "codex":
 		return renderCodexLog(log)
 	case "crush":
-		return renderCrushLog(log)
+		return renderScriptLog(log)
 	default:
 		return renderScriptLog(log)
 	}
@@ -287,81 +287,4 @@ func formatAssistantText(text string) string {
 		}
 	}
 	return text
-}
-
-func renderCrushLog(log []byte) []string {
-	var sess struct {
-		Messages []struct {
-			Role  string            `json:"role"`
-			Parts []json.RawMessage `json:"parts"`
-		} `json:"messages"`
-	}
-	if json.Unmarshal(log, &sess) == nil && len(sess.Messages) > 0 {
-		var lines []string
-		for _, m := range sess.Messages {
-			if m.Role != "assistant" {
-				continue
-			}
-			for _, rawPart := range m.Parts {
-				var p struct {
-					Type     string          `json:"type"`
-					Text     string          `json:"text"`
-					Name     string          `json:"name"`
-					Input    json.RawMessage `json:"input"`
-					Thinking string          `json:"thinking"`
-					ToolCall *struct {
-						Name      string          `json:"name"`
-						Arguments json.RawMessage `json:"arguments"`
-						Input     json.RawMessage `json:"input"`
-					} `json:"tool_call"`
-					Data json.RawMessage `json:"data"`
-				}
-				if json.Unmarshal(rawPart, &p) != nil {
-					continue
-				}
-				if p.Data != nil && p.Name == "" && p.Text == "" {
-					var inner struct {
-						Text  string          `json:"text"`
-						Name  string          `json:"name"`
-						Input json.RawMessage `json:"input"`
-					}
-					if json.Unmarshal(p.Data, &inner) == nil {
-						if inner.Text != "" {
-							p.Text = inner.Text
-						}
-						if inner.Name != "" {
-							p.Name = inner.Name
-						}
-						if len(inner.Input) > 0 {
-							p.Input = inner.Input
-						}
-					}
-				}
-				if p.ToolCall != nil {
-					if p.ToolCall.Name != "" {
-						p.Name = p.ToolCall.Name
-					}
-					if len(p.ToolCall.Arguments) > 0 {
-						p.Input = p.ToolCall.Arguments
-					} else if len(p.ToolCall.Input) > 0 {
-						p.Input = p.ToolCall.Input
-					}
-				}
-				switch p.Type {
-				case "text":
-					if s := strings.TrimSpace(p.Text); s != "" {
-						lines = append(lines, s)
-					}
-				case "tool_call":
-					if p.Name != "" {
-						lines = append(lines, formatToolCall(p.Name, p.Input))
-					}
-				}
-			}
-		}
-		if len(lines) > 0 {
-			return lines
-		}
-	}
-	return renderScriptLog(log)
 }

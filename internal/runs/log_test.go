@@ -108,32 +108,6 @@ func TestRenderLog_Codex(t *testing.T) {
 }
 
 func TestRenderLog_Crush(t *testing.T) {
-	jsonLog := `{
-  "messages": [
-    {
-      "role": "user",
-      "parts": [{"type": "text", "text": "start"}]
-    },
-    {
-      "role": "assistant",
-      "parts": [
-        {"type": "text", "text": "I will check git status."},
-        {"type": "tool_call", "tool_call": {"name": "bash", "arguments": {"command": "git status"}}},
-        {"type": "text", "text": "All checks passed."}
-      ]
-    }
-  ]
-}`
-	wantJSON := []string{
-		"I will check git status.",
-		"bash: git status",
-		"All checks passed.",
-	}
-	gotJSON := RenderLog("crush", []byte(jsonLog))
-	if !reflect.DeepEqual(gotJSON, wantJSON) {
-		t.Fatalf("jsonLog got %v, want %v", gotJSON, wantJSON)
-	}
-
 	textLog := `I will check git status.
 All checks passed.
 `

@@ -803,38 +803,6 @@ func (crushHarness) PrepareMCP(l *Launch, _ string) error {
 	if out, err := Git(l.Dir, nil, "ls-files", "--", CrushMCPPath); err == nil && out != "" {
 		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a crush run", CrushMCPPath)
 	}
-	allowed := []string{
-		"agent",
-		"bash",
-		"crush_info",
-		"crush_logs",
-		"job_output",
-		"job_kill",
-		"download",
-		"lsp_diagnostics",
-		"lsp_references",
-		"lsp_restart",
-		"lsp_symbols",
-		"lsp_definition",
-		"lsp_call_hierarchy",
-		"lsp_rename",
-		"lsp_replace_symbol",
-		"fetch",
-		"agentic_fetch",
-		"glob",
-		"grep",
-		"ls",
-		"question",
-		"sourcegraph",
-		"todos",
-		"view",
-		"list_mcp_resources",
-		"read_mcp_resource",
-	}
-	if !l.ReadOnly {
-		allowed = append(allowed, "edit", "multiedit", "write")
-	}
-	slices.Sort(allowed)
 
 	mcpServers := map[string]any{
 		"bottown": map[string]any{
@@ -855,12 +823,13 @@ func (crushHarness) PrepareMCP(l *Launch, _ string) error {
 		}
 	}
 
+	// crush run automatically approves all permissions for non-interactive
+	// sessions (AutoApproveSession), so permissions.allowed_tools has no effect
+	// in batch mode. Like codex and kimi, read-only scope is not enforced
+	// locally; it is bounded by the server's policy on the run key.
 	cfg := map[string]any{
 		"$schema": "https://charm.land/crush.json",
 		"mcp":     mcpServers,
-		"permissions": map[string]any{
-			"allowed_tools": allowed,
-		},
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -936,79 +905,14 @@ func (crushHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// Summary is the agent's text response from stdout.
 func (crushHarness) Summary(log []byte) string {
-	var sess struct {
-		Messages []struct {
-			Role  string            `json:"role"`
-			Parts []json.RawMessage `json:"parts"`
-		} `json:"messages"`
-	}
-	if json.Unmarshal(log, &sess) == nil && len(sess.Messages) > 0 {
-		var last string
-		for _, m := range sess.Messages {
-			if m.Role != "assistant" {
-				continue
-			}
-			for _, rawPart := range m.Parts {
-				var p struct {
-					Type string          `json:"type"`
-					Text string          `json:"text"`
-					Data json.RawMessage `json:"data"`
-				}
-				if json.Unmarshal(rawPart, &p) != nil {
-					continue
-				}
-				if p.Text == "" && len(p.Data) > 0 {
-					var d struct {
-						Text string `json:"text"`
-					}
-					if json.Unmarshal(p.Data, &d) == nil && d.Text != "" {
-						p.Text = d.Text
-					}
-				}
-				if p.Type == "text" && strings.TrimSpace(p.Text) != "" {
-					last = strings.TrimSpace(p.Text)
-				}
-			}
-		}
-		if last != "" {
-			return last
-		}
-	}
 	return strings.TrimSpace(string(log))
 }
 
-func (crushHarness) Usage(log []byte) *secrets.Usage {
-	var sess struct {
-		Meta struct {
-			Cost             float64 `json:"cost"`
-			PromptTokens     int64   `json:"prompt_tokens"`
-			CompletionTokens int64   `json:"completion_tokens"`
-			TotalTokens      int64   `json:"total_tokens"`
-		} `json:"meta"`
-		Messages []struct {
-			Role string `json:"role"`
-		} `json:"messages"`
-	}
-	if json.Unmarshal(log, &sess) == nil && sess.Meta.TotalTokens > 0 {
-		var turns int64
-		for _, m := range sess.Messages {
-			if m.Role == "user" {
-				turns++
-			}
-		}
-		u := &secrets.Usage{
-			InputTokens:  &sess.Meta.PromptTokens,
-			OutputTokens: &sess.Meta.CompletionTokens,
-			CostUSD:      &sess.Meta.Cost,
-		}
-		if turns > 0 {
-			u.Turns = &turns
-		}
-		return u
-	}
-	return nil
-}
+// Usage is nil: crush run outputs model text and does not report token usage
+// on stdout.
+func (crushHarness) Usage([]byte) *secrets.Usage { return nil }
 
 type scriptHarness struct{ cmd string }
 
