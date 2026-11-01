@@ -120,7 +120,7 @@ func (w *Workspace) Records() ([]Record, error) {
 		if err != nil {
 			continue
 		}
-		if r.Status == StatusRunning && !alive(r.PID) {
+		if r.Status == StatusRunning && !r.LauncherAlive() {
 			r.Status = StatusDead
 		}
 		out = append(out, r)
@@ -135,6 +135,10 @@ func (w *Workspace) RemoveFiles(id string) {
 		_ = os.Remove(w.Path(id, s))
 	}
 }
+
+// LauncherAlive reports whether the process that launched the run, and
+// owns its record, is still running.
+func (r Record) LauncherAlive() bool { return alive(r.PID) }
 
 func alive(pid int) bool {
 	if pid <= 0 {

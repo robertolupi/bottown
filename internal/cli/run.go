@@ -845,6 +845,11 @@ handover.`,
 			if rec.Status != runs.StatusRunning || rec.Ended != nil {
 				return fmt.Errorf("run %s is not live (local status %s)", id, rec.Status)
 			}
+			// Without its launcher the recorded harness pid may have been
+			// reused by an unrelated process: signal nothing.
+			if !rec.LauncherAlive() {
+				return fmt.Errorf("run %s's launcher (pid %d) is dead; not signalling its harness pid %d", id, rec.PID, rec.HarnessPID)
+			}
 			var serverRun secrets.Run
 			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+id, nil, &serverRun); err != nil {
 				return err
@@ -889,6 +894,9 @@ handover.`,
 				}
 				if !killed && time.Now().After(killAt) {
 					killed = true
+					if !rec.LauncherAlive() {
+						return fmt.Errorf("run %s's launcher (pid %d) died after TERM; not killing its harness pid %d", id, rec.PID, rec.HarnessPID)
+					}
 					fmt.Fprintf(cmd.ErrOrStderr(), "run %s did not finish within %s of TERM; killing its harness\n", id, grace)
 					if err := signalHarness(rec.HarnessPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 						return fmt.Errorf("kill run %s: %w", id, err)
