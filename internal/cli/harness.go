@@ -89,7 +89,11 @@ actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
 QUESTION starts a discuss run: the agent answers on the issue, without
 implementing it. The files name this
 bottown binary by absolute path. Re-running refreshes them; a same-named file
-bottown did not write is left alone unless --force.`,
+bottown did not write is left alone unless --force.
+
+Codex setup also installs allow rules for this binary and plain bottown in
+$CODEX_HOME/rules/default.rules (default ~/.codex/rules/default.rules), preserving
+other rules. Restart Codex to load them.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				args = []string{"claude", "agy", "kimi", "codex"}
@@ -166,6 +170,9 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s: installed %sbottown-%s\n", path, invoke, c.Kind)
 	}
+	if harness == "codex" {
+		return installCodexRules(cmd, home)
+	}
 	return nil
 }
 
@@ -221,4 +228,47 @@ func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
 		res = append(res, info)
 	}
 	return res
+}
+
+// Keep our rules in one section so a new binary path replaces the old one
+// without changing user rules, including more restrictive rules.
+const codexRulesBegin = "# BEGIN bottown harness setup rules"
+const codexRulesEnd = "# END bottown harness setup rules"
+
+func installCodexRules(cmd *cobra.Command, home string) error {
+	path := filepath.Join(filepath.Dir(codexSkillsDir(home)), "rules", "default.rules")
+	old, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	block := fmt.Sprintf("%s\nprefix_rule(pattern = [%q], decision = \"allow\")\nprefix_rule(pattern = [\"bottown\"], decision = \"allow\")\n%s\n", codexRulesBegin, selfPath(), codexRulesEnd)
+	content := string(old)
+	begin, end := strings.Index(content, codexRulesBegin), strings.Index(content, codexRulesEnd)
+	if begin >= 0 || end >= 0 {
+		if begin < 0 || end < begin || strings.Count(content, codexRulesBegin) != 1 || strings.Count(content, codexRulesEnd) != 1 {
+			return fmt.Errorf("%s: malformed bottown rules section; repair its markers before re-running setup", path)
+		}
+		end += len(codexRulesEnd)
+		if end < len(content) && content[end] == '\n' {
+			end++
+		}
+		content = content[:begin] + block + content[end:]
+	} else {
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += block
+	}
+	if content == string(old) {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s: up to date\n", path)
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s: installed bottown allow rules; restart Codex to load them\n", path)
+	return nil
 }

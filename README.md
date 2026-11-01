@@ -65,7 +65,11 @@ bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss
 ```
 
 In kimi they are skills: `/skill:bottown-implement 1`; in codex, skills in
-`~/.codex/skills/`: `$bottown-implement 1`.
+`~/.codex/skills/`: `$bottown-implement 1`. Codex setup also adds allow rules
+for plain `bottown` and the setup binary’s absolute path to
+`~/.codex/rules/default.rules`, preserving other rules. `CODEX_HOME` relocates
+both skills and rules. Restart Codex after setup to load the rules; more
+restrictive managed or user rules still apply.
 
 ### 2a. Start a new project: a README as the first change
 
@@ -187,7 +191,7 @@ has the details.
 | `repo add [NAME]` | Host the current checkout on the instance under a `bottown` remote, with labels and protection. |
 | `actor setup ACTOR…` | Create or repair actor worktrees (in the main checkout). |
 | `actor ls` | List the main checkout's actor worktrees. |
-| `harness setup [claude\|agy\|kimi]…` | Install the `/bottown-*` slash commands into the harnesses. |
+| `harness setup [claude\|agy\|kimi\|codex]…` | Install the `/bottown-*` slash commands into the harnesses. |
 | `git gc-branches [--dry-run] [--pattern P]` | Delete `issue/*` branches merged into the default branch, on the forge and locally (in the main checkout). Keeps any branch checked out in a worktree, with a live run, or with an open PR. |
 
 ### Runs (owner, from the main checkout)

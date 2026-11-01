@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -298,5 +299,70 @@ func TestCheckHarnessCurrent(t *testing.T) {
 				t.Errorf("agy should not be installed/current when a command is missing: %+v", s)
 			}
 		}
+	}
+}
+
+func TestInstallCodexRules(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(fmt.Sprint(custom), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", "")
+			root := filepath.Join(home, ".codex")
+			if custom {
+				root = filepath.Join(t.TempDir(), "custom codex")
+				t.Setenv("CODEX_HOME", root)
+			}
+			path := filepath.Join(root, "rules", "default.rules")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := "# user rules\nprefix_rule(pattern = [\"bottown\", \"down\"], decision = \"prompt\")\n"
+			if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := &cobra.Command{}
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			if err := installCommands(cmd, home, "codex", false); err != nil {
+				t.Fatal(err)
+			}
+			first, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{before, fmt.Sprintf("pattern = [%q]", selfPath()), `pattern = ["bottown"], decision = "allow"`} {
+				if !strings.Contains(string(first), want) {
+					t.Errorf("rules lack %q: %s", want, first)
+				}
+			}
+			if !strings.Contains(out.String(), "restart Codex") {
+				t.Error("missing restart reminder")
+			}
+			if err := installCommands(cmd, home, "codex", false); err != nil {
+				t.Fatal(err)
+			}
+			second, _ := os.ReadFile(path)
+			if !bytes.Equal(first, second) {
+				t.Error("second setup changed rules")
+			}
+			// Updating the managed section preserves rules on either side.
+			stale := strings.Replace(string(first), selfPath(), "/old/bottown", 1) + "# trailing user rule\n"
+			os.WriteFile(path, []byte(stale), 0o600)
+			if err := installCodexRules(cmd, home); err != nil {
+				t.Fatal(err)
+			}
+			updated, _ := os.ReadFile(path)
+			if strings.Contains(string(updated), "/old/bottown") || !strings.HasSuffix(string(updated), "# trailing user rule\n") {
+				t.Fatalf("bad refresh: %s", updated)
+			}
+			os.WriteFile(path, []byte(before+codexRulesBegin+"\n"), 0o600)
+			if err := installCodexRules(cmd, home); err == nil {
+				t.Error("accepted broken markers")
+			}
+			unchanged, _ := os.ReadFile(path)
+			if string(unchanged) != before+codexRulesBegin+"\n" {
+				t.Error("changed malformed file")
+			}
+		})
 	}
 }
