@@ -16,6 +16,11 @@ import (
 
 // MCP front end for the forge operations in forge.go.
 
+// kimi's MCP client strictly validates tool output schemas: they must be
+// plain objects, and boolean subschemas (what the Go SDK renders for an
+// `any` field) are rejected. Hence the list wrappers, and why forge_api
+// declares no output type.
+
 const maxAPIBytes = 256 << 10
 
 func principal(req *mcp.CallToolRequest) secrets.Principal {
@@ -24,6 +29,16 @@ func principal(req *mcp.CallToolRequest) secrets.Principal {
 	}
 	p, _ := req.Extra.TokenInfo.Extra["principal"].(secrets.Principal)
 	return p
+}
+
+// issueListOut and prListOut wrap the list outputs in objects: an output
+// schema with a top-level array type is rejected by strict MCP clients.
+type issueListOut struct {
+	Items []IssueItem `json:"items"`
+}
+
+type prListOut struct {
+	Items []PRItem `json:"items"`
 }
 
 func (s *Server) addForgeTools(srv *mcp.Server) {
@@ -47,10 +62,10 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "issue_list",
 		Description: "List issues in a repository. Defaults to the run's repository; outside a run repo is required. " +
-			"State filter can be open (default), closed, or all.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in IssueListIn) (*mcp.CallToolResult, []IssueItem, error) {
-		out, err := s.opIssueList(ctx, principal(req), in)
-		return nil, out, err
+			"State filter can be open (default), closed, or all. Returns an object with an items array.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in IssueListIn) (*mcp.CallToolResult, issueListOut, error) {
+		items, err := s.opIssueList(ctx, principal(req), in)
+		return nil, issueListOut{Items: items}, err
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -65,10 +80,10 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 		Name: "pr_list",
 		Description: "List pull requests in a repository with author, head SHA, and review state. " +
 			"Defaults to the run's repository; outside a run repo is required. " +
-			"State filter can be open (default), closed, or all.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in PRListIn) (*mcp.CallToolResult, []PRItem, error) {
-		out, err := s.opPRList(ctx, principal(req), in)
-		return nil, out, err
+			"State filter can be open (default), closed, or all. Returns an object with an items array.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in PRListIn) (*mcp.CallToolResult, prListOut, error) {
+		items, err := s.opPRList(ctx, principal(req), in)
+		return nil, prListOut{Items: items}, err
 	})
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -110,16 +125,19 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 		Name: "forge_api",
 		Description: "Call any Forgejo API endpoint as yourself, under the same bottown policy as the HTTP proxy " +
 			"(run keys stay in their repository and role; merges, statuses, labels and admin are bottown's).",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, in apiIn) (*mcp.CallToolResult, apiOut, error) {
+		// The output is whatever the endpoint returns; no schema can describe
+		// it. Declaring the output type as any keeps the SDK from rendering
+		// `Body any` as a boolean schema, which strict clients reject.
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in apiIn) (*mcp.CallToolResult, any, error) {
 		p := principal(req)
 		if !strings.HasPrefix(in.Path, "/") {
-			return nil, apiOut{}, errors.New("path must start with /")
+			return nil, nil, errors.New("path must start with /")
 		}
 		var body []byte
 		if in.Body != nil {
 			b, err := json.Marshal(in.Body)
 			if err != nil {
-				return nil, apiOut{}, err
+				return nil, nil, err
 			}
 			body = b
 		}
