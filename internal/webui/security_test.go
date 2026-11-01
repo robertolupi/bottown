@@ -232,6 +232,44 @@ func TestSecurity_CSPHeader(t *testing.T) {
 	}
 }
 
+// The built assets have fixed names (web/vite.config.ts): index.html must
+// reference them, they must be embedded, and browsers must revalidate them.
+func TestStaticAssets_FixedNames(t *testing.T) {
+	s := newTestServer(t)
+	client := &http.Client{}
+	get := func(path string) (*http.Response, string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", s.Port(), path), nil)
+		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, string(body)
+	}
+
+	resp, index := get("/")
+	for _, ref := range []string{`src="/assets/index.js"`, `href="/assets/index.css"`} {
+		if !strings.Contains(index, ref) {
+			t.Errorf("index.html does not reference %s:\n%s", ref, index)
+		}
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Errorf("GET /: Cache-Control = %q, want no-cache", cc)
+	}
+	for path, ctype := range map[string]string{"/assets/index.js": "javascript", "/assets/index.css": "text/css"} {
+		resp, _ := get(path)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), ctype) {
+			t.Errorf("GET %s: %d %s, want 200 %s", path, resp.StatusCode, resp.Header.Get("Content-Type"), ctype)
+		}
+		if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+			t.Errorf("GET %s: Cache-Control = %q, want no-cache", path, cc)
+		}
+	}
+}
+
 func TestPush_Validation(t *testing.T) {
 	s := newTestServer(t)
 	client := &http.Client{}
