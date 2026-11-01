@@ -817,10 +817,15 @@ func truncate(s string, n int) string {
 }
 
 func newRunStop(g *globals) *cobra.Command {
-	return &cobra.Command{
+	var grace time.Duration
+	cmd := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop a live batch run started from this checkout",
-		Args:  cobra.ExactArgs(1),
+		Long: `Stop a live batch run started from this checkout: send its harness's
+process group TERM and, if the harness has not finished within the grace
+period, KILL. The launcher then ends the run as failed and posts the stopped
+handover.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := openRunContext(g)
 			if err != nil {
@@ -864,7 +869,11 @@ func newRunStop(g *globals) *cobra.Command {
 				return fmt.Errorf("stop run %s: %w", id, err)
 			}
 
-			deadline := time.Now().Add(30 * time.Second)
+			// A harness that ignores TERM gets SIGKILL after the grace
+			// period; the launcher then ends the run as failed as usual.
+			killAt := time.Now().Add(grace)
+			deadline := killAt.Add(30 * time.Second)
+			killed := false
 			for {
 				var ended secrets.Run
 				if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+id, nil, &ended); err != nil {
@@ -878,8 +887,15 @@ func newRunStop(g *globals) *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "run %s stopped\n", id)
 					return nil
 				}
+				if !killed && time.Now().After(killAt) {
+					killed = true
+					fmt.Fprintf(cmd.ErrOrStderr(), "run %s did not finish within %s of TERM; killing its harness\n", id, grace)
+					if err := signalHarness(rec.HarnessPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+						return fmt.Errorf("kill run %s: %w", id, err)
+					}
+				}
 				if time.Now().After(deadline) {
-					return fmt.Errorf("run %s was signalled but has not finished", id)
+					return fmt.Errorf("run %s was killed but has not finished", id)
 				}
 				select {
 				case <-cmd.Context().Done():
@@ -889,6 +905,8 @@ func newRunStop(g *globals) *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "how long the harness has to finish after TERM before it is killed")
+	return cmd
 }
 
 // signalHarness signals a batch harness's process group, which it leads.
