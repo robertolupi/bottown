@@ -46,6 +46,7 @@ type Server struct {
 	cookieName   string
 	mu           sync.Mutex // guards auth state (token/cookie)
 	statusMu     sync.Mutex // guards git fetch and status computation
+	afterPullMu  sync.Mutex // one run of the after-pull steps at a time
 	httpServer   *http.Server
 	lastFetch    time.Time
 }
@@ -138,6 +139,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
 	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
+	mux.HandleFunc("POST /api/actions/after-pull", s.handleActionAfterPull)
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
 
 	// Static files

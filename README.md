@@ -128,6 +128,11 @@ cd ~/src/fams/hello/main
 git pull --ff-only bottown main
 ```
 
+A repository can declare what to run after pulling in a `.bottown.toml`
+at its root, `after_pull = ["make install"]`; bottown reads it from the
+forge's `main` only. `bottown web ui` shows those steps after its Pull and
+runs them only when you confirm.
+
 If the verifier requests changes, start a new implement run on the same
 issue: it resumes `issue/1`, and the new head needs a new verify run.
 
