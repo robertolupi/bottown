@@ -27,15 +27,17 @@ steps**:
   an owner-named actor pool, **automatically merge verified child PRs into
   `milestone/<epic>`** (closing each child issue so Forgejo dependencies
   unlock downstream work), and open a single final pull request from
-  `milestone/<epic>` into `main` for the owner to review and merge.
+  `milestone/<epic>` into `main` for the owner to review, approve, and merge.
 
 ### 1.1 Why this narrows two non-goals without reviving v1
 
 - **No autonomous planner directing agents ([problem statement](../problem-statement.md) §6).**
   v1 failed when planner agents dynamically dispatched and coordinated with
   other agents. Here, a `plan` run only proposes a static markdown file in a
-  pull request; server policy forbids it from creating issues or starting runs.
-  A cross-family verifier reviews the plan PR, the owner merges it into `main`,
+  pull request; server policy forbids it from creating issues or starting runs,
+  and base policy forbids all actors from editing or closing existing issues,
+  changing milestones, or changing dependencies. A cross-family verifier
+  reviews the plan PR, the owner merges it into `main`,
   `bottown milestone apply` (deterministic Go code run by the owner) creates
   the issues and dependencies from `main`, and a mechanical scheduler
   (`bottown milestone run`) dispatches flows from Forgejo's dependency state.
@@ -45,8 +47,8 @@ steps**:
   `manager` account) merges child pull requests **only into the milestone
   branch `milestone/<epic>`**, and only after the child PR has a valid
   cross-family `APPROVED` review at its exact head SHA. Landing
-  `milestone/<epic>` into `main` remains a single pull request that the owner
-  reviews and merges in Forgejo.
+  `milestone/<epic>` into `main` remains a single pull request authored by
+  `manager` that the owner reviews, approves, and merges in Forgejo.
 
 ---
 
@@ -83,26 +85,43 @@ bottown web ui (Milestones tab: DAG diagram) + manual `run`/`flow` (Step 1)
   working tree or an unmerged branch: `apply` reads both `.bottown.toml` and
   the milestone plan file from `main`'s commit on the forge.
 
-### 2.2 The `plan` run kind (`bottown milestone plan`)
+### 2.2 The `plan` run kind and base issue-mutation policy
 
 A plan run is a distinct run role, `policy.Plan` (`"plan"`), rather than an
-ordinary `implement` run with a different prompt:
+ordinary `implement` run with a different prompt, paired with base-policy
+rules reserving issue edits and milestone mutations for the owner and
+`manager`:
 
-- **Why a distinct role:** An `implement` run is allowed to create follow-up
-  issues (`POST /repos/*/*/issues` and `/v1/forge/issue/create`). If `plan`
-  reused `implement`, "the planner creates no issues" would be prompt advice
-  only ([problem statement](../problem-statement.md) §2). Giving `plan` its
-  own role lets the server enforce that guarantee in code.
-- **Policy scope (`internal/policy/run.go`, `internal/server/forge.go`):**
+- **Why a distinct role and base issue-edit denial:**
+  An `implement` run is allowed to create follow-up issues
+  (`POST /repos/*/*/issues` and `/v1/forge/issue/create`). If `plan` reused
+  `implement`, "the planner creates no issues" would be prompt advice only
+  ([problem statement](../problem-statement.md) §2). Furthermore, because
+  Step 2's scheduler uses issue `closed` state, milestone membership, and
+  provenance markers in issue bodies to drive readiness and base-branch
+  selection, **no actor may edit or close existing issues or modify
+  milestones**.
+- **Base policy (`internal/policy/policy.go`):**
+  In addition to the existing deny rules (`issue-labels`,
+  `issue-dependencies`, `issue-blocks`, `merge`, `commit-status`,
+  `branch-protection`), `policy.Default` denies for all non-exempt actors:
+  - `issue-edit`: `PATCH` and `DELETE` on `/repos/*/*/issues/*` — actors
+    cannot close or reopen issues, change an issue's `milestone`, or edit an
+    existing issue's title or body (preserving provenance markers).
+  - `pull-edit`: `PATCH` and `DELETE` on `/repos/*/*/pulls/*` — actors cannot
+    close PRs or retarget a PR's base branch through the API proxy.
+  - `milestones`: `POST`, `PUT`, `PATCH`, `DELETE` on
+    `/repos/*/*/milestones/**` — actors cannot create, edit, or close Forgejo
+    milestones.
+- **Run scope for `plan` (`internal/policy/run.go`, `internal/server/forge.go`):**
   - *Git:* identical to `implement` — may fetch from the run's repository and
     push to the run's branch (`issue/<K>`).
   - *API and forge tools:* may read the run's repository, comment on issues
-    and PRs, and create or update the pull request for `issue/<K>`
-    (`opPRCreate` accepts `policy.Implement` or `policy.Plan`).
+    and PRs, and create the pull request for `issue/<K>` (`opPRCreate` accepts
+    `policy.Implement` or `policy.Plan`).
   - *Denied writes:* issue creation (`POST /repos/*/*/issues` and
     `opIssueCreate` return `403 Forbidden` with rule `role-plan-no-issues`),
-    PR reviews, and all base-policy denials (merge, labels, dependencies,
-    branch protection, status).
+    PR reviews, and all base-policy denials above.
 - **Prompt (`internal/runs/prompts/plan.md`):**
   - Renders the kickoff issue `#<K>`, its comments, and the repository's
     `milestones_dir` setting.
@@ -148,7 +167,7 @@ TOML front matter and one fenced TOML metadata block per `##` issue section.
 The file slug `<slug>` (the filename without `.md`) must match
 `^[a-z0-9]+(-[a-z0-9]+)*$`.
 
-```markdown
+````markdown
 +++
 title = "Milestones: plan, check, apply and run"
 kickoff = 74
@@ -178,7 +197,7 @@ depends = ["plan-format-check", "#64"]
 ```
 
 Add `policy.Plan` and `/bottown-plan`.
-```
+````
 
 #### Rules of the micro-format
 
@@ -204,8 +223,8 @@ Add `policy.Plan` and `/bottown-plan`.
      heading title must be non-empty after trimming whitespace.
 4. **Fenced `issue` TOML block:**
    - The first non-blank content of every `##` section must be a fenced code
-     block with info string `issue` (```` ```issue ````). A second `issue`
-     fence in the same section is an error.
+     block with info string `issue` (` ```issue `). A second `issue` fence in
+     the same section is an error.
    - Decoded as TOML with `DisallowUnknownFields`:
      - `key` (required string): stable identifier for this child issue within
        the plan, matching `^[a-z0-9]+(-[a-z0-9]+)*$`, unique in the file.
@@ -257,7 +276,7 @@ bottown milestone apply <slug> [--dry-run] [--repo R]
 `bottown milestone apply` is an **owner-only command**. It reconciles the
 merged plan on `main` into the Forgejo tracker.
 
-#### Provenance markers in the forge
+#### Provenance markers and trust rule
 
 To keep the merged file on `main` identical to what was reviewed, the mapping
 from plan keys to Forgejo issue numbers lives in the forge as an HTML comment
@@ -276,8 +295,16 @@ line at the bottom of each issue body created by `apply`:
 body that `apply` last wrote (`title + "\n\n" + bodyWithoutMarker`), used to
 detect whether an issue was edited by hand in Forgejo after `apply`.
 
-Because markers carry `plan="<slug>"`, multiple plan files may safely
-contribute to the same Forgejo milestone if the owner chooses.
+- **Universal marker trust rule:** Every component that reads
+  `bottown:milestone` markers (`apply` in §2.6, the Web UI in §2.7, base-branch
+  resolution in §3.3, and the epic scheduler in §3.5) **accepts a marker only
+  on issues authored by the owner** (`issue.Poster.UserName == owner`). Because
+  `apply` runs as the owner and base policy (`issue-edit`, §2.2) denies
+  `PATCH /repos/*/*/issues/*` to all actors, an actor can neither plant a
+  trusted marker by filing an issue nor inject or alter a marker on an
+  owner-authored issue.
+- Because markers carry `plan="<slug>"`, multiple plan files may safely
+  contribute to the same Forgejo milestone if the owner chooses.
 
 #### Preflight (before any forge write)
 
@@ -303,12 +330,12 @@ contribute to the same Forgejo milestone if the owner chooses.
      the repository introduces no cycle.
 4. **Discover existing plan issues by marker:**
    - List all issues (open and closed, paginated) in the repository and parse
-     `<!-- bottown:milestone ... -->` markers for `plan="<slug>"`.
-   - **Security & provenance check:** Only issues authored by the owner are
-     accepted as managed plan issues (implementers can file or edit issues in
-     a repo, so a marker on an actor-authored issue is rejected as untrusted).
-   - If two issues carry the same `(plan, role="epic")` or `(plan, key)`
-     marker, refuse and report both issue numbers rather than guessing.
+     `<!-- bottown:milestone ... -->` markers for `plan="<slug>"` on
+     owner-authored issues (ignoring or flagging any marker on an
+     actor-authored issue).
+   - If two owner-authored issues carry the same `(plan, role="epic")` or
+     `(plan, key)` marker, refuse and report both issue numbers rather than
+     guessing.
    - If an existing managed issue is attached to a different Forgejo milestone
      than `#<kickoff>`'s milestone `M`, refuse and report the mismatch.
 
@@ -341,25 +368,29 @@ again:
          matches `marker.sha` (manual edit in Forgejo), **flag conflict/drift**
          in output (`#<num> (<key>): modified in Forgejo since last apply`)
          and skip overwriting unless `--force` is passed.
-   - **Removed keys** (an issue on the forge has `plan="<slug>"` and `key="K"`,
-     but `K` is no longer in `<slug>.md`):
+   - **Removed keys** (an owner-authored issue on the forge has
+     `plan="<slug>"` and `key="K"`, but `K` is no longer in `<slug>.md`):
      - Never automatically closed, deleted, or stripped of its history.
-     - Flagged in `apply`'s output (`#<num> (<key>): key removed from plan; review or close in Forgejo`).
+     - Excluded from the epic's active child set (removed from the epic's
+       checklist and from `#<E>`'s `blocked_by` dependencies) and flagged in
+       `apply`'s output and in `#<E>`'s `### Flagged (removed from plan)`
+       section so the owner can close or re-triage it.
 2. **Create or update the Implementation Epic issue:**
    - The Implementation Epic's body is fully owned by `apply` and contains:
      - Provenance header: kickoff issue `#<kickoff>`, design doc link (if
        set), and plan file `<milestones_dir>/<slug>.md` at `<main-sha>`.
      - Optional overview prose from the plan file.
-     - A `## Implementation issues` checklist in file order:
+     - A `## Implementation issues` checklist of active keys in file order:
        `- [ ] #<num> — <Title> (`<key>`, depends on #<d1>, #<d2>)`
        (using `[x]` for child issues that are already closed).
-     - If any keys were removed from the plan file but remain open on the
-       forge, a `### Flagged (removed from plan)` section listing them.
+     - If any keys were removed from the plan file, a
+       `### Flagged (removed from plan)` section listing their issue numbers
+       and state.
      - The epic marker `<!-- bottown:milestone v=1 plan="<slug>" role="epic" sha="<hex>" -->`.
    - Created in milestone `M` on first apply; updated via `PATCH` whenever its
      rendered text changes.
 3. **Reconcile Forgejo `blocked_by` dependencies:**
-   - For each child issue `#<C>`:
+   - For each active child issue `#<C>`:
      - Desired plan-owned dependencies = the resolved issue numbers of its
        `depends` list.
      - Compare with current `GET /repos/{org}/{repo}/issues/{C}/dependencies`:
@@ -372,8 +403,8 @@ again:
      - Ensure `#<E>` has a Forgejo `blocked_by` dependency on **every active
        child issue** of the plan (and remove edges to keys removed from the
        plan).
-     - Thus in Forgejo, `#<E>` is blocked by all of its child issues and
-       becomes unblocked when all child issues are closed.
+     - Thus in Forgejo, `#<E>` is blocked by all of its active child issues and
+       becomes unblocked when all active child issues are closed.
 
 ### 2.7 Web UI: Milestones view (`bottown web ui`)
 
@@ -381,16 +412,18 @@ Step 1 adds a **Milestones** view to `bottown web ui` ([web UI design](web-ui.md
 §4).
 
 - **What it displays:**
-  - Every Implementation Epic in the repository (discovered from issues carrying
-    the `role="epic"` marker, grouped under their Forgejo milestone), plus any
-    Forgejo milestone without a plan epic.
+  - Every Implementation Epic in the repository (discovered from
+    owner-authored issues carrying the `role="epic"` marker per §2.6's trust
+    rule, grouped under their Forgejo milestone), plus any Forgejo milestone
+    without a plan epic.
   - **Summary bar:** Forgejo milestone link, Implementation Epic `#<E>` link,
     kickoff `#<K>` and design doc link, active base branch (`milestone/<E>` if
     present on the forge, otherwise `main`), and status counts (`closed/total`,
     `ready`, `running`, `awaiting merge`, `blocked`, `stopped`).
   - **Interactive dependency DAG diagram (Mermaid-style layered SVG):**
-    - Nodes are the child implementation issues `#<C1>..#<Cn>` (plus any
-      external `#<N>` dependencies shown as compact pill nodes).
+    - Nodes are the active child implementation issues `#<C1>..#<Cn>` (plus any
+      external `#<N>` dependencies shown as compact pill nodes; removed keys
+      are listed separately under a flagged banner).
     - Directed edges `A ──▶ B` show that `B` depends on `A` (`B` is blocked by
       `A` in Forgejo). Layers are computed topologically from roots to leaves
       and rendered as clean inline SVG (respecting `web-ui.md` §8's strict CSP
@@ -429,9 +462,9 @@ bottown milestone run <E> --agents agy,claude,kimi [--rounds 3] [--timeout 60m] 
 slug `<slug>`, which resolves to that plan's epic issue.)
 
 ```
-main ──────────────────────────────────────────────────────────●──────▶ (owner merges final PR)
+main ──────────────────────────────────────────────────────────●──────▶ (owner approves & merges final PR)
        \                                                      /
-        └──▶ milestone/80 ────●────────────●────────────●────┘  final PR: milestone/80 → main
+        └──▶ milestone/80 ────●────────────●────────────●────┘  final PR (by manager): milestone/80 → main
                \             /            /            /        (Closes #80)
                 ├─▶ issue/81 (agy + claude) ── auto-merge + close #81 (unblocks #83)
                 ├─▶ issue/82 (claude + kimi) ─ auto-merge + close #82 (unblocks #83)
@@ -439,8 +472,8 @@ main ─────────────────────────
 ```
 
 1. **Milestone branch creation:** When `milestone run <E>` starts, if branch
-   `milestone/<E>` does not yet exist on the forge, `bottown` creates
-   `milestone/<E>` at `main`'s current head SHA on the forge.
+   `milestone/<E>` does not yet exist on the forge, `bottown` (as `manager`)
+   creates `milestone/<E>` at `main`'s current head SHA on the forge.
 2. **Child issues target `milestone/<E>`:** Every child issue `#<C>` of epic
    `#<E>` branches `issue/<C>` from `milestone/<E>` and opens its pull request
    with base `milestone/<E>`.
@@ -454,10 +487,10 @@ main ─────────────────────────
    dependencies clear `blocked_by` when an issue is **closed**, closing `#<C>`
    upon merging its PR into `milestone/<E>` immediately unblocks any child
    issue that depends on `#<C>`.
-5. **Final pull request to `main`:** When all child issues of `#<E>` are
-   merged into `milestone/<E>` and closed, `bottown` opens (or updates) a
-   pull request from `milestone/<E>` into `main` (`Closes #<E>`) and stops for
-   the owner to review and merge in Forgejo.
+5. **Final pull request to `main`:** When all active child issues of `#<E>`
+   are merged into `milestone/<E>` and closed, `bottown` (as `manager`) opens
+   (or updates) a pull request from `milestone/<E>` into `main` (`Closes #<E>`)
+   and stops for the owner to review, approve, and merge in Forgejo.
 
 ### 3.2 Protection on `milestone/*` branches
 
@@ -466,16 +499,23 @@ To preserve the same enforcement guarantees on `milestone/<E>` that `main` has
 
 - **Forgejo branch protection rule `milestone/*`:**
   `internal/provision` reconciles a branch protection rule with pattern
-  `milestone/*` on every repository alongside the default branch's rule, with
-  identical settings:
+  `milestone/*` on every repository alongside the default branch's rule
+  (`reconcile.go:576-592`). Its settings match `WantProtection()` for `main`,
+  with `"manager"` added to the push whitelist so the server can create
+  `milestone/<E>` as `manager`:
   - `EnablePush: true`, `EnablePushWhitelist: true`,
     `PushWhitelistUsernames: [owner, "manager"]` — actors cannot push directly
     to `milestone/<E>`, force-push it, or create/delete `milestone/*` branches.
-  - `EnableMergeWhitelist: true`, `MergeWhitelistUsernames: [owner, "manager"]`
-    — actors cannot merge PRs into `milestone/<E>`.
-  - `EnableApprovalsWhitelist: true`, `RequiredApprovals: 1`,
-    `DismissStaleApprovals: true`, `BlockOnRejectedReviews: true`,
-    `ApplyToAdmins: true`.
+  - `EnableMergeWhitelist: true`,
+    `MergeWhitelistUsernames: withOwner(Desired.Protection.MergeWhitelist, owner)`
+    (`[owner, "manager"]`) — actors cannot merge PRs into `milestone/<E>`.
+  - `EnableApprovalsWhitelist: true`,
+    `ApprovalsWhitelistUsernames: withOwner(append(Desired.ActorNames(), Desired.Protection.ApprovalsWhitelist...), owner)`
+    — all configured actors plus the owner, identical to `main`, so a
+    cross-family verifier's `APPROVED` review satisfies Forgejo's approval gate
+    on `milestone/<E>`.
+  - `RequiredApprovals: 1`, `DismissStaleApprovals: true`,
+    `BlockOnRejectedReviews: true`, `ApplyToAdmins: true`.
 - **Git push ref check in the proxy:**
   In `internal/policy/run.go` / git proxy, an `implement` or `plan` run for
   issue `#<N>` may only push `issue/<N>`, preventing an implementer from
@@ -488,10 +528,13 @@ the owner (`bottown run implement <C>` or `bottown flow <C>`). Both paths share
 one rule on the server (`POST /v1/runs` and `opPRCreate`):
 
 - When resolving the base branch for issue `#<C>`:
-  1. Check whether `#<C>` is a child issue of an Implementation Epic `#<E>`
-     (either `#<C>` has a `bottown:milestone` child marker whose plan has epic
-     `#<E>`, or an open epic `#<E>` in the same milestone lists `#<C>` in its
-     dependencies) **and** whether branch `milestone/<E>` exists on the forge.
+  1. Check whether `#<C>` is an **owner-authored** issue carrying a valid
+     `bottown:milestone` child marker (`plan="<slug>"`, `key="<key>"`) whose
+     owner-authored epic `#<E>` (`plan="<slug>"`, `role="epic"`) is open and
+     lists `#<C>` in its active `blocked_by` dependencies (applying §2.6's
+     marker trust rule so an actor-authored issue with a copied marker never
+     gets a milestone base branch), **and** whether branch `milestone/<E>`
+     exists on the forge.
   2. If `milestone/<E>` exists on the forge, `run.Base` is `"milestone/<E>"`.
   3. Otherwise (for standalone issues, or in Step 1 before `milestone run` has
      created `milestone/<E>`), `run.Base` is the repository's default branch
@@ -543,21 +586,33 @@ resumes from the current forge state.
 
 #### Readiness and dependency semantics
 
-- **The epic's child set** is the set of child issues created by `apply` for
-  epic `#<E>` (excluding the kickoff/design issue `#<K>` and `#<E>` itself).
-- A child issue `#<C>` is:
-  - **Complete** when `#<C>`'s state in Forgejo is `closed`.
+- **The epic's active child set** is the set of owner-authored child issues
+  carrying `plan="<slug>"` markers that are currently in `#<E>`'s Forgejo
+  `blocked_by` dependencies (excluding the kickoff/design issue `#<K>`, `#<E>`
+  itself, and any removed keys whose `blocked_by` edge from `#<E>` was dropped
+  by `apply` in §2.6).
+- An active child issue `#<C>` is:
+  - **Complete** when `#<C>`'s state in Forgejo is `closed` **and** `#<C>` was
+    closed either by `manager` (with a merged PR from `issue/<C>` into
+    `milestone/<E>`) or by the owner (`closed_by` / latest close event in the
+    issue timeline).
   - **Blocked** when `#<C>` is `open` and its Forgejo dependencies list
     (`GET /repos/{org}/{repo}/issues/{C}/dependencies`) contains any issue
-    whose state is `open`.
+    whose state is `open` (or any closed dependency that fails the owner/`manager`
+    closure check above).
   - **Ready** when `#<C>` is `open` and all of its Forgejo dependencies are
-    `closed`.
-- **Consequence of Forgejo closed-state dependencies (explicit):**
-  Forgejo clears `blocked_by` when an issue is **closed**, not when a PR is
-  approved. An approved but unmerged PR never unblocks dependents. Conversely,
-  if the owner manually closes a child issue in Forgejo without merging a PR
-  (cancelling or accepting it out-of-band), Forgejo unblocks its dependents and
-  the scheduler treats that closed child issue as satisfied.
+    `closed` (by `manager` or the owner).
+- **Enforcement & consequence of Forgejo closed-state dependencies:**
+  Base policy (`issue-edit` in §2.2) denies `PATCH /repos/*/*/issues/*` to all
+  actors, so an agent cannot close an issue to unblock a dependent. As
+  defense in depth, if the scheduler ever encounters a child issue or
+  dependency closed by any account other than `manager` or the owner, it does
+  not treat that issue as complete: it keeps dependents blocked, posts a stop
+  comment on `#<E>` naming the unauthorized closure, and halts that branch.
+  When the **owner** manually closes a child issue in Forgejo without merging a
+  PR (cancelling or accepting it out-of-band), Forgejo unblocks its dependents
+  and the scheduler treats that owner-closed child issue as satisfied. An
+  approved but unmerged PR never unblocks dependents.
 
 #### Dispatch priority and concurrency
 
@@ -580,16 +635,17 @@ non-stale official `APPROVED` review from `#<C>`'s cross-family verifier, and
    (`POST /v1/repos/{repo}/milestones/{epic}/merge`, passing `issue: C`,
    `pr: P`, `head_sha: H`).
 2. The server verifies using its admin/manager client that:
-   - `#<C>` is a child of epic `#<E>`;
+   - `#<C>` is an owner-authored child of epic `#<E>`;
    - `!<P>` is open, has `Base.Ref == "milestone/<E>"`, `Head.Ref == "issue/<C>"`,
      and `Head.Sha == H`;
    - `!<P>` has a non-stale official `APPROVED` review at commit `H` from an
      actor of a different model family than `!<P>`'s author.
 3. The server merges `!<P>` into `milestone/<E>` as `manager` (recording an
    audit entry `milestone_merge`), deletes or leaves `issue/<C>`, and
-   **explicitly closes issue `#<C>`** (`PATCH /repos/{org}/{repo}/issues/{C}`
-   with `state: "closed"`, because Forgejo only auto-closes `Closes #C` when a
-   PR merges into the repository's default branch).
+   **explicitly closes issue `#<C>` as `manager`**
+   (`PATCH /repos/{org}/{repo}/issues/{C}` with `state: "closed"`, because
+   Forgejo only auto-closes `Closes #C` when a PR merges into the repository's
+   default branch).
 4. The server posts a comment on `#<C>`:
    `**bottown milestone #<E>: merged !P into milestone/<E> at <sha>**`.
 5. On the next scheduler tick, `#<C>` is `closed`, so any child issue blocked
@@ -625,21 +681,29 @@ into `milestone/<E>` first, `!<P2>` may no longer merge cleanly into
 
 ### 3.6 Completing the milestone: final pull request into `main`
 
-When the scheduler loop has no running or ready child issues left:
+When the scheduler loop has no running or ready active child issues left:
 
-- **Case A — All child issues of `#<E>` are closed:**
+- **Case A — All active child issues of `#<E>` are closed:**
   1. `bottown` checks whether an open PR from head `milestone/<E>` into base
-     `main` already exists; if not, `bottown` creates one (as `manager` or the
-     owner) with:
+     `main` already exists; if not, the server creates one **as `manager`**
+     with:
      - `Title`: `#<E>`'s title.
      - `Head`: `"milestone/<E>"`, `Base`: `"main"`.
-     - `Body`: summary of the merged child issues and PRs, plus `Closes #<E>`.
-  2. Posts a comment on `#<E>` linking the final PR `!<final>` and exits `0`
-     (`ready to merge`).
-  3. The Final PR appears in the Web UI Inbox under **Ready to merge** (or
-     **Awaiting owner review**). The owner reviews the integrated diff in
-     Forgejo and merges `!<final>` into `main`, which closes `#<E>`.
-- **Case B — One or more child issues are stopped (and others remain blocked):**
+     - `Body`: summary of the merged child issues and PRs (plus any flagged
+       removed keys), and `Closes #<E>`.
+  2. Why **`manager` authors the final PR:** `main` has
+     `required_approvals = 1` and `apply_to_admins = true`, and Forgejo forbids
+     a PR author from approving their own pull request. Having `manager` author
+     `!<final>` allows the owner (who is on `ApprovalsWhitelistUsernames` and
+     `MergeWhitelistUsernames`) to review, **approve**, and merge `!<final>` in
+     Forgejo directly without needing a redundant agent verify run on the
+     already-verified milestone branch.
+  3. `milestone run` posts a comment on `#<E>` linking the final PR `!<final>`
+     and exits `0` (`ready to merge`).
+  4. The final PR appears in the Web UI Inbox. The owner reviews the integrated
+     diff in Forgejo, approves `!<final>`, and merges it into `main`, which
+     closes `#<E>`.
+- **Case B — One or more active child issues are stopped (and others remain blocked):**
   1. `milestone run` posts a summary comment on `#<E>` listing the completed,
      stopped, and still-blocked child issues.
   2. Exits non-zero. Once the owner fixes or steers the stopped child issue,
@@ -652,12 +716,12 @@ When the scheduler loop has no running or ready child issues left:
 
 | Component | Change |
 |---|---|
-| `internal/policy` | Add `Plan = "plan"` role. In `RunScope.DecideAPI`, `Plan` matches `Implement` except `POST /repos/*/*/issues` is denied (`role-plan-no-issues`). In `RunScope.DecideGit`, `Implement` and `Plan` pushes are confined to the run's branch. |
+| `internal/policy` | In `policy.Default`, add `issue-edit` (`PATCH`/`DELETE` `/repos/*/*/issues/*`), `pull-edit` (`PATCH`/`DELETE` `/repos/*/*/pulls/*`), and `milestones` (writes to `/repos/*/*/milestones/**`) so only the owner and `manager` can close/edit issues, change milestones, or close/retarget PRs. Add `Plan = "plan"` role; in `RunScope.DecideAPI`, `Plan` matches `Implement` except `POST /repos/*/*/issues` is denied (`role-plan-no-issues`). In `RunScope.DecideGit`, `Implement` and `Plan` pushes are confined to the run's branch. |
 | `internal/server/forge.go` | `opIssueCreate` denies `policy.Plan`; `opPRCreate` allows `policy.Implement` and `policy.Plan` and uses `run.Base`. |
-| `internal/provision` | Protect `milestone/*` alongside the default branch (`PushWhitelist: [owner, manager]`, `MergeWhitelist: [owner, manager]`, `RequiredApprovals: 1`, `DismissStaleApprovals: true`, `BlockOnRejectedReviews: true`, `ApplyToAdmins: true`). Reconcile `implement/<actor>` and `verify/<actor>` org labels. |
+| `internal/provision` | Protect `milestone/*` alongside the default branch (`PushWhitelist: [owner, manager]`, `MergeWhitelist: [owner, manager]`, `ApprovalsWhitelist: [actors..., owner]`, `RequiredApprovals: 1`, `DismissStaleApprovals: true`, `BlockOnRejectedReviews: true`, `ApplyToAdmins: true`). Reconcile `implement/<actor>` and `verify/<actor>` org labels. |
 | `internal/config/repo.go` | Add `MilestonesDir string` (`toml:"milestones_dir"`, default `"docs/milestones"`) to `RepoSettings`. |
-| `POST /v1/runs` | Accept `kind: "plan"`. Resolve `run.Base` (`milestone/<E>` when the issue belongs to an epic with an active milestone branch, else default branch). |
-| `POST /v1/repos/{repo}/milestones/{epic}/merge` | Owner-only endpoint used by `milestone run`: verifies cross-family approval at head SHA on `milestone/<epic>`, merges the child PR as `manager`, and closes the child issue. |
+| `POST /v1/runs` | Accept `kind: "plan"`. Resolve `run.Base` (`milestone/<E>` when the owner-authored issue belongs to an owner-authored epic with an active milestone branch, else default branch). |
+| `POST /v1/repos/{repo}/milestones/{epic}/merge` | Owner-only endpoint used by `milestone run`: verifies cross-family approval at head SHA on `milestone/<epic>`, merges the child PR as `manager`, and closes the child issue as `manager`. Also used to create `milestone/<epic>` and open the final PR into `main` as `manager`. |
 
 ---
 
@@ -670,24 +734,27 @@ Each phase is one implementation issue, small enough for one implement run.
 
 1. **Phase 1 — Milestone plan format, `.bottown.toml` `milestones_dir`, and `bottown milestone check`:**
    Parser for `<milestones_dir>/<slug>.md` (TOML `+++` front matter, `##`
-   sections outside fences, ```issue TOML blocks), `milestones_dir` in
+   sections outside fences, fenced `issue` TOML blocks), `milestones_dir` in
    `config.RepoSettings`, and the offline `bottown milestone check` CLI with
    unit tests covering valid plans, syntax errors, unknown fields, duplicate
    keys, invalid dependencies, and cycle detection.
-2. **Phase 2 — The `plan` run kind, prompt, CLI, and `/bottown-plan`:**
-   `policy.Plan` role enforcement (denying issue creation in both the API proxy
-   and `opIssueCreate` while allowing branch push and `opPRCreate`),
-   `internal/runs/prompts/plan.md`, `bottown milestone plan` / `bottown run start plan`,
-   and `/bottown-plan` harness setup across all harnesses.
+2. **Phase 2 — Base issue/milestone policy, the `plan` run kind, prompt, CLI, and `/bottown-plan`:**
+   Base policy rules (`issue-edit`, `pull-edit`, `milestones`) reserving issue
+   state/body/milestone edits for the owner and `manager`; `policy.Plan` role
+   enforcement (denying issue creation in both the API proxy and
+   `opIssueCreate` while allowing branch push and `opPRCreate`);
+   `internal/runs/prompts/plan.md`; `bottown milestone plan` /
+   `bottown run start plan`; and `/bottown-plan` harness setup across all
+   harnesses.
 3. **Phase 3 — `bottown milestone apply`:**
    Owner-only reconciliation reading `.bottown.toml` and `<milestones_dir>/<slug>.md`
    from `main` on the forge; preflight validation (kickoff issue in an open
-   Forgejo milestone, external `#N` refs, cross-issue cycle detection, marker
-   provenance and duplicate detection); `--dry-run`; idempotent creation and
-   update of child implementation issues, the Implementation Epic issue (with
-   task list), and Forgejo `blocked_by` dependencies; drift and removed-key
-   flagging; unit tests against a fake client including interrupted-apply
-   recovery.
+   Forgejo milestone, external `#N` refs, cross-issue cycle detection,
+   owner-authored marker provenance and duplicate detection); `--dry-run`;
+   idempotent creation and update of child implementation issues, the
+   Implementation Epic issue (with task list), and Forgejo `blocked_by`
+   dependencies; drift and removed-key flagging; unit tests against a fake
+   client including interrupted-apply recovery.
 4. **Phase 4 — Web UI Milestones view and dependency DAG diagram:**
    Host UI endpoint and Svelte view for the **Milestones** tab: epic summary
    cards, progress counts, and the interactive layered SVG dependency graph
@@ -697,15 +764,18 @@ Each phase is one implementation issue, small enough for one implement run.
 ### Step 2: Running an Implementation Epic
 
 5. **Phase 5 — Protected `milestone/*` branches and automatic `milestone/<epic>` base-branch resolution:**
-   Provisioning branch protection on `milestone/*`, git push branch confinement,
+   Provisioning branch protection on `milestone/*` (including `manager` push
+   rights and actor approvals whitelist), git push branch confinement,
    `implement/<actor>` and `verify/<actor>` labels, and automatic `run.Base`
-   resolution (`milestone/<epic>` when active vs `main`) across `POST /v1/runs`,
+   resolution (`milestone/<epic>` when active vs `main`, enforcing the
+   owner-authored marker trust rule) across `POST /v1/runs`,
    `runs.Workspace.AddImplement`, prompts, `opPRCreate`, and `flow`.
 6. **Phase 6 — `bottown milestone run`:**
    The epic DAG scheduler (`internal/milestone`), cross-family pool pairing with
-   persistent label assignment, server endpoint for `manager` auto-merge into
-   `milestone/<epic>` + child issue closure, automatic conflict-resolution
-   rounds when `milestone/<epic>` advances, final PR creation from
+   persistent label assignment, server endpoints for `manager` branch creation,
+   auto-merge into `milestone/<epic>` + child issue closure (with owner/`manager`
+   closure verification), automatic conflict-resolution rounds when
+   `milestone/<epic>` advances, `manager`-authored final PR creation from
    `milestone/<epic>` into `main`, and Web UI start/stop controls.
 
 ---
@@ -715,6 +785,7 @@ Each phase is one implementation issue, small enough for one implement run.
 - Creating or closing Forgejo milestones automatically (the owner creates the
   Forgejo milestone and files the kickoff issue in it).
 - Auto-merging the final `milestone/<epic>` pull request into `main` (the owner
-  reviews and merges it in Forgejo).
-- Agents modifying issue dependencies or labels directly.
+  reviews, approves, and merges it in Forgejo).
+- Agents modifying issue state, issue bodies, milestones, dependencies, or
+  labels directly.
 - Cross-repository milestones.
