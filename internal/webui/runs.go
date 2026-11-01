@@ -52,6 +52,18 @@ type FlowInfo struct {
 	Label     string `json:"label"` // "#51 · round 2/3 · verifying with kimi"
 }
 
+// ActiveFlowInfo represents an in-progress flow supervising an issue.
+type ActiveFlowInfo struct {
+	Issue     int64  `json:"issue"`
+	Implement string `json:"implement"`
+	Verify    string `json:"verify"`
+	Round     int    `json:"round"`
+	MaxRounds int    `json:"max_rounds"`
+	Step      string `json:"step"`
+	Label     string `json:"label"`
+	Waiting   bool   `json:"waiting"`
+}
+
 // HistoryRunInfo represents a finished run in the history view.
 type HistoryRunInfo struct {
 	ID        string         `json:"id"`
@@ -300,6 +312,101 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	}
 
 	return live, nil
+}
+
+// ComputeActiveFlows returns all active flows supervising issues, including those between runs.
+func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo) []ActiveFlowInfo {
+	bottownDir := filepath.Join(s.cfg.RepoTop, ".bottown")
+	entries, err := os.ReadDir(bottownDir)
+	if err != nil {
+		return []ActiveFlowInfo{}
+	}
+
+	org, repo := s.orgAndRepo()
+
+	liveByIssue := make(map[int64]LiveRunInfo)
+	for _, r := range liveRuns {
+		if r.Flow != nil {
+			liveByIssue[r.Flow.Issue] = r
+		}
+	}
+
+	var flows []ActiveFlowInfo
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "flow-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		var issueNum int64
+		if _, err := fmt.Sscanf(name, "flow-%d.json", &issueNum); err != nil || issueNum <= 0 {
+			continue
+		}
+
+		flowRec := s.getActiveFlow(issueNum)
+		if flowRec == nil {
+			continue
+		}
+
+		maxRounds := flowRec.Rounds
+		if maxRounds <= 0 {
+			maxRounds = 3
+		}
+
+		if liveRun, ok := liveByIssue[issueNum]; ok && liveRun.Flow != nil {
+			flows = append(flows, ActiveFlowInfo{
+				Issue:     issueNum,
+				Implement: flowRec.Implement,
+				Verify:    flowRec.Verify,
+				Round:     liveRun.Flow.Round,
+				MaxRounds: liveRun.Flow.MaxRounds,
+				Step:      liveRun.Flow.Step,
+				Label:     liveRun.Flow.Label,
+				Waiting:   false,
+			})
+			continue
+		}
+
+		// When waiting between runs, compute current round from PR reviews
+		round := 1
+		pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50", org, repo)
+		var prs []*sdk.PullRequest
+		_ = s.callServer(ctx, http.MethodGet, pullsPath, nil, &prs)
+		for _, pr := range prs {
+			if pr.Head != nil && pr.Head.Ref == fmt.Sprintf("issue/%d", issueNum) {
+				revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+				var revs []*sdk.PullReview
+				if err := s.callServer(ctx, http.MethodGet, revsPath, nil, &revs); err == nil {
+					for _, r := range revs {
+						if r.State == sdk.ReviewStateRequestChanges {
+							round++
+						}
+					}
+				}
+				break
+			}
+		}
+
+		step := "waiting between rounds"
+		label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
+		flows = append(flows, ActiveFlowInfo{
+			Issue:     issueNum,
+			Implement: flowRec.Implement,
+			Verify:    flowRec.Verify,
+			Round:     round,
+			MaxRounds: maxRounds,
+			Step:      step,
+			Label:     label,
+			Waiting:   true,
+		})
+	}
+
+	if flows == nil {
+		flows = []ActiveFlowInfo{}
+	}
+	sort.Slice(flows, func(i, j int) bool {
+		return flows[i].Issue < flows[j].Issue
+	})
+	return flows
 }
 
 // ComputeHistoryRuns retrieves ended runs matching filter criteria.

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo } from './types';
+  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, ActorDetail, FlowInfo, LiveRunInfo, ActiveFlowInfo } from './types';
 
   let status = $state<UIStatusResponse | null>(null);
   let loading = $state<boolean>(true);
@@ -78,14 +78,33 @@
   }
 
   let flowGroups = $derived(() => {
-    if (!status?.live_runs) return [];
-    const groups: { flow: FlowInfo; runs: LiveRunInfo[] }[] = [];
-    const map = new Map<number, { flow: FlowInfo; runs: LiveRunInfo[] }>();
-    for (const r of status.live_runs) {
+    const flows = status?.active_flows || [];
+    const runs = status?.live_runs || [];
+    if (flows.length > 0) {
+      return flows.map((f) => ({
+        flow: f,
+        runs: runs.filter((r) => r.flow && r.flow.issue === f.issue),
+      }));
+    }
+    const groups: { flow: ActiveFlowInfo; runs: LiveRunInfo[] }[] = [];
+    const map = new Map<number, { flow: ActiveFlowInfo; runs: LiveRunInfo[] }>();
+    for (const r of runs) {
       if (r.flow) {
         let g = map.get(r.flow.issue);
         if (!g) {
-          g = { flow: r.flow, runs: [] };
+          g = {
+            flow: {
+              issue: r.flow.issue,
+              implement: '',
+              verify: '',
+              round: r.flow.round,
+              max_rounds: r.flow.max_rounds,
+              step: r.flow.step,
+              label: r.flow.label,
+              waiting: false,
+            },
+            runs: [],
+          };
           map.set(r.flow.issue, g);
           groups.push(g);
         }
@@ -449,28 +468,55 @@
       nowTime = Date.now();
     }, 1000);
 
-    const pollInterval = setInterval(async () => {
-      if (status?.live_runs && status.live_runs.length > 0) {
-        try {
-          const res = await fetch('/api/runs?state=live');
-          if (res.ok) {
-            const liveRuns: LiveRunInfo[] = await res.json();
-            if (status) {
-              const prevLen = status.live_runs.length;
-              status.live_runs = liveRuns;
-              if (liveRuns.length === 0 && prevLen > 0) {
-                await loadStatus(true);
-                await loadHistory();
-              }
+    let pollTimeout: any;
+    let destroyed = false;
+
+    async function poll() {
+      if (destroyed) return;
+      try {
+        const res = await fetch('/api/runs?state=live');
+        if (res.ok) {
+          const data = await res.json();
+          const liveRuns: LiveRunInfo[] = Array.isArray(data) ? data : (data.live_runs || []);
+          const activeFlows: ActiveFlowInfo[] = Array.isArray(data) ? [] : (data.active_flows || []);
+
+          if (status) {
+            const prevRunCount = status.live_runs?.length || 0;
+            const prevFlowCount = status.active_flows?.length || 0;
+
+            status.live_runs = liveRuns;
+            status.active_flows = activeFlows;
+
+            // If a run or flow completed or started, refresh status & history
+            if (
+              (prevRunCount > 0 && liveRuns.length === 0) ||
+              (prevFlowCount > 0 && activeFlows.length === 0) ||
+              liveRuns.length > prevRunCount
+            ) {
+              await loadStatus(true);
+              await loadHistory();
             }
           }
-        } catch {}
+        }
+      } catch {
+        // Ignore background polling errors
+      } finally {
+        if (!destroyed) {
+          const hasActive =
+            (status?.live_runs && status.live_runs.length > 0) ||
+            (status?.active_flows && status.active_flows.length > 0);
+          const delay = hasActive ? 2500 : 10000;
+          pollTimeout = setTimeout(poll, delay);
+        }
       }
-    }, 2500);
+    }
+
+    pollTimeout = setTimeout(poll, 2500);
 
     return () => {
+      destroyed = true;
       clearInterval(timerInterval);
-      clearInterval(pollInterval);
+      clearTimeout(pollTimeout);
     };
   });
 </script>
@@ -605,8 +651,8 @@
         <div class="card-header">
           <div class="card-header-left">
             <h2>Live Runs</h2>
-            {#if status.live_runs && status.live_runs.length > 0}
-              <span class="badge badge-accent">{status.live_runs.length} active</span>
+            {#if ((status?.live_runs?.length || 0) + (status?.active_flows?.length || 0)) > 0}
+              <span class="badge badge-accent">{(status?.live_runs?.length || 0) + (status?.active_flows?.length || 0)} active</span>
             {:else}
               <span class="badge badge-neutral">0 active</span>
             {/if}
@@ -625,10 +671,10 @@
         </div>
 
         <div class="card-body">
-          {#if !status.live_runs || status.live_runs.length === 0}
+          {#if (!status?.live_runs || status.live_runs.length === 0) && (!status?.active_flows || status.active_flows.length === 0)}
             <div class="inbox-zero">
               <span class="inbox-zero-icon">💤</span>
-              <span>No runs currently active in this repository.</span>
+              <span>No runs or flows currently active in this repository.</span>
             </div>
           {:else}
             <div class="live-runs-list">
@@ -655,7 +701,12 @@
                   </div>
 
                   <div class="flow-group-runs">
-                    {#each fg.runs as run (run.id)}
+                    {#if fg.runs.length === 0}
+                      <div class="flow-waiting-state">
+                        <span class="muted text-sm">Waiting between rounds… supervisor will start the next actor.</span>
+                      </div>
+                    {:else}
+                      {#each fg.runs as run (run.id)}
                       <div class="run-card">
                         <div class="run-card-header">
                           <div class="run-card-title">
@@ -696,6 +747,7 @@
                         {/if}
                       </div>
                     {/each}
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -1708,6 +1760,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .flow-waiting-state {
+    padding: 10px 12px;
+    background: rgba(125, 125, 125, 0.04);
+    border-radius: 6px;
+    font-style: italic;
   }
 
   /* Flow Group styles */

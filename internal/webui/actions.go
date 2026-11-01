@@ -179,22 +179,13 @@ func (s *Server) ExecuteStop(ctx context.Context, id string) (string, error) {
 	if strings.HasPrefix(id, "flow-") {
 		var issueNum int64
 		if _, err := fmt.Sscanf(id, "flow-%d", &issueNum); err == nil && issueNum > 0 {
+			rec := s.getActiveFlow(issueNum)
+			if rec == nil {
+				return "", fmt.Errorf("no active flow for issue #%d", issueNum)
+			}
 			infoPath := filepath.Join(s.cfg.RepoTop, ".bottown", fmt.Sprintf("flow-%d.json", issueNum))
-			if data, err := os.ReadFile(infoPath); err == nil {
-				var rec FlowRecord
-				if err := json.Unmarshal(data, &rec); err == nil && rec.PID > 0 {
-					_ = syscall.Kill(-rec.PID, syscall.SIGTERM)
-				}
-				_ = os.Remove(infoPath)
-			}
-			// Also stop any live run on this issue
-			if live, err := s.ComputeLiveRuns(ctx); err == nil {
-				for _, r := range live {
-					if r.Flow != nil && r.Flow.Issue == issueNum {
-						_, _ = s.runCommand(ctx, []string{"-i", s.cfg.Instance.Name, "run", "stop", r.ID})
-					}
-				}
-			}
+			_ = syscall.Kill(-rec.PID, syscall.SIGTERM)
+			_ = os.Remove(infoPath)
 			return fmt.Sprintf("Flow for issue #%d stopped", issueNum), nil
 		}
 	}
@@ -258,7 +249,9 @@ func (s *Server) startBackground(args []string, logPath string) (int, error) {
 		_ = logFile.Close()
 	}()
 
-	// Wait briefly to catch immediate startup failures (e.g. invalid flags, actor limits)
+	// Wait briefly to catch immediate startup failures (e.g. invalid flags, bad options).
+	// Note: 300ms is intended for local CLI validation and process startup; refusals requiring
+	// slower server round-trips (such as an actor at its batch limit) will be logged to the run log.
 	select {
 	case err := <-done:
 		if err != nil {

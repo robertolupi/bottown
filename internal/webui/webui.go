@@ -383,7 +383,11 @@ func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
 		if live == nil {
 			live = []LiveRunInfo{}
 		}
-		writeJSON(w, http.StatusOK, live)
+		flows := s.ComputeActiveFlows(r.Context(), live)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"live_runs":    live,
+			"active_flows": flows,
+		})
 		return
 	}
 

@@ -117,6 +117,17 @@ export interface FlowInfo {
   label: string;
 }
 
+export interface ActiveFlowInfo {
+  issue: number;
+  implement: string;
+  verify: string;
+  round: number;
+  max_rounds: number;
+  step: string;
+  label: string;
+  waiting: boolean;
+}
+
 export interface LiveRunInfo {
   id: string;
   target: string;
@@ -196,6 +207,7 @@ export interface UIStatusResponse {
   inbox: InboxItem[];
   inbox_error?: string;
   live_runs?: LiveRunInfo[];
+  active_flows?: ActiveFlowInfo[];
   actors?: ActorDetail[];
 }
 
