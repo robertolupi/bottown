@@ -813,29 +813,15 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 }
 
 func TestHistoryTableScrollStyles(t *testing.T) {
-	entries, err := distFS.ReadDir("dist/assets")
+	// The built bundle is not tracked (dist/ui), so check the source.
+	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "App.svelte"))
 	if err != nil {
-		t.Fatalf("ReadDir dist/assets: %v", err)
+		t.Fatalf("read App.svelte: %v", err)
 	}
-	var cssContent, jsContent string
-	for _, e := range entries {
-		data, err := distFS.ReadFile("dist/assets/" + e.Name())
-		if err != nil {
-			t.Fatalf("ReadFile %s: %v", e.Name(), err)
-		}
-		switch {
-		case strings.HasSuffix(e.Name(), ".css"):
-			cssContent += string(data)
-		case strings.HasSuffix(e.Name(), ".js"):
-			jsContent += string(data)
-		}
-	}
-	if !strings.Contains(jsContent, "history-table-container") {
-		t.Errorf("expected built JS bundle to include history-table-container class")
-	}
-	for _, want := range []string{"history-table-container", "max-height:440px", "max-block-size:440px", "overflow:auto", "position:sticky"} {
-		if !strings.Contains(cssContent, want) {
-			t.Errorf("expected built CSS bundle to contain %q", want)
+	src := string(data)
+	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: 440px", "max-block-size: 440px", "overflow: auto", "position: sticky"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("expected App.svelte to contain %q", want)
 		}
 	}
 }

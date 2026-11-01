@@ -5,11 +5,13 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig({
   plugins: [svelte()],
   build: {
-    outDir: '../internal/webui/dist',
+    // Not tracked: the Go binary embeds internal/webui/dist, whose tracked
+    // README keeps the directory valid when ui/ was not built.
+    outDir: '../internal/webui/dist/ui',
     emptyOutDir: true,
-    // dist is committed and embedded in the Go binary: fixed names make a
-    // rebuild replace the same files in git instead of adding new hashed
-    // ones. The server sends them with Cache-Control: no-cache instead.
+    // Fixed names: a rebuild replaces the same files. The server sends them
+    // with Cache-Control: no-cache, since a new binary serves new content
+    // at the same URLs.
     rollupOptions: {
       output: {
         entryFileNames: 'assets/[name].js',

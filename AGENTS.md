@@ -109,10 +109,13 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
 | `internal/runs` | Run worktrees, records, prompts, harness bindings (claude, agy) |
 | `internal/secrets`, `internal/hostctl` | In-container secret store; Docker CLI and Keychain on the host |
 
-- **Build:** `make build` writes `bin/bottown`.
-- **Install:** `make install` writes `~/.local/bin/bottown`, which the
-  harness commands and credential helpers use, runs `bottown harness
-  setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
+- **Build:** `make build` writes `bin/bottown`. The web UI's built assets
+  (`internal/webui/dist/ui`) are not tracked: `make web` builds them from
+  `web/` (needs npm); without them the binary serves a stub page. Change
+  `web/src`, not built output.
+- **Install:** `make install` builds the web UI, writes
+  `~/.local/bin/bottown`, which the harness commands and credential helpers
+  use, runs `bottown harness setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
   --if-changed` (`UP=0` skips it). `--if-changed` keeps prod's image when
   the commits differ only in docs.
 - **Tests:** `make test` runs the unit tests. `make e2e` needs Docker and

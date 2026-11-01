@@ -26,8 +26,39 @@ import (
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
+// distFS holds the web UI that `make web` builds into dist/ui. dist/ui is
+// not tracked: dist/README.md keeps the embed valid in a checkout that did
+// not build it, and the server then serves stubPage instead.
+//
 //go:embed all:dist
 var distFS embed.FS
+
+// stubPage is the web UI of a binary built without `make web`.
+const stubPage = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>bottown</title></head>
+<body style="font-family: sans-serif; max-width: 40em; margin: 4em auto;">
+<h1>bottown: web UI not built</h1>
+<p>This bottown binary was built without the web UI. Build it with
+<code>make web</code> (it needs Node and npm), then rebuild the binary:
+<code>make install</code> does both.</p>
+<p>The API under <code>/api/</code> works without it.</p>
+</body>
+</html>
+`
+
+// uiFS returns the web UI built into dist/ui of dist, or nil when it was
+// not built.
+func uiFS(dist fs.FS) fs.FS {
+	ui, err := fs.Sub(dist, "dist/ui")
+	if err != nil {
+		panic(fmt.Sprintf("sub distFS: %v", err))
+	}
+	if _, err := fs.Stat(ui, "index.html"); err != nil {
+		return nil
+	}
+	return ui
+}
 
 // Config configures the host-side web UI.
 type Config struct {
@@ -155,14 +186,25 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
 	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
 
-	// Static files
-	dist, err := fs.Sub(distFS, "dist")
-	if err != nil {
-		panic(fmt.Sprintf("sub distFS: %v", err))
-	}
-	fileServer := http.FileServer(http.FS(dist))
+	mux.Handle("GET /", staticHandler(uiFS(distFS)))
+}
 
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+// staticHandler serves the built web UI in ui, or stubPage when ui is nil.
+func staticHandler(ui fs.FS) http.Handler {
+	if ui == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(stubPage))
+		})
+	}
+	fileServer := http.FileServer(http.FS(ui))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The assets have fixed names (web/vite.config.ts), so a new binary
 		// serves new content at the same URLs: make browsers revalidate.
 		w.Header().Set("Cache-Control", "no-cache")
@@ -172,7 +214,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		}
 
 		// Try opening the file
-		f, err := dist.Open(path)
+		f, err := ui.Open(path)
 		if err != nil {
 			// SPA fallback: serve index.html for non-existent files (except /api/)
 			if !strings.HasPrefix(r.URL.Path, "/api/") {

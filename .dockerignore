@@ -2,3 +2,5 @@
 .DS_Store
 /bin/
 /dist/
+/web/node_modules/
+/internal/webui/dist/ui/
