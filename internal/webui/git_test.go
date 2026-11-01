@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -250,10 +251,10 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{
-					"id":    "r-live-1234",
-					"actor": "claude",
-				},
+				{"id": "r-98765", "actor": "claude"},
+				// An ephemeral run of the same actor: it must not be shown
+				// as the permanent worktree's run.
+				{"id": "r-live-1234", "actor": "claude"},
 			})
 			return
 		}
@@ -301,8 +302,8 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	if wt.LastRun != "r-98765" {
 		t.Errorf("expected last run r-98765, got %s", wt.LastRun)
 	}
-	if wt.ActiveRun != "r-live-1234" {
-		t.Errorf("expected active run r-live-1234, got %s", wt.ActiveRun)
+	if wt.ActiveRun != "r-98765" {
+		t.Errorf("expected active run r-98765, got %s", wt.ActiveRun)
 	}
 	if wt.IsDirty {
 		t.Errorf("expected clean worktree, got dirty")
@@ -315,5 +316,34 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	wts = srv.computeWorktrees(context.Background())
 	if len(wts) != 1 || !wts[0].IsDirty {
 		t.Errorf("expected worktree to be dirty after untracked file")
+	}
+
+	// A launched run's worktree under .bottown/runs, in its own repository
+	// like the runs mirror, is listed as ephemeral; one whose worktree is
+	// gone, or that belongs to another repository, is not.
+	runsDir := filepath.Join(mainCheckout, ".bottown", "runs")
+	ephDir := filepath.Join(runsDir, "r-live-1234")
+	runGit(t, filepath.Dir(mainCheckout), "clone", "-q", mainCheckout, ephDir)
+	runGit(t, ephDir, "checkout", "-q", "-b", "issue/71")
+	for _, r := range []runs.Record{
+		{ID: "r-live-1234", Kind: "implement", Actor: "claude", Repo: "bottown/bottown", Issue: 71, Status: runs.StatusSucceeded, Worktree: ephDir},
+		{ID: "r-gone", Kind: "verify", Actor: "kimi", Repo: "bottown/bottown", PR: 3, Status: runs.StatusSucceeded, Worktree: filepath.Join(runsDir, "r-gone")},
+		{ID: "r-other", Kind: "implement", Actor: "agy", Repo: "bottown/other", Issue: 1, Status: runs.StatusSucceeded, Worktree: ephDir},
+	} {
+		if err := (&runs.Workspace{RunsDir: runsDir}).Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wts = srv.computeWorktrees(context.Background())
+	if len(wts) != 2 {
+		t.Fatalf("expected the actor worktree and one ephemeral run worktree, got %+v", wts)
+	}
+	if wts[0].Ephemeral || wts[0].ActiveRun != "r-98765" {
+		t.Errorf("permanent worktree changed: %+v", wts[0])
+	}
+	eph := wts[1]
+	if !eph.Ephemeral || eph.Actor != "claude" || eph.Path != ephDir || eph.Head != "issue/71" ||
+		eph.Kind != "implement" || eph.Target != "#71" || eph.ActiveRun != "r-live-1234" || eph.LastRun != "r-live-1234" {
+		t.Errorf("unexpected ephemeral worktree: %+v", eph)
 	}
 }

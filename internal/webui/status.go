@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // UIStatusResponse is returned by GET /api/status.
@@ -87,6 +89,11 @@ type ActorWorktreeInfo struct {
 	IsDirty   bool   `json:"is_dirty"`
 	ActiveRun string `json:"active_run,omitempty"`
 	LastRun   string `json:"last_run,omitempty"`
+	// Ephemeral marks a launched run's own worktree under .bottown/runs,
+	// rather than an actor's permanent worktree.
+	Ephemeral bool   `json:"ephemeral,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Target    string `json:"target,omitempty"`
 }
 
 type HarnessCommandInfo struct {
@@ -325,8 +332,8 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		return nil
 	}
 
-	// Get active runs for this repository from server
-	activeRuns := map[string]string{} // actor -> run ID
+	// Live runs for this repository, from the server
+	liveRuns := map[string]bool{}
 	var runsList []struct {
 		ID    string `json:"id"`
 		Actor string `json:"actor"`
@@ -338,9 +345,7 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 	runsPath := "/v1/runs?state=live&repo=" + url.QueryEscape(repoName)
 	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &runsList); err == nil {
 		for _, r := range runsList {
-			if r.Actor != "" {
-				activeRuns[r.Actor] = r.ID
-			}
+			liveRuns[r.ID] = true
 		}
 	}
 
@@ -374,13 +379,64 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		statusOut, _ := git(path, "status", "--porcelain")
 		isDirty := len(strings.TrimSpace(statusOut)) > 0
 
+		// A leased worktree holds its run in bottown.run until `run end`.
 		info := ActorWorktreeInfo{
-			Actor:     actor,
-			Path:      path,
+			Actor:   actor,
+			Path:    path,
+			Head:    head,
+			IsDirty: isDirty,
+			LastRun: lastRun,
+		}
+		if lastRun != "" && liveRuns[lastRun] {
+			info.ActiveRun = lastRun
+		}
+		wts = append(wts, info)
+	}
+	return append(wts, s.ephemeralWorktrees(liveRuns)...)
+}
+
+// ephemeralWorktrees lists the worktrees of launched runs (`bottown run
+// implement/verify/discuss`) still present under .bottown/runs. They belong
+// to the runs mirror, not the main checkout, so `git worktree list` in the
+// checkout does not show them.
+func (s *Server) ephemeralWorktrees(liveRuns map[string]bool) []ActorWorktreeInfo {
+	runsDir := filepath.Join(s.cfg.RepoTop, ".bottown", "runs")
+	ws := &runs.Workspace{RunsDir: runsDir}
+	recs, err := ws.Records()
+	if err != nil {
+		return nil
+	}
+	var wts []ActorWorktreeInfo
+	for _, r := range recs {
+		if r.Repo != "" && r.Repo != s.cfg.FullRepo {
+			continue
+		}
+		dir := r.Worktree
+		if dir == "" {
+			dir = ws.WorktreeDir(r.ID)
+		}
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			continue
+		}
+		head, _ := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
+		if head == "HEAD" {
+			if sha, err := git(dir, "rev-parse", "--short", "HEAD"); err == nil {
+				head = sha + " (detached)"
+			}
+		}
+		statusOut, _ := git(dir, "status", "--porcelain")
+		info := ActorWorktreeInfo{
+			Actor:     r.Actor,
+			Path:      dir,
 			Head:      head,
-			IsDirty:   isDirty,
-			ActiveRun: activeRuns[actor],
-			LastRun:   lastRun,
+			IsDirty:   len(strings.TrimSpace(statusOut)) > 0,
+			LastRun:   r.ID,
+			Ephemeral: true,
+			Kind:      r.Kind,
+			Target:    r.Target(),
+		}
+		if r.Status == runs.StatusRunning || liveRuns[r.ID] {
+			info.ActiveRun = r.ID
 		}
 		wts = append(wts, info)
 	}
