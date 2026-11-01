@@ -133,6 +133,71 @@
     <div class="loading-state">Loading status...</div>
   {:else if status}
     <div class="grid">
+      <!-- 0. Owner Inbox Section (§4.1) -->
+      <section class="card full-width">
+        <div class="card-header">
+          <div class="card-header-left">
+            <h2>Owner Inbox</h2>
+            {#if status.inbox && status.inbox.length > 0}
+              <span class="badge badge-warning">{status.inbox.length} item{status.inbox.length > 1 ? 's' : ''}</span>
+            {:else}
+              <span class="badge badge-success">Inbox zero</span>
+            {/if}
+          </div>
+        </div>
+
+        <div class="card-body">
+          {#if !status.inbox || status.inbox.length === 0}
+            <div class="inbox-zero">
+              <span class="inbox-zero-icon">✓</span>
+              <span>Nothing waiting on the owner in this repository.</span>
+            </div>
+          {:else}
+            <div class="inbox-list">
+              {#each status.inbox as item (item.id)}
+                <div class="inbox-item">
+                  <div class="inbox-badge-col">
+                    {#if item.kind === 'ready_to_merge'}
+                      <span class="badge badge-success">Ready to merge</span>
+                    {:else if item.kind === 'conflicts_with_main'}
+                      <span class="badge badge-error">Conflicts</span>
+                    {:else if item.kind === 'stopped_flow'}
+                      <span class="badge badge-warning">Stopped flow</span>
+                    {:else if item.kind === 'broken_run'}
+                      <span class="badge badge-error">Broken run</span>
+                    {:else if item.kind === 'discuss_answer'}
+                      <span class="badge badge-accent">Discuss answer</span>
+                    {:else if item.kind === 'actor_filed_issue'}
+                      <span class="badge badge-neutral">Actor-filed</span>
+                    {/if}
+                  </div>
+                  <div class="inbox-target-col">
+                    <a class="pr-badge" href={item.target_url} target="_blank" rel="noreferrer">
+                      {item.target} ↗
+                    </a>
+                  </div>
+                  <div class="inbox-desc-col">
+                    <div class="inbox-title">{item.title}</div>
+                    <div class="inbox-desc muted">{item.description}</div>
+                  </div>
+                  <div class="inbox-action-col">
+                    {#if item.action}
+                      <span class="action-command" title={item.action.command}>
+                        <code>{item.action.command}</code>
+                      </span>
+                    {:else}
+                      <a class="btn btn-sm btn-secondary" href={item.target_url} target="_blank" rel="noreferrer">
+                        View in Forgejo ↗
+                      </a>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </section>
+
       <!-- 1. Upstream Section -->
       <section class="card">
         <div class="card-header">
@@ -588,6 +653,81 @@
     margin: 0;
     font-size: 16px;
     font-weight: 600;
+  }
+
+  .card-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .inbox-zero {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .inbox-zero-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--success-bg);
+    color: var(--success);
+    font-size: 12px;
+    font-weight: bold;
+  }
+
+  .inbox-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .inbox-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(125, 125, 125, 0.1);
+    font-size: 14px;
+  }
+
+  .inbox-item:last-child {
+    border-bottom: none;
+  }
+
+  .inbox-badge-col {
+    min-width: 125px;
+  }
+
+  .inbox-target-col {
+    min-width: 55px;
+  }
+
+  .inbox-desc-col {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .inbox-title {
+    font-weight: 500;
+  }
+
+  .inbox-desc {
+    font-size: 13px;
+  }
+
+  .inbox-action-col {
+    text-align: right;
+  }
+
+  .action-command code {
+    font-size: 12px;
   }
 
   .card-body {

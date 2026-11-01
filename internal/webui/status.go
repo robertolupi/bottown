@@ -25,6 +25,7 @@ type UIStatusResponse struct {
 	Forge    ForgeStatus     `json:"forge"`
 	Health   HealthChecklist `json:"health"`
 	Links    RepoLinks       `json:"links"`
+	Inbox    []InboxItem     `json:"inbox"`
 }
 
 type UpstreamStatus struct {
@@ -297,6 +298,14 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	} else {
 		res.Health.Version.ServerVersion = "unreachable"
 		res.Health.Version.Matches = false
+	}
+
+	// 4. Owner inbox (§4.1)
+	inbox, err := s.ComputeInbox(ctx)
+	if err == nil && inbox != nil {
+		res.Inbox = inbox
+	} else {
+		res.Inbox = []InboxItem{}
 	}
 
 	return res, nil

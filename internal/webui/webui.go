@@ -135,6 +135,7 @@ func (s *Server) Close() error {
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
+	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
 	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
@@ -262,6 +263,18 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleGetInbox(w http.ResponseWriter, r *http.Request) {
+	inbox, err := s.ComputeInbox(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if inbox == nil {
+		inbox = []InboxItem{}
+	}
+	writeJSON(w, http.StatusOK, inbox)
 }
 
 func (s *Server) handleActionRefresh(w http.ResponseWriter, r *http.Request) {
