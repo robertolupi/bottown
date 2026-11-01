@@ -18,6 +18,8 @@ func RenderLog(harness string, log []byte) []string {
 		return renderAgyLog(log)
 	case "kimi":
 		return renderKimiLog(log)
+	case "codex":
+		return renderCodexLog(log)
 	default:
 		return renderScriptLog(log)
 	}
@@ -153,6 +155,50 @@ func renderKimiLog(log []byte) []string {
 			}
 		}
 	})
+	return lines
+}
+
+func renderCodexLog(log []byte) []string {
+	var lines []string
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type string `json:"type"`
+			Item *struct {
+				Type      string `json:"type"`
+				Text      string `json:"text"`
+				Command   string `json:"command"`
+				Tool      string `json:"tool"`
+				Arguments any    `json:"arguments"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(line, &ev) != nil {
+			s := strings.TrimSpace(string(line))
+			if s != "" && !strings.HasPrefix(s, "{") {
+				lines = append(lines, s)
+			}
+			return
+		}
+		if ev.Type != "item.completed" || ev.Item == nil {
+			return
+		}
+		switch ev.Item.Type {
+		case "agent_message":
+			if t := formatAssistantText(ev.Item.Text); t != "" {
+				lines = append(lines, t)
+			}
+		case "command_execution":
+			if ev.Item.Command != "" {
+				lines = append(lines, formatToolCall("Bash", ev.Item.Command))
+			}
+		case "mcp_tool_call":
+			if ev.Item.Tool != "" {
+				lines = append(lines, formatToolCall(ev.Item.Tool, ev.Item.Arguments))
+			}
+		}
+	})
+	if len(lines) == 0 {
+		return renderScriptLog(log)
+	}
 	return lines
 }
 

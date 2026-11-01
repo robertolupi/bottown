@@ -32,16 +32,20 @@ var harnessCommands = map[string]struct {
 	dir               func(home string) string
 	template, discuss string
 	skillDirs         bool
+	invoke            string
 }{
 	// Claude Code user commands: /bottown-implement 12 runs `bottown run
 	// start` itself (the !`...` line) and inlines the goal prompt.
-	"claude": {func(h string) string { return filepath.Join(h, ".claude", "commands") }, "claude-command.md", "claude-discuss.md", false},
+	"claude": {func(h string) string { return filepath.Join(h, ".claude", "commands") }, "claude-command.md", "claude-discuss.md", false, "/"},
 	// Antigravity global workflows: invoked as /bottown-implement; the agent
 	// runs `bottown run start` with the number the user typed.
-	"agy": {func(h string) string { return filepath.Join(h, ".gemini", "config", "global_workflows") }, "agy-workflow.md", "agy-discuss.md", false},
+	"agy": {func(h string) string { return filepath.Join(h, ".gemini", "config", "global_workflows") }, "agy-workflow.md", "agy-discuss.md", false, "/"},
 	// Kimi Code user skills: invoked as /skill:bottown-implement; the agent
 	// runs `bottown run start` like agy's.
-	"kimi": {kimiSkillsDir, "kimi-skill.md", "kimi-discuss.md", true},
+	"kimi": {kimiSkillsDir, "kimi-skill.md", "kimi-discuss.md", true, "/skill:"},
+	// Codex user skills: ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md,
+	// invoked as /bottown-implement.
+	"codex": {codexSkillsDir, "codex-skill.md", "codex-discuss.md", true, "/"},
 }
 
 // kimiSkillsDir is $KIMI_CODE_HOME/skills, default ~/.kimi-code/skills.
@@ -52,6 +56,14 @@ func kimiSkillsDir(home string) string {
 	return filepath.Join(home, ".kimi-code", "skills")
 }
 
+// codexSkillsDir is $CODEX_HOME/skills, default ~/.codex/skills.
+func codexSkillsDir(home string) string {
+	if h := os.Getenv("CODEX_HOME"); h != "" {
+		return filepath.Join(h, "skills")
+	}
+	return filepath.Join(home, ".codex", "skills")
+}
+
 type commandData struct {
 	Kind, Target, Bottown, Marker string
 }
@@ -60,7 +72,7 @@ func newHarness() *cobra.Command {
 	h := &cobra.Command{Use: "harness", Short: "Set up agent harnesses for bottown"}
 	var force bool
 	setup := &cobra.Command{
-		Use:   "setup [claude|agy|kimi]...",
+		Use:   "setup [claude|agy|kimi|codex]...",
 		Short: "Install /bottown-implement, /bottown-verify and /bottown-discuss in harnesses' global commands",
 		Long: `Install /bottown-implement, /bottown-verify and /bottown-discuss for each
 harness (default: all):
@@ -69,6 +81,7 @@ harness (default: all):
   agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss}.md
   kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss}/SKILL.md
           (invoked as /skill:bottown-implement 12)
+  codex   ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md
 
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
@@ -78,7 +91,7 @@ bottown binary by absolute path. Re-running refreshes them; a same-named file
 bottown did not write is left alone unless --force.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				args = []string{"claude", "agy", "kimi"}
+				args = []string{"claude", "agy", "kimi", "codex"}
 			}
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -147,8 +160,8 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 			return err
 		}
 		invoke := "/"
-		if hc.skillDirs {
-			invoke = "/skill:"
+		if hc.invoke != "" {
+			invoke = hc.invoke
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s: installed %sbottown-%s\n", path, invoke, c.Kind)
 	}
@@ -161,7 +174,7 @@ func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
 		return nil
 	}
 	var res []webui.HarnessCommandInfo
-	for _, harness := range []string{"claude", "agy", "kimi"} {
+	for _, harness := range []string{"claude", "agy", "kimi", "codex"} {
 		hc, ok := harnessCommands[harness]
 		if !ok {
 			continue

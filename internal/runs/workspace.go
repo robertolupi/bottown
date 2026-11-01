@@ -150,7 +150,7 @@ func (w *Workspace) Sync(ctx context.Context) error {
 	}
 	// Files bottown writes into run worktrees for harnesses (agy's workspace
 	// MCP config holds the run key) must never be committed by the agent.
-	for _, p := range []string{AgyMCPPath, KimiMCPPath} {
+	for _, p := range []string{AgyMCPPath, KimiMCPPath, CodexMCPPath} {
 		if err := appendLine(filepath.Join(w.Mirror, "info", "exclude"), "/"+p); err != nil {
 			return err
 		}

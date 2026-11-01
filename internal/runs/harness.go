@@ -94,8 +94,10 @@ func LookupHarness(name string) (Harness, error) {
 		return agyHarness{}, nil
 	case "kimi":
 		return kimiHarness{}, nil
+	case "codex":
+		return codexHarness{}, nil
 	}
-	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi)", name)
+	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi, codex)", name)
 }
 
 // RunEnv is the environment of a harness process: the user's, minus forge
@@ -577,6 +579,139 @@ func kimiText(raw json.RawMessage) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// codexHarness runs OpenAI's Codex CLI. Like agy and kimi, the launcher writes
+// the workspace file <worktree>/.codex/config.toml (excluded from git), which
+// names the variable holding the run key instead of the key. Batch runs execute
+// non-interactively via `codex exec`.
+type codexHarness struct{}
+
+// CodexMCPPath is the workspace config path inside a worktree.
+const CodexMCPPath = ".codex/config.toml"
+
+func (codexHarness) PrepareMCP(l *Launch, _ string) error {
+	if out, err := Git(l.Dir, nil, "ls-files", "--", CodexMCPPath); err == nil && out != "" {
+		return fmt.Errorf("the repository tracks %s; bottown will not overwrite it for a codex run", CodexMCPPath)
+	}
+	content := fmt.Sprintf("[mcp_servers.bottown]\nurl = %q\nbearer_token_env_var = %q\n", l.MCPURL, "BOTTOWN_RUN_KEY")
+	path := filepath.Join(l.Dir, CodexMCPPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return err
+	}
+	l.MCPConfig = path
+	return nil
+}
+
+// codexBinary is codex on PATH, else where its installer puts it.
+func codexBinary() string {
+	if _, err := exec.LookPath("codex"); err == nil {
+		return "codex"
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		if p := filepath.Join(h, ".local", "bin", "codex"); fileExists(p) {
+			return p
+		}
+	}
+	return "codex"
+}
+
+func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
+	sandbox := "workspace-write"
+	if l.ReadOnly {
+		sandbox = "read-only"
+	}
+	mcpURL := fmt.Sprintf("mcp_servers.bottown.url=%q", l.MCPURL)
+	mcpKey := `mcp_servers.bottown.bearer_token_env_var="BOTTOWN_RUN_KEY"`
+	var args []string
+	if l.Interactive {
+		args = []string{
+			"-s", sandbox,
+			"-c", mcpURL,
+			"-c", mcpKey,
+			l.Prompt,
+		}
+	} else {
+		args = []string{
+			"exec",
+			"--json",
+			"--ephemeral",
+			"--ignore-user-config",
+			"--sandbox", sandbox,
+			"-c", `approval_policy="never"`,
+			"-c", mcpURL,
+			"-c", mcpKey,
+			l.Prompt,
+		}
+	}
+	cmd := exec.CommandContext(ctx, codexBinary(), args...)
+	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
+	return cmd, nil
+}
+
+// Summary is the text of the last completed agent_message item, else the last
+// non-JSON output line.
+func (codexHarness) Summary(log []byte) string {
+	var last string
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type string `json:"type"`
+			Item *struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+		}
+		if json.Unmarshal(line, &ev) == nil && ev.Type == "item.completed" && ev.Item != nil && ev.Item.Type == "agent_message" && ev.Item.Text != "" {
+			last = strings.TrimSpace(ev.Item.Text)
+		}
+	})
+	if last != "" {
+		return last
+	}
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && !strings.HasPrefix(l, "{") {
+			return l
+		}
+	}
+	return ""
+}
+
+// Usage sums usage from all turn.completed events.
+func (codexHarness) Usage(log []byte) *secrets.Usage {
+	var (
+		u     *secrets.Usage
+		turns int64
+	)
+	eachJSONLine(log, func(line []byte) {
+		var ev struct {
+			Type  string `json:"type"`
+			Usage *struct {
+				InputTokens           *int64 `json:"input_tokens"`
+				CachedInputTokens     *int64 `json:"cached_input_tokens"`
+				CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
+				OutputTokens          *int64 `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Type != "turn.completed" || ev.Usage == nil {
+			return
+		}
+		turns++
+		if u == nil {
+			u = &secrets.Usage{}
+		}
+		addTokens(&u.InputTokens, ev.Usage.InputTokens)
+		addTokens(&u.OutputTokens, ev.Usage.OutputTokens)
+		addTokens(&u.CacheReadTokens, ev.Usage.CachedInputTokens)
+		addTokens(&u.CacheWriteTokens, ev.Usage.CacheWriteInputTokens)
+	})
+	if u != nil {
+		u.Turns = &turns
+	}
+	return u
 }
 
 type scriptHarness struct{ cmd string }

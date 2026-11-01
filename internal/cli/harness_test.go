@@ -20,7 +20,8 @@ func TestInstallCommands(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	t.Setenv("KIMI_CODE_HOME", "")
-	for _, h := range []string{"claude", "agy", "kimi"} {
+	t.Setenv("CODEX_HOME", "")
+	for _, h := range []string{"claude", "agy", "kimi", "codex"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
 		}
@@ -64,6 +65,18 @@ func TestInstallCommands(t *testing.T) {
 		for _, want := range []string{"name: bottown-" + kind + "\n", "disableModelInvocation: true", "\n> $ARGUMENTS\n", self + " run start " + kind + " <number>", harnessMarker} {
 			if !strings.Contains(string(skill), want) {
 				t.Errorf("kimi %s skill lacks %q:\n%s", kind, want, skill)
+			}
+		}
+	}
+
+	for _, kind := range []string{"implement", "verify", "discuss"} {
+		skill, err := os.ReadFile(filepath.Join(home, ".codex", "skills", "bottown-"+kind, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"name: bottown-" + kind + "\n", "\n> $ARGUMENTS\n", self + " run start " + kind + " <number>", harnessMarker} {
+			if !strings.Contains(string(skill), want) {
+				t.Errorf("codex %s skill lacks %q:\n%s", kind, want, skill)
 			}
 		}
 	}
@@ -218,11 +231,12 @@ func TestDiscussHandover(t *testing.T) {
 func TestCheckHarnessCurrent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KIMI_CODE_HOME", "")
+	t.Setenv("CODEX_HOME", "")
 
 	// 1. Initially nothing is installed
 	statuses := checkHarnessCurrent(home)
-	if len(statuses) != 3 {
-		t.Fatalf("expected 3 harnesses, got %d", len(statuses))
+	if len(statuses) != 4 {
+		t.Fatalf("expected 4 harnesses, got %d", len(statuses))
 	}
 	for _, s := range statuses {
 		if s.Installed || s.Current {
@@ -230,10 +244,10 @@ func TestCheckHarnessCurrent(t *testing.T) {
 		}
 	}
 
-	// 2. Install all three harnesses
+	// 2. Install all four harnesses
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	for _, h := range []string{"claude", "agy", "kimi"} {
+	for _, h := range []string{"claude", "agy", "kimi", "codex"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
 		}
