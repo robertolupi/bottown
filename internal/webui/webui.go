@@ -163,6 +163,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	fileServer := http.FileServer(http.FS(dist))
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// The assets have fixed names (web/vite.config.ts), so a new binary
+		// serves new content at the same URLs: make browsers revalidate.
+		w.Header().Set("Cache-Control", "no-cache")
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
