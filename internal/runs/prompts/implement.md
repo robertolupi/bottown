@@ -21,6 +21,7 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   - `{{.Bottown}} api GET /repos/…` reaches any other Forgejo endpoint.
 - You cannot review or merge. A verifier from another model family will
   review your pull request, and the owner merges.
+- Run checks as plain commands; write scratch files under `$TMPDIR`.
 
 ## Done means
 

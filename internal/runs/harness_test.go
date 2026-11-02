@@ -71,17 +71,22 @@ func TestAgySummary(t *testing.T) {
 }
 
 func TestClaudeIsolationAndEnv(t *testing.T) {
+	hostTmp := t.TempDir()
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "desktop")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "s")
 	t.Setenv("ANTHROPIC_BASE_URL", "http://host-proxy")
 	t.Setenv("GH_TOKEN", "x")
 	t.Setenv("KEEP_ME", "1")
+	t.Setenv("TMPDIR", hostTmp)
 	c, _ := (claudeHarness{}).Command(t.Context(), Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k"})
 	args := strings.Join(c.Args, " ")
 	for _, want := range []string{"--setting-sources project,local", `"autoMemoryEnabled": false`, "--strict-mcp-config", "--mcp-config /m.json", "--no-session-persistence"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args lack %q: %s", want, args)
 		}
+	}
+	if strings.Contains(args, "--add-dir") {
+		t.Errorf("args should not have --add-dir when TmpDir is empty: %s", args)
 	}
 	env := strings.Join(c.Env, "\n")
 	for _, gone := range []string{"CLAUDE_CODE_ENTRYPOINT=", "CLAUDE_CODE_SESSION_ID=", "ANTHROPIC_BASE_URL=", "GH_TOKEN="} {
@@ -91,6 +96,45 @@ func TestClaudeIsolationAndEnv(t *testing.T) {
 	}
 	if !strings.Contains(env, "KEEP_ME=1") || !strings.Contains(env, "BOTTOWN_RUN_KEY=k") {
 		t.Errorf("env lost a variable it should keep")
+	}
+
+	// With a run scratch directory: --add-dir is passed and TMPDIR is set to it.
+	tmpDir := filepath.Join(t.TempDir(), "r-1.tmp")
+	c2, _ := (claudeHarness{}).Command(t.Context(), Launch{
+		Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k",
+		TmpDir: tmpDir,
+	})
+	args2 := strings.Join(c2.Args, " ")
+	if !strings.Contains(args2, "--add-dir "+tmpDir) {
+		t.Errorf("args lack --add-dir %s: %s", tmpDir, args2)
+	}
+	env2 := strings.Join(c2.Env, "\n")
+	if strings.Contains(env2, "TMPDIR="+hostTmp) {
+		t.Errorf("env still has host TMPDIR")
+	}
+	if !strings.Contains(env2, "TMPDIR="+tmpDir) {
+		t.Errorf("env lacks run TMPDIR %s", tmpDir)
+	}
+}
+
+func TestClaudeDefaultAllowedTools(t *testing.T) {
+	c, _ := (claudeHarness{}).Command(t.Context(), Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k"})
+	var allowed string
+	for i, a := range c.Args {
+		if a == "--allowedTools" && i+1 < len(c.Args) {
+			allowed = c.Args[i+1]
+			break
+		}
+	}
+	tools := strings.Split(allowed, ",")
+	for _, want := range []string{
+		"Bash(node:*)", "Bash(echo:*)", "Bash(test:*)", "Bash([:*)",
+		"Bash(mkdir:*)", "Bash(rm:*)", "Bash(sort:*)", "Bash(uniq:*)",
+		"Bash(xargs:*)", "Bash(jq:*)",
+	} {
+		if !slices.Contains(tools, want) {
+			t.Errorf("allowedTools lacks %q: %s", want, allowed)
+		}
 	}
 }
 

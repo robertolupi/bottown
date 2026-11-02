@@ -73,6 +73,7 @@ type Launch struct {
 	// ReadOnly runs (discuss) must not change the worktree: no file-editing
 	// tools are pre-approved, and edits are not auto-accepted.
 	ReadOnly bool
+	TmpDir   string // scratch directory for the run
 }
 
 // Harness starts an agent CLI for a run.
@@ -186,10 +187,12 @@ func RunEnv(l Launch) []string {
 			continue
 		case insideClaude && (k == "ANTHROPIC_BASE_URL" || k == "USE_STAGING_OAUTH" || k == "USE_LOCAL_OAUTH" || strings.HasPrefix(k, "MCP_")):
 			continue
+		case l.TmpDir != "" && k == "TMPDIR":
+			continue
 		}
 		env = append(env, e)
 	}
-	return append(env,
+	out := append(env,
 		"BOTTOWN_RUN_ID="+l.RunID,
 		"BOTTOWN_RUN_FILE="+l.RecordFile,
 		"BOTTOWN_MCP_URL="+l.MCPURL,
@@ -197,6 +200,10 @@ func RunEnv(l Launch) []string {
 		"BOTTOWN_PROMPT_FILE="+l.PromptFile,
 		"BOTTOWN_RUN_SPEC="+l.Spec,
 	)
+	if l.TmpDir != "" {
+		out = append(out, "TMPDIR="+l.TmpDir)
+	}
+	return out
 }
 
 // defaultAllowed are the tools a batch claude run may use without asking:
@@ -204,9 +211,11 @@ func RunEnv(l Launch) []string {
 var defaultAllowed = []string{
 	"mcp__bottown", "Bash(bottown:*)", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite",
 	"Bash(git:*)", "Bash(go:*)", "Bash(gofmt:*)", "Bash(make:*)",
-	"Bash(npm:*)", "Bash(npx:*)", "Bash(cargo:*)", "Bash(python3:*)",
+	"Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(cargo:*)", "Bash(python3:*)",
 	"Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)",
 	"Bash(sed:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(wc:*)", "Bash(diff:*)",
+	"Bash(echo:*)", "Bash(test:*)", "Bash([:*)", "Bash(mkdir:*)", "Bash(rm:*)",
+	"Bash(sort:*)", "Bash(uniq:*)", "Bash(xargs:*)", "Bash(jq:*)",
 }
 
 type claudeHarness struct{}
@@ -263,6 +272,9 @@ func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 		allowed = append(allowed, "Bash("+self+":*)") // the agent CLI, by absolute path
 	}
 	args := append([]string{"--mcp-config", l.MCPConfig}, claudeIsolation...)
+	if l.TmpDir != "" {
+		args = append(args, "--add-dir", l.TmpDir)
+	}
 	args = append(args,
 		"--permission-mode", mode,
 		"--allowedTools", strings.Join(append(allowed, l.Allow...), ","),

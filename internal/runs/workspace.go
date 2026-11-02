@@ -11,6 +11,7 @@
 //	<repo>/.bottown/runs/<id>.mcp.json  harness MCP config (0600)
 //	<repo>/.bottown/runs/<id>.prompt.md the goal prompt
 //	<repo>/.bottown/runs/<id>.attachments/ the issue's attachments, while the run lasts
+//	<repo>/.bottown/runs/<id>.tmp/      the run's scratch directory, while the run lasts
 //
 // Per-run files sit next to the worktree, never inside it, so an agent's
 // `git add -A` cannot commit them. Runs never touch the user's checkout:
@@ -181,6 +182,10 @@ func (w *Workspace) DefaultBranch(ctx context.Context) (string, error) {
 
 // WorktreeDir is where run id's worktree lives.
 func (w *Workspace) WorktreeDir(id string) string { return filepath.Join(w.RunsDir, id) }
+
+// TmpDir is where launched run id keeps its scratch directory, next to
+// the worktree.
+func (w *Workspace) TmpDir(id string) string { return w.Path(id, ".tmp") }
 
 // AddImplement adds a worktree on branch, resuming origin/<branch> if it
 // exists (a later run continues the same branch) or starting it from
