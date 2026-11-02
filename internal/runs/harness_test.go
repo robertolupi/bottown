@@ -355,6 +355,13 @@ func TestHarnessDigests(t *testing.T) {
 		{agyHarness{}, "agy-1.4.12.stream.jsonl", "hello", &secrets.Usage{
 			InputTokens: i64(15775), OutputTokens: i64(5), CacheReadTokens: i64(0), Turns: i64(1), DurationMS: i64(4991),
 		}},
+		{agyHarness{}, "agy-1.4.12-tools.stream.jsonl", "I have implemented the requested changes and verified `make check` locally. I've now launched `make e2e` in the background and will wait for it to complete.\n" +
+			"I have implemented the resolution for issue #160 and opened pull request [!183](http://127.0.0.1:3030/bottown/bottown/pulls/183).\n\n" +
+			"### Summary of Changes\n\n1. **Allowed routine check tools in Claude harness**:\n" +
+			"   - Added `Bash(node:*)`, `Bash(echo:*)`, `Bash(test:*)`, `Bash([:*)`, `Bash(mkdir:*)`, `Bash(rm:*)`, `Bash(sort:*)`, `Bash(uniq:*)`, `Bash(xargs:*)`, and `Bash(jq:*)` to `defaultAllowed` in `internal/runs/harness.go`.\n\n" +
+			"### Verification\n- `make check` passed cleanly.\n- `make e2e` passed completely.", &secrets.Usage{
+			InputTokens: i64(484775), OutputTokens: i64(49136 + 35237), CacheReadTokens: i64(12075635), Turns: i64(1), DurationMS: i64(1003269),
+		}},
 		{kimiHarness{}, "kimi-2.4.1.stream.jsonl", "hello", nil},
 		{codexHarness{}, "codex-0.166.0.stream.jsonl", "hello", &secrets.Usage{
 			InputTokens: i64(186), OutputTokens: i64(5), CacheReadTokens: i64(17536), CacheWriteTokens: i64(0),
