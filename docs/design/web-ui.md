@@ -533,8 +533,16 @@ the latest step: an `agent_response`'s streamed text, a `tool` step's
 call (its argument from agy's parameter names, an MCP call as
 `server.tool`), failed steps and commands that exit nonzero as errors,
 and the session start, system messages, agy's non-JSON lines and the
-result (status, turns, tokens, duration) as status. The other harnesses'
-lines are still `plain`, and crush's, only its final message, `text`.
+result (status, turns, tokens, duration) as status. codex's stream is
+typed: agent_message text, command_execution and mcp_tool_call calls
+with their class, file_change edits, commands with non-zero exit code as
+errors, and thread.started, turn completion with usage, and the preamble
+as status. kimi's messages are typed: assistant text, tool_calls with
+their class, tool results that start with failure messages as errors,
+non-JSON tool output capped to a few lines, and the latest of
+consecutive background task waits and meta messages (system.version,
+session.resume_hint) as status. The script fallback is still `plain`,
+and crush's, only its final message, `text`.
 Unknown usage stays unknown.
 
 ## 7. Server APIs

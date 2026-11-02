@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -47,9 +48,9 @@ func renderLog(harness string, log []byte) []LogLine {
 	case "antigravity", "agy":
 		return renderAgyLog(log)
 	case "kimi":
-		return kindLines(LinePlain, renderKimiLog(log))
+		return renderKimiLog(log)
 	case "codex":
-		return kindLines(LinePlain, renderCodexLog(log))
+		return renderCodexLog(log)
 	case "crush":
 		// crush's log is only its final message.
 		return kindLines(LineText, renderScriptLog(log))
@@ -474,11 +475,48 @@ func agyErrorMessage(raw json.RawMessage) string {
 	return ""
 }
 
-func renderKimiLog(log []byte) []string {
-	var lines []string
+var kimiWaitingRE = regexp.MustCompile(`^Waiting \d+s / .* background tasks? still running$`)
+
+func renderKimiLog(log []byte) []LogLine {
+	var lines []LogLine
+	events := false
+
+	var rawOutputRun []string
+	waitingLine := ""
+
+	flushRawOutput := func() {
+		if len(rawOutputRun) == 0 {
+			return
+		}
+		const maxLines = 3
+		if len(rawOutputRun) <= maxLines {
+			for _, s := range rawOutputRun {
+				lines = append(lines, LogLine{Kind: LineOutput, Text: s})
+			}
+		} else {
+			for _, s := range rawOutputRun[:maxLines] {
+				lines = append(lines, LogLine{Kind: LineOutput, Text: s})
+			}
+			more := len(rawOutputRun) - maxLines
+			lines = append(lines, LogLine{Kind: LineOutput, Text: fmt.Sprintf("… (%d more lines)", more)})
+		}
+		rawOutputRun = nil
+	}
+
+	flushWaiting := func() {
+		if waitingLine == "" {
+			return
+		}
+		lines = append(lines, LogLine{Kind: LineStatus, Text: waitingLine})
+		waitingLine = ""
+	}
+
 	eachJSONLine(log, func(line []byte) {
 		var m struct {
 			Role      string          `json:"role"`
+			Type      string          `json:"type"`
+			Version   string          `json:"version"`
+			Command   string          `json:"command"`
 			Content   json.RawMessage `json:"content"`
 			ToolCalls []struct {
 				Type     string `json:"type"`
@@ -490,68 +528,185 @@ func renderKimiLog(log []byte) []string {
 		}
 		if json.Unmarshal(line, &m) != nil {
 			s := strings.TrimSpace(string(line))
-			if s != "" && !strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "•") {
-				lines = append(lines, s)
+			if s == "" || strings.HasPrefix(s, "{") || strings.HasPrefix(s, "•") {
+				return
+			}
+			if kimiWaitingRE.MatchString(s) {
+				flushRawOutput()
+				waitingLine = s
+			} else {
+				flushWaiting()
+				rawOutputRun = append(rawOutputRun, s)
 			}
 			return
 		}
-		if m.Role != "assistant" {
+		if m.Role != "assistant" && m.Role != "meta" && m.Role != "tool" {
 			return
 		}
-		for _, tc := range m.ToolCalls {
-			if tc.Function.Name != "" {
-				lines = append(lines, formatToolCall(tc.Function.Name, tc.Function.Arguments))
+		events = true
+		flushRawOutput()
+		flushWaiting()
+
+		switch m.Role {
+		case "assistant":
+			for _, tc := range m.ToolCalls {
+				if tc.Function.Name != "" {
+					arg := toolArg(tc.Function.Arguments)
+					lines = append(lines, LogLine{
+						Kind:      LineTool,
+						Tool:      tc.Function.Name,
+						ToolClass: toolClass(tc.Function.Name, arg),
+						Text:      joinToolCall(tc.Function.Name, arg),
+					})
+				}
 			}
-		}
-		if t := kimiText(m.Content); t != "" {
-			if s := formatAssistantText(t); s != "" {
-				lines = append(lines, s)
+			if t := kimiText(m.Content); t != "" {
+				if s := formatAssistantText(t); s != "" {
+					lines = append(lines, LogLine{Kind: LineText, Text: s})
+				}
+			}
+		case "meta":
+			switch m.Type {
+			case "system.version":
+				s := "system.version"
+				if m.Version != "" {
+					s += ": " + m.Version
+				}
+				lines = append(lines, LogLine{Kind: LineStatus, Text: s})
+			case "session.resume_hint":
+				t := kimiText(m.Content)
+				if s := formatAssistantText(t); s != "" {
+					lines = append(lines, LogLine{Kind: LineStatus, Text: s})
+				} else if m.Command != "" {
+					lines = append(lines, LogLine{Kind: LineStatus, Text: m.Command})
+				}
+			}
+		case "tool":
+			t := kimiText(m.Content)
+			if first := formatAssistantText(t); first != "" {
+				if strings.HasPrefix(first, "Command failed with exit code") ||
+					strings.HasPrefix(first, "Failed to ") ||
+					strings.HasPrefix(first, "Error:") {
+					lines = append(lines, LogLine{Kind: LineError, Text: first})
+				}
 			}
 		}
 	})
+
+	flushRawOutput()
+	flushWaiting()
+
+	if !events {
+		return kindLines(LinePlain, renderScriptLog(log))
+	}
 	return lines
 }
 
-func renderCodexLog(log []byte) []string {
-	var lines []string
+func renderCodexLog(log []byte) []LogLine {
+	var lines []LogLine
+	events := false
 	eachJSONLine(log, func(line []byte) {
 		var ev struct {
-			Type string `json:"type"`
+			Type  string `json:"type"`
+			Usage *struct {
+				InputTokens  *int64 `json:"input_tokens"`
+				OutputTokens *int64 `json:"output_tokens"`
+			} `json:"usage"`
 			Item *struct {
-				Type      string `json:"type"`
-				Text      string `json:"text"`
-				Command   string `json:"command"`
-				Tool      string `json:"tool"`
-				Arguments any    `json:"arguments"`
+				Type             string `json:"type"`
+				Text             string `json:"text"`
+				Command          string `json:"command"`
+				Tool             string `json:"tool"`
+				Arguments        any    `json:"arguments"`
+				ExitCode         *int   `json:"exit_code"`
+				AggregatedOutput string `json:"aggregated_output"`
+				Changes          []struct {
+					Path string `json:"path"`
+					Kind string `json:"kind"`
+				} `json:"changes"`
 			} `json:"item"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
 			s := strings.TrimSpace(string(line))
 			if s != "" && !strings.HasPrefix(s, "{") {
-				lines = append(lines, s)
+				if s == "Reading additional input from stdin..." {
+					lines = append(lines, LogLine{Kind: LineStatus, Text: s})
+				} else {
+					lines = append(lines, LogLine{Kind: LinePlain, Text: s})
+				}
 			}
 			return
 		}
-		if ev.Type != "item.completed" || ev.Item == nil {
-			return
-		}
-		switch ev.Item.Type {
-		case "agent_message":
-			if t := formatAssistantText(ev.Item.Text); t != "" {
-				lines = append(lines, t)
+		events = true
+		switch ev.Type {
+		case "thread.started":
+			lines = append(lines, LogLine{Kind: LineStatus, Text: "thread.started"})
+		case "turn.completed":
+			s := "turn done"
+			if ev.Usage != nil && ev.Usage.InputTokens != nil && ev.Usage.OutputTokens != nil {
+				s = fmt.Sprintf("turn done: %d in, %d out", *ev.Usage.InputTokens, *ev.Usage.OutputTokens)
 			}
-		case "command_execution":
-			if ev.Item.Command != "" {
-				lines = append(lines, formatToolCall("Bash", ev.Item.Command))
+			lines = append(lines, LogLine{Kind: LineStatus, Text: s})
+		case "item.completed":
+			if ev.Item == nil {
+				return
 			}
-		case "mcp_tool_call":
-			if ev.Item.Tool != "" {
-				lines = append(lines, formatToolCall(ev.Item.Tool, ev.Item.Arguments))
+			switch ev.Item.Type {
+			case "agent_message":
+				if t := formatAssistantText(ev.Item.Text); t != "" {
+					lines = append(lines, LogLine{Kind: LineText, Text: t})
+				}
+			case "command_execution":
+				if ev.Item.Command != "" {
+					cmd := ev.Item.Command
+					lines = append(lines, LogLine{
+						Kind:      LineTool,
+						Tool:      "Bash",
+						ToolClass: toolClass("Bash", cmd),
+						Text:      joinToolCall("Bash", cmd),
+					})
+				}
+				if ev.Item.ExitCode != nil && *ev.Item.ExitCode != 0 {
+					first := formatAssistantText(ev.Item.AggregatedOutput)
+					text := fmt.Sprintf("exit %d", *ev.Item.ExitCode)
+					if first != "" {
+						text = fmt.Sprintf("exit %d: %s", *ev.Item.ExitCode, first)
+					}
+					lines = append(lines, LogLine{
+						Kind: LineError,
+						Text: text,
+					})
+				}
+			case "file_change":
+				for _, ch := range ev.Item.Changes {
+					if ch.Path != "" {
+						arg := ch.Path
+						if ch.Kind != "" {
+							arg = fmt.Sprintf("%s (%s)", ch.Path, ch.Kind)
+						}
+						lines = append(lines, LogLine{
+							Kind:      LineTool,
+							Tool:      "Edit",
+							ToolClass: ToolEdit,
+							Text:      joinToolCall("Edit", arg),
+						})
+					}
+				}
+			case "mcp_tool_call":
+				if ev.Item.Tool != "" {
+					arg := toolArg(ev.Item.Arguments)
+					lines = append(lines, LogLine{
+						Kind:      LineTool,
+						Tool:      ev.Item.Tool,
+						ToolClass: toolClass(ev.Item.Tool, arg),
+						Text:      joinToolCall(ev.Item.Tool, arg),
+					})
+				}
 			}
 		}
 	})
-	if len(lines) == 0 {
-		return renderScriptLog(log)
+	if !events {
+		return kindLines(LinePlain, renderScriptLog(log))
 	}
 	return lines
 }

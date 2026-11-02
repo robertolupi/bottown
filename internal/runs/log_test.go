@@ -14,8 +14,29 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 		want    []string
 	}{
 		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello", "result: SUCCESS, 1 turn, 15780 tokens, 5s"}},
-		{"kimi", "kimi-2.4.1.stream.jsonl", []string{"hello"}},
-		{"codex", "codex-0.166.0.stream.jsonl", []string{"hello"}},
+		{"kimi", "kimi-2.4.1.stream.jsonl", []string{
+			"system.version: 2.4.1",
+			"Bash: bottown issue show 176",
+			"#176 Live tail: typed log lines, palette and tool classes, with claude first [open] by rlupi",
+			"Make the live tail and the history log view show lines by kind and tool",
+			"class, and fill in the kinds for claude, the harness whose log is the",
+			"… (2 more lines)",
+			"Bash: cat missing.txt",
+			"Command failed with exit code 1: cat: missing.txt: No such file or directory",
+			"cat: missing.txt: No such file or directory",
+			"Waiting 2s / 1 background task still running",
+			"hello",
+			"To resume this session: kimi -r session_6eb8c082-d72d-4405-969b-cae41b15d90e",
+		}},
+		{"codex", "codex-0.166.0.stream.jsonl", []string{
+			"Reading additional input from stdin...",
+			"thread.started",
+			"hello",
+			"Edit: internal/runs/log.go (update)",
+			"Bash: /bin/zsh -lc 'git diff bottown/main...HEAD'",
+			"exit 128: fatal: bad revision 'bottown/main...HEAD'",
+			"turn done: 17722 in, 5 out",
+		}},
 		{"crush", "crush-0.99.0.log", []string{"hello"}},
 	}
 
@@ -59,8 +80,10 @@ func TestRenderLog_Kimi(t *testing.T) {
 {"role":"meta","type":"session.resume_hint","session_id":"session_1","command":"kimi -r session_1","content":"To resume this session: kimi -r session_1"}
 `
 	want := []string{
+		"system.version: 2.3.0",
 		"Bash: echo hi",
 		"DONE",
+		"To resume this session: kimi -r session_1",
 	}
 	got := lineTexts(RenderLog("kimi", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
@@ -79,10 +102,12 @@ func TestRenderLog_Codex(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":20}}
 `
 	want := []string{
+		"thread.started",
 		"I will check git status.",
 		"Bash: git status",
 		"issue_show: 67",
 		"Done with checks.",
+		"turn done: 100 in, 20 out",
 	}
 	got := lineTexts(RenderLog("codex", []byte(log)))
 	if !reflect.DeepEqual(got, want) {

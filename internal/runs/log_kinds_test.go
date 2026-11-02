@@ -26,19 +26,18 @@ func dumpLines(lines []LogLine) string {
 	return s
 }
 
-// Harnesses whose parts are not told apart yet render plain lines;
+// Harnesses failing before their stream starts render plain lines;
 // crush's log is only its final message.
 func TestRenderLog_Kinds(t *testing.T) {
 	for _, tt := range []struct {
 		harness, file string
 		kind          LineKind
 	}{
-		{"kimi", "kimi-2.4.1.stream.jsonl", LinePlain},
-		{"codex", "codex-0.166.0.stream.jsonl", LinePlain},
 		{"crush", "crush-0.99.0.log", LineText},
 		{"script", "crush-0.99.0.log", LinePlain},
-		// agy failing before its stream starts.
 		{"agy", "crush-0.99.0.log", LinePlain},
+		{"codex", "crush-0.99.0.log", LinePlain},
+		{"kimi", "crush-0.99.0.log", LinePlain},
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", tt.file))
 		if err != nil {
@@ -213,6 +212,107 @@ func TestRenderLog_AgyTools(t *testing.T) {
 		{Kind: LineText, Text: "Stopped."},
 	}
 	if got := RenderLog("agy", []byte(log)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+}
+
+func TestRenderLog_CodexGolden(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "codex-0.166.0.stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RenderLog("codex", b)
+	want := []LogLine{
+		{Kind: LineStatus, Text: "Reading additional input from stdin..."},
+		{Kind: LineStatus, Text: "thread.started"},
+		{Kind: LineText, Text: "hello"},
+		{Kind: LineTool, Tool: "Edit", ToolClass: ToolEdit, Text: "Edit: internal/runs/log.go (update)"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolShell, Text: "Bash: /bin/zsh -lc 'git diff bottown/main...HEAD'"},
+		{Kind: LineError, Text: "exit 128: fatal: bad revision 'bottown/main...HEAD'"},
+		{Kind: LineStatus, Text: "turn done: 17722 in, 5 out"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+}
+
+func TestRenderLog_CodexEvents(t *testing.T) {
+	log := `{"type":"thread.started","thread_id":"t1"}
+{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bottown issue show 12","exit_code":0}}
+{"type":"item.completed","item":{"id":"i2","type":"command_execution","command":"make test","exit_code":2,"aggregated_output":"FAIL: test\nmore"}}
+{"type":"item.completed","item":{"id":"i3","type":"file_change","changes":[{"path":"a.go","kind":"add"},{"path":"b.go","kind":"delete"}]}}
+{"type":"item.completed","item":{"id":"i4","type":"mcp_tool_call","server":"bottown","tool":"issue_create","arguments":{"title":"Bug"}}}
+{"type":"item.completed","item":{"id":"i5","type":"agent_message","text":"All done."}}
+{"type":"turn.completed","usage":{"input_tokens":500,"output_tokens":40}}
+`
+	want := []LogLine{
+		{Kind: LineStatus, Text: "thread.started"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolForge, Text: "Bash: bottown issue show 12"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolShell, Text: "Bash: make test"},
+		{Kind: LineError, Text: "exit 2: FAIL: test"},
+		{Kind: LineTool, Tool: "Edit", ToolClass: ToolEdit, Text: "Edit: a.go (add)"},
+		{Kind: LineTool, Tool: "Edit", ToolClass: ToolEdit, Text: "Edit: b.go (delete)"},
+		{Kind: LineTool, Tool: "issue_create", ToolClass: ToolForge, Text: "issue_create: Bug"},
+		{Kind: LineText, Text: "All done."},
+		{Kind: LineStatus, Text: "turn done: 500 in, 40 out"},
+	}
+	if got := RenderLog("codex", []byte(log)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+}
+
+func TestRenderLog_KimiGolden(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "kimi-2.4.1.stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RenderLog("kimi", b)
+	want := []LogLine{
+		{Kind: LineStatus, Text: "system.version: 2.4.1"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolForge, Text: "Bash: bottown issue show 176"},
+		{Kind: LineOutput, Text: "#176 Live tail: typed log lines, palette and tool classes, with claude first [open] by rlupi"},
+		{Kind: LineOutput, Text: "Make the live tail and the history log view show lines by kind and tool"},
+		{Kind: LineOutput, Text: "class, and fill in the kinds for claude, the harness whose log is the"},
+		{Kind: LineOutput, Text: "… (2 more lines)"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolShell, Text: "Bash: cat missing.txt"},
+		{Kind: LineError, Text: "Command failed with exit code 1: cat: missing.txt: No such file or directory"},
+		{Kind: LineOutput, Text: "cat: missing.txt: No such file or directory"},
+		{Kind: LineStatus, Text: "Waiting 2s / 1 background task still running"},
+		{Kind: LineText, Text: "hello"},
+		{Kind: LineStatus, Text: "To resume this session: kimi -r session_6eb8c082-d72d-4405-969b-cae41b15d90e"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+}
+
+func TestRenderLog_KimiEvents(t *testing.T) {
+	log := `{"role":"meta","type":"system.version","version":"2.4.1"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"t1","function":{"name":"Bash","arguments":"{\"command\":\"bottown whoami\"}"}}]}
+{"role":"assistant","tool_calls":[{"type":"function","id":"t2","function":{"name":"Read","arguments":"{\"path\":\"main.go\"}"}}]}
+1	package main
+2	import "fmt"
+{"role":"tool","tool_call_id":"t3","content":"Failed to open file: access denied\nmore"}
+{"role":"tool","tool_call_id":"t4","content":"Error: something went wrong"}
+Waiting 5s / 2 background tasks still running
+Waiting 10s / 2 background tasks still running
+Waiting 15s / 1 background task still running
+{"role":"assistant","content":"Finished."}
+{"role":"meta","type":"session.resume_hint","session_id":"s1","command":"kimi -r s1","content":"To resume this session: kimi -r s1"}
+`
+	want := []LogLine{
+		{Kind: LineStatus, Text: "system.version: 2.4.1"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolForge, Text: "Bash: bottown whoami"},
+		{Kind: LineTool, Tool: "Read", ToolClass: ToolRead, Text: "Read: main.go"},
+		{Kind: LineOutput, Text: "1\tpackage main"},
+		{Kind: LineOutput, Text: "2\timport \"fmt\""},
+		{Kind: LineError, Text: "Failed to open file: access denied"},
+		{Kind: LineError, Text: "Error: something went wrong"},
+		{Kind: LineStatus, Text: "Waiting 15s / 1 background task still running"},
+		{Kind: LineText, Text: "Finished."},
+		{Kind: LineStatus, Text: "To resume this session: kimi -r s1"},
+	}
+	if got := RenderLog("kimi", []byte(log)); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
