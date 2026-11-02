@@ -29,6 +29,7 @@ type runOpts struct {
 	allow           []string
 	keep            bool
 	question        string // discuss: the owner's question for the prompt
+	message         string // implement, verify, plan: the owner's note for the prompt
 }
 
 func newRun(g *globals) *cobra.Command {
@@ -82,6 +83,9 @@ leaves alone. Without a question, the agent reviews the issue.`,
 	for _, c := range []*cobra.Command{implement, verify, discuss} {
 		runFlags(c, &o)
 	}
+	for _, c := range []*cobra.Command{implement, verify} {
+		messageFlag(c, &o.message)
+	}
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
 	run.AddCommand(implement, verify, discuss, newRunPlan(g), newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
@@ -96,6 +100,11 @@ func runFlags(c *cobra.Command, o *runOpts) {
 	c.Flags().StringSliceVar(&o.allow, "allow", nil, "extra tools the agent may use without asking (harness syntax, e.g. 'Bash(cargo:*)')")
 	c.Flags().BoolVar(&o.keep, "keep", false, "keep the worktree even if the run succeeds")
 	_ = c.MarkFlagRequired("actor")
+}
+
+// messageFlag is --message, the owner's note added to a run's goal prompt.
+func messageFlag(c *cobra.Command, message *string) {
+	c.Flags().StringVarP(message, "message", "m", "", `a note added to the agent's goal prompt, e.g. "also read the epic #123"`)
 }
 
 // newRunPlan is `run plan`, which `milestone plan` also is.
@@ -115,6 +124,7 @@ cannot create issues: once the plan is reviewed and merged, the owner's
 		},
 	}
 	runFlags(c, &o)
+	messageFlag(c, &o.message)
 	return c
 }
 
@@ -270,7 +280,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
 		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
-		Attachments: attachDir,
+		Message: strings.TrimSpace(o.message), Attachments: attachDir,
 	}
 	if err := rc.ws.Save(rec); err != nil {
 		return err
@@ -281,7 +291,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}()
 	rk := &agentCtx{Actor: run.Actor, ServerURL: rc.inst.ServerURL(), Key: created.Key, RunID: run.ID}
-	prompt, base, err := renderPrompt(ctx, rc, run, o.question, rk, attachDir)
+	prompt, base, err := renderPrompt(ctx, rc, run, rec, rk, attachDir)
 	if err != nil {
 		return err
 	}
@@ -421,10 +431,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	return nil
 }
 
-// renderPrompt fetches the issue or PR and renders the goal prompt, after
-// downloading its attachments with the run key rk into attachDir. It also
-// returns the repository's default branch.
-func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question string, rk *agentCtx, attachDir string) (string, string, error) {
+// renderPrompt fetches the issue or PR and renders the goal prompt, with
+// the owner's question or message from rec, after downloading its
+// attachments with the run key rk into attachDir. It also returns the
+// repository's default branch.
+func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, rk *agentCtx, attachDir string) (string, string, error) {
 	base, err := rc.ws.DefaultBranch(ctx)
 	if err != nil {
 		return "", "", err
@@ -444,7 +455,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: selfPath(), Remote: "origin", Question: question, AttachmentsOf: n,
+		Bottown: selfPath(), Remote: "origin", Question: rec.Question, Message: rec.Message, AttachmentsOf: n,
 	}
 	// Attachments never stop a run: a failure is in the prompt instead.
 	var is server.IssueOut
@@ -536,6 +547,9 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		}
 	default:
 		fmt.Fprintf(&b, "Verified at `%s`.\n\n", rec.SHA)
+	}
+	if rec.Message != "" {
+		fmt.Fprintf(&b, "Owner's note:%s\n\n", quoteLines(rec.Message))
 	}
 	if rec.Interactive {
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")

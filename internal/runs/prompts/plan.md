@@ -5,7 +5,7 @@ You are **{{.Actor}}**, working as the **planner** in bottown run `{{.RunID}}`.
 Write the milestone plan for kickoff issue #{{.Issue}} in `{{.Repo}}`:
 **{{.Title}}**
 
-{{.Body}}{{template "attachments" .}}
+{{.Body}}{{template "attachments" .}}{{template "message" .}}
 
 A plan is one file, `{{.MilestonesDir}}/<slug>.md`, that proposes the
 milestone's implementation issues and their dependencies. This run creates

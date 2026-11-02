@@ -35,6 +35,7 @@ type Record struct {
 	Interactive     bool       `json:"interactive,omitempty"`
 	AllowSameFamily bool       `json:"allow_same_family,omitempty"`
 	Question        string     `json:"question,omitempty"` // discuss: the owner's question
+	Message         string     `json:"message,omitempty"`  // the owner's note for the prompt (--message)
 	Harness         string     `json:"harness"`
 	Status          string     `json:"status"`
 	StopRequested   bool       `json:"stop_requested,omitempty"`
