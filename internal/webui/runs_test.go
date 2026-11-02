@@ -156,7 +156,16 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	fix := defaultRunsFixture()
 	now := time.Now().UTC()
 
-	// 1 open PR for issue/51 with one REQUEST_CHANGES review (so round 2)
+	// 1 open PR for issue/51 with one REQUEST_CHANGES review (so round 2).
+	// Issue #51 has a milestone assigned on the issue while PR !52 has no milestone.
+	fix.issues = []*sdk.Issue{
+		{
+			Index:     51,
+			Title:     "Issue 51 Title",
+			State:     sdk.StateOpen,
+			Milestone: &sdk.Milestone{ID: 7, Title: "Milestone 1"},
+		},
+	}
 	fix.prs = []*sdk.PullRequest{
 		{
 			Index: 52,
@@ -246,6 +255,9 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	r := live[0]
 	if r.ID != "r-verify-1" || r.Kind != "verify" || r.Actor != "kimi" {
 		t.Fatalf("unexpected run info: %+v", r)
+	}
+	if r.Issue != 51 || r.IssueTitle != "Issue 51 Title" || r.PR != 52 || r.PRTitle != "PR for 51" || r.Milestone != "Milestone 1" || r.ThreadKey != "flow:issue:51:pr:52" {
+		t.Fatalf("expected live run to resolve issue/PR titles and issue milestone, got: %+v", r)
 	}
 	if r.Flow == nil {
 		t.Fatal("expected run to be grouped under flow")

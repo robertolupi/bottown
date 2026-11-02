@@ -35,8 +35,10 @@ type LiveRunInfo struct {
 	TargetURL   string    `json:"target_url"`
 	Issue       int64     `json:"issue,omitempty"`
 	IssueURL    string    `json:"issue_url,omitempty"`
+	IssueTitle  string    `json:"issue_title,omitempty"`
 	PR          int64     `json:"pr,omitempty"`
 	PRURL       string    `json:"pr_url,omitempty"`
+	PRTitle     string    `json:"pr_title,omitempty"`
 	Milestone   string    `json:"milestone,omitempty"`
 	ThreadKey   string    `json:"thread_key,omitempty"`
 	Kind        string    `json:"kind"` // implement, verify, discuss
@@ -204,9 +206,14 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
 	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 
-	// PR by issue index
+	// PR by issue index and PR by PR index
 	prByIssue := make(map[int64]*sdk.PullRequest)
+	prByIndex := make(map[int64]*sdk.PullRequest, len(prs))
 	for _, pr := range prs {
+		if pr == nil || pr.Index <= 0 {
+			continue
+		}
+		prByIndex[pr.Index] = pr
 		if pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
 			var issueNum int64
 			if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &issueNum); err == nil {
@@ -215,23 +222,30 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		}
 	}
 
-	// Fetch reviews ONLY for PRs matching active runs
+	// Fetch issues and reviews ONLY for issues/PRs matching active runs
+	issuesByIndex := make(map[int64]*sdk.Issue)
 	prReviews := make(map[int64][]*sdk.PullReview)
 	for _, sr := range serverRuns {
-		if sr.Kind != "implement" && sr.Kind != "verify" {
-			continue
-		}
 		issueNum := sr.Issue
+		if issueNum <= 0 {
+			issueNum = parseIssueRef(sr.Branch)
+		}
 		if issueNum <= 0 && sr.PR > 0 {
-			for _, pr := range prs {
-				if pr.Index == sr.PR && pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
-					var num int64
-					if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &num); err == nil {
-						issueNum = num
-					}
-					break
+			if pr := prByIndex[sr.PR]; pr != nil && pr.Head != nil {
+				if num := parseIssueRef(pr.Head.Ref); num > 0 {
+					issueNum = num
 				}
 			}
+		}
+		if issueNum > 0 && issuesByIndex[issueNum] == nil {
+			var iss sdk.Issue
+			issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
+			if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &iss); err == nil && iss.Index > 0 {
+				issuesByIndex[issueNum] = &iss
+			}
+		}
+		if sr.Kind != "implement" && sr.Kind != "verify" {
+			continue
 		}
 		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Index] == nil {
 			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
@@ -337,14 +351,29 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			}
 		}
 
-		var issueURL, prURL, milestone, threadKey string
+		var issueURL, issueTitle, prURL, prTitle, milestone, threadKey string
 		if issueNum > 0 {
 			issueURL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum)
+			if iss := issuesByIndex[issueNum]; iss != nil {
+				issueTitle = iss.Title
+				if iss.Milestone != nil && iss.Milestone.Title != "" {
+					milestone = iss.Milestone.Title
+				}
+			}
 		}
 		if prNum > 0 {
 			prURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prNum)
-			if pr := prByIssue[issueNum]; pr != nil && pr.Index == prNum && pr.Milestone != nil {
-				milestone = pr.Milestone.Title
+			pr := prByIndex[prNum]
+			if pr == nil {
+				if byIss := prByIssue[issueNum]; byIss != nil && byIss.Index == prNum {
+					pr = byIss
+				}
+			}
+			if pr != nil {
+				prTitle = pr.Title
+				if milestone == "" && pr.Milestone != nil && pr.Milestone.Title != "" {
+					milestone = pr.Milestone.Title
+				}
 			}
 		}
 		if sr.Kind == "discuss" {
@@ -365,8 +394,10 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			TargetURL:   targetURL,
 			Issue:       issueNum,
 			IssueURL:    issueURL,
+			IssueTitle:  issueTitle,
 			PR:          prNum,
 			PRURL:       prURL,
+			PRTitle:     prTitle,
 			Milestone:   milestone,
 			ThreadKey:   threadKey,
 			Kind:        sr.Kind,

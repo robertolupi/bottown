@@ -135,8 +135,10 @@ export interface LiveRunInfo {
   target_url: string;
   issue?: number;
   issue_url?: string;
+  issue_title?: string;
   pr?: number;
   pr_url?: string;
+  pr_title?: string;
   milestone?: string;
   thread_key?: string;
   kind: string;

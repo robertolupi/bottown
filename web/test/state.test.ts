@@ -815,3 +815,62 @@ test('buildFlowTimeline consumes backend type:"run" events by run_id, deduplicat
   assert.equal(filtered[0].runs.length, 3);
 });
 
+test('first-ever live flow preserves issue milestone and issue/PR titles when historyRuns is empty', () => {
+  // Pre-PR live-only run on an issue with an issue-assigned milestone
+  const prePRLiveOnly = [
+    {
+      id: 'r-live-pre',
+      target: '#70',
+      target_url: 'http://forge/issues/70',
+      issue: 70,
+      issue_url: 'http://forge/issues/70',
+      issue_title: 'First-ever flow issue',
+      milestone: 'Milestone Beta',
+      thread_key: 'flow:issue:70',
+      kind: 'implement',
+      actor: 'agy',
+      family: 'google',
+      harness: 'agy',
+      interactive: false,
+      created: '2026-11-02T09:00:00Z',
+      expires: '2026-11-02T10:00:00Z',
+      elapsed: '1m 30s',
+      timeout: '60m',
+      log_tail: [],
+      denials: [],
+    },
+  ] as any[];
+
+  const [prePRThread] = groupHistoryThreads([], prePRLiveOnly);
+  assert.equal(prePRThread.key, 'flow:issue:70');
+  assert.equal(prePRThread.issue, 70);
+  assert.equal(prePRThread.issue_title, 'First-ever flow issue');
+  assert.equal(prePRThread.milestone, 'Milestone Beta');
+  const preMain = formatThreadMainLine(prePRThread);
+  assert.equal(preMain.milestone, 'Milestone Beta');
+  assert.equal(preMain.text, '#70 First-ever flow issue · Milestone Beta');
+
+  // Post-PR live-only run where the issue has a milestone and the PR has none (resolved from issue on backend)
+  const postPRLiveOnly = [
+    {
+      ...prePRLiveOnly[0],
+      pr: 71,
+      pr_url: 'http://forge/pulls/71',
+      pr_title: 'Implement #70',
+      thread_key: 'flow:issue:70:pr:71',
+    },
+  ] as any[];
+
+  const [postPRThread] = groupHistoryThreads([], postPRLiveOnly);
+  assert.equal(postPRThread.key, 'flow:issue:70:pr:71');
+  assert.equal(postPRThread.issue, 70);
+  assert.equal(postPRThread.issue_title, 'First-ever flow issue');
+  assert.equal(postPRThread.pr, 71);
+  assert.equal(postPRThread.pr_title, 'Implement #70');
+  assert.equal(postPRThread.milestone, 'Milestone Beta');
+  const postMain = formatThreadMainLine(postPRThread);
+  assert.equal(postMain.milestone, 'Milestone Beta');
+  assert.equal(postMain.text, '#70 First-ever flow issue · !71 Implement #70 · Milestone Beta');
+});
+
+
