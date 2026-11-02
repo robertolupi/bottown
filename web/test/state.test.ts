@@ -213,6 +213,7 @@ test('groupHistoryThreads groups implement/verify loops by (issue, pr), separate
       issue: 10,
       issue_title: 'Threads in Run History',
       milestone: 'Iteration 2',
+      thread_key: 'flow:issue:10',
       kind: 'implement',
       actor: 'claude',
       family: 'anthropic',
@@ -380,12 +381,13 @@ test('groupHistoryThreads groups implement/verify loops by (issue, pr), separate
 });
 
 test('pre-PR runs group under issue before PR exists and preserve membership + selection when PR is created', () => {
-  const prePRRuns = [
+  const prePRHistory = [
     {
-      id: 'r-20-attempt1',
+      id: 'r-pre',
       target: '#20',
       target_url: 'http://forge/issues/20',
       issue: 20,
+      thread_key: 'flow:issue:20',
       kind: 'implement',
       actor: 'claude',
       family: 'anthropic',
@@ -396,44 +398,82 @@ test('pre-PR runs group under issue before PR exists and preserve membership + s
       summary: 'First attempt failed',
       denials: [],
     },
+  ] as any[];
+
+  const prePRLive = [
     {
-      id: 'r-20-attempt2',
+      id: 'r-open',
       target: '#20',
       target_url: 'http://forge/issues/20',
       issue: 20,
+      thread_key: 'flow:issue:20',
       kind: 'implement',
       actor: 'claude',
       family: 'anthropic',
-      status: 'running',
-      active: true,
+      harness: 'claude',
+      interactive: false,
       created: '2026-11-01T14:15:00Z',
-      duration: '2m0s',
-      summary: '',
+      expires: '2026-11-01T15:15:00Z',
+      elapsed: '2m0s',
+      timeout: '60m',
+      log_tail: [],
       denials: [],
     },
   ] as any[];
 
-  const beforePRThreads = groupHistoryThreads(prePRRuns);
+  const beforePRThreads = groupHistoryThreads(prePRHistory, prePRLive);
   assert.equal(beforePRThreads.length, 1);
   assert.equal(beforePRThreads[0].key, 'flow:issue:20');
   assert.equal(beforePRThreads[0].active, true);
-  assert.deepEqual(beforePRThreads[0].runs.map((r) => r.id), ['r-20-attempt1', 'r-20-attempt2']);
+  assert.deepEqual(beforePRThreads[0].runs.map((r) => r.id), ['r-pre', 'r-open']);
 
   // User expands the pre-PR flow
   let expandedKey = toggleExpandedThread(null, beforePRThreads[0].key);
   assert.equal(expandedKey, 'flow:issue:20');
 
-  // Now PR !21 is created and verify starts
-  const afterPRRuns = [
-    prePRRuns[0],
+  // Live pre-PR -> PR transition: r-open opens PR !21 while still running, while
+  // historyRuns still carries r-pre with backend thread_key "flow:issue:20".
+  const liveAfterPROpened = [
     {
-      ...prePRRuns[1],
+      ...prePRLive[0],
       pr: 21,
       pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
+    },
+  ] as any[];
+
+  const livePRThreads = groupHistoryThreads(prePRHistory, liveAfterPROpened);
+  assert.equal(livePRThreads.length, 1);
+  assert.equal(livePRThreads[0].key, 'flow:issue:20:pr:21');
+  assert.equal(livePRThreads[0].pr, 21);
+  assert.equal(livePRThreads[0].active, true);
+  assert.deepEqual(livePRThreads[0].runs.map((r) => r.id), ['r-pre', 'r-open']);
+
+  // Selection immediately moves to the PR thread during the live poll
+  expandedKey = reconcileExpandedThread(expandedKey, beforePRThreads, livePRThreads);
+  assert.equal(expandedKey, 'flow:issue:20:pr:21');
+
+  // Now r-open ends and verify starts
+  const afterPRRuns = [
+    prePRHistory[0],
+    {
+      id: 'r-open',
+      target: '#20',
+      target_url: 'http://forge/issues/20',
+      issue: 20,
+      pr: 21,
+      pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
       status: 'succeeded',
       active: false,
+      created: '2026-11-01T14:15:00Z',
       ended: '2026-11-01T14:25:00Z',
+      duration: '10m0s',
       summary: 'Opened !21',
+      denials: [],
     },
     {
       id: 'r-20-verify1',
@@ -442,6 +482,7 @@ test('pre-PR runs group under issue before PR exists and preserve membership + s
       issue: 20,
       pr: 21,
       pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
       kind: 'verify',
       actor: 'agy',
       family: 'google',
@@ -461,11 +502,11 @@ test('pre-PR runs group under issue before PR exists and preserve membership + s
   assert.equal(afterPRThreads[0].active, true);
   assert.deepEqual(
     afterPRThreads[0].runs.map((r) => r.id),
-    ['r-20-attempt1', 'r-20-attempt2', 'r-20-verify1'],
+    ['r-pre', 'r-open', 'r-20-verify1'],
   );
 
-  // Selection is preserved across the pre-PR -> PR transition
-  expandedKey = reconcileExpandedThread(expandedKey, beforePRThreads, afterPRThreads);
+  // Selection stays on the PR thread
+  expandedKey = reconcileExpandedThread(expandedKey, livePRThreads, afterPRThreads);
   assert.equal(expandedKey, 'flow:issue:20:pr:21');
 });
 

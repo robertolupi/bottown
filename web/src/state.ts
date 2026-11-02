@@ -289,7 +289,20 @@ export function aggregateThreadUsage(runs: HistoryRunInfo[]): UsageInfo | undefi
   return hasUsage ? sum : undefined;
 }
 
+function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: number } {
+  if (!threadKey) return {};
+  const issueMatch = threadKey.match(/(?:^|:)issue:(\d+)(?:$|:)/);
+  const prMatch = threadKey.match(/(?:^|:)pr:(\d+)(?:$|:)/);
+  const issue = issueMatch ? parseInt(issueMatch[1], 10) : undefined;
+  const pr = prMatch ? parseInt(prMatch[1], 10) : undefined;
+  return {
+    issue: issue && issue > 0 ? issue : undefined,
+    pr: pr && pr > 0 ? pr : undefined,
+  };
+}
+
 function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: number } {
+  const fromKey = parseThreadKeyIssueAndPR(run.thread_key);
   let issue = run.issue && run.issue > 0 ? run.issue : undefined;
   let pr = run.pr && run.pr > 0 ? run.pr : undefined;
   if (!issue && run.target?.startsWith('#')) {
@@ -298,17 +311,26 @@ function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: numbe
   if (!pr && run.target?.startsWith('!')) {
     pr = parseIssueNumber(run.target) ?? undefined;
   }
+  if (!issue && fromKey.issue) {
+    issue = fromKey.issue;
+  }
+  if (!pr && fromKey.pr) {
+    pr = fromKey.pr;
+  }
   return { issue, pr };
 }
 
 function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
+  const fromKey = parseThreadKeyIssueAndPR(lr.thread_key);
   const issue =
     lr.issue ||
     lr.flow?.issue ||
-    (lr.target?.startsWith('#') ? (parseIssueNumber(lr.target) ?? undefined) : undefined);
+    (lr.target?.startsWith('#') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
+    fromKey.issue;
   const pr =
     lr.pr ||
-    (lr.target?.startsWith('!') ? (parseIssueNumber(lr.target) ?? undefined) : undefined);
+    (lr.target?.startsWith('!') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
+    fromKey.pr;
   return {
     id: lr.id,
     target: lr.target || (pr ? `!${pr}` : issue ? `#${issue}` : ''),
@@ -347,8 +369,32 @@ export function groupHistoryThreads(
   const live = liveRuns || [];
   const flows = activeFlows || [];
 
-  const seenRunIds = new Set((historyRuns || []).map((r) => r.id));
-  const combinedRuns: HistoryRunInfo[] = [...(historyRuns || [])];
+  const liveById = new Map<string, LiveRunInfo>();
+  for (const lr of live) {
+    if (lr && lr.id) liveById.set(lr.id, lr);
+  }
+  const seenRunIds = new Set<string>();
+  const combinedRuns: HistoryRunInfo[] = [];
+  for (const r of historyRuns || []) {
+    if (!r || !r.id) continue;
+    seenRunIds.add(r.id);
+    const matchingLive = liveById.get(r.id);
+    if (matchingLive) {
+      const converted = liveRunToHistoryRun(matchingLive);
+      combinedRuns.push({
+        ...r,
+        issue: r.issue || converted.issue,
+        issue_url: r.issue_url || converted.issue_url,
+        pr: r.pr || converted.pr,
+        pr_url: r.pr_url || converted.pr_url,
+        milestone: r.milestone || converted.milestone,
+        thread_key: converted.thread_key || r.thread_key,
+        active: true,
+      });
+    } else {
+      combinedRuns.push(r);
+    }
+  }
   for (const lr of live) {
     if (!lr || !lr.id || seenRunIds.has(lr.id)) continue;
     seenRunIds.add(lr.id);
@@ -357,16 +403,39 @@ export function groupHistoryThreads(
 
   if (combinedRuns.length === 0) return [];
 
+  let maxKnownMs = 0;
+  for (const r of combinedRuns) {
+    const cMs = r.created ? new Date(r.created).getTime() : 0;
+    const eMs = r.ended ? new Date(r.ended).getTime() : 0;
+    if (!isNaN(cMs) && cMs > maxKnownMs) maxKnownMs = cMs;
+    if (!isNaN(eMs) && eMs > maxKnownMs) maxKnownMs = eMs;
+  }
+
   // Normalize runs in chronological order (oldest first) so we can link pre-PR
   // implement runs to the PR created for that flow window.
   const enriched = combinedRuns.map((r) => {
     const { issue, pr } = resolveRunIssueAndPR(r);
+    const isLiveRun = !r.ended && (Boolean(r.active) || r.status === 'running');
+    const rawCreatedMs = r.created ? new Date(r.created).getTime() : NaN;
+    const createdMs =
+      !isNaN(rawCreatedMs) && rawCreatedMs > 0
+        ? rawCreatedMs
+        : isLiveRun
+          ? maxKnownMs + 1
+          : 0;
+    const rawEndedMs = r.ended ? new Date(r.ended).getTime() : NaN;
+    const endedMs =
+      !isNaN(rawEndedMs) && rawEndedMs > 0
+        ? rawEndedMs
+        : isLiveRun
+          ? Math.max(createdMs, maxKnownMs + 1)
+          : createdMs;
     return {
       run: r,
       issue,
       pr,
-      createdMs: new Date(r.created).getTime() || 0,
-      endedMs: new Date(r.ended || r.created).getTime() || 0,
+      createdMs,
+      endedMs,
     };
   });
 
@@ -510,16 +579,17 @@ export function groupHistoryThreads(
     }
 
     // Pre-PR implement run: associate with the PR created for its flow window if one exists.
-    if (issue && !pr && r.thread_key !== `flow:issue:${issue}`) {
+    if (issue && !pr) {
       const windows = prWindowsByIssue.get(issue);
       if (windows && windows.length > 0) {
         for (let i = 0; i < windows.length; i++) {
           const w = windows[i];
           const prevLastMs = i > 0 ? windows[i - 1].lastMs : -Infinity;
           const isLastWindow = i === windows.length - 1;
+          const isLiveRun = !r.ended && (Boolean(r.active) || r.status === 'running');
           const withinWindow =
             item.createdMs > prevLastMs &&
-            (item.createdMs <= w.lastMs || (isLastWindow && (Boolean(r.active) || r.status === 'running')));
+            (item.createdMs <= w.lastMs || (isLastWindow && isLiveRun && !r.thread_key));
           if (withinWindow) {
             pr = w.pr;
             pr_url = pr_url || w.pr_url;
@@ -813,16 +883,39 @@ export function reconcileExpandedThread(
   nextThreads: HistoryThread[],
 ): string | null {
   if (!currentKey) return null;
+  const prev = prevThreads.find((t) => t.key === currentKey);
+  const prePRMatch = currentKey.match(/^flow:issue:(\d+)$/);
+  if (prePRMatch) {
+    const issueNum = parseInt(prePRMatch[1], 10);
+    if (prev) {
+      const prevRunIds = new Set(prev.runs.map((r) => r.id));
+      const upgradedByRun = nextThreads.find(
+        (t) =>
+          t.kind === 'flow' &&
+          t.issue === issueNum &&
+          Boolean(t.pr) &&
+          t.runs.some((r) => prevRunIds.has(r.id)),
+      );
+      if (upgradedByRun) return upgradedByRun.key;
+    }
+    const prevKeys = new Set(prevThreads.map((t) => t.key));
+    const newlyOpenedPRThread = nextThreads.find(
+      (t) =>
+        t.kind === 'flow' &&
+        t.issue === issueNum &&
+        Boolean(t.pr) &&
+        (!prevKeys.has(t.key) || t.active),
+    );
+    if (newlyOpenedPRThread) return newlyOpenedPRThread.key;
+  }
   if (nextThreads.some((t) => t.key === currentKey)) {
     return currentKey;
   }
-  const prev = prevThreads.find((t) => t.key === currentKey);
   if (prev) {
     const prevRunIds = new Set(prev.runs.map((r) => r.id));
     const byRunId = nextThreads.find((t) => t.runs.some((r) => prevRunIds.has(r.id)));
     if (byRunId) return byRunId.key;
   }
-  const prePRMatch = currentKey.match(/^flow:issue:(\d+)$/);
   if (prePRMatch) {
     const issueNum = parseInt(prePRMatch[1], 10);
     const upgraded = nextThreads.find((t) => t.kind === 'flow' && t.issue === issueNum && Boolean(t.pr));
