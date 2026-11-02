@@ -34,7 +34,14 @@ type Instance struct {
 	Image       string `toml:"image,omitempty"`
 	OwnerLogin  string `toml:"owner_login,omitempty"`
 	OwnerEmail  string `toml:"owner_email,omitempty"`
+	// ActorModels is the default model spec of each actor's launched runs
+	// on this host, used when the command names none (ACTOR without
+	// :SPEC), e.g. agy = "gemini-3.8-flash".
+	ActorModels map[string]string `toml:"actor_models,omitempty"`
 }
+
+// ActorModel is an actor's default spec on this host, or "".
+func (i Instance) ActorModel(actor string) string { return i.ActorModels[actor] }
 
 // Container is the Docker container name.
 func (i Instance) Container() string { return "bottown-" + i.Name }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/forgejo"
 	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -26,7 +27,8 @@ const (
 type RunRequest struct {
 	Kind            string `json:"kind"` // implement | verify | discuss | plan
 	Actor           string `json:"actor"`
-	Repo            string `json:"repo"` // name within the org
+	Spec            string `json:"spec,omitempty"` // the harness's model, recorded as given
+	Repo            string `json:"repo"`           // name within the org
 	Issue           int64  `json:"issue,omitempty"`
 	PR              int64  `json:"pr,omitempty"`
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
@@ -73,6 +75,11 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		case req.AllowSameFamily:
 			writeError(w, http.StatusForbidden, "only the owner can allow a same-family review")
 			return
+		case req.Spec != "":
+			// A self-started run is in the actor's own TUI, which chose
+			// its model; bottown launches nothing that could use a spec.
+			writeError(w, http.StatusForbidden, "only the owner's launched runs choose a model")
+			return
 		}
 		req.Actor = p.Actor
 	}
@@ -97,7 +104,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "repo", run.Org+"/"+run.Repo,
+	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "spec", run.Spec, "repo", run.Org+"/"+run.Repo,
 		"issue", run.Issue, "pr", run.PR, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
 		"interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
@@ -110,13 +117,16 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	if !ok {
 		return run, runErr(http.StatusBadRequest, "unknown actor %q (actors: %s)", req.Actor, strings.Join(s.desired().ActorNames(), ", "))
 	}
+	if err := runs.ValidSpec(req.Spec); err != nil {
+		return run, runErr(http.StatusBadRequest, "%v", err)
+	}
 	ttl := defaultRunTTL
 	if req.TTLSeconds > 0 {
 		ttl = min(time.Duration(req.TTLSeconds)*time.Second, maxRunTTL)
 	}
 	now := time.Now().UTC()
 	run = secrets.Run{
-		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family, Harness: actor.Harness,
+		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family, Harness: actor.Harness, Spec: req.Spec,
 		Org: s.desired().Org, Repo: req.Repo, Interactive: req.Interactive,
 		Created: now, Expires: now.Add(ttl),
 	}

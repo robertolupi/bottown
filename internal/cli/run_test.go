@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -41,6 +43,32 @@ func TestPlanHandover(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("plan handover lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+// A run that chose a model says which, in the handover, run show and run ls.
+func TestModelShown(t *testing.T) {
+	rec := runs.Record{ID: "r-mod", Kind: policy.Verify, Actor: "agy", Family: "google", SHA: "abc123", Spec: "gemini-3.8-flash", Status: runs.StatusSucceeded}
+	if got := handoverText(rec, runs.StatusSucceeded, 0, "ok"); !strings.Contains(got, "agy (google) · model `gemini-3.8-flash` · batch") {
+		t.Errorf("handover:\n%s", got)
+	}
+	var b strings.Builder
+	printRunShow(&b, lipgloss.NewRenderer(&b), &rec, nil, nil, "", "")
+	if !strings.Contains(b.String(), "as agy (google, model gemini-3.8-flash)") {
+		t.Errorf("run show:\n%s", b.String())
+	}
+	b.Reset()
+	if err := printRunLs(&b, lipgloss.NewRenderer(&b), []runs.Record{rec}, []secrets.Run{{ID: "r-srv", Actor: "crush", Spec: "openrouter:~deepseek/latest", Expires: time.Now().Add(time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"MODEL", "gemini-3.8-flash", "openrouter:~deepseek/latest"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("run ls lacks %q:\n%s", want, b.String())
+		}
+	}
+	rec.Spec = ""
+	if got := handoverText(rec, runs.StatusSucceeded, 0, "ok"); strings.Contains(got, "model") {
+		t.Errorf("handover without a model:\n%s", got)
 	}
 }
 

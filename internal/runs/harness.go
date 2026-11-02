@@ -66,7 +66,10 @@ type Launch struct {
 	RecordFile  string
 	RunID       string
 	Interactive bool
-	Allow       []string // extra allowed tools (claude syntax)
+	// Spec is the harness-specific part of an ACTOR:SPEC choice, usually a
+	// model (see SplitActorSpec); empty uses the harness's default.
+	Spec  string
+	Allow []string // extra allowed tools (claude syntax)
 	// ReadOnly runs (discuss) must not change the worktree: no file-editing
 	// tools are pre-approved, and edits are not auto-accepted.
 	ReadOnly bool
@@ -112,6 +115,45 @@ func LookupHarness(name string) (Harness, error) {
 	return nil, fmt.Errorf("no harness binding for %q yet (available: claude, antigravity, kimi, codex, crush)", name)
 }
 
+// SplitActorSpec splits an ACTOR[:SPEC] choice at its first colon. The
+// actor is the forge identity (family, key, cross-family rule); the spec is
+// opaque to bottown and only the actor's harness binding reads it: a model
+// ("agy:gemini-3.8-flash") or, for crush, a provider and a model
+// ("crush:openrouter:~deepseek/latest"). No colon means no spec.
+func SplitActorSpec(s string) (actor, spec string, err error) {
+	actor, spec, hasSpec := strings.Cut(s, ":")
+	switch {
+	case actor == "":
+		return "", "", fmt.Errorf("%q names no actor", s)
+	case hasSpec && spec == "":
+		return "", "", fmt.Errorf("%q names no model after the colon", s)
+	}
+	if err := ValidSpec(spec); err != nil {
+		return "", "", err
+	}
+	return actor, spec, nil
+}
+
+// ValidSpec rejects a spec with spaces or control characters: it is one
+// argument on the harness's command line, and shown in run records.
+func ValidSpec(spec string) error {
+	if strings.ContainsFunc(spec, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+		return fmt.Errorf("model %q contains spaces or control characters", spec)
+	}
+	if len(spec) > 200 {
+		return fmt.Errorf("model %q is too long", spec[:40]+"…")
+	}
+	return nil
+}
+
+// modelArgs are flag and spec, or nothing when there is no spec.
+func modelArgs(flag, spec string) []string {
+	if spec == "" {
+		return nil
+	}
+	return []string{flag, spec}
+}
+
 // RunEnv is the environment of a harness process: the user's, minus forge
 // credentials an agent could fall back to, plus the run's coordinates.
 func RunEnv(l Launch) []string {
@@ -124,7 +166,7 @@ func RunEnv(l Launch) []string {
 		k, _, _ := strings.Cut(e, "=")
 		switch {
 		case k == "GH_TOKEN", k == "GITHUB_TOKEN", k == "GITEA_TOKEN", k == "FORGEJO_TOKEN",
-			k == "BOTTOWN_INSTANCE", k == HarnessCmdEnv:
+			k == "BOTTOWN_INSTANCE", k == "BOTTOWN_RUN_SPEC", k == HarnessCmdEnv:
 			continue
 		case strings.HasPrefix(k, "CLAUDE_CODE_"), k == "CLAUDECODE":
 			continue
@@ -139,6 +181,7 @@ func RunEnv(l Launch) []string {
 		"BOTTOWN_MCP_URL="+l.MCPURL,
 		"BOTTOWN_RUN_KEY="+l.Key,
 		"BOTTOWN_PROMPT_FILE="+l.PromptFile,
+		"BOTTOWN_RUN_SPEC="+l.Spec,
 	)
 }
 
@@ -211,6 +254,7 @@ func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 		"--allowedTools", strings.Join(append(allowed, l.Allow...), ","),
 		"-n", "bottown "+l.RunID,
 	)
+	args = append(args, modelArgs("--model", l.Spec)...)
 	if !l.Interactive {
 		// The run log keeps the transcript; don't add batch sessions to the
 		// owner's session list.
@@ -324,19 +368,19 @@ func (agyHarness) PrepareMCP(l *Launch, _ string) error {
 }
 
 func (agyHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
-	var args []string
+	args := modelArgs("--model", l.Spec)
 	if l.Interactive {
 		// The owner approves tool use in the TUI.
-		args = []string{"-i", l.Prompt}
+		args = append(args, "-i", l.Prompt)
 	} else {
 		// agy has no allowlist tier: unattended runs must skip prompts. Forge
 		// access is still bounded by the run key.
-		args = []string{
+		args = append(args,
 			"--dangerously-skip-permissions",
-			"--log-file", strings.TrimSuffix(l.RecordFile, ".json") + ".agy.log",
+			"--log-file", strings.TrimSuffix(l.RecordFile, ".json")+".agy.log",
 			"--output-format", "stream-json",
 			"--print", l.Prompt, // --print takes the next argument: keep it last
-		}
+		)
 	}
 	cmd := exec.CommandContext(ctx, "agy", args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
@@ -531,7 +575,7 @@ func (kimiHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	}
 	// kimi -p never asks: it approves tool calls itself, and no allowlist
 	// flag exists. Forge access is still bounded by the run key.
-	args := []string{"--output-format", "stream-json"}
+	args := append([]string{"--output-format", "stream-json"}, modelArgs("-m", l.Spec)...)
 	if l.ReadOnly {
 		args = append(args, "--agent-file", kimiAgentFile(l))
 	}
@@ -694,6 +738,7 @@ func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 			"-c", mcpURL,
 			"-c", mcpKey,
 		}
+		args = append(args, modelArgs("-m", l.Spec)...)
 		if userServers, err := codexUserServers(); err == nil {
 			for _, name := range userServers {
 				if name != "bottown" {
@@ -720,8 +765,9 @@ func (codexHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 			"--ignore-user-config",
 			"-c", mcpURL,
 			"-c", mcpKey,
-			l.Prompt,
 		}
+		args = append(args, modelArgs("-m", l.Spec)...)
+		args = append(args, l.Prompt)
 	}
 	cmd := exec.CommandContext(ctx, codexBinary(), args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
@@ -907,10 +953,23 @@ func (crushHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	if l.Interactive {
 		return nil, errors.New("crush cannot start its TUI with a prompt: start crush in the actor worktree and select /bottown-<kind> N (bottown harness setup crush installs them)")
 	}
-	args := []string{"run", "--quiet", l.Prompt}
+	args := append([]string{"run", "--quiet"}, modelArgs("-m", crushModel(l.Spec))...)
+	args = append(args, l.Prompt)
 	cmd := exec.CommandContext(ctx, crushBinary(), args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
 	return cmd, nil
+}
+
+// crushModel is crush's -m value for a spec: PROVIDER:MODEL becomes
+// PROVIDER/MODEL, the form crush takes, with the model left as it is (model
+// names contain slashes, so only the first colon separates the provider).
+// A spec without a colon is a bare model name.
+func crushModel(spec string) string {
+	provider, model, ok := strings.Cut(spec, ":")
+	if !ok {
+		return spec
+	}
+	return provider + "/" + model
 }
 
 // Summary is the agent's text response from stdout.

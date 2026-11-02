@@ -390,6 +390,7 @@ function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
     actor: lr.actor || '',
     family: lr.family || '',
     harness: lr.harness || '',
+    spec: lr.spec,
     mode: lr.interactive ? 'interactive' : 'batch',
     status: 'running',
     created: lr.created,

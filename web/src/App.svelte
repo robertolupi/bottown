@@ -786,6 +786,7 @@
                             <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
                             <span class="badge badge-neutral">{run.kind}</span>
                             <span class="badge repo-badge">{run.actor} ({run.family})</span>
+                            {#if run.spec}<span class="badge instance-badge" title="model">model {run.spec}</span>{/if}
                             <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
                           </div>
                           <div class="run-card-actions">
@@ -834,6 +835,7 @@
                       <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
                       <span class="badge badge-neutral">{run.kind}</span>
                       <span class="badge repo-badge">{run.actor} ({run.family})</span>
+                      {#if run.spec}<span class="badge instance-badge" title="model">model {run.spec}</span>{/if}
                       <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
                     </div>
                     <div class="run-card-actions">
@@ -1285,7 +1287,7 @@
                                           <a class="pr-badge" href={r.target_url} target="_blank" rel="noreferrer">{r.target}</a>
                                         </td>
                                         <td><span class="badge badge-neutral">{r.kind}</span></td>
-                                        <td><span class="badge repo-badge">{r.family ? `${r.actor} (${r.family})` : r.actor}</span></td>
+                                        <td><span class="badge repo-badge">{r.family ? `${r.actor} (${r.family})` : r.actor}</span>{#if r.spec} <span class="badge instance-badge" title="model">model {r.spec}</span>{/if}</td>
                                         <td>
                                           <span class="badge badge-{r.status === 'succeeded' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'accent' : 'warning'}">
                                             {r.status}

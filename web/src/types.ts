@@ -145,6 +145,7 @@ export interface LiveRunInfo {
   actor: string;
   family: string;
   harness: string;
+  spec?: string; // the harness's model, when the run chose one (ACTOR:MODEL)
   interactive: boolean;
   created: string;
   expires: string;
@@ -192,6 +193,7 @@ export interface HistoryRunInfo {
   actor: string;
   family: string;
   harness: string;
+  spec?: string; // the harness's model, when the run chose one (ACTOR:MODEL)
   mode: string;
   status: string; // execution: succeeded | failed | revoked | running
   // The work result the server recorded from the run's tools: approved,

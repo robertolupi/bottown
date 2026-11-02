@@ -95,7 +95,7 @@ leaves alone. Without a question, the agent reviews the issue.`,
 
 // runFlags are the flags of the commands that launch a run.
 func runFlags(c *cobra.Command, o *runOpts) {
-	c.Flags().StringVarP(&o.actor, "actor", "a", "", "actor to run as (required), e.g. claude, codex")
+	c.Flags().StringVarP(&o.actor, "actor", "a", "", "actor to run as (required), e.g. claude, codex, or ACTOR:MODEL to choose its harness's model, e.g. agy:gemini-3.8-flash, crush:openrouter:~deepseek/latest")
 	c.Flags().BoolVarP(&o.interactive, "interactive", "I", false, "run the harness's interactive UI in this terminal, so you can steer it")
 	c.Flags().StringSliceVar(&o.allow, "allow", nil, "extra tools the agent may use without asking (harness syntax, e.g. 'Bash(cargo:*)')")
 	c.Flags().BoolVar(&o.keep, "keep", false, "keep the worktree even if the run succeeds")
@@ -225,15 +225,22 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err != nil {
 		return err
 	}
+	actor, spec, err := runs.SplitActorSpec(o.actor)
+	if err != nil {
+		return err
+	}
 	rc, err := openRunContextRepo(g, o.repo)
 	if err != nil {
 		return err
+	}
+	if spec == "" {
+		spec = rc.inst.ActorModel(actor)
 	}
 	if err := rc.ws.Sync(ctx); err != nil {
 		return err
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: o.actor, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Interactive: o.interactive}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Interactive: o.interactive}
 	if kind == policy.Verify {
 		req.PR = n
 	} else {
@@ -277,7 +284,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
+		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName, Spec: run.Spec,
 		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir,
@@ -330,7 +337,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
 		MCPURL: mcpURL, Key: created.Key,
 		RecordFile: recPath, RunID: run.ID, Interactive: o.interactive, Allow: o.allow,
-		ReadOnly: kind == policy.Discuss,
+		ReadOnly: kind == policy.Discuss, Spec: run.Spec,
 	}
 	if err := h.PrepareMCP(&l, rc.ws.RunsDir); err != nil {
 		return err
@@ -341,7 +348,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "run %s: %s %s as %s (%s, %s) in %s\n", run.ID, kind, rec.Target(), run.Actor, run.Family, rec.Mode(), dir)
+	fmt.Fprintf(out, "run %s: %s %s as %s (%s, %s%s) in %s\n", run.ID, kind, rec.Target(), run.Actor, run.Family, rec.Mode(), modelNote(", ", rec.Spec), dir)
 
 	logf, err := os.OpenFile(rc.ws.Path(run.ID, ".log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -476,6 +483,21 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	return p, base, err
 }
 
+// modelNote is sep+"model SPEC", or "" for the harness's default model.
+func modelNote(sep, spec string) string {
+	if spec == "" {
+		return ""
+	}
+	return sep + "model " + spec
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
 func selfPath() string {
 	p, err := os.Executable()
 	if err != nil {
@@ -527,7 +549,11 @@ func cleanSummary(rec runs.Record, summary string) string {
 // handoverText is the handover comment for a finished run.
 func handoverText(rec runs.Record, status string, code int, summary string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**bottown run `%s`** · %s · %s (%s) · %s · **%s**", rec.ID, rec.Kind, rec.Actor, rec.Family, rec.Mode(), status)
+	fmt.Fprintf(&b, "**bottown run `%s`** · %s · %s (%s)", rec.ID, rec.Kind, rec.Actor, rec.Family)
+	if rec.Spec != "" {
+		fmt.Fprintf(&b, " · model `%s`", rec.Spec)
+	}
+	fmt.Fprintf(&b, " · %s · **%s**", rec.Mode(), status)
 	if code != 0 {
 		fmt.Fprintf(&b, " (exit %d)", code)
 	}
@@ -608,6 +634,7 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 		st.Header.Render("TARGET"),
 		st.Header.Render("ACTOR"),
 		st.Header.Render("FAMILY"),
+		st.Header.Render("MODEL"),
 		st.Header.Render("MODE"),
 		st.Header.Render("STATUS"),
 		st.Header.Render("KEY"),
@@ -632,6 +659,7 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 			st.Bold.Render(rec.Target()),
 			st.Info.Render(rec.Actor),
 			rec.Family,
+			orDash(rec.Spec),
 			rec.Mode(),
 			st.runStatus(rec.Status),
 			st.keyState(keySt),
@@ -669,6 +697,7 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 			st.Bold.Render(target),
 			st.Info.Render(sr.Actor),
 			sr.Family,
+			orDash(sr.Spec),
 			mode,
 			st.runStatus(status),
 			st.keyState(serverKeyState(sr)),
@@ -707,6 +736,7 @@ func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) er
 		st.Header.Render("TARGET"),
 		st.Header.Render("ACTOR"),
 		st.Header.Render("FAMILY"),
+		st.Header.Render("MODEL"),
 		st.Header.Render("KEY"),
 		st.Header.Render("STATUS"),
 		st.Header.Render("AGE"),
@@ -731,6 +761,7 @@ func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) er
 			st.Bold.Render(target),
 			st.Info.Render(sr.Actor),
 			sr.Family,
+			orDash(sr.Spec),
 			st.keyState(serverKeyState(sr)),
 			st.runStatus(status),
 			st.Dim.Render(age(sr.Created)),
@@ -828,7 +859,7 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 			st.Purple.Render(rec.Kind),
 			st.Bold.Render(rec.Target()),
 			st.Info.Render(rec.Actor),
-			rec.Family,
+			rec.Family+modelNote(", ", rec.Spec),
 			rec.Mode(),
 			st.runStatus(rec.Status),
 		)

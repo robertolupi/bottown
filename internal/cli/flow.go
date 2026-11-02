@@ -16,7 +16,7 @@ func newFlow(g *globals) *cobra.Command {
 	var rounds int
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "flow N --implement ACTOR --verify ACTOR",
+		Use:   "flow N --implement ACTOR[:MODEL] --verify ACTOR[:MODEL]",
 		Short: "Drive one issue through implement and cross-family verify",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,8 +59,8 @@ func newFlow(g *globals) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&implement, "implement", "", "actor that implements the issue (required)")
-	cmd.Flags().StringVar(&verify, "verify", "", "actor from another family that verifies the PR (required)")
+	cmd.Flags().StringVar(&implement, "implement", "", "actor that implements the issue (required); ACTOR:MODEL chooses its harness's model, e.g. agy:gemini-3.8-flash")
+	cmd.Flags().StringVar(&verify, "verify", "", "actor from another family that verifies the PR (required); ACTOR:MODEL as for --implement. The family is the actor's, whatever the model")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "maximum implement runs, including the first")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
