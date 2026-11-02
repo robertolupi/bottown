@@ -1,9 +1,9 @@
 # Design: milestones: plan, check, apply and run
 
-Status: **design**, written with the owner in issue #74; Phases 1 and 2
+Status: **design**, written with the owner in issue #74; Phases 1–3
 (§5) are built (`internal/milestone`, `bottown milestone check`; the base
 issue/PR/milestone rules, the `plan` run kind, `bottown run plan` /
-`milestone plan` and `/bottown-plan`). Extends
+`milestone plan` and `/bottown-plan`; `bottown milestone apply`). Extends
 [the local web UI and supervisor design](web-ui.md) (§3.7).
 
 ## 1. Goal
@@ -273,11 +273,15 @@ worktree, and unit tests can run it against golden files.
 ### 2.6 Applying a plan: `bottown milestone apply`
 
 ```
-bottown milestone apply <slug> [--dry-run] [--repo R]
+bottown milestone apply <slug> [--dry-run] [--force] [--repo R]
 ```
 
 `bottown milestone apply` is an **owner-only command**. It reconciles the
-merged plan on `main` into the Forgejo tracker.
+merged plan on `main` into the Forgejo tracker. It runs in the owner's main
+checkout and talks to Forgejo through the server's API proxy with the
+owner's key (`internal/milestone.Apply` behind a small `Forge` interface;
+the CLI's implementation is `internal/cli/milestone_forge.go`). It prints
+every planned change and flag before writing, then each write.
 
 #### Provenance markers and trust rule
 
@@ -381,7 +385,9 @@ again:
 2. **Create or update the Implementation Epic issue:**
    - The Implementation Epic's body is fully owned by `apply` and contains:
      - Provenance header: kickoff issue `#<kickoff>`, design doc link (if
-       set), and plan file `<milestones_dir>/<slug>.md` at `<main-sha>`.
+       set), and plan file `<milestones_dir>/<slug>.md` at the commit on
+       `main` that last changed it (not `main`'s head, which moves with every
+       merge and would rewrite the epic on each re-apply).
      - Optional overview prose from the plan file.
      - A `## Implementation issues` checklist of active keys in file order:
        `- [ ] #<num> — <Title> (`<key>`, depends on #<d1>, #<d2>)`
@@ -401,7 +407,17 @@ again:
        edges to other issues of `plan="<slug>"` that are no longer in
        `depends` (`DELETE .../dependencies`). Dependencies on issues outside
        `plan="<slug>"` that the owner added manually are preserved unless they
-       were previously declared in `depends`.
+       were previously declared in `depends`. What was previously declared
+       comes from the current epic's checklist (`depends on #<d1>, …`), which
+       `apply` wrote at the last apply.
+   - All removals are made before any addition, so reversing an edge never
+     leaves a transient two-issue cycle that Forgejo would refuse.
+   - An existing epic's `PATCH` (step 2) is made after the removals and
+     before the additions. Its checklist is the only record of the external
+     dependencies the plan declared, so it changes only once their stale
+     edges are gone: an apply interrupted earlier still removes them on the
+     next run, instead of mistaking them for the owner's own. A new epic is
+     created before any dependency write, since it has edges of its own.
    - For the **Implementation Epic `#<E>`**:
      - Ensure `#<E>` has a Forgejo `blocked_by` dependency on **every active
        child issue** of the plan (and remove edges to keys removed from the

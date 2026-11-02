@@ -36,7 +36,48 @@ design document exists.`,
 			return milestoneCheck(cmd.OutOrStdout(), cmd.ErrOrStderr(), ".", args[0])
 		},
 	})
+	m.AddCommand(newMilestoneApply(g))
 	return m
+}
+
+func newMilestoneApply(g *globals) *cobra.Command {
+	var o milestone.ApplyOptions
+	var repo string
+	c := &cobra.Command{
+		Use:   "apply <slug> [--dry-run] [--force] [--repo R]",
+		Short: "File a merged milestone plan's issues: the epic, its child issues and their dependencies",
+		Long: `Apply the milestone plan <milestones_dir>/<slug>.md, as merged on the
+repository's default branch on the forge (never the working tree), as the
+owner. It files each section as a child issue and an Implementation Epic
+listing them, all in the kickoff issue's open milestone, and makes Forgejo
+dependencies match the plan: each child is blocked by its depends, and the
+epic by every child.
+
+Apply is idempotent: issues carry hidden markers mapping them to the plan,
+so re-applying an unchanged plan writes nothing, and re-applying after a
+failure resumes it. Every check runs before the first write. A changed
+section updates its issue unless the issue is closed, or was edited in
+Forgejo since the last apply (--force overwrites it). Sections removed from
+the plan keep their issues, which apply flags for the owner.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, inst, org, name, key, err := ownerRepo(g, repo)
+			if err != nil {
+				return err
+			}
+			f := newProxyForge(inst.ServerURL(), key, org, name)
+			if o.Owner, err = f.ownerLogin(cmd.Context()); err != nil {
+				return fmt.Errorf("finding the owner's login: %w", err)
+			}
+			o.Org, o.Repo, o.Slug, o.Out = org, name, args[0], cmd.OutOrStdout()
+			_, err = milestone.Apply(cmd.Context(), f, o)
+			return err
+		},
+	}
+	c.Flags().BoolVar(&o.DryRun, "dry-run", false, "check the plan and print the changes, writing nothing")
+	c.Flags().BoolVar(&o.Force, "force", false, "overwrite open issues edited in Forgejo since the last apply")
+	c.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
+	return c
 }
 
 // milestoneCheck checks the plan file arg names, from the directory dir. It
