@@ -176,6 +176,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("GET /api/runs", s.handleGetRuns)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleGetRunLog)
+	mux.HandleFunc("GET /api/issues/{number}", s.handleGetIssueDetails)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleGetIssueTimeline)
 	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
 	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
@@ -511,6 +512,20 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 		"id":    id,
 		"lines": lines,
 	})
+}
+
+func (s *Server) handleGetIssueDetails(w http.ResponseWriter, r *http.Request) {
+	issueNum, err := strconv.ParseInt(r.PathValue("number"), 10, 64)
+	if err != nil || issueNum <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid issue number required"})
+		return
+	}
+	details, err := s.ComputeIssueDetails(r.Context(), issueNum)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, details)
 }
 
 func (s *Server) handleGetIssueTimeline(w http.ResponseWriter, r *http.Request) {

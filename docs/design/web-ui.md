@@ -316,17 +316,25 @@ be recomputed.
 
 Each row links to the issue or PR in Forgejo (merging happens there) and
 offers the matching bottown action (§5): re-run the flow, end or clean up
-the run. Once repositories declare checks (§4.5), "ready to merge" also
-requires them to pass.
+the run. Issue-backed rows show the full issue title next to the reference.
+Once repositories declare checks (§4.5), "ready to merge" also requires them
+to pass.
 
 ### 4.2 Runs
 
-**Live.** Active runs: target, kind, actor and family, batch or
+**Live.** Active runs: target, issue title, kind, actor and family, batch or
 interactive, and elapsed time against the timeout. Runs of one flow are
 grouped under it ("#51 · round 2/3 · verifying with kimi"). A batch run
 shows a **live tail of its log**, readable rather than raw JSON (assistant
 text and tool calls, one line each), refreshed while it runs; the UI is
 on the host, so it reads `.bottown/runs/<id>.log` directly.
+
+Issue references in Live Runs, Run History and Owner Inbox show the issue
+title and Markdown description in a popup on hover or keyboard focus. The
+browser loads `GET /api/issues/{number}` on first display or interaction,
+sharing and caching concurrent and completed reads; a failed read affects
+only that popup. The
+title stays plain text and rendered description HTML is sanitized.
 
 **History.** A flow-centric table of history threads. Each flow thread groups
 `implement` and `verify` runs for the same issue and PR (including manual
@@ -563,9 +571,10 @@ API proxy.
 - **The owner key never reaches the browser.** The Go process holds it and
   makes every server call itself.
 - **Everything the agents wrote is untrusted:** issue and PR text, review
-  bodies, handovers, logs. The UI escapes all of it and sets a strict
-  Content-Security-Policy with no inline scripts, so text an agent
-  controls cannot run in the page that can start runs or push.
+  bodies, handovers, logs. The UI escapes text, sanitizes the HTML produced
+  from issue-description Markdown, and sets a strict Content-Security-Policy
+  with no inline scripts, so text an agent controls cannot run in the page
+  that can start runs or push.
 - **Actions are the CLI's.** Each goes through the same Go code and checks
   as its CLI command, and the server enforces policy regardless of who
   calls. Repository-declared commands (after-pull steps) run only when the

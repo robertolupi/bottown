@@ -146,6 +146,15 @@ type TimelineEvent struct {
 	URL      string     `json:"url,omitempty"`
 }
 
+// IssueDetails is the issue text shown by reference popups.
+type IssueDetails struct {
+	Issue int64  `json:"issue"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	State string `json:"state"`
+	URL   string `json:"url"`
+}
+
 // IssueTimeline represents the timeline for an issue or a specific flow thread.
 type IssueTimeline struct {
 	Issue     int64           `json:"issue"`
@@ -935,6 +944,27 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	})
 
 	return history, nil
+}
+
+// ComputeIssueDetails fetches the text for an issue reference popup.
+func (s *Server) ComputeIssueDetails(ctx context.Context, issueNum int64) (*IssueDetails, error) {
+	org, repo := s.orgAndRepo()
+	issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
+	var issue sdk.Issue
+	if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &issue); err != nil {
+		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, err)
+	}
+	issueURL := issue.HTMLURL
+	if issueURL == "" {
+		issueURL = fmt.Sprintf("%s/%s/%s/issues/%d", s.cfg.Instance.ForgejoURL(), org, repo, issueNum)
+	}
+	return &IssueDetails{
+		Issue: issueNum,
+		Title: issue.Title,
+		Body:  issue.Body,
+		State: string(issue.State),
+		URL:   issueURL,
+	}, nil
 }
 
 // ComputeIssueTimeline gathers runs, PRs, reviews, and merge events for an issue's latest flow thread.

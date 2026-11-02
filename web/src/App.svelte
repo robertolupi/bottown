@@ -9,6 +9,7 @@
     Denial,
   } from './types';
   import { lifecycleChange } from './lifecycle';
+  import IssueReference from './IssueReference.svelte';
   import LiveLogTail from './LiveLogTail.svelte';
   import {
     buildFlowActionPayload,
@@ -683,10 +684,20 @@
 
                   <div class="inbox-content-col">
                     <div class="inbox-title-row">
-                      <a class="pr-badge" href={item.target_url} target="_blank" rel="noreferrer">
-                        {item.target}
-                      </a>
-                      <span class="inbox-title">{item.title}</span>
+                      {#if item.issue}
+                        <IssueReference
+                          number={item.issue}
+                          href={item.target_url}
+                          label={item.target}
+                          title={item.issue_title}
+                          showTitle
+                        />
+                      {:else}
+                        <a class="pr-badge" href={item.target_url} target="_blank" rel="noreferrer">
+                          {item.target}
+                        </a>
+                        <span class="inbox-title">{item.title}</span>
+                      {/if}
                     </div>
                     <div class="inbox-desc muted">{item.description}</div>
                   </div>
@@ -757,7 +768,16 @@
                 <div class="flow-group-card">
                   <div class="flow-group-header">
                     <div class="flow-group-title">
-                      <span class="badge badge-accent flow-badge">Flow for #{fg.flow.issue}</span>
+                      <span class="badge badge-accent flow-badge">
+                        Flow for
+                        <IssueReference
+                          number={fg.flow.issue}
+                          href={fg.runs[0]?.issue_url || `${status.links.issues}/${fg.flow.issue}`}
+                          label={`#${fg.flow.issue}`}
+                          title={fg.runs.find((run) => run.issue_title)?.issue_title}
+                          showTitle
+                        />
+                      </span>
                       <strong>Round {fg.flow.round}/{fg.flow.max_rounds}</strong>
                       <span class="muted text-sm">— {fg.flow.step}</span>
                     </div>
@@ -784,7 +804,17 @@
                       <div class="run-card">
                         <div class="run-card-header">
                           <div class="run-card-title">
-                            <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                            {#if run.issue || run.flow?.issue || run.target.startsWith('#')}
+                              <IssueReference
+                                number={run.issue || run.flow?.issue || parseIssueNumber(run.target) || 0}
+                                href={run.target_url}
+                                label={run.target}
+                                title={run.issue_title}
+                                showTitle
+                              />
+                            {:else}
+                              <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                            {/if}
                             <span class="badge badge-neutral">{run.kind}</span>
                             <span class="badge repo-badge">{run.actor} ({run.family})</span>
                             {#if run.spec}<span class="badge instance-badge" title="model">model {run.spec}</span>{/if}
@@ -820,7 +850,17 @@
                 <div class="run-card">
                   <div class="run-card-header">
                     <div class="run-card-title">
-                      <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                      {#if run.issue || run.flow?.issue || run.target.startsWith('#')}
+                        <IssueReference
+                          number={run.issue || run.flow?.issue || parseIssueNumber(run.target) || 0}
+                          href={run.target_url}
+                          label={run.target}
+                          title={run.issue_title}
+                          showTitle
+                        />
+                      {:else}
+                        <a class="pr-badge" href={run.target_url} target="_blank" rel="noreferrer">{run.target}</a>
+                      {/if}
                       <span class="badge badge-neutral">{run.kind}</span>
                       <span class="badge repo-badge">{run.actor} ({run.family})</span>
                       {#if run.spec}<span class="badge instance-badge" title="model">model {run.spec}</span>{/if}
@@ -937,14 +977,14 @@
                         <td>
                           <div class="thread-main-line">
                             {#if mainLine.issueLabel}
-                              <a class="pr-badge" href={mainLine.issueUrl || h.target_url} target="_blank" rel="noreferrer">
-                                {mainLine.issueLabel}
-                              </a>
+                              <IssueReference
+                                number={thread.issue || 0}
+                                href={mainLine.issueUrl || h.target_url}
+                                label={mainLine.issueLabel}
+                                title={mainLine.issueTitle}
+                              />
                             {:else}
                               <a class="pr-badge" href={h.target_url} target="_blank" rel="noreferrer">{h.target}</a>
-                            {/if}
-                            {#if mainLine.issueTitle}
-                              <span class="thread-title" title={mainLine.issueTitle}>{mainLine.issueTitle}</span>
                             {/if}
                             {#if mainLine.milestone}
                               <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
@@ -1024,15 +1064,12 @@
                           <div class="thread-main-line">
                             <span class="thread-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
                             {#if mainLine.issueLabel}
-                              <a
-                                class="pr-badge"
-                                href={mainLine.issueUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                onclick={(e) => e.stopPropagation()}
-                              >
-                                {mainLine.issueLabel}
-                              </a>
+                              <IssueReference
+                                number={thread.issue || 0}
+                                href={mainLine.issueUrl || thread.runs[thread.runs.length - 1].target_url}
+                                label={mainLine.issueLabel}
+                                title={mainLine.issueTitle}
+                              />
                             {/if}
                             {#if mainLine.prLabel}
                               <a
@@ -1055,11 +1092,6 @@
                               >
                                 {thread.runs[thread.runs.length - 1].target}
                               </a>
-                            {/if}
-                            {#if mainLine.issueTitle || mainLine.prTitle}
-                              <span class="thread-title" title={mainLine.issueTitle || mainLine.prTitle}>
-                                {mainLine.issueTitle || mainLine.prTitle}
-                              </span>
                             {/if}
                             {#if mainLine.milestone}
                               <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
