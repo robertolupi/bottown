@@ -297,6 +297,15 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
 		}
 	}()
+	tmpDir := rc.ws.TmpDir(run.ID)
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return err
+	}
+	defer func() {
+		if e := os.RemoveAll(tmpDir); e != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove tmp dir: %v\n", e)
+		}
+	}()
 	rk := &agentCtx{Actor: run.Actor, ServerURL: rc.inst.ServerURL(), Key: created.Key, RunID: run.ID}
 	prompt, base, err := renderPrompt(ctx, rc, run, rec, rk, attachDir)
 	if err != nil {
@@ -337,7 +346,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
 		MCPURL: mcpURL, Key: created.Key,
 		RecordFile: recPath, RunID: run.ID, Interactive: o.interactive, Allow: o.allow,
-		ReadOnly: kind == policy.Discuss, Spec: run.Spec,
+		ReadOnly: kind == policy.Discuss, Spec: run.Spec, TmpDir: tmpDir,
 	}
 	if err := h.PrepareMCP(&l, rc.ws.RunsDir); err != nil {
 		return err

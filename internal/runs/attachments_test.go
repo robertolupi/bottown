@@ -123,11 +123,20 @@ func TestRemoveFilesRemovesAttachments(t *testing.T) {
 	if dir != filepath.Join(w.RunsDir, "r-1.attachments") {
 		t.Fatalf("AttachmentsDir %s", dir)
 	}
+	tmp := w.TmpDir("r-1")
+	if tmp != filepath.Join(w.RunsDir, "r-1.tmp") {
+		t.Fatalf("TmpDir %s", tmp)
+	}
 	_ = os.MkdirAll(dir, 0o700)
 	_ = os.WriteFile(filepath.Join(dir, "1-a.png"), png, 0o600)
+	_ = os.MkdirAll(tmp, 0o700)
+	_ = os.WriteFile(filepath.Join(tmp, "scratch.txt"), []byte("data"), 0o600)
 	w.RemoveFiles("r-1")
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("attachments survive RemoveFiles: %v", err)
+	}
+	if _, err := os.Stat(tmp); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("tmp dir survives RemoveFiles: %v", err)
 	}
 }
 

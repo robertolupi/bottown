@@ -26,6 +26,7 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
     that should not block this pull request.
+- Run checks as plain commands; write scratch files under `$TMPDIR`.
 
 ## Done means
 

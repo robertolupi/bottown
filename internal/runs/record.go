@@ -191,6 +191,7 @@ func (w *Workspace) RemoveFiles(id string) {
 		_ = os.Remove(w.Path(id, s))
 	}
 	_ = RemoveAttachments(w.AttachmentsDir(id))
+	_ = os.RemoveAll(w.TmpDir(id))
 }
 
 // LauncherAlive reports whether the process that launched the run, and
