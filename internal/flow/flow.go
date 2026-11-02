@@ -157,7 +157,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			continue
 		}
 
-		pr, err = s.waitMergeable(ctx, opts, pr)
+		pr, err = s.waitForPush(ctx, opts, pr)
 		if err != nil {
 			return result, err
 		}
@@ -216,9 +216,12 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 }
 
-func (s *Supervisor) waitMergeable(ctx context.Context, opts Options, pr server.PROut) (server.PROut, error) {
+// waitForPush lets Forgejo finish updating mergeability and reviews after a
+// head change. A verdict submitted before the push task settles the reviews
+// can be dismissed as stale even when it names the new head.
+func (s *Supervisor) waitForPush(ctx context.Context, opts Options, pr server.PROut) (server.PROut, error) {
 	for range 50 {
-		if pr.Mergeable {
+		if pr.Mergeable && reviewsSettled(pr) {
 			return pr, nil
 		}
 		if err := waitForge(ctx); err != nil {
@@ -230,7 +233,22 @@ func (s *Supervisor) waitMergeable(ctx context.Context, opts Options, pr server.
 			return pr, err
 		}
 	}
+	if !reviewsSettled(pr) {
+		return pr, fmt.Errorf("pull request !%d reviews did not settle at %s", pr.Number, shortSHA(pr.HeadSHA))
+	}
 	return pr, nil
+}
+
+func reviewsSettled(pr server.PROut) bool {
+	for _, r := range pr.Reviews {
+		if r.Dismissed || r.CommitID == "" {
+			continue
+		}
+		if wantStale := r.CommitID != pr.HeadSHA; r.Stale != wantStale {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64, head string) (server.PROut, error) {
