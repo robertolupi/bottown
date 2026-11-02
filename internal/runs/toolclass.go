@@ -24,7 +24,7 @@ var toolClasses = []struct {
 	// claude and kimi; codex commands are rendered as Bash. agy.
 	{class: ToolShell, names: []string{"Bash", "run_command"}},
 	{class: ToolRead, names: []string{"Read", "read_file", "view_file", "list_dir"}},
-	{class: ToolEdit, names: []string{"Edit", "Write", "NotebookEdit", "edit_file", "write_file", "replace_file_content", "multi_replace_file_content"}},
+	{class: ToolEdit, names: []string{"Edit", "Write", "NotebookEdit", "edit_file", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"}},
 	{class: ToolSearch, names: []string{"Grep", "Glob", "grep_search", "find_by_name"}},
 	// bottown's MCP tools, by their prefixed and bare names
 	// (internal/server/mcp.go and tools.go).

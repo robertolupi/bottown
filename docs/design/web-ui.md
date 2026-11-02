@@ -527,9 +527,15 @@ use; a shell command that runs `bottown` is `forge`. claude's stream-json
 names every part, so its lines are typed: assistant text, tool calls,
 denials and failed tool results as errors, and the session start,
 background tasks, rate limits other than `allowed` and the result
-(turns, cost, duration) as status. The other harnesses' lines are still
-`plain`, and crush's, only its final message, `text`. Unknown usage stays
-unknown.
+(turns, cost, duration) as status. agy's stream-json is typed by its
+`step_update` events, each step shown once, when it ends or while it is
+the latest step: an `agent_response`'s streamed text, a `tool` step's
+call (its argument from agy's parameter names, an MCP call as
+`server.tool`), failed steps and commands that exit nonzero as errors,
+and the session start, system messages, agy's non-JSON lines and the
+result (status, turns, tokens, duration) as status. The other harnesses'
+lines are still `plain`, and crush's, only its final message, `text`.
+Unknown usage stays unknown.
 
 ## 7. Server APIs
 

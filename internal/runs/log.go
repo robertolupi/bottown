@@ -45,7 +45,7 @@ func renderLog(harness string, log []byte) []LogLine {
 	case "claude":
 		return renderClaudeLog(log)
 	case "antigravity", "agy":
-		return kindLines(LinePlain, renderAgyLog(log))
+		return renderAgyLog(log)
 	case "kimi":
 		return kindLines(LinePlain, renderKimiLog(log))
 	case "codex":
@@ -248,54 +248,230 @@ func formatLogDuration(ms int64) string {
 	return d.String()
 }
 
-func renderAgyLog(log []byte) []string {
-	var lines []string
+// agyEvent is one line of agy's --output-format stream-json (1.4.12).
+type agyEvent struct {
+	Event string `json:"event"`
+	Init  *struct {
+		Model string `json:"model"`
+	} `json:"init"`
+	Step *struct {
+		Index     int          `json:"step_index"`
+		State     string       `json:"state"` // ACTIVE, DONE or ERROR
+		Type      string       `json:"step_type"`
+		TextDelta string       `json:"text_delta"`
+		ToolName  string       `json:"tool_name"`
+		ToolInfo  *agyToolInfo `json:"tool_info"`
+	} `json:"step_update"`
+	Result *struct {
+		Status          string  `json:"status"`
+		Response        string  `json:"response"`
+		NumTurns        int     `json:"num_turns"`
+		DurationSeconds float64 `json:"duration_seconds"`
+		Usage           *struct {
+			Total int64 `json:"total_tokens"`
+		} `json:"usage"`
+	} `json:"result"`
+}
+
+type agyToolInfo struct {
+	Name       string          `json:"name"`
+	Parameters map[string]any  `json:"parameters"`
+	Output     string          `json:"output"`
+	Error      json.RawMessage `json:"error"`
+}
+
+// renderAgyLog renders agy's stream-json. Steps arrive as step_update
+// events, several per step_index: an agent_response streams its text as
+// text_delta pieces on ACTIVE updates, and a tool step is ACTIVE while it
+// runs. A step is shown once, when it ends (DONE or ERROR), or while it is
+// the latest step, so a running command or a reply being written shows.
+// user_input steps are left out.
+func renderAgyLog(log []byte) []LogLine {
+	// The last step_update, by line number: the step that may show early.
+	lastStep, n, events := -1, 0, false
 	eachJSONLine(log, func(line []byte) {
-		var ev struct {
-			Event      string `json:"event"`
-			StepUpdate *struct {
-				StepType string `json:"step_type"`
-				State    string `json:"state"`
-				ToolCall *struct {
-					Name string `json:"name"`
-					Args any    `json:"args"`
-				} `json:"tool_call"`
-				ToolCalls []struct {
-					Name string `json:"name"`
-					Args any    `json:"args"`
-				} `json:"tool_calls"`
-			} `json:"step_update"`
-			Result *struct {
-				Response string `json:"response"`
-			} `json:"result"`
+		var ev agyEvent
+		if json.Unmarshal(line, &ev) == nil {
+			events = true
+			if ev.Step != nil {
+				lastStep = n
+			}
 		}
+		n++
+	})
+	// Not agy's stream (agy failed before it started): plain lines.
+	if !events {
+		return kindLines(LinePlain, renderScriptLog(log))
+	}
+
+	var lines []LogLine
+	add := func(kind LineKind, text string) {
+		lines = append(lines, LogLine{Kind: kind, Text: text})
+	}
+	text := map[int]string{} // agent_response step -> its text so far
+	shown := map[int]bool{}
+	n = 0
+	eachJSONLine(log, func(line []byte) {
+		i := n
+		n++
+		var ev agyEvent
 		if json.Unmarshal(line, &ev) != nil {
 			s := strings.TrimSpace(string(line))
 			if s != "" && !strings.HasPrefix(s, "{") {
-				lines = append(lines, s)
+				add(LineStatus, s)
 			}
 			return
 		}
-		if ev.Event == "step_update" && ev.StepUpdate != nil {
-			su := ev.StepUpdate
-			if su.ToolCall != nil && su.ToolCall.Name != "" {
-				lines = append(lines, formatToolCall(su.ToolCall.Name, su.ToolCall.Args))
+		switch {
+		case ev.Event == "init" && ev.Init != nil:
+			add(LineStatus, "session started: "+ev.Init.Model)
+		case ev.Event == "step_update" && ev.Step != nil:
+			st := ev.Step
+			text[st.Index] += st.TextDelta
+			ended := st.State == "DONE" || st.State == "ERROR"
+			if shown[st.Index] || !ended && i != lastStep {
+				return
 			}
-			for _, tc := range su.ToolCalls {
-				if tc.Name != "" {
-					lines = append(lines, formatToolCall(tc.Name, tc.Args))
+			if ended {
+				shown[st.Index] = true
+			}
+			switch st.Type {
+			case "agent_response":
+				if t := formatAssistantText(text[st.Index]); t != "" {
+					add(LineText, t)
+				}
+			case "tool":
+				lines = append(lines, agyToolLine(st.ToolName, st.ToolInfo))
+				if st.ToolInfo != nil && st.State == "DONE" {
+					if out := formatAssistantText(st.ToolInfo.Output); agyFailedCommand(out) {
+						add(LineError, out)
+					}
+				}
+			case "system_message":
+				if ended {
+					s := formatAssistantText(text[st.Index])
+					if s == "" {
+						s = "system message"
+					}
+					add(LineStatus, s)
 				}
 			}
-		} else if ev.Event == "result" && ev.Result != nil && ev.Result.Response != "" {
-			if t := formatAssistantText(ev.Result.Response); t != "" {
-				lines = append(lines, t)
+			if st.State == "ERROR" {
+				msg := "step failed"
+				if st.ToolInfo != nil {
+					if m := agyErrorMessage(st.ToolInfo.Error); m != "" {
+						msg = m
+					}
+				}
+				add(LineError, msg)
+			}
+		case ev.Event == "result" && ev.Result != nil:
+			r := ev.Result
+			kind := LineStatus
+			if r.Status != "SUCCESS" {
+				kind = LineError
+			}
+			turns := "turns"
+			if r.NumTurns == 1 {
+				turns = "turn"
+			}
+			s := fmt.Sprintf("result: %s, %d %s", r.Status, r.NumTurns, turns)
+			if r.Usage != nil {
+				s += fmt.Sprintf(", %d tokens", r.Usage.Total)
+			}
+			s += ", " + formatLogDuration(int64(r.DurationSeconds*1000))
+			add(kind, s)
+			// The response repeats the steps' text: show it only when no
+			// text step did.
+			hasText := false
+			for _, l := range lines {
+				hasText = hasText || l.Kind == LineText
+			}
+			if t := formatAssistantText(r.Response); t != "" && !hasText {
+				add(LineText, t)
 			}
 		}
 	})
-	if len(lines) == 0 {
-		return renderScriptLog(log)
-	}
 	return lines
+}
+
+// agyToolLine is a tool step's line. Its argument comes from agy's
+// parameter names; an MCP call shows, and is classed by, the server and
+// tool it calls.
+func agyToolLine(toolName string, info *agyToolInfo) LogLine {
+	name := toolName
+	var p map[string]any
+	if info != nil {
+		if info.Name != "" {
+			name = info.Name
+		}
+		p = info.Parameters
+	}
+	str := func(key string) string {
+		if v, ok := p[key]; ok && v != nil {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+		return ""
+	}
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if s := str(k); s != "" {
+				return s
+			}
+		}
+		return ""
+	}
+	arg, class := "", ""
+	switch {
+	case name == "call_mcp_tool":
+		tool := str("ToolName")
+		arg = tool
+		if srv := str("ServerName"); srv != "" {
+			arg = srv + "." + tool
+		}
+		class = toolClass(tool, "")
+	case first("CommandLine") != "":
+		arg = str("CommandLine")
+	case first("AbsolutePath", "Path", "TargetFile") != "":
+		arg = first("AbsolutePath", "Path", "TargetFile")
+		if name == "read_file" && (str("StartLine") != "" || str("EndLine") != "") {
+			arg += ":" + str("StartLine") + "-" + str("EndLine")
+		}
+	case first("Query", "SearchPath") != "":
+		arg = first("Query", "SearchPath")
+	case len(p) > 0:
+		arg = toolArg(p)
+	}
+	if class == "" {
+		class = toolClass(name, arg)
+	}
+	return LogLine{Kind: LineTool, Tool: name, ToolClass: class, Text: joinToolCall(name, arg)}
+}
+
+// agyFailedCommand reports whether a run_command output's first line is
+// "Command exited with code N." with N other than 0.
+func agyFailedCommand(first string) bool {
+	var code int
+	if _, err := fmt.Sscanf(first, "Command exited with code %d", &code); err != nil {
+		return false
+	}
+	return code != 0
+}
+
+// agyErrorMessage is the first line of a tool_info.error: an object with
+// a message, or a string.
+func agyErrorMessage(raw json.RawMessage) string {
+	var e struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &e) == nil && e.Message != "" {
+		return formatAssistantText(e.Message)
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return formatAssistantText(s)
+	}
+	return ""
 }
 
 func renderKimiLog(log []byte) []string {

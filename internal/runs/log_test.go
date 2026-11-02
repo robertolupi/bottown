@@ -13,7 +13,7 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 		file    string
 		want    []string
 	}{
-		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello"}},
+		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello", "result: SUCCESS, 1 turn, 15780 tokens, 5s"}},
 		{"kimi", "kimi-2.4.1.stream.jsonl", []string{"hello"}},
 		{"codex", "codex-0.166.0.stream.jsonl", []string{"hello"}},
 		{"crush", "crush-0.99.0.log", []string{"hello"}},
@@ -63,22 +63,6 @@ func TestRenderLog_Kimi(t *testing.T) {
 		"DONE",
 	}
 	got := lineTexts(RenderLog("kimi", []byte(log)))
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-}
-
-func TestRenderLog_Agy(t *testing.T) {
-	log := `{"event":"step_update","step_update":{"step_type":"tool_call","tool_call":{"name":"Bash","args":{"command":"git diff"}}}}
-{"event":"step_update","step_update":{"step_type":"tool_call","tool_call":{"name":"Edit","args":{"file_path":"main.go"}}}}
-{"event":"result","result":{"status":"SUCCESS","response":"All done\n"}}
-`
-	want := []string{
-		"Bash: git diff",
-		"Edit: main.go",
-		"All done",
-	}
-	got := lineTexts(RenderLog("agy", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

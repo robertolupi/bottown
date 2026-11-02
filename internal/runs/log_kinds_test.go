@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -32,11 +33,12 @@ func TestRenderLog_Kinds(t *testing.T) {
 		harness, file string
 		kind          LineKind
 	}{
-		{"agy", "agy-1.4.12.stream.jsonl", LinePlain},
 		{"kimi", "kimi-2.4.1.stream.jsonl", LinePlain},
 		{"codex", "codex-0.166.0.stream.jsonl", LinePlain},
 		{"crush", "crush-0.99.0.log", LineText},
 		{"script", "crush-0.99.0.log", LinePlain},
+		// agy failing before its stream starts.
+		{"agy", "crush-0.99.0.log", LinePlain},
 	} {
 		b, err := os.ReadFile(filepath.Join("testdata", tt.file))
 		if err != nil {
@@ -119,5 +121,98 @@ func TestLogLineJSON(t *testing.T) {
 	want := `[{"kind":"tool","tool":"Read","tool_class":"read","text":"Read: a.go"},{"kind":"plain","text":"x"}]`
 	if string(b) != want {
 		t.Errorf("got %s, want %s", b, want)
+	}
+}
+
+// The agy tools testdata: trimmed from a real 1.4.12 run (r-c0500878),
+// with an ERROR step of the shape agy writes. Steps that end show once;
+// user_input and agent_response steps without text show nothing, and the
+// result's response, which repeats the steps' text, is left out.
+func TestRenderLog_AgyGolden(t *testing.T) {
+	const wt = "/Users/rlupi/src/fams/bottown/main/.bottown/runs/r-c0500878"
+	got := RenderLog("agy", agyTestdata(t, 0))
+	want := []LogLine{
+		{Kind: LineStatus, Text: "session started: gemini-3.8-flash-medium"},
+		{Kind: LineTool, Tool: "run_command", ToolClass: ToolForge, Text: "run_command: bottown whoami"},
+		{Kind: LineTool, Tool: "read_file", ToolClass: ToolRead, Text: "read_file: " + wt + "/internal/runs/harness.go:1-200"},
+		{Kind: LineTool, Tool: "run_command", ToolClass: ToolShell, Text: `run_command: git grep -n "func runCmd" internal/cli/`},
+		{Kind: LineError, Text: "Command exited with code 1."},
+		{Kind: LineTool, Tool: "manage_task", ToolClass: ToolOther, Text: `manage_task: {"Action":"kill","TaskId":"cf46ae8d-515f-49c9-ba61-c242dcad006f/task-114"}`},
+		{Kind: LineStatus, Text: "system message"},
+		{Kind: LineTool, Tool: "edit_file", ToolClass: ToolEdit, Text: "edit_file: " + wt + "/internal/runs/harness.go"},
+		{Kind: LineTool, Tool: "view_file", ToolClass: ToolRead, Text: "view_file: " + wt + "/internal/runs/tools.go"},
+		{Kind: LineError, Text: "open " + wt + "/internal/runs/tools.go: no such file or directory"},
+		{Kind: LineStatus, Text: "root agent idle; waiting up to 30m0s for 1 background task(s)"},
+		{Kind: LineTool, Tool: "run_command", ToolClass: ToolShell, Text: "run_command: make e2e"},
+		{Kind: LineText, Text: "I have implemented the requested changes and verified `make check` locally. I've now launched `make e2e` in the background and will wait for it to complete."},
+		{Kind: LineStatus, Text: "system message"},
+		{Kind: LineText, Text: "I have implemented the resolution for issue #160 and opened pull request [!183](http://127.0.0.1:3030/bottown/bottown/pulls/183)."},
+		{Kind: LineStatus, Text: "result: SUCCESS, 1 turn, 533911 tokens, 16m43s"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+}
+
+// agyTestdata is the agy tools testdata, or its first n lines.
+func agyTestdata(t *testing.T, n int) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "agy-1.4.12-tools.stream.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		return b
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	return []byte(strings.Join(lines[:n], ""))
+}
+
+// While agy runs, its latest step shows before it ends: a running
+// command, or the reply written so far.
+func TestRenderLog_AgyLive(t *testing.T) {
+	idle := LogLine{Kind: LineStatus, Text: "root agent idle; waiting up to 30m0s for 1 background task(s)"}
+	running := LogLine{Kind: LineTool, Tool: "run_command", ToolClass: ToolShell, Text: "run_command: make e2e"}
+	for _, tc := range []struct {
+		name string
+		n    int
+		want []LogLine
+	}{
+		{"running command", 22, []LogLine{running}},
+		{"waiting for it", 23, []LogLine{running, idle}},
+		{"command done", 24, []LogLine{idle, running}},
+		{"reply so far", 29, []LogLine{{Kind: LineStatus, Text: "system message"}, {Kind: LineText, Text: "I have implemented the resolution for issue #160 and opened pull request"}}},
+	} {
+		lines := RenderLog("agy", agyTestdata(t, tc.n))
+		if got := lines[len(lines)-len(tc.want):]; !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, dumpLines(got), dumpLines(tc.want))
+		}
+	}
+}
+
+// agy's parameter names, an MCP call, a failed step without a message
+// (shown once), a failed command, and a result that is not a success.
+func TestRenderLog_AgyTools(t *testing.T) {
+	log := `{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"call_mcp_tool","tool_info":{"name":"call_mcp_tool","parameters":{"ServerName":"bottown","ToolName":"issue_get","Arguments":{"number":12}}}}}
+{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"grep_search","tool_info":{"name":"grep_search","parameters":{"Query":"LogLine","SearchPath":"internal"}}}}
+{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"tool","tool_name":"write_to_file","tool_info":{"name":"write_to_file","parameters":{"TargetFile":"a.go","CodeContent":"package a"}}}}
+{"event":"step_update","step_update":{"step_index":4,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"make check"}}}}
+{"event":"step_update","step_update":{"step_index":4,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"make check"}}}}
+{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"false"},"output":"Command exited with code 2.\n"}}}
+{"event":"result","result":{"status":"ERROR","response":"Stopped.\nmore","num_turns":3,"duration_seconds":2.5}}
+`
+	want := []LogLine{
+		{Kind: LineTool, Tool: "call_mcp_tool", ToolClass: ToolForge, Text: "call_mcp_tool: bottown.issue_get"},
+		{Kind: LineTool, Tool: "grep_search", ToolClass: ToolSearch, Text: "grep_search: LogLine"},
+		{Kind: LineTool, Tool: "write_to_file", ToolClass: ToolEdit, Text: "write_to_file: a.go"},
+		{Kind: LineTool, Tool: "run_command", ToolClass: ToolShell, Text: "run_command: make check"},
+		{Kind: LineError, Text: "step failed"},
+		{Kind: LineTool, Tool: "run_command", ToolClass: ToolShell, Text: "run_command: false"},
+		{Kind: LineError, Text: "Command exited with code 2."},
+		{Kind: LineError, Text: "result: ERROR, 3 turns, 3s"},
+		{Kind: LineText, Text: "Stopped."},
+	}
+	if got := RenderLog("agy", []byte(log)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
