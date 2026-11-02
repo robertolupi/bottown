@@ -7,6 +7,7 @@
   import type { MilestoneGroup, MilestoneNode } from './types';
   import IssueReference from './IssueReference.svelte';
   import { actorPair, canOpenFlow, canStart, layoutDag, statusBadge } from './milestones';
+  import { reloadOn } from './reload.svelte';
 
   interface Props {
     refreshKey: number;
@@ -47,10 +48,7 @@
     }
   }
 
-  $effect(() => {
-    void refreshKey;
-    load();
-  });
+  reloadOn(() => refreshKey, load);
 
   onMount(() => {
     const interval = setInterval(load, 30000);
