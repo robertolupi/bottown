@@ -412,6 +412,12 @@ again:
        `apply` wrote at the last apply.
    - All removals are made before any addition, so reversing an edge never
      leaves a transient two-issue cycle that Forgejo would refuse.
+   - An existing epic's `PATCH` (step 2) is made after the removals and
+     before the additions. Its checklist is the only record of the external
+     dependencies the plan declared, so it changes only once their stale
+     edges are gone: an apply interrupted earlier still removes them on the
+     next run, instead of mistaking them for the owner's own. A new epic is
+     created before any dependency write, since it has edges of its own.
    - For the **Implementation Epic `#<E>`**:
      - Ensure `#<E>` has a Forgejo `blocked_by` dependency on **every active
        child issue** of the plan (and remove edges to keys removed from the

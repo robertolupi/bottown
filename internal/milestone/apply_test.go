@@ -21,6 +21,8 @@ type fakeForge struct {
 	// failCreate fails the CreateIssue call with that 1-based index, if > 0.
 	failCreate int
 	creates    int
+	// failRemove fails every RemoveBlockedBy call when set.
+	failRemove bool
 }
 
 const owner = "owner"
@@ -118,6 +120,9 @@ func (f *fakeForge) AddBlockedBy(_ context.Context, n, dep int64) error {
 }
 
 func (f *fakeForge) RemoveBlockedBy(_ context.Context, n, dep int64) error {
+	if f.failRemove {
+		return errors.New("injected failure")
+	}
 	i := slices.Index(f.deps[n], dep)
 	if i < 0 {
 		return fmt.Errorf("#%d is not blocked by #%d", n, dep)
@@ -336,7 +341,7 @@ func TestApplyAmend(t *testing.T) {
 	f.files[planFile] = string(md(plan2))
 	rep, out := mustApply(t, f, nil)
 
-	if want := []string{"edit #3", "create #9", "edit #7", "dep #4-#2", "dep #7-#6", "dep #9+#3", "dep #7+#9"}; !slices.Equal(f.writes, want) {
+	if want := []string{"edit #3", "create #9", "dep #4-#2", "dep #7-#6", "edit #7", "dep #9+#3", "dep #7+#9"}; !slices.Equal(f.writes, want) {
 		t.Errorf("writes %v, want %v\n%s", f.writes, want, out)
 	}
 	for _, s := range []string{
@@ -396,6 +401,40 @@ func TestApplyResumes(t *testing.T) {
 	}
 	if !slices.Equal(f.deps[4], []int64{3, 2}) || !slices.Equal(f.deps[7], []int64{3, 4, 5, 6}) {
 		t.Errorf("deps after resume: %v", f.deps)
+	}
+	f.writes = nil
+	if mustApply(t, f, nil); len(f.writes) != 0 {
+		t.Errorf("apply after resume wrote %v", f.writes)
+	}
+}
+
+// An apply that stops before removing a stale external edge leaves the
+// epic's record of it, so the next apply still removes it, and still keeps
+// the owner's own edges.
+func TestApplyResumesExternalRemoval(t *testing.T) {
+	f := withPlan(plan1)
+	mustApply(t, f, nil)
+	// a #3, b #4, c #5, d #6, epic #7; the owner made #8 block b by hand.
+	f.add(&ForgeIssue{Title: "Owner's", Poster: owner})
+	f.deps[4] = append(f.deps[4], 8)
+	// b no longer depends on #2, and its title changes the epic too.
+	f.files[planFile] = strings.NewReplacer(`depends = ["a", "#2"]`, `depends = ["a"]`, "## Bravo", "## Bravo two").Replace(f.files[planFile])
+	epic := f.issues[7].Body
+	f.failRemove = true
+	if _, out, err := apply(t, f, nil); err == nil || !strings.Contains(err.Error(), "removing #4's dependency on #2") {
+		t.Fatalf("interrupted apply: %v\n%s", err, out)
+	}
+	if f.issues[7].Body != epic {
+		t.Errorf("the epic changed before the stale edge was removed:\n%s", f.issues[7].Body)
+	}
+	f.failRemove = false
+	f.writes = nil
+	mustApply(t, f, nil)
+	if want := []string{"dep #4-#2", "edit #7"}; !slices.Equal(f.writes, want) {
+		t.Errorf("resumed apply wrote %v, want %v", f.writes, want)
+	}
+	if !slices.Equal(f.deps[4], []int64{3, 8}) {
+		t.Errorf("b blocked by %v, want #3 and the owner's #8", f.deps[4])
 	}
 	f.writes = nil
 	if mustApply(t, f, nil); len(f.writes) != 0 {

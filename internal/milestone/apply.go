@@ -688,7 +688,7 @@ func (a *applier) print() {
 	}
 }
 
-// execute makes the planned writes: child issues, then the epic, then the
+// execute makes the planned writes: child issues, then the epic and the
 // dependencies, so that each step can name the issues the earlier made.
 func (a *applier) execute(ctx context.Context) error {
 	f, w := a.f, a.o.Out
@@ -713,27 +713,25 @@ func (a *applier) execute(ctx context.Context) error {
 			fmt.Fprintf(w, "updated %s\n", c.ref())
 		}
 	}
-	if a.epicNew {
+	epicBody := func() string {
 		content := a.epicContent()
-		body := withMarker(content, Marker{Plan: a.o.Slug, Epic: true, SHA: Hash(a.plan.Title, content)})
-		if a.epic == nil {
-			n, err := f.CreateIssue(ctx, a.plan.Title, body, a.rep.Milestone.ID)
-			if err != nil {
-				return fmt.Errorf("creating the Implementation Epic: %w", err)
-			}
-			a.epic = &ForgeIssue{Number: n, Title: a.plan.Title, Body: body, Poster: a.o.Owner, Milestone: &a.rep.Milestone}
-			a.rep.Epic = n
-			fmt.Fprintf(w, "created the Implementation Epic #%d\n", n)
-		} else {
-			if err := f.EditIssue(ctx, a.epic.Number, a.plan.Title, body); err != nil {
-				return fmt.Errorf("updating the Implementation Epic #%d: %w", a.epic.Number, err)
-			}
-			fmt.Fprintf(w, "updated the Implementation Epic #%d\n", a.epic.Number)
-		}
-		a.rep.Writes++
+		return withMarker(content, Marker{Plan: a.o.Slug, Epic: true, SHA: Hash(a.plan.Title, content)})
 	}
-	// Removals first, so that reversing an edge never makes a transient
-	// cycle Forgejo would refuse.
+	// A new epic is created before the dependencies, since it has some.
+	if a.epicNew && a.epic == nil {
+		body := epicBody()
+		n, err := f.CreateIssue(ctx, a.plan.Title, body, a.rep.Milestone.ID)
+		if err != nil {
+			return fmt.Errorf("creating the Implementation Epic: %w", err)
+		}
+		a.epic = &ForgeIssue{Number: n, Title: a.plan.Title, Body: body, Poster: a.o.Owner, Milestone: &a.rep.Milestone}
+		a.rep.Epic = n
+		a.rep.Writes++
+		a.epicNew = false
+		fmt.Fprintf(w, "created the Implementation Epic #%d\n", n)
+	}
+	// Removals before additions, so that reversing an edge never makes a
+	// transient cycle Forgejo would refuse.
 	for _, ch := range a.deps {
 		for _, d := range ch.remove {
 			from, to := a.resolve(ch.node), a.resolve(d)
@@ -743,6 +741,17 @@ func (a *applier) execute(ctx context.Context) error {
 			a.rep.Writes++
 			fmt.Fprintf(w, "#%d: no longer blocked by #%d\n", from, to)
 		}
+	}
+	// An existing epic is updated only after the removals: its checklist
+	// records the external dependencies the plan declared, which tells
+	// stale edges from the owner's own, so an apply interrupted before
+	// then still finds the stale ones on the next.
+	if a.epicNew {
+		if err := f.EditIssue(ctx, a.epic.Number, a.plan.Title, epicBody()); err != nil {
+			return fmt.Errorf("updating the Implementation Epic #%d: %w", a.epic.Number, err)
+		}
+		a.rep.Writes++
+		fmt.Fprintf(w, "updated the Implementation Epic #%d\n", a.epic.Number)
 	}
 	for _, ch := range a.deps {
 		for _, d := range ch.add {
