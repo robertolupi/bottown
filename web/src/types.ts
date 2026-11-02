@@ -133,6 +133,12 @@ export interface LiveRunInfo {
   id: string;
   target: string;
   target_url: string;
+  issue?: number;
+  issue_url?: string;
+  pr?: number;
+  pr_url?: string;
+  milestone?: string;
+  thread_key?: string;
   kind: string;
   actor: string;
   family: string;
@@ -171,6 +177,15 @@ export interface HistoryRunInfo {
   id: string;
   target: string;
   target_url: string;
+  issue?: number;
+  issue_url?: string;
+  issue_title?: string;
+  pr?: number;
+  pr_url?: string;
+  pr_title?: string;
+  milestone?: string;
+  thread_key?: string;
+  active?: boolean;
   kind: string;
   actor: string;
   family: string;
@@ -189,6 +204,9 @@ export interface HistoryRunInfo {
 export interface TimelineEvent {
   type: string;
   time: string;
+  ended?: string;
+  duration?: string;
+  kind?: string;
   title: string;
   detail?: string;
   actor?: string;
@@ -199,11 +217,57 @@ export interface TimelineEvent {
 
 export interface IssueTimeline {
   issue: number;
+  pr?: number;
+  pr_url?: string;
+  pr_title?: string;
+  milestone?: string;
+  thread_key?: string;
   title: string;
   state: string;
   url: string;
   events: TimelineEvent[];
 }
+
+export interface HistoryThread {
+  key: string;
+  kind: 'flow' | 'discuss';
+  issue?: number;
+  issue_url?: string;
+  issue_title?: string;
+  pr?: number;
+  pr_url?: string;
+  pr_title?: string;
+  milestone?: string;
+  active: boolean;
+  active_label?: string;
+  status: string;
+  run_count: number;
+  last_activity: string;
+  actors: string[];
+  duration: string;
+  usage?: UsageInfo;
+  summary: string;
+  total_denials: number;
+  runs: HistoryRunInfo[]; // constituent runs in chronological order
+}
+
+export interface FlowTimelineRunBoundary {
+  entry_type: 'run_boundary';
+  run: HistoryRunInfo;
+  time: string;
+  ended?: string;
+  duration: string;
+  status: string;
+  events: TimelineEvent[];
+}
+
+export interface FlowTimelineStandaloneEvent {
+  entry_type: 'event';
+  time: string;
+  event: TimelineEvent;
+}
+
+export type FlowTimelineEntry = FlowTimelineRunBoundary | FlowTimelineStandaloneEvent;
 
 export interface UIStatusResponse {
   instance: string;

@@ -1,19 +1,31 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, ActionResult, HistoryRunInfo, IssueTimeline, Denial } from './types';
+  import type {
+    UIStatusResponse,
+    ActionResult,
+    HistoryRunInfo,
+    HistoryThread,
+    IssueTimeline,
+    Denial,
+  } from './types';
   import { lifecycleChange } from './lifecycle';
   import {
     buildFlowActionPayload,
+    buildFlowTimeline,
     buildRunActionPayload,
-    filterHistoryRuns,
+    filterHistoryThreads,
+    formatThreadMainLine,
+    groupHistoryThreads,
     groupLiveFlows,
     isSameFamilyPair,
     nextPollDelayMs,
     parseIssueNumber,
     parseLivePollSnapshot,
+    reconcileExpandedThread,
     resolveInboxAction,
     selectDefaultActors,
     standaloneLiveRuns,
+    toggleExpandedThread,
   } from './state';
 
   let status = $state<UIStatusResponse | null>(null);
@@ -67,7 +79,13 @@
   let filterDate = $state<string>('');
   let filterSearch = $state<string>('');
 
-  // Timeline state
+  // Flow expansion & timeline state (at most one flow expanded at a time)
+  let expandedThreadKey = $state<string | null>(null);
+  let threadTimelines = $state<Record<string, IssueTimeline>>({});
+  let threadTimelineLoading = $state<Record<string, boolean>>({});
+  let threadTimelineError = $state<Record<string, string>>({});
+
+  // Legacy modal timeline state
   let timelineData = $state<IssueTimeline | null>(null);
   let timelineLoading = $state<boolean>(false);
 
@@ -105,9 +123,13 @@
     expandedLogs = { ...expandedLogs };
   }
 
-  let filteredHistory = $derived(
-    filterHistoryRuns(
-      historyRuns,
+  let historyThreads = $derived(
+    groupHistoryThreads(historyRuns, status?.live_runs, status?.active_flows),
+  );
+
+  let filteredThreads = $derived(
+    filterHistoryThreads(
+      historyThreads,
       {
         actor: filterActor,
         kind: filterKind,
@@ -116,8 +138,50 @@
         search: filterSearch,
       },
       nowTime,
-    )
+    ),
   );
+
+  async function loadThreadTimeline(thread: HistoryThread, background = false) {
+    if (!thread.issue) return;
+    const key = thread.key;
+    if (!background && !threadTimelines[key]) {
+      threadTimelineLoading = { ...threadTimelineLoading, [key]: true };
+    }
+    try {
+      const prParam = thread.pr !== undefined ? `?pr=${thread.pr}` : '?pr=0';
+      const res = await fetch(`/api/issues/${thread.issue}/timeline${prParam}`);
+      if (!res.ok) {
+        throw new Error(`Failed to load timeline for #${thread.issue}`);
+      }
+      const data: IssueTimeline = await res.json();
+      threadTimelines = { ...threadTimelines, [key]: data };
+      if (threadTimelineError[key]) {
+        const nextErr = { ...threadTimelineError };
+        delete nextErr[key];
+        threadTimelineError = nextErr;
+      }
+    } catch (e: any) {
+      if (!background) {
+        threadTimelineError = {
+          ...threadTimelineError,
+          [key]: e.message || 'Failed to load timeline',
+        };
+      }
+    } finally {
+      if (threadTimelineLoading[key]) {
+        threadTimelineLoading = { ...threadTimelineLoading, [key]: false };
+      }
+    }
+  }
+
+  function selectFlowThread(thread: HistoryThread) {
+    if (thread.kind !== 'flow') return;
+    const nextKey = toggleExpandedThread(expandedThreadKey, thread.key);
+    expandedThreadKey = nextKey;
+    if (nextKey === thread.key) {
+      loadThreadTimeline(thread, Boolean(threadTimelines[thread.key]));
+    }
+  }
 
   async function loadStatus(isRefresh = false) {
     if (isRefresh) refreshing = true;
@@ -144,14 +208,31 @@
     }
   }
 
-  async function loadHistory() {
-    historyLoading = true;
+  async function loadHistory(background = false) {
+    if (!background && historyRuns.length === 0) {
+      historyLoading = true;
+    }
     try {
+      const prevThreads = groupHistoryThreads(historyRuns, status?.live_runs, status?.active_flows);
       const res = await fetch('/api/runs?state=ended');
       if (!res.ok) {
         throw new Error(`Failed to load history: ${res.statusText}`);
       }
-      historyRuns = await res.json();
+      const nextRuns: HistoryRunInfo[] = await res.json();
+      const nextThreads = groupHistoryThreads(nextRuns, status?.live_runs, status?.active_flows);
+      const prevKey = expandedThreadKey;
+      const reconciledKey = reconcileExpandedThread(prevKey, prevThreads, nextThreads);
+      if (reconciledKey && prevKey && reconciledKey !== prevKey && threadTimelines[prevKey]) {
+        threadTimelines = { ...threadTimelines, [reconciledKey]: threadTimelines[prevKey] };
+      }
+      historyRuns = nextRuns;
+      expandedThreadKey = reconciledKey;
+      if (reconciledKey) {
+        const selected = nextThreads.find((t) => t.key === reconciledKey);
+        if (selected && selected.kind === 'flow') {
+          await loadThreadTimeline(selected, true);
+        }
+      }
     } catch (e: any) {
       console.error('Failed to load history:', e);
     } finally {
@@ -433,15 +514,33 @@
           const { liveRuns, activeFlows } = parseLivePollSnapshot(data);
 
           if (status) {
+            const prevThreads = groupHistoryThreads(historyRuns, status.live_runs, status.active_flows);
             const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
 
             status.live_runs = liveRuns;
             status.active_flows = activeFlows;
 
-            // A run or flow started or ended: refresh status, and history
-            // when something ended.
+            const nextThreads = groupHistoryThreads(historyRuns, liveRuns, activeFlows);
+            const prevKey = expandedThreadKey;
+            const reconciledKey = reconcileExpandedThread(prevKey, prevThreads, nextThreads);
+            if (reconciledKey && prevKey && reconciledKey !== prevKey && threadTimelines[prevKey]) {
+              threadTimelines = { ...threadTimelines, [reconciledKey]: threadTimelines[prevKey] };
+            }
+            expandedThreadKey = reconciledKey;
+
+            // A run or flow started or ended: refresh status and history
+            // in the background without altering the expanded flow selection.
             if (change.status) await loadStatus(true);
-            if (change.history) await loadHistory();
+            if (change.status || change.history) await loadHistory(true);
+
+            // Live-update the selected active flow's timeline.
+            if (expandedThreadKey) {
+              const currentThreads = groupHistoryThreads(historyRuns, status?.live_runs, status?.active_flows);
+              const selected = currentThreads.find((t) => t.key === expandedThreadKey);
+              if (selected && selected.kind === 'flow' && (selected.active || change.status || change.history)) {
+                await loadThreadTimeline(selected, true);
+              }
+            }
           }
         }
       } catch {
@@ -766,13 +865,15 @@
         <div class="card-header">
           <div class="card-header-left">
             <h2 id="run-history-heading">Run History</h2>
-            <span class="badge badge-neutral">{historyRuns.length} total</span>
+            <span class="badge badge-neutral">
+              {historyThreads.length} {historyThreads.length === 1 ? 'thread' : 'threads'} · {historyRuns.length} {historyRuns.length === 1 ? 'run' : 'runs'}
+            </span>
           </div>
           <div class="card-header-right filters-row">
             <input
               type="text"
               class="input input-sm"
-              placeholder="Search target or summary..."
+              placeholder="Search issue, PR, milestone, or summary..."
               bind:value={filterSearch}
             />
             <select class="input input-sm select-sm" bind:value={filterActor}>
@@ -808,9 +909,9 @@
         <div class="card-body">
           {#if historyLoading}
             <div class="loading-state">Loading history...</div>
-          {:else if filteredHistory.length === 0}
+          {:else if filteredThreads.length === 0}
             <div class="inbox-zero">
-              <span>No matching finished runs found.</span>
+              <span>No matching history threads found.</span>
             </div>
           {:else}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -823,86 +924,406 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Target</th>
+                    <th>Flow / Target</th>
                     <th>Kind</th>
-                    <th>Actor</th>
+                    <th>Actors</th>
                     <th>Status</th>
                     <th>Duration</th>
                     <th>Usage</th>
                     <th>Summary</th>
-                    <th>When</th>
+                    <th>Last Activity</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each filteredHistory as h (h.id)}
-                    <tr>
-                      <td>
-                        <a class="pr-badge" href={h.target_url} target="_blank" rel="noreferrer">{h.target}</a>
-                      </td>
-                      <td><span class="badge badge-neutral">{h.kind}</span></td>
-                      <td><span class="badge repo-badge">{h.actor} ({h.family})</span></td>
-                      <td>
-                        <span class="badge badge-{h.status === 'succeeded' ? 'success' : h.status === 'failed' ? 'error' : 'warning'}">
-                          {h.status}
-                        </span>
-                        {#if h.denials && h.denials.length > 0}
-                          <span class="badge badge-error" title="Operations the server's policy refused this run; expand the log to see them">
-                            {h.denials.length} denied
+                  {#each filteredThreads as thread (thread.key)}
+                    {@const mainLine = formatThreadMainLine(thread)}
+                    {#if thread.kind === 'discuss'}
+                      {@const h = thread.runs[0]}
+                      <tr class="discuss-thread-row" class:flow-row-active={thread.active}>
+                        <td>
+                          <div class="thread-main-line">
+                            {#if mainLine.issueLabel}
+                              <a class="pr-badge" href={mainLine.issueUrl || h.target_url} target="_blank" rel="noreferrer">
+                                {mainLine.issueLabel}
+                              </a>
+                            {:else}
+                              <a class="pr-badge" href={h.target_url} target="_blank" rel="noreferrer">{h.target}</a>
+                            {/if}
+                            {#if mainLine.issueTitle}
+                              <span class="thread-title" title={mainLine.issueTitle}>{mainLine.issueTitle}</span>
+                            {/if}
+                            {#if mainLine.milestone}
+                              <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
+                            {/if}
+                          </div>
+                        </td>
+                        <td><span class="badge badge-neutral">discuss</span></td>
+                        <td><span class="badge repo-badge">{h.actor} ({h.family})</span></td>
+                        <td>
+                          {#if thread.active}
+                            <span class="badge badge-accent flow-live-badge">active</span>
+                          {/if}
+                          <span class="badge badge-{h.status === 'succeeded' ? 'success' : h.status === 'failed' ? 'error' : 'warning'}">
+                            {h.status}
                           </span>
-                        {/if}
-                      </td>
-                      <td class="muted">{h.duration || '—'}</td>
-                      <td class="muted text-sm">{formatUsage(h.usage)}</td>
-                      <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
-                      <td class="muted text-sm">{formatTime(h.created)}</td>
-                      <td>
-                        <div class="row-actions">
-                          <button
-                            class="btn btn-sm btn-secondary"
-                            onclick={() => toggleHistoryLog(h.id)}
-                            title="Expand parsed run log"
-                          >
-                            {expandedLogs[h.id] ? 'Hide Log' : 'Log'}
-                          </button>
-                          <button
-                            class="btn btn-sm btn-secondary"
-                            onclick={() => extractIssueAndOpenTimeline(h.target)}
-                            title="View issue timeline"
-                          >
-                            Timeline
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {#if expandedLogs[h.id]}
-                      {@const logState = expandedLogs[h.id]}
-                      <tr class="log-expand-row">
-                        <td colspan="9">
-                          {@render denialList(h.denials)}
-                          <div class="log-tail-box history-log-box">
-                            <div class="log-tail-header">
-                              <span>Run Log ({h.id})</span>
-                              {#if logState.lines}
-                                <span class="muted text-sm">{logState.lines.length} lines</span>
-                              {/if}
-                            </div>
-                            <div class="log-tail-content">
-                              {#if logState.loading}
-                                <div class="log-line muted">Loading log...</div>
-                              {:else if logState.error}
-                                <div class="log-line error">{logState.error}</div>
-                              {:else if !logState.lines || logState.lines.length === 0}
-                                <div class="log-line muted">No log lines recorded.</div>
-                              {:else}
-                                {#each logState.lines as line}
-                                  <div class="log-line">{line}</div>
-                                {/each}
-                              {/if}
-                            </div>
+                          {#if h.denials && h.denials.length > 0}
+                            <span class="badge badge-error" title="Operations the server's policy refused this run; expand the log to see them">
+                              {h.denials.length} denied
+                            </span>
+                          {/if}
+                        </td>
+                        <td class="muted">{h.duration || '—'}</td>
+                        <td class="muted text-sm">{formatUsage(h.usage)}</td>
+                        <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
+                        <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
+                        <td>
+                          <div class="row-actions">
+                            <button
+                              class="btn btn-sm btn-secondary"
+                              onclick={() => toggleHistoryLog(h.id)}
+                              title="Expand parsed run log"
+                            >
+                              {expandedLogs[h.id] ? 'Hide Log' : 'Log'}
+                            </button>
                           </div>
                         </td>
                       </tr>
+                      {#if expandedLogs[h.id]}
+                        {@const logState = expandedLogs[h.id]}
+                        <tr class="log-expand-row">
+                          <td colspan="9">
+                            {@render denialList(h.denials)}
+                            <div class="log-tail-box history-log-box">
+                              <div class="log-tail-header">
+                                <span>Run Log ({h.id})</span>
+                                {#if logState.lines}
+                                  <span class="muted text-sm">{logState.lines.length} lines</span>
+                                {/if}
+                              </div>
+                              <div class="log-tail-content">
+                                {#if logState.loading}
+                                  <div class="log-line muted">Loading log...</div>
+                                {:else if logState.error}
+                                  <div class="log-line error">{logState.error}</div>
+                                {:else if !logState.lines || logState.lines.length === 0}
+                                  <div class="log-line muted">No log lines recorded.</div>
+                                {:else}
+                                  {#each logState.lines as line}
+                                    <div class="log-line">{line}</div>
+                                  {/each}
+                                {/if}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      {/if}
+                    {:else}
+                      {@const isExpanded = expandedThreadKey === thread.key}
+                      <tr
+                        class="flow-thread-row"
+                        class:flow-row-active={thread.active}
+                        class:flow-row-expanded={isExpanded}
+                        onclick={() => selectFlowThread(thread)}
+                      >
+                        <td>
+                          <div class="thread-main-line">
+                            <span class="thread-chevron" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
+                            {#if mainLine.issueLabel}
+                              <a
+                                class="pr-badge"
+                                href={mainLine.issueUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onclick={(e) => e.stopPropagation()}
+                              >
+                                {mainLine.issueLabel}
+                              </a>
+                            {/if}
+                            {#if mainLine.prLabel}
+                              <a
+                                class="pr-badge"
+                                href={mainLine.prUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                onclick={(e) => e.stopPropagation()}
+                              >
+                                {mainLine.prLabel}
+                              </a>
+                            {/if}
+                            {#if !mainLine.issueLabel && !mainLine.prLabel && thread.runs.length > 0}
+                              <a
+                                class="pr-badge"
+                                href={thread.runs[thread.runs.length - 1].target_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                onclick={(e) => e.stopPropagation()}
+                              >
+                                {thread.runs[thread.runs.length - 1].target}
+                              </a>
+                            {/if}
+                            {#if mainLine.issueTitle || mainLine.prTitle}
+                              <span class="thread-title" title={mainLine.issueTitle || mainLine.prTitle}>
+                                {mainLine.issueTitle || mainLine.prTitle}
+                              </span>
+                            {/if}
+                            {#if mainLine.milestone}
+                              <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
+                            {/if}
+                          </div>
+                        </td>
+                        <td>
+                          <span class="badge badge-neutral">
+                            flow · {thread.run_count} {thread.run_count === 1 ? 'run' : 'runs'}
+                          </span>
+                        </td>
+                        <td>
+                          <div class="thread-actors">
+                            {#each thread.actors as act}
+                              <span class="badge repo-badge">{act}</span>
+                            {/each}
+                          </div>
+                        </td>
+                        <td>
+                          <div class="thread-status-badges">
+                            {#if thread.active}
+                              <span class="badge badge-accent flow-live-badge">
+                                {thread.active_label ? `active · ${thread.active_label}` : 'active'}
+                              </span>
+                            {/if}
+                            <span class="badge badge-{thread.status === 'succeeded' ? 'success' : thread.status === 'failed' ? 'error' : thread.status === 'running' ? 'accent' : 'warning'}">
+                              {thread.status}
+                            </span>
+                            {#if thread.total_denials > 0}
+                              <span class="badge badge-error" title="Operations refused by server policy in this flow">
+                                {thread.total_denials} denied
+                              </span>
+                            {/if}
+                          </div>
+                        </td>
+                        <td class="muted">{thread.duration || '—'}</td>
+                        <td class="muted text-sm">{formatUsage(thread.usage)}</td>
+                        <td class="summary-cell" title={thread.summary}>{thread.summary || '—'}</td>
+                        <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
+                        <td>
+                          <div class="row-actions">
+                            <button
+                              class="btn btn-sm btn-secondary"
+                              aria-expanded={isExpanded}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                selectFlowThread(thread);
+                              }}
+                            >
+                              {isExpanded ? 'Collapse' : `Runs (${thread.run_count})`}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {#if isExpanded}
+                        {@const flowTimelineEntries = buildFlowTimeline(thread, threadTimelines[thread.key])}
+                        <tr class="flow-expand-row">
+                          <td colspan="9">
+                            <div class="flow-expanded-panel">
+                              <!-- 1. Combined Flow Timeline at the top of the expanded flow -->
+                              <div class="flow-timeline-section">
+                                <div class="flow-section-header">
+                                  <div class="flow-section-title">
+                                    <strong>Combined Flow Timeline</strong>
+                                    {#if mainLine.issueLabel}
+                                      <span class="badge badge-neutral">{mainLine.issueLabel}</span>
+                                    {/if}
+                                    {#if mainLine.prLabel}
+                                      <span class="badge badge-neutral">{mainLine.prLabel}</span>
+                                    {/if}
+                                    {#if mainLine.milestone}
+                                      <span class="badge milestone-badge">{mainLine.milestone}</span>
+                                    {/if}
+                                    {#if thread.active}
+                                      <span class="badge badge-accent">Live updating</span>
+                                    {/if}
+                                  </div>
+                                  {#if threadTimelineLoading[thread.key]}
+                                    <span class="muted text-sm">Refreshing timeline…</span>
+                                  {:else if threadTimelineError[thread.key]}
+                                    <span class="muted text-sm">{threadTimelineError[thread.key]}</span>
+                                  {/if}
+                                </div>
+
+                                <div class="flow-timeline-list">
+                                  {#each flowTimelineEntries as entry}
+                                    {#if entry.entry_type === 'run_boundary'}
+                                      <div class="timeline-run-boundary timeline-run-{entry.status}">
+                                        <div class="timeline-run-boundary-header">
+                                          <div class="timeline-run-boundary-meta">
+                                            <span class="badge badge-neutral">{entry.run.kind}</span>
+                                            <span class="badge repo-badge">{entry.run.actor} ({entry.run.family})</span>
+                                            <code class="text-sm muted">{entry.run.id}</code>
+                                            <span class="badge badge-{entry.status === 'succeeded' ? 'success' : entry.status === 'failed' ? 'error' : entry.status === 'running' ? 'accent' : 'warning'}">
+                                              {entry.status}
+                                            </span>
+                                            {#if entry.duration && entry.duration !== '-'}
+                                              <span class="muted text-sm">{entry.duration}</span>
+                                            {/if}
+                                          </div>
+                                          <div class="timeline-run-boundary-actions">
+                                            <span class="muted text-sm">
+                                              {formatTime(entry.time)}{entry.ended ? ` → ${formatTime(entry.ended)}` : ' (in progress)'}
+                                            </span>
+                                            <button
+                                              class="btn btn-sm btn-secondary"
+                                              onclick={() => toggleHistoryLog(entry.run.id)}
+                                            >
+                                              {expandedLogs[entry.run.id] ? 'Hide Run Details' : 'Run Details & Log'}
+                                            </button>
+                                          </div>
+                                        </div>
+
+                                        <div class="timeline-run-boundary-events">
+                                          {#each entry.events as ev}
+                                            <div class="timeline-item timeline-{ev.type}">
+                                              <div class="timeline-dot"></div>
+                                              <div class="timeline-body">
+                                                <div class="timeline-header">
+                                                  <span class="timeline-title">
+                                                    {#if ev.url}
+                                                      <a href={ev.url} target="_blank" rel="noreferrer">{ev.title}</a>
+                                                    {:else}
+                                                      {ev.title}
+                                                    {/if}
+                                                  </span>
+                                                  <span class="muted text-sm">{formatTime(ev.time)}</span>
+                                                </div>
+                                                {#if ev.detail}
+                                                  <div class="timeline-detail">{ev.detail}</div>
+                                                {/if}
+                                                {#if ev.actor}
+                                                  <div class="timeline-meta muted text-sm">by {ev.actor}</div>
+                                                {/if}
+                                              </div>
+                                            </div>
+                                          {/each}
+                                        </div>
+                                      </div>
+                                    {:else}
+                                      {@const ev = entry.event}
+                                      <div class="timeline-item timeline-standalone timeline-{ev.type}">
+                                        <div class="timeline-dot"></div>
+                                        <div class="timeline-body">
+                                          <div class="timeline-header">
+                                            <span class="timeline-title">
+                                              {#if ev.url}
+                                                <a href={ev.url} target="_blank" rel="noreferrer">{ev.title}</a>
+                                              {:else}
+                                                {ev.title}
+                                              {/if}
+                                            </span>
+                                            <span class="muted text-sm">{formatTime(ev.time)}</span>
+                                          </div>
+                                          {#if ev.detail}
+                                            <div class="timeline-detail">{ev.detail}</div>
+                                          {/if}
+                                          {#if ev.actor}
+                                            <div class="timeline-meta muted text-sm">by {ev.actor}</div>
+                                          {/if}
+                                        </div>
+                                      </div>
+                                    {/if}
+                                  {/each}
+                                </div>
+                              </div>
+
+                              <!-- 2. Constituent Runs in this Flow -->
+                              <div class="flow-runs-section">
+                                <div class="flow-section-header">
+                                  <strong>Constituent Runs ({thread.runs.length})</strong>
+                                </div>
+                                <table class="data-table constituent-runs-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Run ID</th>
+                                      <th>Target</th>
+                                      <th>Kind</th>
+                                      <th>Actor</th>
+                                      <th>Outcome</th>
+                                      <th>Duration</th>
+                                      <th>Usage</th>
+                                      <th>Summary</th>
+                                      <th>When</th>
+                                      <th>Details</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {#each thread.runs as r (r.id)}
+                                      <tr>
+                                        <td class="font-mono text-sm">{r.id}</td>
+                                        <td>
+                                          <a class="pr-badge" href={r.target_url} target="_blank" rel="noreferrer">{r.target}</a>
+                                        </td>
+                                        <td><span class="badge badge-neutral">{r.kind}</span></td>
+                                        <td><span class="badge repo-badge">{r.actor} ({r.family})</span></td>
+                                        <td>
+                                          <span class="badge badge-{r.status === 'succeeded' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'accent' : 'warning'}">
+                                            {r.status}
+                                          </span>
+                                          {#if r.denials && r.denials.length > 0}
+                                            <span class="badge badge-error" title="Operations the server's policy refused this run; expand the log to see them">
+                                              {r.denials.length} denied
+                                            </span>
+                                          {/if}
+                                        </td>
+                                        <td class="muted">{r.duration || '—'}</td>
+                                        <td class="muted text-sm">{formatUsage(r.usage)}</td>
+                                        <td class="summary-cell" title={r.summary}>{r.summary || '—'}</td>
+                                        <td class="muted text-sm">{formatTime(r.created)}</td>
+                                        <td>
+                                          <button
+                                            class="btn btn-sm btn-secondary"
+                                            onclick={() => toggleHistoryLog(r.id)}
+                                            title="Expand parsed run log and policy denials"
+                                          >
+                                            {expandedLogs[r.id] ? 'Hide Log' : 'Log'}
+                                          </button>
+                                        </td>
+                                      </tr>
+                                      {#if expandedLogs[r.id]}
+                                        {@const logState = expandedLogs[r.id]}
+                                        <tr class="log-expand-row">
+                                          <td colspan="10">
+                                            {@render denialList(r.denials)}
+                                            <div class="log-tail-box history-log-box">
+                                              <div class="log-tail-header">
+                                                <span>Run Log ({r.id} · {r.kind} · {r.actor})</span>
+                                                {#if logState.lines}
+                                                  <span class="muted text-sm">{logState.lines.length} lines</span>
+                                                {/if}
+                                              </div>
+                                              <div class="log-tail-content">
+                                                {#if logState.loading}
+                                                  <div class="log-line muted">Loading log...</div>
+                                                {:else if logState.error}
+                                                  <div class="log-line error">{logState.error}</div>
+                                                {:else if !logState.lines || logState.lines.length === 0}
+                                                  <div class="log-line muted">No log lines recorded.</div>
+                                                {:else}
+                                                  {#each logState.lines as line}
+                                                    <div class="log-line">{line}</div>
+                                                  {/each}
+                                                {/if}
+                                              </div>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      {/if}
+                                    {/each}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      {/if}
                     {/if}
                   {/each}
                 </tbody>
@@ -2195,4 +2616,154 @@
   .muted { color: var(--text-muted); }
   .text-sm { font-size: 12px; }
   .loading-state { text-align: center; padding: 48px; color: var(--text-muted); }
+
+  /* Flow-centric Run History styles */
+  .flow-thread-row {
+    cursor: pointer;
+    transition: background-color 0.12s ease;
+  }
+
+  .flow-thread-row:hover {
+    background: rgba(125, 125, 125, 0.06);
+  }
+
+  .flow-row-expanded {
+    background: rgba(37, 99, 235, 0.06);
+  }
+
+  .flow-row-active {
+    background: rgba(37, 99, 235, 0.09);
+  }
+
+  .flow-row-active td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .thread-main-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .thread-chevron {
+    display: inline-block;
+    width: 14px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .thread-title {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+  }
+
+  .milestone-badge {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .thread-actors, .thread-status-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .flow-live-badge {
+    font-weight: 600;
+  }
+
+  .flow-expand-row td {
+    padding: 0;
+    background: rgba(125, 125, 125, 0.03);
+  }
+
+  .flow-expanded-panel {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    border-left: 3px solid var(--accent);
+  }
+
+  .flow-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .flow-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .flow-timeline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-left: 8px;
+  }
+
+  .timeline-run-boundary {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--primary);
+    border-radius: 8px;
+    background: var(--card-bg);
+    overflow: hidden;
+  }
+
+  .timeline-run-succeeded {
+    border-left-color: var(--success);
+  }
+
+  .timeline-run-failed {
+    border-left-color: var(--error);
+  }
+
+  .timeline-run-running {
+    border-left-color: var(--accent);
+  }
+
+  .timeline-run-boundary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: rgba(125, 125, 125, 0.06);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .timeline-run-boundary-meta, .timeline-run-boundary-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .timeline-run-boundary-events {
+    padding: 12px 16px 4px 24px;
+  }
+
+  .timeline-standalone {
+    margin-left: 16px;
+  }
+
+  .constituent-runs-table {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
 </style>

@@ -574,6 +574,288 @@ func TestRuns_IssueTimeline(t *testing.T) {
 	}
 }
 
+func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
+	fix := defaultRunsFixture()
+	now := time.Now().UTC()
+
+	t0 := now.Add(-3 * time.Hour)
+	fix.issues = []*sdk.Issue{
+		{
+			Index:     50,
+			Title:     "Thread History Issue",
+			State:     sdk.StateOpen,
+			Poster:    &sdk.User{UserName: "rlupi"},
+			Created:   t0,
+			Milestone: &sdk.Milestone{ID: 1, Title: "Milestone Alpha"},
+		},
+		{
+			Index:   60,
+			Title:   "No Milestone Issue",
+			State:   sdk.StateOpen,
+			Poster:  &sdk.User{UserName: "rlupi"},
+			Created: t0,
+		},
+	}
+
+	// Issue 50 had PR !51 (closed after round 1) and later PR !52 (open, with 2 rounds).
+	pr51Created := t0.Add(15 * time.Minute)
+	pr51Closed := t0.Add(45 * time.Minute)
+	pr52Created := t0.Add(75 * time.Minute)
+
+	fix.prs = []*sdk.PullRequest{
+		{
+			Index:   51,
+			Title:   "First attempt at #50",
+			State:   sdk.StateClosed,
+			Poster:  &sdk.User{UserName: "claude"},
+			Head:    &sdk.PRBranchInfo{Ref: "issue/50", Sha: "aaaa1111"},
+			Created: &pr51Created,
+			Closed:  &pr51Closed,
+		},
+		{
+			Index:   52,
+			Title:   "Second attempt at #50",
+			State:   sdk.StateOpen,
+			Poster:  &sdk.User{UserName: "claude"},
+			Head:    &sdk.PRBranchInfo{Ref: "issue/50", Sha: "bbbb2222"},
+			Created: &pr52Created,
+		},
+	}
+
+	fix.reviews[51] = []*sdk.PullReview{
+		{
+			ID:        101,
+			State:     sdk.ReviewStateRequestChanges,
+			Body:      "Wrong approach in PR 51",
+			Reviewer:  &sdk.User{UserName: "agy"},
+			Submitted: t0.Add(35 * time.Minute),
+		},
+	}
+	fix.reviews[52] = []*sdk.PullReview{
+		{
+			ID:        102,
+			State:     sdk.ReviewStateRequestChanges,
+			Body:      "Please add unit tests",
+			Reviewer:  &sdk.User{UserName: "agy"},
+			Submitted: t0.Add(95 * time.Minute),
+		},
+		{
+			ID:        103,
+			State:     sdk.ReviewStateApproved,
+			Body:      "Looks good now",
+			Reviewer:  &sdk.User{UserName: "agy"},
+			Submitted: t0.Add(125 * time.Minute),
+		},
+	}
+
+	end := func(d time.Duration) *time.Time {
+		tm := t0.Add(d)
+		return &tm
+	}
+
+	fix.runs = []secrets.Run{
+		// PR 51 runs: pre-PR failed implement, implement opening !51, verify on !51
+		{
+			ID: "r-51-pre", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 50, Branch: "issue/50", Created: t0.Add(2 * time.Minute), Ended: end(8 * time.Minute),
+			Status: "failed", Digest: secrets.Digest{Summary: "Initial attempt timed out"},
+		},
+		{
+			ID: "r-51-imp", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 50, Branch: "issue/50", Created: t0.Add(10 * time.Minute), Ended: end(20 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Opened PR !51"},
+		},
+		{
+			ID: "r-51-ver", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
+			PR: 51, Branch: "issue/50", Created: t0.Add(30 * time.Minute), Ended: end(40 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Requested changes on !51"},
+		},
+		// Standalone discuss run on #50
+		{
+			ID: "r-50-discuss", Kind: "discuss", Actor: "kimi", Family: "moonshot", Repo: "bottown",
+			Issue: 50, Created: t0.Add(50 * time.Minute), Ended: end(55 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Discussed new design"},
+		},
+		// PR 52 runs: pre-PR implement after !51 closed, implement opening !52, verify round 1, implement round 2, verify round 2
+		{
+			ID: "r-52-pre", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 50, Branch: "issue/50", Created: t0.Add(60 * time.Minute), Ended: end(65 * time.Minute),
+			Status: "failed", Digest: secrets.Digest{Summary: "Stopped before opening PR"},
+		},
+		{
+			ID: "r-52-imp1", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 50, Branch: "issue/50", Created: t0.Add(70 * time.Minute), Ended: end(80 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Opened PR !52"},
+		},
+		{
+			ID: "r-52-ver1", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
+			PR: 52, Branch: "issue/50", Created: t0.Add(90 * time.Minute), Ended: end(100 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Requested unit tests on !52"},
+		},
+		{
+			ID: "r-52-imp2", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 50, Branch: "issue/50", Created: t0.Add(105 * time.Minute), Ended: end(115 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Added unit tests to !52"},
+		},
+		{
+			ID: "r-52-ver2", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
+			PR: 52, Branch: "issue/50", Created: t0.Add(120 * time.Minute), Ended: end(130 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Approved !52"},
+		},
+		// Pre-PR implement run on issue #60 (no PR yet, no milestone)
+		{
+			ID: "r-60-imp1", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
+			Issue: 60, Branch: "issue/60", Created: t0.Add(135 * time.Minute), Ended: end(140 * time.Minute),
+			Status: "failed", Digest: secrets.Digest{Summary: "Pre-PR run on #60"},
+		},
+	}
+
+	fix.comments[50] = []*sdk.Comment{
+		{
+			ID:      1,
+			Poster:  &sdk.User{UserName: "rlupi"},
+			Body:    "Comment during PR 51",
+			Created: t0.Add(25 * time.Minute),
+		},
+		{
+			ID:      2,
+			Poster:  &sdk.User{UserName: "kimi"},
+			Body:    "**bottown run `r-50-discuss`** · discuss · kimi (moonshot) · batch · **succeeded**\n\nDiscussed new design",
+			Created: t0.Add(54 * time.Minute),
+		},
+		{
+			ID:      3,
+			Poster:  &sdk.User{UserName: "rlupi"},
+			Body:    "Comment during PR 52",
+			Created: t0.Add(85 * time.Minute),
+		},
+	}
+
+	_, port := newRunsFixtureServer(t, fix)
+	top := t.TempDir()
+	// Mark issue #50 as having an active flow to test active highlighting on the open PR thread (!52) only.
+	if err := os.MkdirAll(filepath.Join(top, ".bottown"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	flowRec := fmt.Sprintf(`{"issue":50,"implement":"claude","verify":"agy","rounds":3,"pid":%d}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-50.json"), []byte(flowRec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServer(Config{
+		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
+		RepoTop:  top,
+		FullRepo: "bottown/bottown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	history, err := s.ComputeHistoryRuns(ctx, HistoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := make(map[string]HistoryRunInfo, len(history))
+	for _, h := range history {
+		byID[h.ID] = h
+	}
+
+	// 1. PR 51 thread includes pre-PR run, implement, and verify; not active (since PR 51 is closed)
+	for _, id := range []string{"r-51-pre", "r-51-imp", "r-51-ver"} {
+		h := byID[id]
+		if h.ThreadKey != "flow:issue:50:pr:51" || h.Issue != 50 || h.PR != 51 {
+			t.Fatalf("%s: expected flow:issue:50:pr:51, got %+v", id, h)
+		}
+		if h.Milestone != "Milestone Alpha" {
+			t.Fatalf("%s: expected milestone 'Milestone Alpha', got %q", id, h.Milestone)
+		}
+		if h.Active {
+			t.Fatalf("%s: closed PR 51 thread must not be marked active", id)
+		}
+	}
+
+	// 2. PR 52 thread includes pre-PR run after !51 closed and both rounds of implement+verify; marked active
+	for _, id := range []string{"r-52-pre", "r-52-imp1", "r-52-ver1", "r-52-imp2", "r-52-ver2"} {
+		h := byID[id]
+		if h.ThreadKey != "flow:issue:50:pr:52" || h.Issue != 50 || h.PR != 52 {
+			t.Fatalf("%s: expected flow:issue:50:pr:52, got %+v", id, h)
+		}
+		if h.Milestone != "Milestone Alpha" {
+			t.Fatalf("%s: expected milestone 'Milestone Alpha', got %q", id, h.Milestone)
+		}
+		if !h.Active {
+			t.Fatalf("%s: open PR 52 thread for active flow #50 should be marked active", id)
+		}
+	}
+
+	// 3. Discuss run is a separate entry
+	disc := byID["r-50-discuss"]
+	if disc.ThreadKey != "discuss:r-50-discuss" || disc.Active {
+		t.Fatalf("discuss run should have standalone thread key and not be flow-active, got %+v", disc)
+	}
+
+	// 4. Pre-PR run on issue #60 (no PR, no milestone)
+	pre60 := byID["r-60-imp1"]
+	if pre60.ThreadKey != "flow:issue:60" || pre60.Issue != 60 || pre60.PR != 0 || pre60.Milestone != "" {
+		t.Fatalf("r-60-imp1: expected pre-PR thread flow:issue:60 with empty milestone, got %+v", pre60)
+	}
+
+	// 5. Scoped timeline for PR 51 excludes PR 52 runs/reviews/comments and excludes discuss runs
+	tl51, err := s.ComputeFlowTimeline(ctx, 50, 51)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tl51.PR != 51 || tl51.ThreadKey != "flow:issue:50:pr:51" || tl51.Milestone != "Milestone Alpha" {
+		t.Fatalf("unexpected tl51 metadata: %+v", tl51)
+	}
+	var tl51Runs []string
+	for _, ev := range tl51.Events {
+		if ev.Type == "run" {
+			tl51Runs = append(tl51Runs, ev.RunID)
+			if ev.Ended == nil || ev.Duration == "" || ev.Kind == "" {
+				t.Fatalf("expected run boundary metadata (Ended, Duration, Kind) on %+v", ev)
+			}
+		}
+		if ev.Type == "comment" && strings.Contains(ev.Detail, "PR 52") {
+			t.Fatalf("tl51 should not include PR 52 comment: %+v", ev)
+		}
+		if strings.Contains(ev.Detail, "discuss") {
+			t.Fatalf("tl51 should not include discuss run or handover: %+v", ev)
+		}
+	}
+	if strings.Join(tl51Runs, ",") != "r-51-pre,r-51-imp,r-51-ver" {
+		t.Fatalf("tl51 runs = %v, want [r-51-pre r-51-imp r-51-ver]", tl51Runs)
+	}
+
+	// 6. Scoped timeline for PR 52 includes only PR 52's 5 runs and PR 52's reviews/comments
+	tl52, err := s.ComputeFlowTimeline(ctx, 50, 52)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tl52Runs []string
+	var tl52Reviews int
+	for _, ev := range tl52.Events {
+		if ev.Type == "run" {
+			tl52Runs = append(tl52Runs, ev.RunID)
+		}
+		if ev.Type == "review" {
+			tl52Reviews++
+		}
+		if ev.Type == "comment" && strings.Contains(ev.Detail, "PR 51") {
+			t.Fatalf("tl52 should not include PR 51 comment: %+v", ev)
+		}
+	}
+	if strings.Join(tl52Runs, ",") != "r-52-pre,r-52-imp1,r-52-ver1,r-52-imp2,r-52-ver2" {
+		t.Fatalf("tl52 runs = %v, want all 5 PR 52 runs", tl52Runs)
+	}
+	if tl52Reviews != 2 {
+		t.Fatalf("tl52 reviews = %d, want 2", tl52Reviews)
+	}
+}
+
 func TestActions_FlowCrossFamilyValidation(t *testing.T) {
 	fix := defaultRunsFixture()
 	// Two actors in the same family

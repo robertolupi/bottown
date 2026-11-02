@@ -8,7 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +33,12 @@ type LiveRunInfo struct {
 	ID          string    `json:"id"`
 	Target      string    `json:"target"` // "#51" or "!51"
 	TargetURL   string    `json:"target_url"`
+	Issue       int64     `json:"issue,omitempty"`
+	IssueURL    string    `json:"issue_url,omitempty"`
+	PR          int64     `json:"pr,omitempty"`
+	PRURL       string    `json:"pr_url,omitempty"`
+	Milestone   string    `json:"milestone,omitempty"`
+	ThreadKey   string    `json:"thread_key,omitempty"`
 	Kind        string    `json:"kind"` // implement, verify, discuss
 	Actor       string    `json:"actor"`
 	Family      string    `json:"family"`
@@ -79,22 +88,31 @@ type ActiveFlowInfo struct {
 
 // HistoryRunInfo represents a finished run in the history view.
 type HistoryRunInfo struct {
-	ID        string         `json:"id"`
-	Target    string         `json:"target"` // "#51" or "!51"
-	TargetURL string         `json:"target_url"`
-	Kind      string         `json:"kind"`
-	Actor     string         `json:"actor"`
-	Family    string         `json:"family"`
-	Harness   string         `json:"harness"`
-	Mode      string         `json:"mode"`   // "batch" or "interactive"
-	Status    string         `json:"status"` // "succeeded", "failed", "revoked"
-	Created   time.Time      `json:"created"`
-	Ended     *time.Time     `json:"ended,omitempty"`
-	Duration  string         `json:"duration"` // e.g. "2m 15s"
-	Summary   string         `json:"summary"`  // first line of handover
-	Usage     *secrets.Usage `json:"usage,omitempty"`
-	Purged    bool           `json:"purged"`
-	Denials   []Denial       `json:"denials"`
+	ID         string         `json:"id"`
+	Target     string         `json:"target"` // "#51" or "!51"
+	TargetURL  string         `json:"target_url"`
+	Issue      int64          `json:"issue,omitempty"`
+	IssueURL   string         `json:"issue_url,omitempty"`
+	IssueTitle string         `json:"issue_title,omitempty"`
+	PR         int64          `json:"pr,omitempty"`
+	PRURL      string         `json:"pr_url,omitempty"`
+	PRTitle    string         `json:"pr_title,omitempty"`
+	Milestone  string         `json:"milestone,omitempty"`
+	ThreadKey  string         `json:"thread_key,omitempty"`
+	Active     bool           `json:"active,omitempty"`
+	Kind       string         `json:"kind"`
+	Actor      string         `json:"actor"`
+	Family     string         `json:"family"`
+	Harness    string         `json:"harness"`
+	Mode       string         `json:"mode"`   // "batch" or "interactive"
+	Status     string         `json:"status"` // "succeeded", "failed", "revoked"
+	Created    time.Time      `json:"created"`
+	Ended      *time.Time     `json:"ended,omitempty"`
+	Duration   string         `json:"duration"` // e.g. "2m 15s"
+	Summary    string         `json:"summary"`  // first line of handover
+	Usage      *secrets.Usage `json:"usage,omitempty"`
+	Purged     bool           `json:"purged"`
+	Denials    []Denial       `json:"denials"`
 }
 
 // HistoryFilter specifies criteria for filtering ended runs.
@@ -105,25 +123,33 @@ type HistoryFilter struct {
 	Since  time.Time
 }
 
-// TimelineEvent is a single chronological event on an issue.
+// TimelineEvent is a single chronological event on an issue or flow thread.
 type TimelineEvent struct {
-	Type   string    `json:"type"` // "issue_created", "run", "pr_opened", "review", "pr_merged", "comment"
-	Time   time.Time `json:"time"`
-	Title  string    `json:"title"`
-	Detail string    `json:"detail,omitempty"`
-	Actor  string    `json:"actor,omitempty"`
-	Status string    `json:"status,omitempty"`
-	RunID  string    `json:"run_id,omitempty"`
-	URL    string    `json:"url,omitempty"`
+	Type     string     `json:"type"` // "issue_created", "run", "pr_opened", "review", "pr_merged", "comment"
+	Time     time.Time  `json:"time"`
+	Ended    *time.Time `json:"ended,omitempty"`
+	Duration string     `json:"duration,omitempty"`
+	Kind     string     `json:"kind,omitempty"`
+	Title    string     `json:"title"`
+	Detail   string     `json:"detail,omitempty"`
+	Actor    string     `json:"actor,omitempty"`
+	Status   string     `json:"status,omitempty"`
+	RunID    string     `json:"run_id,omitempty"`
+	URL      string     `json:"url,omitempty"`
 }
 
-// IssueTimeline represents the complete history for an issue.
+// IssueTimeline represents the timeline for an issue or a specific flow thread.
 type IssueTimeline struct {
-	Issue  int64           `json:"issue"`
-	Title  string          `json:"title"`
-	State  string          `json:"state"`
-	URL    string          `json:"url"`
-	Events []TimelineEvent `json:"events"`
+	Issue     int64           `json:"issue"`
+	PR        int64           `json:"pr,omitempty"`
+	PRURL     string          `json:"pr_url,omitempty"`
+	PRTitle   string          `json:"pr_title,omitempty"`
+	Milestone string          `json:"milestone,omitempty"`
+	ThreadKey string          `json:"thread_key,omitempty"`
+	Title     string          `json:"title"`
+	State     string          `json:"state"`
+	URL       string          `json:"url"`
+	Events    []TimelineEvent `json:"events"`
 }
 
 func (s *Server) getActiveFlow(issue int64) *FlowRecord {
@@ -256,53 +282,75 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 
 		// Calculate flow info ONLY for implement and verify runs when an active flow exists
 		var flow *FlowInfo
-		if sr.Kind == "implement" || sr.Kind == "verify" {
-			issueNum := sr.Issue
-			if issueNum <= 0 && sr.PR > 0 {
-				for _, pr := range prs {
-					if pr.Index == sr.PR && pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
-						var num int64
-						if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &num); err == nil {
-							issueNum = num
-						}
-						break
+		issueNum := sr.Issue
+		if issueNum <= 0 {
+			issueNum = parseIssueRef(sr.Branch)
+		}
+		if issueNum <= 0 && sr.PR > 0 {
+			for _, pr := range prs {
+				if pr.Index == sr.PR && pr.Head != nil {
+					if num := parseIssueRef(pr.Head.Ref); num > 0 {
+						issueNum = num
 					}
+					break
 				}
 			}
+		}
+		prNum := sr.PR
+		if prNum <= 0 && issueNum > 0 && sr.Kind != "discuss" {
+			if pr := prByIssue[issueNum]; pr != nil {
+				prNum = pr.Index
+			}
+		}
 
-			if issueNum > 0 {
-				flowRec := s.getActiveFlow(issueNum)
-				if flowRec != nil {
-					pr := prByIssue[issueNum]
-					round := 1
-					if pr != nil {
-						for _, r := range prReviews[pr.Index] {
-							// Matching internal/flow countRounds: count all requested changes
-							// including dismissed/stale ones
-							if r.State == sdk.ReviewStateRequestChanges {
-								round++
-							}
+		if (sr.Kind == "implement" || sr.Kind == "verify") && issueNum > 0 {
+			flowRec := s.getActiveFlow(issueNum)
+			if flowRec != nil {
+				pr := prByIssue[issueNum]
+				round := 1
+				if pr != nil {
+					for _, r := range prReviews[pr.Index] {
+						// Matching internal/flow countRounds: count all requested changes
+						// including dismissed/stale ones
+						if r.State == sdk.ReviewStateRequestChanges {
+							round++
 						}
 					}
-					maxRounds := flowRec.Rounds
-					if maxRounds <= 0 {
-						maxRounds = 3
-					}
-					stepWord := "implementing with"
-					if sr.Kind == "verify" {
-						stepWord = "verifying with"
-					}
-					step := fmt.Sprintf("%s %s", stepWord, sr.Actor)
-					label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
-					flow = &FlowInfo{
-						Issue:     issueNum,
-						Round:     round,
-						MaxRounds: maxRounds,
-						Step:      step,
-						Label:     label,
-					}
+				}
+				maxRounds := flowRec.Rounds
+				if maxRounds <= 0 {
+					maxRounds = 3
+				}
+				stepWord := "implementing with"
+				if sr.Kind == "verify" {
+					stepWord = "verifying with"
+				}
+				step := fmt.Sprintf("%s %s", stepWord, sr.Actor)
+				label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
+				flow = &FlowInfo{
+					Issue:     issueNum,
+					Round:     round,
+					MaxRounds: maxRounds,
+					Step:      step,
+					Label:     label,
 				}
 			}
+		}
+
+		var issueURL, prURL, milestone, threadKey string
+		if issueNum > 0 {
+			issueURL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum)
+		}
+		if prNum > 0 {
+			prURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prNum)
+			if pr := prByIssue[issueNum]; pr != nil && pr.Index == prNum && pr.Milestone != nil {
+				milestone = pr.Milestone.Title
+			}
+		}
+		if sr.Kind == "discuss" {
+			threadKey = "discuss:" + sr.ID
+		} else {
+			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
 		}
 
 		elapsed := formatDuration(now.Sub(sr.Created))
@@ -315,6 +363,12 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			ID:          sr.ID,
 			Target:      target,
 			TargetURL:   targetURL,
+			Issue:       issueNum,
+			IssueURL:    issueURL,
+			PR:          prNum,
+			PRURL:       prURL,
+			Milestone:   milestone,
+			ThreadKey:   threadKey,
 			Kind:        sr.Kind,
 			Actor:       sr.Actor,
 			Family:      family,
@@ -427,6 +481,312 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 	return flows
 }
 
+var summaryPRRegex = regexp.MustCompile(`!(\d+)\b`)
+
+type resolvedRunMeta struct {
+	Issue      int64
+	IssueURL   string
+	IssueTitle string
+	PR         int64
+	PRURL      string
+	PRTitle    string
+	Milestone  string
+	ThreadKey  string
+	Active     bool
+}
+
+func parseIssueRef(ref string) int64 {
+	ref = strings.TrimSpace(ref)
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	if strings.HasPrefix(ref, "issue/") {
+		var n int64
+		if _, err := fmt.Sscanf(ref, "issue/%d", &n); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func parseSummaryPR(summary string) int64 {
+	m := summaryPRRegex.FindStringSubmatch(summary)
+	if len(m) >= 2 {
+		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func flowThreadKey(issueNum, prNum int64, runID string) string {
+	switch {
+	case issueNum > 0 && prNum > 0:
+		return fmt.Sprintf("flow:issue:%d:pr:%d", issueNum, prNum)
+	case issueNum > 0:
+		return fmt.Sprintf("flow:issue:%d", issueNum)
+	case prNum > 0:
+		return fmt.Sprintf("flow:pr:%d", prNum)
+	default:
+		return "flow:run:" + runID
+	}
+}
+
+func isPROpen(pr *sdk.PullRequest) bool {
+	if pr == nil {
+		return true
+	}
+	if pr.HasMerged || pr.Merged != nil || pr.Closed != nil {
+		return false
+	}
+	return pr.State == "" || pr.State == sdk.StateOpen
+}
+
+// resolveRunsMeta maps runs to their flow thread (issue, PR, milestone, thread key, and active state).
+// Implement and verify runs for the same issue and PR share a thread; distinct PRs form separate threads;
+// pre-PR implement runs group under the issue and join the PR thread once the PR is created;
+// discuss runs remain standalone entries.
+func (s *Server) resolveRunsMeta(
+	allRuns []secrets.Run,
+	issues []*sdk.Issue,
+	prs []*sdk.PullRequest,
+) (map[string]resolvedRunMeta, map[int64][]int64, map[int64]time.Time) {
+	org, repo := s.orgAndRepo()
+	forgeURL := s.cfg.Instance.ForgejoURL()
+
+	issuesByIndex := make(map[int64]*sdk.Issue, len(issues))
+	for _, iss := range issues {
+		if iss != nil && iss.Index > 0 {
+			issuesByIndex[iss.Index] = iss
+		}
+	}
+
+	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	issueOfPR := make(map[int64]int64)
+	for _, pr := range prs {
+		if pr == nil || pr.Index <= 0 {
+			continue
+		}
+		prsByIndex[pr.Index] = pr
+		if pr.Head != nil {
+			if n := parseIssueRef(pr.Head.Ref); n > 0 {
+				issueOfPR[pr.Index] = n
+			}
+		}
+	}
+
+	hasExplicitPRRun := make(map[int64]bool)
+	earliestRunForPR := make(map[int64]time.Time)
+	for _, sr := range allRuns {
+		if sr.PR > 0 {
+			hasExplicitPRRun[sr.PR] = true
+			if t, ok := earliestRunForPR[sr.PR]; !ok || (!sr.Created.IsZero() && sr.Created.Before(t)) {
+				earliestRunForPR[sr.PR] = sr.Created
+			}
+			if issueOfPR[sr.PR] == 0 {
+				if sr.Issue > 0 {
+					issueOfPR[sr.PR] = sr.Issue
+				} else if n := parseIssueRef(sr.Branch); n > 0 {
+					issueOfPR[sr.PR] = n
+				}
+			}
+		}
+	}
+
+	for _, sr := range allRuns {
+		if sr.Kind == "implement" && sr.Issue > 0 {
+			if mentioned := parseSummaryPR(sr.Digest.Summary); mentioned > 0 && issueOfPR[mentioned] == 0 {
+				if prsByIndex[mentioned] != nil || hasExplicitPRRun[mentioned] {
+					issueOfPR[mentioned] = sr.Issue
+				}
+			}
+		}
+	}
+
+	prsForIssue := make(map[int64][]int64)
+	seenPR := make(map[int64]bool)
+	for prIdx, issNum := range issueOfPR {
+		if issNum > 0 && prIdx > 0 && !seenPR[prIdx] {
+			seenPR[prIdx] = true
+			prsForIssue[issNum] = append(prsForIssue[issNum], prIdx)
+		}
+	}
+
+	prStartTime := func(prIdx int64) time.Time {
+		if pr := prsByIndex[prIdx]; pr != nil && pr.Created != nil && !pr.Created.IsZero() {
+			return *pr.Created
+		}
+		return earliestRunForPR[prIdx]
+	}
+
+	for issNum := range prsForIssue {
+		cands := prsForIssue[issNum]
+		sort.Slice(cands, func(i, j int) bool {
+			ti, tj := prStartTime(cands[i]), prStartTime(cands[j])
+			if !ti.Equal(tj) && !ti.IsZero() && !tj.IsZero() {
+				return ti.Before(tj)
+			}
+			return cands[i] < cands[j]
+		})
+		prsForIssue[issNum] = cands
+	}
+
+	prCutoffs := make(map[int64]time.Time)
+	for _, cands := range prsForIssue {
+		for idx, prIdx := range cands {
+			pr := prsByIndex[prIdx]
+			if idx == len(cands)-1 && isPROpen(pr) {
+				continue
+			}
+			var cutoff time.Time
+			if pr != nil {
+				if pr.Merged != nil && pr.Merged.After(cutoff) {
+					cutoff = *pr.Merged
+				}
+				if pr.Closed != nil && pr.Closed.After(cutoff) {
+					cutoff = *pr.Closed
+				}
+				if cutoff.IsZero() {
+					if pr.Updated != nil && pr.Updated.After(cutoff) {
+						cutoff = *pr.Updated
+					}
+					if pr.Created != nil && pr.Created.After(cutoff) {
+						cutoff = *pr.Created
+					}
+				}
+			}
+			for _, r := range allRuns {
+				if r.Kind == "discuss" {
+					continue
+				}
+				if r.PR == prIdx || (r.Kind == "implement" && parseSummaryPR(r.Digest.Summary) == prIdx) {
+					if r.Created.After(cutoff) {
+						cutoff = r.Created
+					}
+					if r.Ended != nil && r.Ended.After(cutoff) {
+						cutoff = *r.Ended
+					}
+				}
+			}
+			prCutoffs[prIdx] = cutoff
+		}
+	}
+
+	meta := make(map[string]resolvedRunMeta, len(allRuns))
+	activeThreads := make(map[string]bool)
+	seenIssues := make(map[int64]bool)
+	now := time.Now().UTC()
+
+	for _, sr := range allRuns {
+		var issueNum, prNum int64
+		var threadKey string
+
+		switch sr.Kind {
+		case "discuss":
+			issueNum = sr.Issue
+			prNum = sr.PR
+			threadKey = "discuss:" + sr.ID
+		case "verify":
+			prNum = sr.PR
+			issueNum = sr.Issue
+			if issueNum <= 0 && prNum > 0 {
+				issueNum = issueOfPR[prNum]
+			}
+			if issueNum <= 0 {
+				issueNum = parseIssueRef(sr.Branch)
+			}
+			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
+		default: // "implement"
+			issueNum = sr.Issue
+			if issueNum <= 0 {
+				issueNum = parseIssueRef(sr.Branch)
+			}
+			prNum = sr.PR
+			if issueNum <= 0 && prNum > 0 {
+				issueNum = issueOfPR[prNum]
+			}
+			if prNum <= 0 && issueNum > 0 {
+				cands := prsForIssue[issueNum]
+				if mentioned := parseSummaryPR(sr.Digest.Summary); mentioned > 0 && slices.Contains(cands, mentioned) {
+					prNum = mentioned
+				} else {
+					for idx, candPR := range cands {
+						if idx == len(cands)-1 && isPROpen(prsByIndex[candPR]) {
+							prNum = candPR
+							break
+						}
+						if cutoff := prCutoffs[candPR]; !cutoff.IsZero() && !sr.Created.After(cutoff) {
+							prNum = candPR
+							break
+						}
+					}
+				}
+			}
+			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
+		}
+
+		if issueNum > 0 {
+			seenIssues[issueNum] = true
+		}
+
+		var issueURL, issueTitle, prURL, prTitle, milestone string
+		if issueNum > 0 {
+			issueURL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum)
+			if iss := issuesByIndex[issueNum]; iss != nil {
+				issueTitle = iss.Title
+				if iss.Milestone != nil && iss.Milestone.Title != "" {
+					milestone = iss.Milestone.Title
+				}
+			}
+		}
+		if prNum > 0 {
+			prURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prNum)
+			if pr := prsByIndex[prNum]; pr != nil {
+				prTitle = pr.Title
+				if milestone == "" && pr.Milestone != nil && pr.Milestone.Title != "" {
+					milestone = pr.Milestone.Title
+				}
+			}
+		}
+
+		meta[sr.ID] = resolvedRunMeta{
+			Issue:      issueNum,
+			IssueURL:   issueURL,
+			IssueTitle: issueTitle,
+			PR:         prNum,
+			PRURL:      prURL,
+			PRTitle:    prTitle,
+			Milestone:  milestone,
+			ThreadKey:  threadKey,
+		}
+
+		if (sr.Kind == "implement" || sr.Kind == "verify") && sr.Ended == nil && (sr.Expires.IsZero() || sr.Active(now)) {
+			activeThreads[threadKey] = true
+		}
+	}
+
+	for issueNum := range prsForIssue {
+		seenIssues[issueNum] = true
+	}
+	for issueNum := range seenIssues {
+		if s.getActiveFlow(issueNum) != nil {
+			cands := prsForIssue[issueNum]
+			if len(cands) > 0 && isPROpen(prsByIndex[cands[len(cands)-1]]) {
+				activeThreads[flowThreadKey(issueNum, cands[len(cands)-1], "")] = true
+			} else {
+				activeThreads[flowThreadKey(issueNum, 0, "")] = true
+			}
+		}
+	}
+
+	for id, m := range meta {
+		if !strings.HasPrefix(m.ThreadKey, "discuss:") {
+			m.Active = activeThreads[m.ThreadKey]
+			meta[id] = m
+		}
+	}
+
+	return meta, prsForIssue, prCutoffs
+}
+
 // ComputeHistoryRuns retrieves ended runs matching filter criteria.
 func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) ([]HistoryRunInfo, error) {
 	org, repo := s.orgAndRepo()
@@ -434,15 +794,26 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 
 	actorMap, _ := s.fetchActorMap(ctx)
 
-	var serverRuns []secrets.Run
-	runsPath := "/v1/runs?history=1&state=ended&repo=" + url.QueryEscape(repo)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
+	var allRuns []secrets.Run
+	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
+	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &allRuns); err != nil {
 		return nil, fmt.Errorf("fetch history runs: %w", err)
 	}
 	denials := s.fetchDenials(ctx)
 
+	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
+	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+
+	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=all&type=issues", org, repo)
+	issues, _ := listAll[*sdk.Issue](ctx, s, issuesPath)
+
+	metaMap, _, _ := s.resolveRunsMeta(allRuns, issues, prs)
+
 	var history []HistoryRunInfo
-	for _, sr := range serverRuns {
+	for _, sr := range allRuns {
+		if sr.Ended == nil {
+			continue
+		}
 		// Apply filters
 		if filter.Actor != "" && sr.Actor != filter.Actor {
 			continue
@@ -487,24 +858,34 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		}
 
 		summary := firstLine(sr.Digest.Summary)
+		meta := metaMap[sr.ID]
 
 		history = append(history, HistoryRunInfo{
-			ID:        sr.ID,
-			Target:    target,
-			TargetURL: targetURL,
-			Kind:      sr.Kind,
-			Actor:     sr.Actor,
-			Family:    family,
-			Harness:   harness,
-			Mode:      mode,
-			Status:    sr.Status,
-			Created:   sr.Created,
-			Ended:     sr.Ended,
-			Duration:  duration,
-			Summary:   summary,
-			Usage:     sr.Digest.Usage,
-			Purged:    sr.Purged,
-			Denials:   orEmpty(denials[sr.ID]),
+			ID:         sr.ID,
+			Target:     target,
+			TargetURL:  targetURL,
+			Issue:      meta.Issue,
+			IssueURL:   meta.IssueURL,
+			IssueTitle: meta.IssueTitle,
+			PR:         meta.PR,
+			PRURL:      meta.PRURL,
+			PRTitle:    meta.PRTitle,
+			Milestone:  meta.Milestone,
+			ThreadKey:  meta.ThreadKey,
+			Active:     meta.Active,
+			Kind:       sr.Kind,
+			Actor:      sr.Actor,
+			Family:     family,
+			Harness:    harness,
+			Mode:       mode,
+			Status:     sr.Status,
+			Created:    sr.Created,
+			Ended:      sr.Ended,
+			Duration:   duration,
+			Summary:    summary,
+			Usage:      sr.Digest.Usage,
+			Purged:     sr.Purged,
+			Denials:    orEmpty(denials[sr.ID]),
 		})
 	}
 
@@ -516,130 +897,230 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	return history, nil
 }
 
-// ComputeIssueTimeline gathers all runs, PRs, reviews, and merge events for an issue.
+// ComputeIssueTimeline gathers runs, PRs, reviews, and merge events for an issue's latest flow thread.
 func (s *Server) ComputeIssueTimeline(ctx context.Context, issueNum int64) (*IssueTimeline, error) {
+	return s.ComputeFlowTimeline(ctx, issueNum, -1)
+}
+
+// ComputeFlowTimeline gathers events and runs for a specific flow thread (issue + PR).
+// When prFilter is -1, it selects the latest PR for issueNum (or 0 if no PR exists).
+// When prFilter is 0, it scopes to the pre-PR thread for issueNum.
+// Discuss runs and runs belonging to other PR threads on the same issue are excluded.
+func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int64) (*IssueTimeline, error) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
-	// 1. Fetch issue
-	issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
-	var issue sdk.Issue
-	if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &issue); err != nil {
-		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, err)
+	// 1. Fetch issue when issueNum > 0
+	var issue *sdk.Issue
+	if issueNum > 0 {
+		issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
+		var fetched sdk.Issue
+		if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &fetched); err != nil {
+			return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, err)
+		}
+		issue = &fetched
 	}
 
-	timeline := &IssueTimeline{
-		Issue:  issueNum,
-		Title:  issue.Title,
-		State:  string(issue.State),
-		URL:    fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum),
-		Events: []TimelineEvent{},
-	}
-
-	if !issue.Created.IsZero() {
-		timeline.Events = append(timeline.Events, TimelineEvent{
-			Type:   "issue_created",
-			Time:   issue.Created,
-			Title:  fmt.Sprintf("Issue #%d opened", issueNum),
-			Detail: issue.Title,
-			Actor:  userLogin(issue.Poster),
-			URL:    timeline.URL,
-		})
-	}
-
-	// 2. Fetch associated PR
+	// 2. Fetch all PRs and runs to resolve thread membership accurately
 	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
 	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 
-	var matchedPR *sdk.PullRequest
+	var serverRuns []secrets.Run
+	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
+	_ = s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns)
+
+	var issuesList []*sdk.Issue
+	if issue != nil {
+		issuesList = []*sdk.Issue{issue}
+	}
+	metaMap, prsForIssue, prCutoffs := s.resolveRunsMeta(serverRuns, issuesList, prs)
+
+	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
 	for _, pr := range prs {
-		if pr.Head != nil && pr.Head.Ref == fmt.Sprintf("issue/%d", issueNum) {
-			matchedPR = pr
-			break
+		if pr != nil && pr.Index > 0 {
+			prsByIndex[pr.Index] = pr
 		}
 	}
 
-	var prIndex int64
-	if matchedPR != nil {
-		prIndex = matchedPR.Index
-		prURL := fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prIndex)
-		if matchedPR.Created != nil {
+	prIndex := prFilter
+	if prIndex < 0 {
+		if cands := prsForIssue[issueNum]; len(cands) > 0 {
+			prIndex = cands[len(cands)-1]
+		} else {
+			prIndex = 0
+		}
+	}
+
+	if issueNum <= 0 && prIndex > 0 {
+		if pr := prsByIndex[prIndex]; pr != nil && pr.Head != nil {
+			issueNum = parseIssueRef(pr.Head.Ref)
+		}
+		if issueNum > 0 && issue == nil {
+			issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
+			var fetched sdk.Issue
+			if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &fetched); err == nil {
+				issue = &fetched
+			}
+		}
+	}
+
+	matchedPR := prsByIndex[prIndex]
+	targetThreadKey := flowThreadKey(issueNum, prIndex, "")
+
+	var milestone string
+	if issue != nil && issue.Milestone != nil && issue.Milestone.Title != "" {
+		milestone = issue.Milestone.Title
+	} else if matchedPR != nil && matchedPR.Milestone != nil && matchedPR.Milestone.Title != "" {
+		milestone = matchedPR.Milestone.Title
+	}
+
+	timeline := &IssueTimeline{
+		Issue:     issueNum,
+		PR:        prIndex,
+		Milestone: milestone,
+		ThreadKey: targetThreadKey,
+		Events:    []TimelineEvent{},
+	}
+	if issue != nil {
+		timeline.Title = issue.Title
+		timeline.State = string(issue.State)
+		timeline.URL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum)
+		if !issue.Created.IsZero() {
 			timeline.Events = append(timeline.Events, TimelineEvent{
-				Type:   "pr_opened",
-				Time:   *matchedPR.Created,
-				Title:  fmt.Sprintf("Pull request !%d opened", prIndex),
-				Detail: matchedPR.Title,
-				Actor:  userLogin(matchedPR.Poster),
-				URL:    prURL,
+				Type:   "issue_created",
+				Time:   issue.Created,
+				Title:  fmt.Sprintf("Issue #%d opened", issueNum),
+				Detail: issue.Title,
+				Actor:  userLogin(issue.Poster),
+				URL:    timeline.URL,
 			})
 		}
+	} else if matchedPR != nil {
+		timeline.Title = matchedPR.Title
+		timeline.State = string(matchedPR.State)
+		timeline.URL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prIndex)
+	}
 
-		// Reviews
-		revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, prIndex)
-		revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
-		if err == nil {
-			for _, r := range revs {
+	if prIndex > 0 {
+		prURL := fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prIndex)
+		timeline.PRURL = prURL
+		if matchedPR != nil {
+			timeline.PRTitle = matchedPR.Title
+			if matchedPR.Created != nil {
 				timeline.Events = append(timeline.Events, TimelineEvent{
-					Type:   "review",
-					Time:   r.Submitted,
-					Title:  fmt.Sprintf("Review on !%d: %s", prIndex, r.State),
-					Detail: r.Body,
-					Actor:  userLogin(r.Reviewer),
-					Status: string(r.State),
+					Type:   "pr_opened",
+					Time:   *matchedPR.Created,
+					Title:  fmt.Sprintf("Pull request !%d opened", prIndex),
+					Detail: matchedPR.Title,
+					Actor:  userLogin(matchedPR.Poster),
+					URL:    prURL,
+				})
+			}
+
+			// Reviews for this specific PR
+			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, prIndex)
+			revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
+			if err == nil {
+				for _, r := range revs {
+					timeline.Events = append(timeline.Events, TimelineEvent{
+						Type:   "review",
+						Time:   r.Submitted,
+						Title:  fmt.Sprintf("Review on !%d: %s", prIndex, r.State),
+						Detail: r.Body,
+						Actor:  userLogin(r.Reviewer),
+						Status: string(r.State),
+						URL:    prURL,
+					})
+				}
+			}
+
+			// Merge event
+			if matchedPR.HasMerged && matchedPR.Merged != nil {
+				timeline.Events = append(timeline.Events, TimelineEvent{
+					Type:   "pr_merged",
+					Time:   *matchedPR.Merged,
+					Title:  fmt.Sprintf("Pull request !%d merged into main", prIndex),
+					Actor:  userLogin(matchedPR.MergedBy),
+					Status: "merged",
 					URL:    prURL,
 				})
 			}
 		}
-
-		// Merge event
-		if matchedPR.HasMerged && matchedPR.Merged != nil {
-			timeline.Events = append(timeline.Events, TimelineEvent{
-				Type:   "pr_merged",
-				Time:   *matchedPR.Merged,
-				Title:  fmt.Sprintf("Pull request !%d merged into main", prIndex),
-				Actor:  userLogin(matchedPR.MergedBy),
-				Status: "merged",
-				URL:    prURL,
-			})
-		}
 	}
 
-	// 3. Fetch runs for this issue and its PR
-	var serverRuns []secrets.Run
-	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err == nil {
-		for _, sr := range serverRuns {
-			if sr.Issue == issueNum || (prIndex > 0 && sr.PR == prIndex) {
-				detail := sr.Digest.Summary
-				if detail == "" {
-					detail = fmt.Sprintf("Run %s (%s)", sr.ID, sr.Kind)
+	// 3. Runs belonging specifically to this flow thread (excluding discuss runs and other PR threads)
+	for _, sr := range serverRuns {
+		if sr.Kind == "discuss" {
+			continue
+		}
+		m := metaMap[sr.ID]
+		if m.ThreadKey != targetThreadKey {
+			continue
+		}
+		detail := firstLine(sr.Digest.Summary)
+		if detail == "" {
+			detail = fmt.Sprintf("Run %s (%s)", sr.ID, sr.Kind)
+		}
+		runURL := timeline.URL
+		if sr.PR > 0 {
+			runURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, sr.PR)
+		}
+		duration := ""
+		if sr.Ended != nil {
+			duration = formatDuration(sr.Ended.Sub(sr.Created))
+		} else if sr.Digest.Usage != nil && sr.Digest.Usage.DurationMS != nil {
+			duration = formatDuration(time.Duration(*sr.Digest.Usage.DurationMS) * time.Millisecond)
+		}
+		status := sr.Status
+		if status == "" && sr.Ended == nil {
+			status = "live"
+		}
+		timeline.Events = append(timeline.Events, TimelineEvent{
+			Type:     "run",
+			Time:     sr.Created,
+			Ended:    sr.Ended,
+			Duration: duration,
+			Kind:     sr.Kind,
+			Title:    fmt.Sprintf("Run %s: %s by %s", sr.ID, sr.Kind, sr.Actor),
+			Detail:   detail,
+			Actor:    sr.Actor,
+			Status:   status,
+			RunID:    sr.ID,
+			URL:      runURL,
+		})
+	}
+
+	// 4. Issue comments scoped to this flow thread's window (excluding discuss handovers)
+	if issueNum > 0 {
+		var afterTime, cutoffTime time.Time
+		cands := prsForIssue[issueNum]
+		if prIndex > 0 {
+			if idx := slices.Index(cands, prIndex); idx >= 0 {
+				if idx > 0 {
+					afterTime = prCutoffs[cands[idx-1]]
 				}
-				runURL := timeline.URL
-				if sr.PR > 0 {
-					runURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, sr.PR)
-				}
-				timeline.Events = append(timeline.Events, TimelineEvent{
-					Type:   "run",
-					Time:   sr.Created,
-					Title:  fmt.Sprintf("Run %s: %s by %s", sr.ID, sr.Kind, sr.Actor),
-					Detail: detail,
-					Actor:  sr.Actor,
-					Status: sr.Status,
-					RunID:  sr.ID,
-					URL:    runURL,
-				})
+				cutoffTime = prCutoffs[prIndex]
 			}
+		} else if len(cands) > 0 {
+			afterTime = prCutoffs[cands[len(cands)-1]]
 		}
-	}
 
-	// 4. Issue comments
-	commentsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issueNum)
-	// Forgejo returns all issue comments and ignores page/limit.
-	var comments []*sdk.Comment
-	err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments)
-	if err == nil {
-		for _, c := range comments {
-			if c != nil && !c.Created.IsZero() {
+		commentsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issueNum)
+		var comments []*sdk.Comment
+		if err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments); err == nil {
+			for _, c := range comments {
+				if c == nil || c.Created.IsZero() {
+					continue
+				}
+				if strings.Contains(c.Body, "**bottown run ") && strings.Contains(c.Body, "· discuss ·") {
+					continue
+				}
+				if !afterTime.IsZero() && !c.Created.After(afterTime) {
+					continue
+				}
+				if !cutoffTime.IsZero() && c.Created.After(cutoffTime) {
+					continue
+				}
 				timeline.Events = append(timeline.Events, TimelineEvent{
 					Type:   "comment",
 					Time:   c.Created,
