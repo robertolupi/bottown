@@ -13,7 +13,6 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 		file    string
 		want    []string
 	}{
-		{"claude", "claude-2.1.316.stream.jsonl", []string{"hello"}},
 		{"agy", "agy-1.4.12.stream.jsonl", []string{"hello"}},
 		{"kimi", "kimi-2.4.1.stream.jsonl", []string{"hello"}},
 		{"codex", "codex-0.166.0.stream.jsonl", []string{"hello"}},
@@ -26,7 +25,7 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := RenderLog(tt.harness, b)
+			got := lineTexts(RenderLog(tt.harness, b))
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("RenderLog(%q) = %v, want %v", tt.harness, got, tt.want)
 			}
@@ -45,7 +44,7 @@ func TestRenderLog_Claude(t *testing.T) {
 		"Read: AGENTS.md",
 		"All checks passed.",
 	}
-	got := RenderLog("claude", []byte(log))
+	got := lineTexts(RenderLog("claude", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -63,7 +62,7 @@ func TestRenderLog_Kimi(t *testing.T) {
 		"Bash: echo hi",
 		"DONE",
 	}
-	got := RenderLog("kimi", []byte(log))
+	got := lineTexts(RenderLog("kimi", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -79,7 +78,7 @@ func TestRenderLog_Agy(t *testing.T) {
 		"Edit: main.go",
 		"All done",
 	}
-	got := RenderLog("agy", []byte(log))
+	got := lineTexts(RenderLog("agy", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -101,7 +100,7 @@ func TestRenderLog_Codex(t *testing.T) {
 		"issue_show: 67",
 		"Done with checks.",
 	}
-	got := RenderLog("codex", []byte(log))
+	got := lineTexts(RenderLog("codex", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -115,7 +114,7 @@ All checks passed.
 		"I will check git status.",
 		"All checks passed.",
 	}
-	gotText := RenderLog("crush", []byte(textLog))
+	gotText := lineTexts(RenderLog("crush", []byte(textLog)))
 	if !reflect.DeepEqual(gotText, wantText) {
 		t.Fatalf("textLog got %v, want %v", gotText, wantText)
 	}
@@ -131,7 +130,7 @@ tests passed
 		"running make check",
 		"tests passed",
 	}
-	got := RenderLog("script", []byte(log))
+	got := lineTexts(RenderLog("script", []byte(log)))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

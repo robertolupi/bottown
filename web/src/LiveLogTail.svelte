@@ -6,13 +6,16 @@
     isScrolledToBottom,
     buildKeyedLogLines,
     updateLogTailFollow,
+    logLineTexts,
   } from './state';
+  import type { LogLine } from './types';
+  import LogLineView from './LogLineView.svelte';
 
-  let { runId, lines = [] }: { runId: string; lines?: string[] } = $props();
+  let { runId, lines = [] }: { runId: string; lines?: LogLine[] } = $props();
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let isFollowing = $state<boolean>(true);
-  let previousLines: string[] = [];
+  let previousLines: LogLine[] = [];
   let baseIndex = 0;
   let programmaticScrollTarget: number | null = null;
 
@@ -74,7 +77,7 @@
     const prev = previousLines;
 
     if (curr !== prev && prev.length > 0 && curr.length > 0) {
-      const trimmedCount = detectTrimmedLineCount(prev, curr);
+      const trimmedCount = detectTrimmedLineCount(logLineTexts(prev), logLineTexts(curr));
       if (trimmedCount > 0) {
         baseIndex += trimmedCount;
         if (!isFollowing && scrollContainer) {
@@ -115,6 +118,18 @@
 <div class="log-tail-box">
   <div class="log-tail-header">
     <span>Live Tail (.bottown/runs/{runId}.log)</span>
+    <span class="log-legend" aria-label="Log colors">
+      <span class="lg-text" title="Assistant text">text</span>
+      <span class="lg-shell" title="Tool call: shell command">shell</span>
+      <span class="lg-read" title="Tool call: read a file or directory">read</span>
+      <span class="lg-edit" title="Tool call: edit or write a file">edit</span>
+      <span class="lg-search" title="Tool call: search files">search</span>
+      <span class="lg-forge" title="Tool call: bottown and the forge">forge</span>
+      <span class="lg-browser" title="Tool call: browser">browser</span>
+      <span class="lg-output" title="Tool output">output</span>
+      <span class="lg-error" title="Denied or failed tool call">error</span>
+      <span class="lg-status" title="Session, background task and result events">status</span>
+    </span>
     <button
       type="button"
       class="log-follow-btn"
@@ -143,7 +158,7 @@
       <div class="log-line muted">Waiting for agent activity...</div>
     {:else}
       {#each keyedLines as item (item.id)}
-        <div class="log-line">{item.text}</div>
+        <LogLineView line={item.line} />
       {/each}
     {/if}
   </div>
@@ -244,6 +259,26 @@
     white-space: pre-wrap;
     word-break: break-all;
   }
+
+  /* The palette's colors (LogLineView.svelte), as a one-line legend. */
+  .log-legend {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    cursor: help;
+  }
+  .lg-text { color: var(--log-text); }
+  .lg-shell { color: var(--log-tool-shell); }
+  .lg-read { color: var(--log-tool-read); }
+  .lg-edit { color: var(--log-tool-edit); }
+  .lg-search { color: var(--log-tool-search); }
+  .lg-forge { color: var(--log-tool-forge); }
+  .lg-browser { color: var(--log-tool-browser); }
+  .lg-output { color: var(--log-output); }
+  .lg-error { color: var(--log-error); }
+  .lg-status { color: var(--log-status); font-style: italic; }
 
   .muted {
     color: #64748b;

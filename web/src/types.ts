@@ -131,6 +131,17 @@ export interface ActiveFlowInfo {
   waiting: boolean;
 }
 
+// One rendered line of a run's log (internal/runs.LogLine).
+export type LogLineKind = 'plain' | 'text' | 'tool' | 'output' | 'error' | 'status';
+export type ToolClass = 'shell' | 'read' | 'edit' | 'search' | 'forge' | 'browser' | 'other';
+
+export interface LogLine {
+  kind: LogLineKind;
+  tool?: string; // tool name, for kind tool
+  tool_class?: ToolClass;
+  text: string;
+}
+
 export interface LiveRunInfo {
   id: string;
   target: string;
@@ -154,7 +165,7 @@ export interface LiveRunInfo {
   elapsed: string;
   timeout: string;
   flow?: FlowInfo;
-  log_tail: string[];
+  log_tail: LogLine[];
   denials: Denial[];
 }
 

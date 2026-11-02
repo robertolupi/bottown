@@ -30,30 +30,30 @@ type ActorDetail struct {
 
 // LiveRunInfo represents an active run.
 type LiveRunInfo struct {
-	ID          string    `json:"id"`
-	Target      string    `json:"target"` // "#51" or "!51"
-	TargetURL   string    `json:"target_url"`
-	Issue       int64     `json:"issue,omitempty"`
-	IssueURL    string    `json:"issue_url,omitempty"`
-	IssueTitle  string    `json:"issue_title,omitempty"`
-	PR          int64     `json:"pr,omitempty"`
-	PRURL       string    `json:"pr_url,omitempty"`
-	PRTitle     string    `json:"pr_title,omitempty"`
-	Milestone   string    `json:"milestone,omitempty"`
-	ThreadKey   string    `json:"thread_key,omitempty"`
-	Kind        string    `json:"kind"` // implement, verify, discuss
-	Actor       string    `json:"actor"`
-	Family      string    `json:"family"`
-	Harness     string    `json:"harness"`
-	Spec        string    `json:"spec,omitempty"` // the harness's model, if chosen
-	Interactive bool      `json:"interactive"`
-	Created     time.Time `json:"created"`
-	Expires     time.Time `json:"expires"`
-	Elapsed     string    `json:"elapsed"` // e.g. "4m 12s"
-	Timeout     string    `json:"timeout"` // e.g. "60m"
-	Flow        *FlowInfo `json:"flow,omitempty"`
-	LogTail     []string  `json:"log_tail"`
-	Denials     []Denial  `json:"denials"`
+	ID          string         `json:"id"`
+	Target      string         `json:"target"` // "#51" or "!51"
+	TargetURL   string         `json:"target_url"`
+	Issue       int64          `json:"issue,omitempty"`
+	IssueURL    string         `json:"issue_url,omitempty"`
+	IssueTitle  string         `json:"issue_title,omitempty"`
+	PR          int64          `json:"pr,omitempty"`
+	PRURL       string         `json:"pr_url,omitempty"`
+	PRTitle     string         `json:"pr_title,omitempty"`
+	Milestone   string         `json:"milestone,omitempty"`
+	ThreadKey   string         `json:"thread_key,omitempty"`
+	Kind        string         `json:"kind"` // implement, verify, discuss
+	Actor       string         `json:"actor"`
+	Family      string         `json:"family"`
+	Harness     string         `json:"harness"`
+	Spec        string         `json:"spec,omitempty"` // the harness's model, if chosen
+	Interactive bool           `json:"interactive"`
+	Created     time.Time      `json:"created"`
+	Expires     time.Time      `json:"expires"`
+	Elapsed     string         `json:"elapsed"` // e.g. "4m 12s"
+	Timeout     string         `json:"timeout"` // e.g. "60m"
+	Flow        *FlowInfo      `json:"flow,omitempty"`
+	LogTail     []runs.LogLine `json:"log_tail"`
+	Denials     []Denial       `json:"denials"`
 }
 
 // Denial is an operation the server's policy refused a run, from
@@ -293,7 +293,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		}
 
 		// Read log tail from disk if batch run
-		var logTail []string
+		var logTail []runs.LogLine
 		if !sr.Interactive {
 			logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", sr.ID+".log")
 			if logBytes, err := os.ReadFile(logPath); err == nil {
@@ -306,7 +306,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			}
 		}
 		if logTail == nil {
-			logTail = []string{}
+			logTail = []runs.LogLine{}
 		}
 
 		// Calculate flow info ONLY for implement and verify runs when an active flow exists

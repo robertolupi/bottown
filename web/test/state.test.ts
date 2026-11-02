@@ -1112,17 +1112,17 @@ test('updateLogTailFollow transitions follow state on scroll and explicit click'
 test('buildKeyedLogLines generates monotonic keys across line trimming', () => {
   const initial = buildKeyedLogLines(['a', 'b', 'c'], 0);
   assert.deepEqual(initial, [
-    { id: 0, text: 'a' },
-    { id: 1, text: 'b' },
-    { id: 2, text: 'c' },
+    { id: 0, line: 'a' },
+    { id: 1, line: 'b' },
+    { id: 2, line: 'c' },
   ]);
 
   // After trimming 1 line ('a'), baseIndex shifts to 1
   const afterTrim = buildKeyedLogLines(['b', 'c', 'd'], 1);
   assert.deepEqual(afterTrim, [
-    { id: 1, text: 'b' },
-    { id: 2, text: 'c' },
-    { id: 3, text: 'd' },
+    { id: 1, line: 'b' },
+    { id: 2, line: 'c' },
+    { id: 3, line: 'd' },
   ]);
 
   // Keys for 'b' and 'c' remain stable (1 and 2)

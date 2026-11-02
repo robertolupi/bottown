@@ -8,6 +8,7 @@ import type {
   InboxItem,
   IssueTimeline,
   LiveRunInfo,
+  LogLine,
   TimelineEvent,
   UsageInfo,
 } from './types';
@@ -1220,19 +1221,31 @@ export function buildFlowConstituentRuns(
   return thread.runs;
 }
 
-export interface KeyedLogLine {
+export interface KeyedLogLine<T = LogLine> {
   id: number;
-  text: string;
+  line: T;
 }
 
 // Build keyed lines with monotonic IDs so Svelte preserves existing line DOM elements
 // as lines slide or trim.
-export function buildKeyedLogLines(
-  lines: string[] | undefined | null,
+export function buildKeyedLogLines<T = LogLine>(
+  lines: T[] | undefined | null,
   baseIndex: number,
-): KeyedLogLine[] {
+): KeyedLogLine<T>[] {
   if (!lines || lines.length === 0) return [];
-  return lines.map((text, i) => ({ id: baseIndex + i, text }));
+  return lines.map((line, i) => ({ id: baseIndex + i, line }));
+}
+
+// The texts of log lines, which follow and trim detection compare.
+export function logLineTexts(lines: LogLine[] | undefined | null): string[] {
+  return (lines || []).map((l) => l.text);
+}
+
+// A tool line's text split into the tool name and its argument, when the
+// text starts with the name; null for other lines.
+export function splitToolLine(line: LogLine): { tool: string; arg: string } | null {
+  if (line.kind !== 'tool' || !line.tool || !line.text.startsWith(line.tool)) return null;
+  return { tool: line.tool, arg: line.text.slice(line.tool.length) };
 }
 
 // Detect how many lines were trimmed from the beginning of prevLines when nextLines arrived.

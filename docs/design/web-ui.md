@@ -329,7 +329,12 @@ interactive, and elapsed time against the timeout. Runs of one flow are
 grouped under it ("#51 · round 2/3 · verifying with kimi"). A batch run
 shows a **live tail of its log**, readable rather than raw JSON (assistant
 text and tool calls, one line each), refreshed while it runs; the UI is
-on the host, so it reads `.bottown/runs/<id>.log` directly.
+on the host, so it reads `.bottown/runs/<id>.log` directly. Each line
+carries a kind (`text`, `tool`, `output`, `error`, `status`, or `plain`
+for harnesses whose parts are not told apart yet) and, for a tool call,
+the tool's name and class (`shell`, `read`, `edit`, `search`, `forge`,
+`browser`, `other`). The tail and the history's log boxes color lines by
+kind and tool names by class, with a legend in the tail's header.
 
 Issue references in Live Runs, Run History and Owner Inbox show the issue
 title and Markdown description in a popup on hover or keyboard focus. The
@@ -516,7 +521,15 @@ log has, at run end, into the digest:
 | crush | the assistant text from stdout | none known |
 
 The live tail renders the same events, one line per assistant message or
-tool call. Unknown usage stays unknown.
+tool call, each with a kind and, for a tool call, a tool class (§4.2).
+One table in `internal/runs` classifies tools by the names the harnesses
+use; a shell command that runs `bottown` is `forge`. claude's stream-json
+names every part, so its lines are typed: assistant text, tool calls,
+denials and failed tool results as errors, and the session start,
+background tasks, rate limits other than `allowed` and the result
+(turns, cost, duration) as status. The other harnesses' lines are still
+`plain`, and crush's, only its final message, `text`. Unknown usage stays
+unknown.
 
 ## 7. Server APIs
 

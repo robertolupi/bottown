@@ -7,10 +7,12 @@
     HistoryThread,
     IssueTimeline,
     Denial,
+    LogLine,
   } from './types';
   import { lifecycleChange } from './lifecycle';
   import IssueReference from './IssueReference.svelte';
   import LiveLogTail from './LiveLogTail.svelte';
+  import LogLineView from './LogLineView.svelte';
   import Milestones from './Milestones.svelte';
   import {
     buildFlowActionPayload,
@@ -73,7 +75,7 @@
 
   // Timer, Polling & Logs
   let nowTime = $state<number>(Date.now());
-  let expandedLogs = $state<Record<string, { loading: boolean; lines?: string[]; error?: string }>>({});
+  let expandedLogs = $state<Record<string, { loading: boolean; lines?: LogLine[]; error?: string }>>({});
 
   // History state & filters
   let historyRuns = $state<HistoryRunInfo[]>([]);
@@ -1089,7 +1091,7 @@
                                   <div class="log-line muted">No log lines recorded.</div>
                                 {:else}
                                   {#each logState.lines as line}
-                                    <div class="log-line">{line}</div>
+                                    <LogLineView {line} />
                                   {/each}
                                 {/if}
                               </div>
@@ -1386,7 +1388,7 @@
                                                   <div class="log-line muted">No log lines recorded.</div>
                                                 {:else}
                                                   {#each logState.lines as line}
-                                                    <div class="log-line">{line}</div>
+                                                    <LogLineView {line} />
                                                   {/each}
                                                 {/if}
                                               </div>
