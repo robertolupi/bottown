@@ -75,7 +75,10 @@ External links are not listed. The files belong to the run:
 - **When.** Starting a run downloads the files before the prompt is
   rendered. Each `issue show` in the run fetches files added since. A launched
   run's directory is removed when its launcher returns, however the run
-  ended, and by `run gc` if the launcher died. An actor worktree's directory
+  ended, and by `run gc` if the launcher died. The launcher saves the run's
+  record, as preparing, before it downloads anything, so `run gc` finds
+  the run, as dead, even when the launcher died during startup. An actor
+  worktree's directory
   is removed when `run end` ends the run, when `run start` or `run end`
   recover an interrupted run (before the record is finalized, so a failed
   removal is retried), and before the next run downloads.

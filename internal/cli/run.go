@@ -196,6 +196,9 @@ func parseNumber(s string) (int64, error) {
 	return n, nil
 }
 
+// errNoChange makes a Workspace.Update leave the record as it is.
+var errNoChange = errors.New("record unchanged")
+
 func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (err error) {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -232,11 +235,37 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil); e != nil && err == nil {
 			err = fmt.Errorf("end run %s: %w", run.ID, e)
 		}
+		// A startup that failed before the run was running ends its record too.
+		_ = rc.ws.Update(run.ID, func(current *runs.Record) error {
+			if current.Status != runs.StatusPreparing {
+				return errNoChange
+			}
+			now := time.Now().UTC()
+			current.Status, current.Ended, current.Key = runs.StatusFailed, &now, ""
+			return nil
+		})
 	}()
 
+	harnessName := run.Harness
+	if harnessName == "" {
+		harnessName = run.Actor
+	}
 	// The run's attachments last as long as the run: removed however this
-	// returns, and by `run gc` if this process dies.
+	// returns, and by `run gc` if this process dies. The preparing record
+	// is saved before anything is downloaded, so gc finds the run, as dead,
+	// even if this process dies before the run is running.
 	attachDir := rc.ws.AttachmentsDir(run.ID)
+	rec := runs.Record{
+		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
+		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
+		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
+		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
+		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
+		Attachments: attachDir,
+	}
+	if err := rc.ws.Save(rec); err != nil {
+		return err
+	}
 	defer func() {
 		if e := runs.RemoveAttachments(attachDir); e != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
@@ -256,10 +285,6 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err != nil {
 		return err
 	}
-	harnessName := run.Harness
-	if harnessName == "" {
-		harnessName = run.Actor
-	}
 	h, err := runs.LookupHarness(harnessName)
 	if err != nil {
 		return err
@@ -274,15 +299,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := os.WriteFile(rc.ws.Path(run.ID, ".prompt.md"), []byte(prompt), 0o600); err != nil {
 		return err
 	}
-	rec := runs.Record{
-		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
-		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
-		Status: runs.StatusRunning, PID: os.Getpid(), Started: time.Now().UTC(), Worktree: dir,
-		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
-		Attachments: attachDir,
-	}
-	if err := rc.ws.Save(rec); err != nil {
+	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
+		current.Status, current.Worktree = runs.StatusRunning, dir
+		rec = *current
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -1028,31 +1049,9 @@ recently ended ones.`,
 			if err != nil {
 				return err
 			}
-			removed := 0
-			var keep []string // local runs gc leaves, whose server record stays
-			for _, r := range recs {
-				switch r.Status {
-				case runs.StatusRunning:
-					keep = append(keep, r.ID)
-					continue
-				case runs.StatusFailed:
-					if !failed {
-						keep = append(keep, r.ID)
-						continue
-					}
-				case runs.StatusDead:
-					// Its launcher died: make sure the key is gone too.
-					_ = callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+r.ID, map[string]string{"status": "revoked"}, nil)
-				}
-				if err := rc.ws.Remove(r.ID); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %v\n", r.ID, err)
-					keep = append(keep, r.ID)
-					continue
-				}
-				rc.ws.RemoveFiles(r.ID)
-				removed++
-			}
-			_, _ = runs.Git(rc.ws.Mirror, nil, "worktree", "prune")
+			removed, keep := gcLocal(rc.ws, recs, failed, cmd.ErrOrStderr(), func(id string) {
+				_ = callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, map[string]string{"status": "revoked"}, nil)
+			})
 			// A run whose key expired while it was live cannot end itself:
 			// its key no longer authenticates. Revoke it with the owner key.
 			var live []secrets.Run
@@ -1087,13 +1086,44 @@ recently ended ones.`,
 	return cmd
 }
 
+// gcLocal removes the worktrees and files of finished local runs: succeeded
+// and dead, and failed ones too with failed. A dead run, including one whose
+// launcher died while preparing, is revoked first. keep is the runs it left,
+// whose server records stay.
+func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string)) (removed int, keep []string) {
+	for _, r := range recs {
+		switch r.Status {
+		case runs.StatusPreparing, runs.StatusRunning:
+			keep = append(keep, r.ID)
+			continue
+		case runs.StatusFailed:
+			if !failed {
+				keep = append(keep, r.ID)
+				continue
+			}
+		case runs.StatusDead:
+			// Its launcher died: make sure the key is gone too.
+			revoke(r.ID)
+		}
+		if err := ws.Remove(r.ID); err != nil {
+			fmt.Fprintf(warn, "warning: %s: %v\n", r.ID, err)
+			keep = append(keep, r.ID)
+			continue
+		}
+		ws.RemoveFiles(r.ID)
+		removed++
+	}
+	_, _ = runs.Git(ws.Mirror, nil, "worktree", "prune")
+	return removed, keep
+}
+
 // expiredLive is the IDs of the server runs gc revokes: not ended, key
 // expired. A run whose launcher in this checkout is still alive is left to
 // it: the launcher ends the run with the owner key when the harness exits.
 func expiredLive(live []secrets.Run, local []runs.Record, now time.Time) []string {
 	launched := make(map[string]bool)
 	for _, r := range local {
-		if r.Status == runs.StatusRunning && r.Ended == nil && r.LauncherAlive() {
+		if (r.Status == runs.StatusPreparing || r.Status == runs.StatusRunning) && r.Ended == nil && r.LauncherAlive() {
 			launched[r.ID] = true
 		}
 	}

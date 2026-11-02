@@ -17,7 +17,7 @@ const (
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
-	StatusDead      = "dead" // recorded as running, but its process is gone
+	StatusDead      = "dead" // recorded as preparing or running, but its process is gone
 )
 
 // Record is the host-side record of a run, written next to its worktree.
@@ -154,8 +154,8 @@ func LoadFile(path string) (Record, error) {
 	return r, err
 }
 
-// Records lists local runs, newest first, marking running records whose
-// process is gone as dead.
+// Records lists local runs, newest first, marking preparing and running
+// records whose launcher is gone as dead.
 func (w *Workspace) Records() ([]Record, error) {
 	ents, err := os.ReadDir(w.RunsDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -174,7 +174,7 @@ func (w *Workspace) Records() ([]Record, error) {
 		if err != nil {
 			continue
 		}
-		if r.Status == StatusRunning && !r.LauncherAlive() {
+		if (r.Status == StatusPreparing || r.Status == StatusRunning) && !r.LauncherAlive() {
 			r.Status = StatusDead
 		}
 		out = append(out, r)
