@@ -266,25 +266,38 @@ export function formatDurationMs(ms: number): string {
 
 export function aggregateThreadUsage(runs: HistoryRunInfo[]): UsageInfo | undefined {
   let hasUsage = false;
-  const sum: UsageInfo = {
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
-    cost_usd: 0,
-    turns: 0,
-    duration_ms: 0,
-  };
+  const sum: UsageInfo = {};
   for (const r of runs) {
     if (!r.usage) continue;
-    hasUsage = true;
-    sum.input_tokens = (sum.input_tokens || 0) + (r.usage.input_tokens || 0);
-    sum.output_tokens = (sum.output_tokens || 0) + (r.usage.output_tokens || 0);
-    sum.cache_read_tokens = (sum.cache_read_tokens || 0) + (r.usage.cache_read_tokens || 0);
-    sum.cache_write_tokens = (sum.cache_write_tokens || 0) + (r.usage.cache_write_tokens || 0);
-    sum.cost_usd = (sum.cost_usd || 0) + (r.usage.cost_usd || 0);
-    sum.turns = (sum.turns || 0) + (r.usage.turns || 0);
-    sum.duration_ms = (sum.duration_ms || 0) + (r.usage.duration_ms || 0);
+    const u = r.usage;
+    if (u.input_tokens !== undefined && u.input_tokens !== null) {
+      hasUsage = true;
+      sum.input_tokens = (sum.input_tokens ?? 0) + u.input_tokens;
+    }
+    if (u.output_tokens !== undefined && u.output_tokens !== null) {
+      hasUsage = true;
+      sum.output_tokens = (sum.output_tokens ?? 0) + u.output_tokens;
+    }
+    if (u.cache_read_tokens !== undefined && u.cache_read_tokens !== null) {
+      hasUsage = true;
+      sum.cache_read_tokens = (sum.cache_read_tokens ?? 0) + u.cache_read_tokens;
+    }
+    if (u.cache_write_tokens !== undefined && u.cache_write_tokens !== null) {
+      hasUsage = true;
+      sum.cache_write_tokens = (sum.cache_write_tokens ?? 0) + u.cache_write_tokens;
+    }
+    if (u.cost_usd !== undefined && u.cost_usd !== null) {
+      hasUsage = true;
+      sum.cost_usd = (sum.cost_usd ?? 0) + u.cost_usd;
+    }
+    if (u.turns !== undefined && u.turns !== null) {
+      hasUsage = true;
+      sum.turns = (sum.turns ?? 0) + u.turns;
+    }
+    if (u.duration_ms !== undefined && u.duration_ms !== null) {
+      hasUsage = true;
+      sum.duration_ms = (sum.duration_ms ?? 0) + u.duration_ms;
+    }
   }
   return hasUsage ? sum : undefined;
 }

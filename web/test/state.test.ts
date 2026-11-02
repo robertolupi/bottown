@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  aggregateThreadUsage,
   buildFlowActionPayload,
   buildFlowConstituentRuns,
   buildFlowTimeline,
@@ -872,5 +873,79 @@ test('first-ever live flow preserves issue milestone and issue/PR titles when hi
   assert.equal(postMain.milestone, 'Milestone Beta');
   assert.equal(postMain.text, '#70 First-ever flow issue · !71 Implement #70 · Milestone Beta');
 });
+
+test('aggregateThreadUsage preserves undefined for unknown usage fields on partial usage metadata', () => {
+  // Duration-only usage (e.g. harness did not report tokens, cost, or turns):
+  // unknown fields must remain undefined, never fabricated zeroes.
+  const durationOnlyRun = [
+    {
+      id: 'r-dur-only',
+      target: '#80',
+      target_url: 'http://forge/issues/80',
+      issue: 80,
+      kind: 'implement',
+      actor: 'agy',
+      family: 'google',
+      harness: 'agy',
+      mode: 'batch',
+      status: 'succeeded',
+      created: '2026-11-02T10:00:00Z',
+      ended: '2026-11-02T10:01:00Z',
+      duration: '1m 0s',
+      summary: 'Implemented',
+      usage: { duration_ms: 60000 },
+      purged: false,
+      denials: [],
+    },
+  ] as any[];
+
+  const durationOnlyUsage = aggregateThreadUsage(durationOnlyRun);
+  assert.deepEqual(durationOnlyUsage, { duration_ms: 60000 });
+  assert.equal(durationOnlyUsage?.input_tokens, undefined);
+  assert.equal(durationOnlyUsage?.output_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cache_read_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cache_write_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cost_usd, undefined);
+  assert.equal(durationOnlyUsage?.turns, undefined);
+
+  const [durationOnlyThread] = groupHistoryThreads(durationOnlyRun);
+  assert.equal(durationOnlyThread.usage?.cost_usd, undefined);
+  assert.equal(durationOnlyThread.usage?.input_tokens, undefined);
+  assert.equal(durationOnlyThread.usage?.duration_ms, 60000);
+
+  // Mixed partial usage across multiple runs sums reported fields and leaves unreported fields undefined
+  const mixedRuns = [
+    ...durationOnlyRun,
+    {
+      ...durationOnlyRun[0],
+      id: 'r-tok-turns',
+      kind: 'verify',
+      actor: 'claude',
+      family: 'anthropic',
+      harness: 'claude',
+      created: '2026-11-02T10:02:00Z',
+      ended: '2026-11-02T10:03:00Z',
+      usage: { input_tokens: 1500, output_tokens: 500, turns: 2, duration_ms: 45000 },
+    },
+  ] as any[];
+
+  const mixedUsage = aggregateThreadUsage(mixedRuns);
+  assert.deepEqual(mixedUsage, {
+    input_tokens: 1500,
+    output_tokens: 500,
+    turns: 2,
+    duration_ms: 105000,
+  });
+  assert.equal(mixedUsage?.cost_usd, undefined);
+  assert.equal(mixedUsage?.cache_read_tokens, undefined);
+  assert.equal(mixedUsage?.cache_write_tokens, undefined);
+
+  // Empty usage object returns undefined
+  assert.equal(
+    aggregateThreadUsage([{ ...durationOnlyRun[0], usage: {} } as any]),
+    undefined,
+  );
+});
+
 
 
