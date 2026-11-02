@@ -179,6 +179,13 @@ export interface Denial {
   detail?: string;
 }
 
+// An ended run's log as the history table loads it (GET /api/runs/ID/log).
+export interface RunLogState {
+  loading: boolean;
+  lines?: LogLine[];
+  error?: string;
+}
+
 export interface UsageInfo {
   input_tokens?: number;
   output_tokens?: number;

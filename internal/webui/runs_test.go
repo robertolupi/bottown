@@ -1147,14 +1147,14 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 
 func TestHistoryTableScrollStyles(t *testing.T) {
 	// The built bundle is not tracked (dist/ui), so check the source.
-	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "App.svelte"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "RunHistory.svelte"))
 	if err != nil {
-		t.Fatalf("read App.svelte: %v", err)
+		t.Fatalf("read RunHistory.svelte: %v", err)
 	}
 	src := string(data)
 	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: 1320px", "max-block-size: 1320px", "overflow: auto", "position: sticky"} {
 		if !strings.Contains(src, want) {
-			t.Errorf("expected App.svelte to contain %q", want)
+			t.Errorf("expected RunHistory.svelte to contain %q", want)
 		}
 	}
 }
