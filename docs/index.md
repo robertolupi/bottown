@@ -123,6 +123,11 @@ to bottown and only the actor's harness binding reads it:
 - **Checked by the harness.** bottown rejects only an empty spec or one
   with spaces or control characters. It keeps no list of models: an
   unknown one fails the run when the harness rejects it.
+- **Listed by the harness.** `bottown models [ACTOR [ARGS...]]` runs the
+  actor's harness's own listing, `agy models` or `crush models`, passing
+  ARGS on (`bottown models crush openrouter`); without ACTOR it lists every
+  actor's in turn. claude, kimi and codex have no listing command, and it
+  says so: give them a name their model flag takes.
 - **Recorded.** The server's run record and the local one keep the spec
   (`spec`), and `run ls`, `run show`, the handover comment, the web UI and
   the launcher's start line label it "model". A scripted harness
