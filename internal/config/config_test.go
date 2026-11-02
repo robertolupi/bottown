@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultDesiredIsValid(t *testing.T) {
 	d, err := LoadDesired("/nonexistent/bottown.toml")
@@ -28,6 +32,26 @@ func TestActorBatchRunLimit(t *testing.T) {
 	d.Actors[0].MaxBatchRuns = &negative
 	if err := d.validate(); err == nil {
 		t.Fatal("negative max_batch_runs accepted")
+	}
+}
+
+// The host's [actor_models] table names default models; saving the
+// instance (as `bottown up` does) keeps it.
+func TestActorModels(t *testing.T) {
+	t.Setenv("BOTTOWN_HOME", t.TempDir())
+	dir, _ := InstanceDir("dev")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "config.toml"), []byte("forgejo_port = 3040\nserver_port = 3041\n\n[actor_models]\nagy = \"gemini-3.8-flash\"\ncrush = \"openrouter:~deepseek/latest\"\n"), 0o600)
+	inst, ok, err := LoadInstance("dev")
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := SaveInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	inst, _, _ = LoadInstance("dev")
+	if inst.ActorModel("agy") != "gemini-3.8-flash" || inst.ActorModel("crush") != "openrouter:~deepseek/latest" || inst.ActorModel("claude") != "" {
+		t.Fatalf("actor models %v", inst.ActorModels)
 	}
 }
 

@@ -45,6 +45,7 @@ type LiveRunInfo struct {
 	Actor       string    `json:"actor"`
 	Family      string    `json:"family"`
 	Harness     string    `json:"harness"`
+	Spec        string    `json:"spec,omitempty"` // the harness's model, if chosen
 	Interactive bool      `json:"interactive"`
 	Created     time.Time `json:"created"`
 	Expires     time.Time `json:"expires"`
@@ -106,8 +107,9 @@ type HistoryRunInfo struct {
 	Actor      string `json:"actor"`
 	Family     string `json:"family"`
 	Harness    string `json:"harness"`
-	Mode       string `json:"mode"`   // "batch" or "interactive"
-	Status     string `json:"status"` // "succeeded", "failed", "revoked"
+	Spec       string `json:"spec,omitempty"` // the harness's model, if chosen
+	Mode       string `json:"mode"`           // "batch" or "interactive"
+	Status     string `json:"status"`         // "succeeded", "failed", "revoked"
 	// Outcome is the work result the server recorded (secrets.Outcome*),
 	// apart from Status: empty when none was recorded.
 	Outcome  string         `json:"outcome,omitempty"`
@@ -408,6 +410,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			Actor:       sr.Actor,
 			Family:      family,
 			Harness:     harness,
+			Spec:        sr.Spec,
 			Interactive: sr.Interactive,
 			Created:     sr.Created,
 			Expires:     sr.Expires,
@@ -912,6 +915,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			Actor:      sr.Actor,
 			Family:     family,
 			Harness:    harness,
+			Spec:       sr.Spec,
 			Mode:       mode,
 			Status:     sr.Status,
 			Outcome:    sr.Outcome,

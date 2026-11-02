@@ -52,11 +52,15 @@ type APIKey struct {
 // losing it invalidates in-flight run keys and loses run history, nothing
 // the forge holds.
 type Run struct {
-	ID              string `json:"id"`
-	Kind            string `json:"kind"` // implement | verify | discuss
-	Actor           string `json:"actor"`
-	Family          string `json:"family"`
-	Harness         string `json:"harness,omitempty"` // which CLI runs the actor
+	ID      string `json:"id"`
+	Kind    string `json:"kind"` // implement | verify | discuss
+	Actor   string `json:"actor"`
+	Family  string `json:"family"`
+	Harness string `json:"harness,omitempty"` // which CLI runs the actor
+	// Spec is the model the launcher asked the harness for, from
+	// ACTOR:SPEC; empty is the harness's default. It never changes the
+	// actor's family.
+	Spec            string `json:"spec,omitempty"`
 	Org             string `json:"org"`
 	Repo            string `json:"repo"`
 	Issue           int64  `json:"issue,omitempty"`

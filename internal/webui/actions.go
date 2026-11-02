@@ -14,6 +14,8 @@ import (
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // FlowRequest specifies parameters to start an issue flow.
@@ -74,12 +76,21 @@ func (s *Server) ExecuteFlow(ctx context.Context, req FlowRequest) (string, erro
 
 	// Cross-family rule verification upfront. If fetching actors fails (e.g. server offline),
 	// we proceed because the CLI will enforce the family rule independently.
+	// Implement and Verify are ACTOR[:MODEL]; the model never changes the family.
+	impName, _, err := runs.SplitActorSpec(req.Implement)
+	if err != nil {
+		return "", err
+	}
+	verName, _, err := runs.SplitActorSpec(req.Verify)
+	if err != nil {
+		return "", err
+	}
 	actorMap, err := s.fetchActorMap(ctx)
 	if err == nil {
-		impAct := actorMap[req.Implement]
-		verAct := actorMap[req.Verify]
+		impAct := actorMap[impName]
+		verAct := actorMap[verName]
 		if impAct != nil && verAct != nil && impAct.Family != "" && impAct.Family == verAct.Family {
-			return "", fmt.Errorf("verifier %q is in the same model family (%s) as implementer %q", req.Verify, verAct.Family, req.Implement)
+			return "", fmt.Errorf("verifier %q is in the same model family (%s) as implementer %q", verName, verAct.Family, impName)
 		}
 	}
 
@@ -134,6 +145,10 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 		return "", fmt.Errorf("unknown run kind %q (must be implement, verify, discuss, or plan)", req.Kind)
 	}
 
+	actorName, _, err := runs.SplitActorSpec(req.Actor)
+	if err != nil {
+		return "", err
+	}
 	// Verify cross-family rule for verify runs
 	if req.Kind == "verify" && !req.AllowSameFamily {
 		actorMap, _ := s.fetchActorMap(ctx)
@@ -143,9 +158,9 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 		if err := s.callServer(ctx, http.MethodGet, pullPath, nil, &pr); err == nil && pr.Poster != nil {
 			author := pr.Poster.UserName
 			authorAct := actorMap[author]
-			verAct := actorMap[req.Actor]
+			verAct := actorMap[actorName]
 			if authorAct != nil && verAct != nil && authorAct.Family != "" && authorAct.Family == verAct.Family {
-				return "", fmt.Errorf("verifier %q is in the same model family (%s) as PR author %q; check 'Allow same family' to bypass", req.Actor, verAct.Family, author)
+				return "", fmt.Errorf("verifier %q is in the same model family (%s) as PR author %q; check 'Allow same family' to bypass", actorName, verAct.Family, author)
 			}
 		}
 	}

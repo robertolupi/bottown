@@ -12,6 +12,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/review"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -33,7 +34,9 @@ const (
 // ErrActorLimit marks a run creation refused by the per-actor batch limit.
 var ErrActorLimit = errors.New("actor at live batch run limit")
 
-// Options selects the issue, actors, and budgets for one flow.
+// Options selects the issue, actors, and budgets for one flow. Implement
+// and Verify are ACTOR[:SPEC] (runs.SplitActorSpec): the spec, a model
+// choice, goes to the run unchanged and never changes the actor's family.
 type Options struct {
 	Issue     int64
 	Repo      string
@@ -66,7 +69,7 @@ func (e *StopError) Error() string {
 type RunRequest struct {
 	Kind  string
 	Repo  string
-	Actor string
+	Actor string // ACTOR[:SPEC], as given in Options
 	Issue int64
 	PR    int64
 }
@@ -264,16 +267,24 @@ func (s *Supervisor) checkFamilies(ctx context.Context, opts Options) error {
 	for _, actor := range actors {
 		families[actor.Name] = actor.Family
 	}
-	implement, ok := families[opts.Implement]
-	if !ok {
-		return fmt.Errorf("unknown implementer %q", opts.Implement)
+	implActor, _, err := runs.SplitActorSpec(opts.Implement)
+	if err != nil {
+		return fmt.Errorf("implementer: %w", err)
 	}
-	verify, ok := families[opts.Verify]
+	verActor, _, err := runs.SplitActorSpec(opts.Verify)
+	if err != nil {
+		return fmt.Errorf("verifier: %w", err)
+	}
+	implement, ok := families[implActor]
 	if !ok {
-		return fmt.Errorf("unknown verifier %q", opts.Verify)
+		return fmt.Errorf("unknown implementer %q", implActor)
+	}
+	verify, ok := families[verActor]
+	if !ok {
+		return fmt.Errorf("unknown verifier %q", verActor)
 	}
 	if implement == verify {
-		return fmt.Errorf("implementer %s and verifier %s are both %s; cross-family verification is required", opts.Implement, opts.Verify, implement)
+		return fmt.Errorf("implementer %s and verifier %s are both %s; cross-family verification is required", implActor, verActor, implement)
 	}
 	return nil
 }

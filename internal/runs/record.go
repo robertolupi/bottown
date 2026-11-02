@@ -37,6 +37,7 @@ type Record struct {
 	Question        string     `json:"question,omitempty"` // discuss: the owner's question
 	Message         string     `json:"message,omitempty"`  // the owner's note for the prompt (--message)
 	Harness         string     `json:"harness"`
+	Spec            string     `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
 	Status          string     `json:"status"`
 	StopRequested   bool       `json:"stop_requested,omitempty"`
 	ExitCode        *int       `json:"exit_code,omitempty"`

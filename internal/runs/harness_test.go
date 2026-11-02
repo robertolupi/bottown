@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -510,5 +511,77 @@ func TestCrushSummary(t *testing.T) {
 func TestCrushUsage(t *testing.T) {
 	if got := (crushHarness{}).Usage([]byte("hello")); got != nil {
 		t.Fatalf("usage = %v, want nil", got)
+	}
+}
+
+func TestSplitActorSpec(t *testing.T) {
+	for _, c := range []struct{ in, actor, spec, err string }{
+		{in: "agy", actor: "agy"},
+		{in: "agy:gemini-3.8-flash", actor: "agy", spec: "gemini-3.8-flash"},
+		{in: "crush:openrouter:~deepseek/latest", actor: "crush", spec: "openrouter:~deepseek/latest"},
+		{in: "crush:lmstudio:qwen/qwen3.8-27b", actor: "crush", spec: "lmstudio:qwen/qwen3.8-27b"},
+		{in: "", err: "names no actor"},
+		{in: ":opus", err: "names no actor"},
+		{in: "agy:", err: "no model"},
+		{in: "agy:two words", err: "spaces"},
+	} {
+		actor, spec, err := SplitActorSpec(c.in)
+		if c.err != "" {
+			if err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Errorf("%q: error %v, want %q", c.in, err, c.err)
+			}
+			continue
+		}
+		if err != nil || actor != c.actor || spec != c.spec {
+			t.Errorf("%q = %q, %q, %v; want %q, %q", c.in, actor, spec, err, c.actor, c.spec)
+		}
+	}
+}
+
+// Each harness passes a spec as its own model flag, and adds nothing
+// without one; the spec also reaches the run's environment.
+func TestHarnessModelFlag(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	for _, c := range []struct {
+		name        string
+		h           Harness
+		interactive bool
+		spec        string
+		want        string // the model arguments, in order
+	}{
+		{"claude", claudeHarness{}, false, "opus", "--model opus"},
+		{"claude interactive", claudeHarness{}, true, "opus", "--model opus"},
+		{"agy", agyHarness{}, false, "gemini-3.8-flash", "--model gemini-3.8-flash"},
+		{"agy interactive", agyHarness{}, true, "gemini-3.8-flash", "--model gemini-3.8-flash"},
+		{"kimi", kimiHarness{}, false, "kimi-k3", "-m kimi-k3"},
+		{"codex", codexHarness{}, false, "gpt-6", "-m gpt-6"},
+		{"codex interactive", codexHarness{}, true, "gpt-6", "-m gpt-6"},
+		{"crush model", crushHarness{}, false, "qwen3", "-m qwen3"},
+		{"crush provider", crushHarness{}, false, "openrouter:~deepseek/latest", "-m openrouter/~deepseek/latest"},
+		{"crush provider slashes", crushHarness{}, false, "lmstudio:qwen/qwen3.8-27b", "-m lmstudio/qwen/qwen3.8-27b"},
+	} {
+		l := Launch{Dir: t.TempDir(), Prompt: "do it", RecordFile: "/x/r-1.json", Interactive: c.interactive}
+		plain, err := c.h.Command(t.Context(), l)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		l.Spec = c.spec
+		cmd, err := c.h.Command(t.Context(), l)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if args := strings.Join(cmd.Args[1:], " "); !strings.Contains(args, c.want) {
+			t.Errorf("%s: args lack %q: %s", c.name, c.want, args)
+		}
+		if flag := strings.Fields(c.want)[0]; slices.Contains(plain.Args, flag) {
+			t.Errorf("%s: %s without a spec: %v", c.name, flag, plain.Args)
+		}
+		// The spec adds its two arguments and leaves the prompt last.
+		if len(cmd.Args) != len(plain.Args)+2 || cmd.Args[len(cmd.Args)-1] != plain.Args[len(plain.Args)-1] {
+			t.Errorf("%s: the spec moved other arguments: %v vs %v", c.name, cmd.Args, plain.Args)
+		}
+		if !slices.Contains(cmd.Env, "BOTTOWN_RUN_SPEC="+c.spec) {
+			t.Errorf("%s: env lacks BOTTOWN_RUN_SPEC", c.name)
+		}
 	}
 }

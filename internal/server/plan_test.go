@@ -96,7 +96,11 @@ func TestPlanRun(t *testing.T) {
 	if w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","repo":"demo","issue":8}`); w.Code != http.StatusBadRequest {
 		t.Errorf("plan run on a PR = %d (%s), want 400", w.Code, w.Body.String())
 	}
-	w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","repo":"demo","issue":7}`)
+	// A model spec is checked, then recorded as given.
+	if w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","spec":"two words","repo":"demo","issue":7}`); w.Code != http.StatusBadRequest {
+		t.Errorf("plan run with a bad spec = %d (%s), want 400", w.Code, w.Body.String())
+	}
+	w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","spec":"opus","repo":"demo","issue":7}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST /v1/runs plan = %d (%s), want 201", w.Code, w.Body.String())
 	}
@@ -104,7 +108,7 @@ func TestPlanRun(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Kind != policy.Plan || created.Issue != 7 || created.Branch != "issue/7" || created.Key == "" {
+	if created.Kind != policy.Plan || created.Issue != 7 || created.Branch != "issue/7" || created.Key == "" || created.Spec != "opus" {
 		t.Fatalf("plan run = %+v, want kind plan on issue/7 with a key", created.Run)
 	}
 	runKey := created.Key

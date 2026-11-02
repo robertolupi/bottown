@@ -751,6 +751,9 @@ func TestE2E(t *testing.T) {
 		if code, _ := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number}); code != 403 {
 			t.Errorf("starting a run for another actor: %d", code)
 		}
+		if code, _ := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "spec": "opus", "repo": "demo", "issue": issue.Number}); code != 403 {
+			t.Errorf("self-start choosing a model: %d, want 403", code)
+		}
 		code, run := call(rk, "POST", "/v1/runs", map[string]any{"kind": "implement", "repo": "demo", "issue": issue.Number})
 		if code != 201 || run["actor"] != "claude" || run["started_by"] != "claude" {
 			t.Fatalf("self-start: %d %v", code, run)
@@ -1469,10 +1472,14 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("handover comment: %+v", comments)
 		}
 
-		verify := "set -e; test \"$(cat cli.txt)\" = cli; " + bin +
+		// ACTOR:MODEL reaches the harness, and the records show the model.
+		verify := "set -e; test \"$(cat cli.txt)\" = cli; test \"$BOTTOWN_RUN_SPEC\" = gemini-3.8-flash; " + bin +
 			` mcp call review_submit "{\"event\":\"APPROVED\",\"body\":\"ok\",\"commit_id\":\"$(git rev-parse HEAD)\"}" > /dev/null; echo approved`
-		if out, err := withHarness(verify, "run", "verify", "-a", "agy", fmt.Sprint(pr)); err != nil || !strings.Contains(out, "succeeded") {
+		if out, err := withHarness(verify, "run", "verify", "-a", "agy:gemini-3.8-flash", fmt.Sprint(pr)); err != nil || !strings.Contains(out, "succeeded") || !strings.Contains(out, "model gemini-3.8-flash") {
 			t.Fatalf("run verify: %v\n%s", err, out)
+		}
+		if out := a.mustCmd(demo, "run", "ls", "--all"); !strings.Contains(out, "gemini-3.8-flash") {
+			t.Errorf("run ls --all lacks the verifier's model:\n%s", out)
 		}
 		// A failing run keeps its worktree; -I is recorded even without a TTY.
 		out, err = withHarness("echo boom; exit 3", "run", "implement", "-a", "kimi", "-I", fmt.Sprint(issue.Number))
@@ -1486,10 +1493,10 @@ func TestE2E(t *testing.T) {
 			}
 		}
 		// endedInDemo counts the server's ended runs of demo in `run ls --all`
-		// (RUN REPO KIND TARGET ACTOR FAMILY KEY ...), and whether kimi's is one.
+		// (RUN REPO KIND TARGET ACTOR FAMILY MODEL KEY ...), and whether kimi's is one.
 		endedInDemo := func() (n int, kimi bool) {
 			for _, l := range strings.Split(a.mustCmd(demo, "run", "ls", "--all"), "\n") {
-				if f := strings.Fields(l); len(f) > 6 && f[1] == "demo" && f[6] == "ended" {
+				if f := strings.Fields(l); len(f) > 7 && f[1] == "demo" && f[7] == "ended" {
 					n++
 					kimi = kimi || f[4] == "kimi"
 				}

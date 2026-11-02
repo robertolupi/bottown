@@ -264,6 +264,40 @@ func TestFlowRejectsSameFamilyBeforeRunning(t *testing.T) {
 	}
 }
 
+// ACTOR:SPEC picks a model: the family check reads the actor, and the
+// runner gets the spec as given.
+func TestFlowActorSpecs(t *testing.T) {
+	opts := testOptions()
+	opts.Implement, opts.Verify = "claude:opus", "agy:gemini-3.8-flash"
+	api := &fakeAPI{}
+	var got []string
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		got = append(got, req.Kind+" "+req.Actor)
+		if req.Kind == policy.Implement {
+			api.open, api.pr = true, openPR()
+		} else {
+			approve(api)
+		}
+		return nil
+	})
+	if _, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if want := "implement claude:opus,verify agy:gemini-3.8-flash"; strings.Join(got, ",") != want {
+		t.Fatalf("runs %v, want %s", got, want)
+	}
+
+	// A model does not change the actor's family.
+	opts.Verify = "claude:sonnet"
+	if _, err := (&Supervisor{API: &fakeAPI{}, Runner: runner}).Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "cross-family") {
+		t.Fatalf("same family through specs: %v", err)
+	}
+	opts.Verify = "agy:"
+	if _, err := (&Supervisor{API: &fakeAPI{}, Runner: runner}).Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "verifier") {
+		t.Fatalf("empty spec: %v", err)
+	}
+}
+
 func TestFlowRefusesLiveRun(t *testing.T) {
 	now := time.Now()
 	api := &fakeAPI{runs: []secrets.Run{{ID: "r-live", Issue: 9, Created: now, Expires: now.Add(time.Hour)}}}
