@@ -76,6 +76,7 @@ export interface RepoSettingsCheck {
   branch: string;
   commit?: string;
   after_pull: string[];
+  milestones_dir?: string;
   error?: string;
 }
 

@@ -163,7 +163,7 @@ func TestRepoSettings_NoFileAndInvalid(t *testing.T) {
 	// No file on main: the defaults, even though a branch has one.
 	forge.set("issue/7", "after_pull = [\"make install\"]\n")
 	st := srv.LoadRepoSettings(ctx)
-	if st.Error != "" || !st.Checked || st.Found || len(st.AfterPull) != 0 || st.AfterPull == nil {
+	if st.Error != "" || !st.Checked || st.Found || len(st.AfterPull) != 0 || st.AfterPull == nil || st.MilestonesDir != "docs/milestones" {
 		t.Fatalf("no file: %+v", st)
 	}
 	if _, err := srv.ExecuteAfterPull(ctx, []string{"make install"}); err == nil || !strings.Contains(err.Error(), "no after-pull steps") {
@@ -178,6 +178,18 @@ func TestRepoSettings_NoFileAndInvalid(t *testing.T) {
 	}
 	if _, err := srv.ExecuteAfterPull(ctx, []string{"make install"}); err == nil {
 		t.Errorf("invalid file: steps ran")
+	}
+
+	// So is an invalid milestones_dir, which also withholds the steps.
+	forge.set(mainSHA, "after_pull = [\"make install\"]\nmilestones_dir = \"../plans\"\n")
+	st = srv.LoadRepoSettings(ctx)
+	if !st.Found || !strings.Contains(st.Error, "milestones_dir") || len(st.AfterPull) != 0 || st.MilestonesDir != "" {
+		t.Fatalf("invalid milestones_dir: %+v", st)
+	}
+
+	forge.set(mainSHA, "milestones_dir = \"plans\"\n")
+	if st = srv.LoadRepoSettings(ctx); st.Error != "" || st.MilestonesDir != "plans" {
+		t.Fatalf("custom milestones_dir: %+v", st)
 	}
 }
 

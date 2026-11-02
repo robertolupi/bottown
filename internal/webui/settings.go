@@ -30,7 +30,10 @@ type RepoSettingsCheck struct {
 	Branch    string   `json:"branch"`
 	Commit    string   `json:"commit,omitempty"`
 	AfterPull []string `json:"after_pull"`
-	Error     string   `json:"error,omitempty"`
+	// MilestonesDir is the effective milestones_dir: the file's, or the
+	// default without the file. It is empty when the file is invalid.
+	MilestonesDir string `json:"milestones_dir,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type afterPullRequest struct {
@@ -76,6 +79,7 @@ func (s *Server) LoadRepoSettings(ctx context.Context) RepoSettingsCheck {
 		return res
 	case code == http.StatusNotFound:
 		res.Checked = true
+		res.MilestonesDir = config.DefaultRepoSettings().MilestonesDir
 		return res
 	case code < 200 || code > 299:
 		res.Error = fmt.Sprintf("server error %d: %s", code, strings.TrimSpace(string(body)))
@@ -90,6 +94,7 @@ func (s *Server) LoadRepoSettings(ctx context.Context) RepoSettingsCheck {
 	if st.AfterPull != nil {
 		res.AfterPull = st.AfterPull
 	}
+	res.MilestonesDir = st.MilestonesDir
 	return res
 }
 
