@@ -496,7 +496,7 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":    id,
-			"lines": []string{},
+			"lines": []runs.LogLine{},
 		})
 		return
 	}

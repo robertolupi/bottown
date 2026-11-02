@@ -53,8 +53,8 @@ test('LiveLogTail reactive effect wiring: mounts cleanly and runs without effect
   assert.equal(preEffectRuns, 1, 'pre-effect must run exactly once on mount');
   assert.equal(effectRuns, 1, 'effect must run exactly once on mount');
   assert.deepEqual($.get(keyedLines), [
-    { id: 0, text: 'line 1' },
-    { id: 1, text: 'line 2' },
+    { id: 0, line: 'line 1' },
+    { id: 1, line: 'line 2' },
   ]);
 
   // 1. Appending new lines
@@ -72,9 +72,9 @@ test('LiveLogTail reactive effect wiring: mounts cleanly and runs without effect
   assert.equal(effectRuns, 3, 'effect runs once on trim');
   assert.equal(baseIndex, 1);
   assert.deepEqual($.get(keyedLines), [
-    { id: 1, text: 'line 2' },
-    { id: 2, text: 'line 3' },
-    { id: 3, text: 'line 4' },
+    { id: 1, line: 'line 2' },
+    { id: 2, line: 'line 3' },
+    { id: 3, line: 'line 4' },
   ]);
 
   // 3. Pause following (user scrolled away)
@@ -89,9 +89,9 @@ test('LiveLogTail reactive effect wiring: mounts cleanly and runs without effect
   assert.equal(effectRuns, 5, 'effect runs once while paused');
   assert.equal(baseIndex, 2);
   assert.deepEqual($.get(keyedLines), [
-    { id: 2, text: 'line 3' },
-    { id: 3, text: 'line 4' },
-    { id: 4, text: 'line 5' },
+    { id: 2, line: 'line 3' },
+    { id: 3, line: 'line 4' },
+    { id: 4, line: 'line 5' },
   ]);
 
   cleanup();

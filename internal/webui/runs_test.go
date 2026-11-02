@@ -19,6 +19,7 @@ import (
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -268,7 +269,7 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if !strings.Contains(r.Flow.Label, "#51 · round 2/3 · verifying with kimi") {
 		t.Fatalf("unexpected flow label: %q", r.Flow.Label)
 	}
-	if len(r.LogTail) != 2 || r.LogTail[0] != "Bash: make check" || r.LogTail[1] != "Running checks now" {
+	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LinePlain, Text: "Bash: make check"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LinePlain, Text: "Running checks now"}) {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
 	// The run's refusals outside its repository and with no repository
@@ -1074,6 +1075,31 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 	resp, body = doReq(http.MethodGet, "/api/runs/r-live-api/log", "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "starting task") {
 		t.Fatalf("GET /api/runs/r-live-api/log: status %d, body %s", resp.StatusCode, body)
+	}
+	var logResp struct {
+		Lines []runs.LogLine `json:"lines"`
+	}
+	if err := json.Unmarshal([]byte(body), &logResp); err != nil {
+		t.Fatalf("GET /api/runs/r-live-api/log: %v: %s", err, body)
+	}
+	wantLines := []runs.LogLine{{Kind: runs.LinePlain, Text: "starting task"}, {Kind: runs.LinePlain, Text: "task done"}}
+	if fmt.Sprint(logResp.Lines) != fmt.Sprint(wantLines) {
+		t.Fatalf("GET /api/runs/r-live-api/log: lines %+v, want %+v", logResp.Lines, wantLines)
+	}
+
+	// GET /api/status: the live run's tail is the same objects.
+	resp, body = doReq(http.MethodGet, "/api/status", "")
+	var status struct {
+		LiveRuns []struct {
+			ID      string         `json:"id"`
+			LogTail []runs.LogLine `json:"log_tail"`
+		} `json:"live_runs"`
+	}
+	if err := json.Unmarshal([]byte(body), &status); err != nil || resp.StatusCode != http.StatusOK || len(status.LiveRuns) != 1 {
+		t.Fatalf("GET /api/status: status %d, err %v, body %s", resp.StatusCode, err, body)
+	}
+	if fmt.Sprint(status.LiveRuns[0].LogTail) != fmt.Sprint(wantLines) {
+		t.Fatalf("GET /api/status: log_tail %+v, want %+v", status.LiveRuns[0].LogTail, wantLines)
 	}
 
 	// Path traversal attempt should be rejected with 400 Bad Request
