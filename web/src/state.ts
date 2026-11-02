@@ -1220,3 +1220,91 @@ export function buildFlowConstituentRuns(
   return thread.runs;
 }
 
+export interface KeyedLogLine {
+  id: number;
+  text: string;
+}
+
+// Build keyed lines with monotonic IDs so Svelte preserves existing line DOM elements
+// as lines slide or trim.
+export function buildKeyedLogLines(
+  lines: string[] | undefined | null,
+  baseIndex: number,
+): KeyedLogLine[] {
+  if (!lines || lines.length === 0) return [];
+  return lines.map((text, i) => ({ id: baseIndex + i, text }));
+}
+
+// Detect how many lines were trimmed from the beginning of prevLines when nextLines arrived.
+// Returns 0 if lines were only appended or unchanged.
+// Returns k > 0 if k lines were trimmed from the front.
+// If nextLines is empty and prevLines had lines, returns prevLines.length.
+// If there is no overlap at all, returns prevLines.length.
+export function detectTrimmedLineCount(prevLines: string[], nextLines: string[]): number {
+  if (!prevLines || prevLines.length === 0) return 0;
+  if (!nextLines || nextLines.length === 0) return prevLines.length;
+
+  // Check if prevLines is a prefix of nextLines (0 lines trimmed, lines only appended or identical)
+  let isPrefix = true;
+  if (nextLines.length >= prevLines.length) {
+    for (let i = 0; i < prevLines.length; i++) {
+      if (prevLines[i] !== nextLines[i]) {
+        isPrefix = false;
+        break;
+      }
+    }
+    if (isPrefix) return 0;
+  }
+
+  // Look for the shift k in [1, prevLines.length) where prevLines[k:] is a prefix of nextLines
+  for (let k = 1; k < prevLines.length; k++) {
+    const remainingCount = prevLines.length - k;
+    if (nextLines.length >= remainingCount) {
+      let matches = true;
+      for (let i = 0; i < remainingCount; i++) {
+        if (prevLines[k + i] !== nextLines[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return k;
+    }
+  }
+
+  // No overlap found: all previous lines have been shifted out
+  return prevLines.length;
+}
+
+// Compute the new scrollTop when trimmedHeight pixels were removed from the top of the scroll container,
+// preserving the visual position of the lines below.
+export function computePreservedScrollTop(
+  currentScrollTop: number,
+  trimmedHeight: number,
+): number {
+  if (trimmedHeight <= 0) return currentScrollTop;
+  return Math.max(0, currentScrollTop - trimmedHeight);
+}
+
+// Check whether a scroll container is scrolled to the bottom (within threshold pixels).
+// If the content fits within the viewport, it is always considered at the bottom.
+export function isScrolledToBottom(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  threshold = 16,
+): boolean {
+  if (scrollHeight <= clientHeight) return true;
+  return scrollHeight - scrollTop - clientHeight <= threshold;
+}
+
+// Determine the next follow state given whether the container is at the bottom,
+// or if an explicit action was taken (such as clicking the follow control).
+export function updateLogTailFollow(
+  wasFollowing: boolean,
+  atBottom: boolean,
+  action?: 'scroll' | 'follow_click',
+): boolean {
+  if (action === 'follow_click') return true;
+  return atBottom;
+}
+

@@ -7,13 +7,17 @@ import {
   buildFlowActionPayload,
   buildFlowConstituentRuns,
   buildFlowTimeline,
+  buildKeyedLogLines,
   buildRunActionPayload,
+  computePreservedScrollTop,
+  detectTrimmedLineCount,
   filterHistoryRuns,
   filterHistoryThreads,
   formatThreadMainLine,
   groupHistoryThreads,
   groupLiveFlows,
   isSameFamilyPair,
+  isScrolledToBottom,
   nextPollDelayMs,
   parseIssueNumber,
   parseLivePollSnapshot,
@@ -23,6 +27,7 @@ import {
   selectDefaultActors,
   standaloneLiveRuns,
   toggleExpandedThread,
+  updateLogTailFollow,
 } from '../src/state.ts';
 
 const actors = [
@@ -1004,6 +1009,201 @@ test('buildFlowTimeline carries recorded outcomes from history runs and run even
       ['r-ver-2', 'succeeded', 'approved'],
     ],
   );
+});
+
+test('detectTrimmedLineCount detects trimmed lines on append, sliding window, and disjoint updates', () => {
+  // Empty or initial cases
+  assert.equal(detectTrimmedLineCount([], []), 0);
+  assert.equal(detectTrimmedLineCount([], ['line 1', 'line 2']), 0);
+  assert.equal(detectTrimmedLineCount(['line 1', 'line 2'], []), 2);
+
+  // Appending new output without trimming
+  assert.equal(detectTrimmedLineCount(['line 1', 'line 2'], ['line 1', 'line 2']), 0);
+  assert.equal(detectTrimmedLineCount(['line 1', 'line 2'], ['line 1', 'line 2', 'line 3']), 0);
+  assert.equal(detectTrimmedLineCount(['line 1', 'line 2'], ['line 1', 'line 2', 'line 3', 'line 4']), 0);
+
+  // Trimmed lines from the front
+  assert.equal(
+    detectTrimmedLineCount(
+      ['line 1', 'line 2', 'line 3', 'line 4'],
+      ['line 2', 'line 3', 'line 4', 'line 5'],
+    ),
+    1,
+  );
+  assert.equal(
+    detectTrimmedLineCount(
+      ['line 1', 'line 2', 'line 3', 'line 4'],
+      ['line 3', 'line 4', 'line 5', 'line 6'],
+    ),
+    2,
+  );
+  assert.equal(
+    detectTrimmedLineCount(
+      ['line 1', 'line 2', 'line 3', 'line 4'],
+      ['line 4', 'line 5', 'line 6', 'line 7'],
+    ),
+    3,
+  );
+
+  // Sliding window of 25 lines (e.g. backend retaining 25 lines)
+  const window25Old = Array.from({ length: 25 }, (_, i) => `log line ${i}`);
+  // 5 new lines arrive, first 5 trimmed
+  const window25New = Array.from({ length: 25 }, (_, i) => `log line ${i + 5}`);
+  assert.equal(detectTrimmedLineCount(window25Old, window25New), 5);
+
+  // Repeated identical lines
+  assert.equal(
+    detectTrimmedLineCount(['repeat', 'repeat', 'repeat'], ['repeat', 'repeat', 'repeat', 'new']),
+    0,
+  );
+  assert.equal(
+    detectTrimmedLineCount(['repeat', 'repeat', 'repeat'], ['repeat', 'repeat', 'new']),
+    1,
+  );
+
+  // Disjoint / completely new stream
+  assert.equal(
+    detectTrimmedLineCount(['old 1', 'old 2'], ['fresh 1', 'fresh 2']),
+    2,
+  );
+});
+
+test('computePreservedScrollTop preserves visual position and clamps to zero', () => {
+  assert.equal(computePreservedScrollTop(200, 50), 150);
+  assert.equal(computePreservedScrollTop(30, 50), 0);
+  assert.equal(computePreservedScrollTop(100, 0), 100);
+  assert.equal(computePreservedScrollTop(100, -20), 100);
+});
+
+test('isScrolledToBottom detects bottom and scrolled-away states', () => {
+  // Content fits entirely within viewport
+  assert.equal(isScrolledToBottom(0, 100, 180), true);
+  assert.equal(isScrolledToBottom(0, 180, 180), true);
+
+  // Content overflows viewport
+  const scrollHeight = 600;
+  const clientHeight = 180;
+  const maxScroll = scrollHeight - clientHeight; // 420
+
+  // At the exact bottom
+  assert.equal(isScrolledToBottom(420, scrollHeight, clientHeight), true);
+
+  // Within default threshold (16px)
+  assert.equal(isScrolledToBottom(410, scrollHeight, clientHeight, 16), true);
+  assert.equal(isScrolledToBottom(404, scrollHeight, clientHeight, 16), true);
+
+  // Scrolled away
+  assert.equal(isScrolledToBottom(400, scrollHeight, clientHeight, 16), false);
+  assert.equal(isScrolledToBottom(100, scrollHeight, clientHeight, 16), false);
+  assert.equal(isScrolledToBottom(0, scrollHeight, clientHeight, 16), false);
+});
+
+test('updateLogTailFollow transitions follow state on scroll and explicit click', () => {
+  // Clicking follow always resumes following regardless of current scroll position
+  assert.equal(updateLogTailFollow(false, false, 'follow_click'), true);
+  assert.equal(updateLogTailFollow(true, false, 'follow_click'), true);
+
+  // On scroll: resumes when at bottom, pauses when scrolled away
+  assert.equal(updateLogTailFollow(true, false, 'scroll'), false);
+  assert.equal(updateLogTailFollow(false, true, 'scroll'), true);
+  assert.equal(updateLogTailFollow(true, true, 'scroll'), true);
+});
+
+test('buildKeyedLogLines generates monotonic keys across line trimming', () => {
+  const initial = buildKeyedLogLines(['a', 'b', 'c'], 0);
+  assert.deepEqual(initial, [
+    { id: 0, text: 'a' },
+    { id: 1, text: 'b' },
+    { id: 2, text: 'c' },
+  ]);
+
+  // After trimming 1 line ('a'), baseIndex shifts to 1
+  const afterTrim = buildKeyedLogLines(['b', 'c', 'd'], 1);
+  assert.deepEqual(afterTrim, [
+    { id: 1, text: 'b' },
+    { id: 2, text: 'c' },
+    { id: 3, text: 'd' },
+  ]);
+
+  // Keys for 'b' and 'c' remain stable (1 and 2)
+  assert.equal(afterTrim[0].id, initial[1].id);
+  assert.equal(afterTrim[1].id, initial[2].id);
+});
+
+test('simulated live log session: follows initially, pauses on scroll away, preserves reading position on trim, resumes on return to bottom or follow click', () => {
+  // Session simulation
+  let following = true;
+  let baseIndex = 0;
+  let currentLines: string[] = ['line 1', 'line 2', 'line 3'];
+  let scrollTop = 0;
+  const clientHeight = 100;
+  const lineHeight = 20;
+
+  // 1. Initial state: following is true, scrolled to latest line
+  let scrollHeight = currentLines.length * lineHeight; // 60
+  assert.equal(following, true);
+  scrollTop = Math.max(0, scrollHeight - clientHeight); // 0 (fits in viewport)
+
+  // 2. More lines arrive while following: automatically follows to bottom
+  const nextBatch = ['line 1', 'line 2', 'line 3', 'line 4', 'line 5', 'line 6', 'line 7', 'line 8'];
+  const trim1 = detectTrimmedLineCount(currentLines, nextBatch);
+  assert.equal(trim1, 0);
+  currentLines = nextBatch;
+  scrollHeight = currentLines.length * lineHeight; // 160
+  if (following) {
+    scrollTop = scrollHeight - clientHeight; // 60
+  }
+  assert.equal(scrollTop, 60);
+  assert.equal(isScrolledToBottom(scrollTop, scrollHeight, clientHeight), true);
+
+  // 3. User scrolls away to inspect line 2
+  scrollTop = 20; // Scrolled up to read line 2
+  following = updateLogTailFollow(
+    following,
+    isScrolledToBottom(scrollTop, scrollHeight, clientHeight),
+    'scroll',
+  );
+  assert.equal(following, false); // Paused following
+
+  // 4. Incoming output arrives and older lines are trimmed (e.g. buffer sliding window)
+  // New lines: lines 3 through 10 (lines 1 and 2 trimmed)
+  const trimmedBatch = ['line 3', 'line 4', 'line 5', 'line 6', 'line 7', 'line 8', 'line 9', 'line 10'];
+  const trim2 = detectTrimmedLineCount(currentLines, trimmedBatch);
+  assert.equal(trim2, 2); // 2 lines trimmed
+  baseIndex += trim2;
+
+  // Since following is false, incoming events must NOT pull the user to bottom
+  assert.equal(following, false);
+  const trimmedHeight = trim2 * lineHeight; // 40px lost from top
+  scrollTop = computePreservedScrollTop(scrollTop, trimmedHeight);
+  // User was at scrollTop = 20; since 40px was trimmed above, reading position clamps to 0
+  assert.equal(scrollTop, 0);
+  assert.equal(following, false); // Still paused!
+
+  // 5. User scrolls back to bottom manually
+  scrollHeight = trimmedBatch.length * lineHeight; // 160
+  scrollTop = scrollHeight - clientHeight; // 60
+  following = updateLogTailFollow(
+    following,
+    isScrolledToBottom(scrollTop, scrollHeight, clientHeight),
+    'scroll',
+  );
+  assert.equal(following, true); // Automatic following resumed!
+
+  // 6. User scrolls away again, then clicks the Follow control
+  scrollTop = 10;
+  following = updateLogTailFollow(
+    following,
+    isScrolledToBottom(scrollTop, scrollHeight, clientHeight),
+    'scroll',
+  );
+  assert.equal(following, false);
+
+  // User explicitly clicks follow control
+  following = updateLogTailFollow(following, false, 'follow_click');
+  scrollTop = scrollHeight - clientHeight;
+  assert.equal(following, true);
+  assert.equal(scrollTop, 60);
 });
 
 
