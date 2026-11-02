@@ -2196,6 +2196,38 @@ fi`
 		if out, err := a.cmd(filepath.Join(fam, "claude"), "milestone", "apply", "demo-plan"); err == nil || !strings.Contains(out, "main checkout") {
 			t.Errorf("apply from an actor worktree: %v\n%s", err, out)
 		}
+
+		// The web UI's Milestones view reads the applied epic back from
+		// Forgejo: its children, their dependency layers, and no
+		// milestone/<epic> branch yet.
+		ui, err := webui.NewServer(webui.Config{Instance: a.cfg, RepoTop: t.TempDir(), FullRepo: "bottown/demo", OwnerKey: owner})
+		if err != nil {
+			t.Fatalf("webui server: %v", err)
+		}
+		defer ui.Close()
+		groups, err := ui.ComputeMilestones(context.Background())
+		if err != nil {
+			t.Fatalf("milestones view: %v", err)
+		}
+		var g *webui.MilestoneGroup
+		for i := range groups {
+			if groups[i].Epic != nil && groups[i].Epic.Number == epic {
+				g = &groups[i]
+			}
+		}
+		if g == nil {
+			t.Fatalf("no group for epic #%d: %+v", epic, groups)
+		}
+		layers := map[int64]int{}
+		statuses := map[int64]string{}
+		for _, n := range g.Nodes {
+			layers[n.Number], statuses[n.Number] = n.Layer, n.Status
+		}
+		if g.Error != "" || g.Base != "main" || g.Kickoff == nil || g.Kickoff.Number != kickoff.Number || g.Design != "docs/design.md" ||
+			g.Counts.Total != 2 || layers[one] != 0 || layers[external.Number] != 0 || layers[two] != 1 ||
+			statuses[one] != webui.NodeReady || statuses[two] != webui.NodeBlocked {
+			t.Errorf("milestones view: %+v, layers %v, statuses %v", g, layers, statuses)
+		}
 	})
 
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {

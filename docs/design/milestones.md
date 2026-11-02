@@ -1,9 +1,10 @@
 # Design: milestones: plan, check, apply and run
 
-Status: **design**, written with the owner in issue #74; Phases 1–3
+Status: **design**, written with the owner in issue #74; Phases 1–4
 (§5) are built (`internal/milestone`, `bottown milestone check`; the base
 issue/PR/milestone rules, the `plan` run kind, `bottown run plan` /
-`milestone plan` and `/bottown-plan`; `bottown milestone apply`). Extends
+`milestone plan` and `/bottown-plan`; `bottown milestone apply`; the web
+UI's Milestones tab and `GET /api/milestones`). Extends
 [the local web UI and supervisor design](web-ui.md) (§3.7).
 
 ## 1. Goal
@@ -459,9 +460,25 @@ Step 1 adds a **Milestones** view to `bottown web ui` ([web UI design](web-ui.md
         - `closed` (completed).
       - Assigned actor pair (`implement/<A>`, `verify/<B>`) when set.
       - Direct links to `#<num>` and `!<pr>` in Forgejo.
+  - **How it is built:** the host UI serves `GET /api/milestones`
+    (`internal/webui/milestones.go`). An epic's active children are its
+    plan's trusted children that it is blocked by; the plan's other trusted
+    children are its removed keys. Kickoff, plan file and design come from
+    the epic's header line. A Forgejo milestone without an epic shows its
+    issues the same way (open milestones only). A node's status is, first
+    match wins: `closed`; `running` (a live run on the issue or its PR, or
+    a UI-started flow between runs); `stopped` (the owner's newest
+    `**bottown flow: …**` comment, other than ready to merge, with no run
+    since; or the last run failed; or the open PR's reviews assess as
+    changes requested or undecided); `approved` / `in review` (an open PR);
+    `blocked` (an open dependency); else `ready`. The actor pair is the
+    `implement/`/`verify/` labels, else the running flow's, else the last
+    runs'. Layers are each node's longest distance from a root, external
+    dependencies included as layer-0 pills.
   - **Actions in the Milestones view:**
     - In Step 1: start a single-issue flow or run on any `ready` or `stopped`
-      child issue directly from its node.
+      child issue directly from its node; clicking any open node that is not
+      running opens the flow dialog for it.
     - In Step 2: start or stop `bottown milestone run <E>` with an actor pool
       selector.
 

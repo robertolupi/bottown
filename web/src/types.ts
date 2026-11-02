@@ -303,3 +303,81 @@ export interface ActionResult {
   output: string;
   error?: string;
 }
+
+// GET /api/milestones (docs/design/milestones.md §2.7)
+export type MilestoneNodeStatus =
+  | 'blocked'
+  | 'ready'
+  | 'running'
+  | 'in_review'
+  | 'approved'
+  | 'stopped'
+  | 'closed'
+  | 'open';
+
+export interface MilestoneRef {
+  id: number;
+  title: string;
+  state: string;
+  url: string;
+}
+
+export interface MilestoneIssueRef {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  key?: string;
+}
+
+export interface MilestoneCounts {
+  total: number;
+  closed: number;
+  ready: number;
+  running: number;
+  in_review: number;
+  awaiting_merge: number;
+  blocked: number;
+  stopped: number;
+}
+
+export interface MilestoneNode {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  key?: string;
+  external?: boolean;
+  status: MilestoneNodeStatus;
+  layer: number;
+  depends_on: number[];
+  implement?: string;
+  verify?: string;
+  run?: { id: string; kind: string; actor: string; created: string; elapsed: string };
+  pr?: { number: number; title: string; url: string; state: string; review?: string };
+  stop_reason?: string;
+  flow?: { implement: string; verify: string };
+}
+
+export interface MilestoneEdge {
+  from: number;
+  to: number;
+}
+
+export interface MilestoneGroup {
+  id: string;
+  milestone?: MilestoneRef;
+  epic?: MilestoneIssueRef;
+  plan?: string;
+  plan_file?: string;
+  kickoff?: MilestoneIssueRef;
+  design?: string;
+  design_url?: string;
+  base: string;
+  removed: MilestoneIssueRef[];
+  counts: MilestoneCounts;
+  nodes: MilestoneNode[];
+  edges: MilestoneEdge[];
+  layers: number;
+  error?: string;
+}
