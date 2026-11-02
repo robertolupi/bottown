@@ -1,8 +1,9 @@
 // Package milestone parses and checks milestone plan files: the
 // <milestones_dir>/<slug>.md files that `bottown milestone apply` turns into
 // an Implementation Epic issue and its child issues (docs/design/milestones.md
-// §2.4). Everything here is offline: it reads bytes and reports problems, and
-// never contacts the server or Forgejo.
+// §2.4). Check is offline: it reads bytes and reports problems, and never
+// contacts the server or Forgejo. Apply (apply.go) reconciles a plan into
+// the forge through the Forge interface, which the CLI implements.
 package milestone
 
 import (

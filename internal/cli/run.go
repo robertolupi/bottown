@@ -132,32 +132,11 @@ func openRunContext(g *globals) (*runContext, error) {
 }
 
 func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
-	top, err := mainCheckout()
+	top, inst, org, name, key, err := ownerRepo(g, repoOverride)
 	if err != nil {
 		return nil, err
 	}
-	inst, err := g.loadInstance()
-	if err != nil {
-		return nil, err
-	}
-	full, ok := repoOnInstance(top, inst)
-	if !ok {
-		return nil, fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
-	}
-	org, name, _ := strings.Cut(full, "/")
-	if repoOverride != "" {
-		if o, r, ok := strings.Cut(repoOverride, "/"); ok {
-			if o != org {
-				return nil, fmt.Errorf("repository %q is not in org %s", repoOverride, org)
-			}
-			repoOverride = r
-		}
-		name, full = repoOverride, org+"/"+repoOverride
-	}
-	key, err := ownerKey(g)
-	if err != nil {
-		return nil, err
-	}
+	full := org + "/" + name
 	self, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -168,6 +147,36 @@ func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
 		return nil, err
 	}
 	return &runContext{inst: inst, ws: ws, org: org, repo: name, key: key}, nil
+}
+
+// ownerRepo resolves the main checkout an owner command runs in, its
+// instance, the repository (org and name: the checkout's, or repoOverride)
+// and the owner's API key.
+func ownerRepo(g *globals, repoOverride string) (top string, inst config.Instance, org, name, key string, err error) {
+	if top, err = mainCheckout(); err != nil {
+		return
+	}
+	if inst, err = g.loadInstance(); err != nil {
+		return
+	}
+	full, ok := repoOnInstance(top, inst)
+	if !ok {
+		err = fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
+		return
+	}
+	org, name, _ = strings.Cut(full, "/")
+	if repoOverride != "" {
+		if o, r, ok := strings.Cut(repoOverride, "/"); ok {
+			if o != org {
+				err = fmt.Errorf("repository %q is not in org %s", repoOverride, org)
+				return
+			}
+			repoOverride = r
+		}
+		name = repoOverride
+	}
+	key, err = ownerKey(g)
+	return
 }
 
 // discussQuestion is the question for a discuss run: the words after the

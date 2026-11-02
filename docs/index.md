@@ -118,7 +118,9 @@ External links are not listed. The files belong to the run:
   child issues, and visualizes the DAG in `bottown web ui`; Step 2 runs an
   implementation epic on a protected `milestone/<epic>` branch with auto-merge
   of verified child PRs and a final pull request into `main`. (Built:
-  Phase 1, the plan format, `milestones_dir` and `bottown milestone check`.)
+  Phase 1, the plan format, `milestones_dir` and `bottown milestone check`;
+  Phase 2, the `plan` run kind and owner-only issue edits; Phase 3,
+  `bottown milestone apply`.)
 
 ### History
 

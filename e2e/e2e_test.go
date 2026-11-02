@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -2066,6 +2067,105 @@ fi`
 		}
 		if got := git(t, wt, "branch", "--show-current"); got != "issue/903" {
 			t.Errorf("claude's worktree switched to %q", got)
+		}
+	})
+
+	t.Run("milestone apply files a merged plan", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+		}
+		var ms struct{ ID int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/milestones", map[string]string{"title": "Demo milestone"}, &ms)
+		var kickoff, external struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]any{"title": "Kickoff", "milestone": ms.ID}, &kickoff)
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]any{"title": "Outside the plan"}, &external)
+
+		// The owner merges the plan into main.
+		ownerGit("fetch", "-q", remote)
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		defer git(t, demo, "switch", "-q", "main")
+		plan := fmt.Sprintf("+++\ntitle = \"Demo epic\"\nkickoff = %d\ndesign = \"docs/design.md\"\n+++\n\nWhat the milestone is for.\n\n"+
+			"## First\n\n```issue\nkey = \"one\"\n```\n\nDo one.\n\n"+
+			"## Second\n\n```issue\nkey = \"two\"\ndepends = [\"one\", \"#%d\"]\n```\n\nDo two.\n", kickoff.Number, external.Number)
+		os.MkdirAll(filepath.Join(demo, "docs", "milestones"), 0o755)
+		os.WriteFile(filepath.Join(demo, "docs", "design.md"), []byte("design\n"), 0o644)
+		os.WriteFile(filepath.Join(demo, "docs", "milestones", "demo-plan.md"), []byte(plan), 0o644)
+		git(t, demo, "add", "docs")
+		git(t, demo, "commit", "-q", "-m", "milestone plan")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+
+		out := a.mustCmd(demo, "milestone", "apply", "demo-plan", "--dry-run")
+		for _, want := range []string{`milestone "Demo milestone"`, "create (one)", "(two): add blocked by #" + fmt.Sprint(external.Number), "dry run: nothing written"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("dry run lacks %q:\n%s", want, out)
+			}
+		}
+		marked := func() map[string]int64 {
+			t.Helper()
+			var issues []struct {
+				Number int64
+				Body   string
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/issues?state=all&type=issues&limit=50", nil, &issues)
+			got := map[string]int64{}
+			for _, is := range issues {
+				for _, k := range []string{`key="one"`, `key="two"`, `role="epic"`} {
+					if strings.Contains(is.Body, `plan="demo-plan" `+k) {
+						got[k] = is.Number
+					}
+				}
+			}
+			return got
+		}
+		if got := marked(); len(got) != 0 {
+			t.Fatalf("dry run filed %v", got)
+		}
+
+		out = a.mustCmd(demo, "milestone", "apply", "demo-plan")
+		got := marked()
+		one, two, epic := got[`key="one"`], got[`key="two"`], got[`role="epic"`]
+		if one == 0 || two == 0 || epic == 0 {
+			t.Fatalf("apply filed %v:\n%s", got, out)
+		}
+		blockedBy := func(n int64) []int64 {
+			t.Helper()
+			var deps []struct{ Number int64 }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/dependencies", n), nil, &deps)
+			var ns []int64
+			for _, d := range deps {
+				ns = append(ns, d.Number)
+			}
+			slices.Sort(ns)
+			return ns
+		}
+		if d := blockedBy(two); !slices.Equal(d, []int64{min(one, external.Number), max(one, external.Number)}) {
+			t.Errorf("#%d (two) blocked by %v", two, d)
+		}
+		if d := blockedBy(epic); !slices.Equal(d, []int64{one, two}) {
+			t.Errorf("epic #%d blocked by %v", epic, d)
+		}
+		var e struct {
+			Body      string
+			Milestone struct{ ID int64 }
+		}
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", epic), nil, &e)
+		if e.Milestone.ID != ms.ID || !strings.Contains(e.Body, fmt.Sprintf("- [ ] #%d — Second (`two`, depends on #%d, #%d)", two, one, external.Number)) {
+			t.Errorf("epic in milestone %d:\n%s", e.Milestone.ID, e.Body)
+		}
+
+		// Re-applying writes nothing: Forgejo keeps the bodies as written.
+		if out := a.mustCmd(demo, "milestone", "apply", "demo-plan"); !strings.Contains(out, "no changes") || !strings.Contains(out, ": 0 write(s)") {
+			t.Errorf("re-apply:\n%s", out)
+		}
+		// Actors cannot apply: it needs the main checkout and the owner's key.
+		if out, err := a.cmd(filepath.Join(fam, "claude"), "milestone", "apply", "demo-plan"); err == nil || !strings.Contains(out, "main checkout") {
+			t.Errorf("apply from an actor worktree: %v\n%s", err, out)
 		}
 	})
 
