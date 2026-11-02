@@ -80,17 +80,42 @@ leaves alone. Without a question, the agent reviews the issue.`,
 	}
 	discuss.Flags().StringVar(&questionFile, "question-file", "", "read the question from a file, or - for stdin")
 	for _, c := range []*cobra.Command{implement, verify, discuss} {
-		c.Flags().StringVarP(&o.actor, "actor", "a", "", "actor to run as (required), e.g. claude, codex")
-		c.Flags().BoolVarP(&o.interactive, "interactive", "I", false, "run the harness's interactive UI in this terminal, so you can steer it")
-		c.Flags().StringSliceVar(&o.allow, "allow", nil, "extra tools the agent may use without asking (harness syntax, e.g. 'Bash(cargo:*)')")
-		c.Flags().BoolVar(&o.keep, "keep", false, "keep the worktree even if the run succeeds")
-		_ = c.MarkFlagRequired("actor")
+		runFlags(c, &o)
 	}
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
-	run.AddCommand(implement, verify, discuss, newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
+	run.AddCommand(implement, verify, discuss, newRunPlan(g), newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
 	run.AddCommand(agentCmds(newRunStart(), newRunEnd())...)
 	return run
+}
+
+// runFlags are the flags of the commands that launch a run.
+func runFlags(c *cobra.Command, o *runOpts) {
+	c.Flags().StringVarP(&o.actor, "actor", "a", "", "actor to run as (required), e.g. claude, codex")
+	c.Flags().BoolVarP(&o.interactive, "interactive", "I", false, "run the harness's interactive UI in this terminal, so you can steer it")
+	c.Flags().StringSliceVar(&o.allow, "allow", nil, "extra tools the agent may use without asking (harness syntax, e.g. 'Bash(cargo:*)')")
+	c.Flags().BoolVar(&o.keep, "keep", false, "keep the worktree even if the run succeeds")
+	_ = c.MarkFlagRequired("actor")
+}
+
+// newRunPlan is `run plan`, which `milestone plan` also is.
+func newRunPlan(g *globals) *cobra.Command {
+	var o runOpts
+	c := &cobra.Command{
+		Use:   "plan -a ACTOR [-I] ISSUE",
+		Short: "Plan a milestone from its kickoff issue: the agent opens a pull request with the plan file",
+		Long: `Plan a milestone from its kickoff issue. The agent reads the issue and the
+design it references, writes <milestones_dir>/<slug>.md, checks it with
+` + "`bottown milestone check`" + `, pushes issue/<ISSUE> and opens a pull request. The run
+cannot create issues: once the plan is reviewed and merged, the owner's
+` + "`bottown milestone apply`" + ` files them.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return startRun(cmd, g, policy.Plan, args[0], o)
+		},
+	}
+	runFlags(c, &o)
+	return c
 }
 
 // runContext is the hosted checkout a run command operates on.
@@ -214,7 +239,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	var dir string
-	if kind == policy.Implement {
+	if kind == policy.Implement || kind == policy.Plan {
 		dir, err = rc.ws.AddImplement(run.ID, run.Branch, base)
 	} else {
 		dir, err = rc.ws.AddVerify(run.ID, run.SHA)
@@ -365,12 +390,21 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question
 	if err := callServer(ctx, rc.inst, rc.key, "GET", fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", run.Org, run.Repo, n), nil, &item); err != nil {
 		return "", "", err
 	}
-	p, err := runs.Prompt(run.Kind, runs.PromptData{
+	d := runs.PromptData{
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
 		Bottown: selfPath(), Remote: "origin", Question: question,
-	})
+	}
+	if run.Kind == policy.Plan {
+		// bottown reads the repository's settings from its default branch.
+		settings, err := runs.RepoSettingsAt(rc.ws.Mirror, "origin/"+base)
+		if err != nil {
+			return "", "", err
+		}
+		d.MilestonesDir = settings.MilestonesDir
+	}
+	p, err := runs.Prompt(run.Kind, d)
 	return p, base, err
 }
 
@@ -402,7 +436,7 @@ func askOutcome(cmd *cobra.Command, def string) string {
 	return def
 }
 
-// handover posts the run's outcome on its issue (implement, discuss) or PR (verify),
+// handover posts the run's outcome on its issue (implement, discuss, plan) or PR (verify),
 // with the run key, as the actor.
 func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, key, status string, code int, summary string) error {
 	n := run.Issue
@@ -434,7 +468,7 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		b.WriteString("Stopped by the owner.\n\n")
 	}
 	switch rec.Kind {
-	case policy.Implement:
+	case policy.Implement, policy.Plan:
 		if head, err := runs.Git(rec.Worktree, nil, "rev-parse", "--short", "HEAD"); err == nil {
 			fmt.Fprintf(&b, "Branch `%s` at `%s`.\n\n", rec.Branch, head)
 		}

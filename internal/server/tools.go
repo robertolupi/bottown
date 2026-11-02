@@ -87,7 +87,7 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "pr_create",
-		Description: "Open a pull request from this implement run's branch into the default branch, closing the run's issue. Push the branch first.",
+		Description: "Open a pull request from this implement or plan run's branch into the default branch, closing the run's issue. Push the branch first.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in PRCreateIn) (*mcp.CallToolResult, PRCreateOut, error) {
 		out, err := s.opPRCreate(ctx, principal(req), in)
 		return nil, out, err

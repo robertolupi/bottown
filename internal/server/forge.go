@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,12 +98,22 @@ func (s *Server) actorClient(ctx context.Context, actor string) (*forgejo.Client
 	return forgejo.New(ctx, s.Rec.BaseURL, token), nil
 }
 
-func requireRole(p secrets.Principal, role string) error {
-	if p.Run == nil {
-		return ferr(http.StatusForbidden, "needs a %s run (start one with `bottown run start %s N`)", role, role)
+// requireRole refuses principals outside a run of one of roles; the first
+// is the one error messages suggest starting.
+func requireRole(p secrets.Principal, roles ...string) error {
+	needs := make([]string, len(roles))
+	for i, r := range roles {
+		needs[i] = "a " + r + " run"
+		if r == policy.Implement {
+			needs[i] = "an " + r + " run"
+		}
 	}
-	if p.Run.Kind != role {
-		return ferr(http.StatusForbidden, "not allowed in a %s run (needs a %s run)", p.Run.Kind, role)
+	need := strings.Join(needs, " or ")
+	if p.Run == nil {
+		return ferr(http.StatusForbidden, "needs %s (start one with `bottown run start %s N`)", need, roles[0])
+	}
+	if !slices.Contains(roles, p.Run.Kind) {
+		return ferr(http.StatusForbidden, "not allowed in a %s run (needs %s)", p.Run.Kind, need)
 	}
 	return nil
 }
@@ -309,6 +320,12 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 		s.toolAudit(p, "", "issue_create", "deny", "disabled")
 		return IssueCreateOut{}, ferr(http.StatusForbidden, "actors may not file issues on this instance")
 	}
+	if p.Run != nil && p.Run.Kind == policy.Plan {
+		// The plan's issues are created by the owner's milestone apply,
+		// from the reviewed plan file; the planner proposes, never files.
+		s.toolAudit(p, "", "issue_create", "deny", "role-plan-no-issues")
+		return IssueCreateOut{}, ferr(http.StatusForbidden, "plan runs may not create issues")
+	}
 	if strings.TrimSpace(in.Title) == "" {
 		return IssueCreateOut{}, ferr(http.StatusBadRequest, "title is required")
 	}
@@ -445,7 +462,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 }
 
 func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreateIn) (PRCreateOut, error) {
-	if err := requireRole(p, policy.Implement); err != nil {
+	if err := requireRole(p, policy.Implement, policy.Plan); err != nil {
 		s.toolAudit(p, "", "pr_create", "deny", err.Error())
 		return PRCreateOut{}, err
 	}
@@ -461,7 +478,7 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	if err != nil {
 		return PRCreateOut{}, err
 	}
-	body := strings.TrimSpace(in.Body) + fmt.Sprintf("\n\nCloses #%d\n\n_bottown implement run %s (%s, %s)_", run.Issue, run.ID, run.Actor, run.Family)
+	body := strings.TrimSpace(in.Body) + fmt.Sprintf("\n\nCloses #%d\n\n_bottown %s run %s (%s, %s)_", run.Issue, run.Kind, run.ID, run.Actor, run.Family)
 	pr, _, err := c.CreatePullRequest(run.Org, run.Repo, sdk.CreatePullRequestOption{
 		Head: run.Branch, Base: repo.DefaultBranch, Title: in.Title, Body: body,
 	})

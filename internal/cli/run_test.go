@@ -27,6 +27,37 @@ func TestStoppedHandover(t *testing.T) {
 	}
 }
 
+// A plan run hands over like an implementer: the branch and its head.
+func TestPlanHandover(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	rec := runs.Record{ID: "r-plan", Kind: policy.Plan, Actor: "claude", Family: "anthropic", Branch: "issue/7", Worktree: dir}
+	got := handoverText(rec, runs.StatusSucceeded, 0, "planned")
+	for _, want := range []string{"· plan ·", "Branch `issue/7` at `", "planned"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("plan handover lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// `run plan` and its alias `milestone plan` launch plan runs as an actor.
+func TestPlanCommands(t *testing.T) {
+	root := newRoot()
+	for _, path := range [][]string{{"run", "plan"}, {"milestone", "plan"}} {
+		c, _, err := root.Find(path)
+		if err != nil || c.Name() != "plan" {
+			t.Fatalf("%v: %v, %v", path, c, err)
+		}
+		if f := c.Flags().Lookup("actor"); f == nil || f.Shorthand != "a" || c.Flags().Lookup("interactive") == nil {
+			t.Errorf("%v lacks -a/--actor or -I/--interactive", path)
+		}
+	}
+}
+
 // startHarness starts a shell that spawns a long child, the way a harness
 // spawns MCP servers, and returns the child's pid once it is running. The
 // trap is set after the fork, so the child cannot inherit it.

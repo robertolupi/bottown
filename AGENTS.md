@@ -45,6 +45,7 @@ Work happens in runs. In your actor worktree:
 bottown run start implement 12      # or: /bottown-implement 12
 bottown run start verify 13         # or: /bottown-verify 13
 bottown run start discuss 12        # or: /bottown-discuss 12 QUESTION
+bottown run start plan 14           # or: /bottown-plan 14
 ```
 
 `run start` prints the goal prompt for the run: follow it. Use the bottown
@@ -72,10 +73,16 @@ bottown run end [--failed] --summary-file -
 - **Discuss runs** review and discuss one issue without implementing it: the
   worktree is detached at the default branch, and the answer goes in a
   comment on the issue. They cannot push, open PRs or review.
-- **Anyone can file issues,** in or outside a run: follow-ups found while
-  working, or what the owner asks you to file from a conversation. Outside
-  a run the repository is the one your worktree's `bottown` remote points
-  at. Filing is the one write a read-only key may make.
+- **Plan runs** write a milestone plan, `<milestones_dir>/<slug>.md`, for a
+  kickoff issue: they push `issue/<n>` with only that file and open a PR.
+  They cannot file issues, review or merge.
+- **Only the owner edits issues, PRs or milestones:** actors cannot close,
+  reopen, retitle or retarget them, or change milestones.
+- **Anyone can file issues,** in or outside a run (except a plan run):
+  follow-ups found while working, or what the owner asks you to file from
+  a conversation. Outside a run the repository is the one your worktree's
+  `bottown` remote points at. Filing is the one write a read-only key may
+  make.
 - **Cross-family rule:** a verifier must be from another model family than
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end

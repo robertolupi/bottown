@@ -25,7 +25,7 @@ var promptFS embed.FS
 
 var prompts = template.Must(template.ParseFS(promptFS, "prompts/*.md"))
 
-// PromptData fills the implement and verify templates.
+// PromptData fills the prompt templates.
 type PromptData struct {
 	RunID, Actor, Family, Repo string
 	Issue, PR                  int64
@@ -36,9 +36,11 @@ type PromptData struct {
 	Remote                     string // the bottown remote in the worktree
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 	Question                   string // discuss: the owner's question, if given to the command
+	MilestonesDir              string // plan: where the repository keeps milestone plans
 }
 
-// Prompt renders the goal prompt for kind ("implement" or "verify").
+// Prompt renders the goal prompt for kind (a run role: "implement",
+// "verify", "discuss" or "plan").
 func Prompt(kind string, d PromptData) (string, error) {
 	var b bytes.Buffer
 	if err := prompts.ExecuteTemplate(&b, kind+".md", d); err != nil {

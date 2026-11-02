@@ -2,7 +2,8 @@
 // bottown's proxy. Token scopes and team permissions already bound what each
 // bot can do, so the default is allow; the rules deny the policy-carrying
 // writes that bottown performs itself (merge, commit status, protection,
-// labels, dependencies, repository and org administration).
+// labels, dependencies, issue and PR edits, milestones, repository and org
+// administration).
 package policy
 
 import (
@@ -49,6 +50,12 @@ func Default(owner string) Policy {
 			{Name: "repo-labels", Methods: writes, Pattern: "/repos/*/*/labels/**"},
 			{Name: "issue-dependencies", Methods: writes, Pattern: "/repos/*/*/issues/*/dependencies/**"},
 			{Name: "issue-blocks", Methods: writes, Pattern: "/repos/*/*/issues/*/blocks/**"},
+			// Issue state, milestone, title and body (which carry apply's
+			// provenance markers), PR state and base, and milestones are the
+			// owner's and manager's (docs/design/milestones.md §2.2).
+			{Name: "issue-edit", Methods: []string{"PATCH", "DELETE"}, Pattern: "/repos/*/*/issues/*"},
+			{Name: "pull-edit", Methods: []string{"PATCH", "DELETE"}, Pattern: "/repos/*/*/pulls/*"},
+			{Name: "milestones", Methods: writes, Pattern: "/repos/*/*/milestones/**"},
 			{Name: "repo-settings", Methods: []string{"PATCH", "DELETE"}, Pattern: "/repos/*/*"},
 			{Name: "collaborators", Methods: writes, Pattern: "/repos/*/*/collaborators/**"},
 			{Name: "hooks", Pattern: "/repos/*/*/hooks/**"},

@@ -129,9 +129,9 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 		return "", errors.New("actor is required")
 	}
 	switch req.Kind {
-	case "implement", "verify", "discuss":
+	case "implement", "verify", "discuss", "plan":
 	default:
-		return "", fmt.Errorf("unknown run kind %q (must be implement, verify, or discuss)", req.Kind)
+		return "", fmt.Errorf("unknown run kind %q (must be implement, verify, discuss, or plan)", req.Kind)
 	}
 
 	// Verify cross-family rule for verify runs

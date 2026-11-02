@@ -25,6 +25,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/robertolupi/bottown/internal/config"
 )
 
 // Workspace is the .bottown directory of one hosted checkout.
@@ -238,6 +240,25 @@ func (w *Workspace) Remove(id string) error {
 	}
 	_, err := Git(w.Mirror, nil, "worktree", "remove", "--force", dir)
 	return err
+}
+
+// RepoSettingsAt reads config.RepoSettingsFile at ref (e.g. origin/main) in
+// the git repository dir; a ref without the file gets the defaults.
+func RepoSettingsAt(dir, ref string) (config.RepoSettings, error) {
+	if out, err := Git(dir, nil, "ls-tree", "--name-only", ref, "--", config.RepoSettingsFile); err != nil {
+		return config.RepoSettings{}, err
+	} else if out == "" {
+		return config.DefaultRepoSettings(), nil
+	}
+	b, err := Git(dir, nil, "show", ref+":"+config.RepoSettingsFile)
+	if err != nil {
+		return config.RepoSettings{}, err
+	}
+	s, err := config.ParseRepoSettings([]byte(b))
+	if err != nil {
+		return config.RepoSettings{}, fmt.Errorf("%s at %s: %w", config.RepoSettingsFile, ref, err)
+	}
+	return s, nil
 }
 
 // Git runs git in dir with extra `-c` settings and returns trimmed stdout.
