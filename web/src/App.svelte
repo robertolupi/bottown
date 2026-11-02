@@ -11,6 +11,7 @@
   import { lifecycleChange } from './lifecycle';
   import {
     buildFlowActionPayload,
+    buildFlowConstituentRuns,
     buildFlowTimeline,
     buildRunActionPayload,
     filterHistoryThreads,
@@ -1123,6 +1124,7 @@
 
                       {#if isExpanded}
                         {@const flowTimelineEntries = buildFlowTimeline(thread, threadTimelines[thread.key])}
+                        {@const constituentRuns = buildFlowConstituentRuns(thread, flowTimelineEntries)}
                         <tr class="flow-expand-row">
                           <td colspan="9">
                             <div class="flow-expanded-panel">
@@ -1158,7 +1160,7 @@
                                         <div class="timeline-run-boundary-header">
                                           <div class="timeline-run-boundary-meta">
                                             <span class="badge badge-neutral">{entry.run.kind}</span>
-                                            <span class="badge repo-badge">{entry.run.actor} ({entry.run.family})</span>
+                                            <span class="badge repo-badge">{entry.run.family ? `${entry.run.actor} (${entry.run.family})` : entry.run.actor}</span>
                                             <code class="text-sm muted">{entry.run.id}</code>
                                             <span class="badge badge-{entry.status === 'succeeded' ? 'success' : entry.status === 'failed' ? 'error' : entry.status === 'running' ? 'accent' : 'warning'}">
                                               {entry.status}
@@ -1237,7 +1239,7 @@
                               <!-- 2. Constituent Runs in this Flow -->
                               <div class="flow-runs-section">
                                 <div class="flow-section-header">
-                                  <strong>Constituent Runs ({thread.runs.length})</strong>
+                                  <strong>Constituent Runs ({constituentRuns.length})</strong>
                                 </div>
                                 <table class="data-table constituent-runs-table">
                                   <thead>
@@ -1255,14 +1257,14 @@
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {#each thread.runs as r (r.id)}
+                                    {#each constituentRuns as r (r.id)}
                                       <tr>
                                         <td class="font-mono text-sm">{r.id}</td>
                                         <td>
                                           <a class="pr-badge" href={r.target_url} target="_blank" rel="noreferrer">{r.target}</a>
                                         </td>
                                         <td><span class="badge badge-neutral">{r.kind}</span></td>
-                                        <td><span class="badge repo-badge">{r.actor} ({r.family})</span></td>
+                                        <td><span class="badge repo-badge">{r.family ? `${r.actor} (${r.family})` : r.actor}</span></td>
                                         <td>
                                           <span class="badge badge-{r.status === 'succeeded' ? 'success' : r.status === 'failed' ? 'error' : r.status === 'running' ? 'accent' : 'warning'}">
                                             {r.status}

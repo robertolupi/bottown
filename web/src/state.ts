@@ -301,6 +301,40 @@ function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: numbe
   return { issue, pr };
 }
 
+function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
+  const issue =
+    lr.issue ||
+    lr.flow?.issue ||
+    (lr.target?.startsWith('#') ? (parseIssueNumber(lr.target) ?? undefined) : undefined);
+  const pr =
+    lr.pr ||
+    (lr.target?.startsWith('!') ? (parseIssueNumber(lr.target) ?? undefined) : undefined);
+  return {
+    id: lr.id,
+    target: lr.target || (pr ? `!${pr}` : issue ? `#${issue}` : ''),
+    target_url: lr.target_url || lr.pr_url || lr.issue_url || '',
+    issue,
+    issue_url: lr.issue_url || (lr.target?.startsWith('#') ? lr.target_url : undefined),
+    pr,
+    pr_url: lr.pr_url || (lr.target?.startsWith('!') ? lr.target_url : undefined),
+    milestone: lr.milestone,
+    thread_key: lr.thread_key,
+    active: true,
+    kind: lr.kind || 'implement',
+    actor: lr.actor || '',
+    family: lr.family || '',
+    harness: lr.harness || '',
+    mode: lr.interactive ? 'interactive' : 'batch',
+    status: 'running',
+    created: lr.created,
+    ended: undefined,
+    duration: lr.elapsed || '',
+    summary: '',
+    purged: false,
+    denials: lr.denials || [],
+  };
+}
+
 // Group history runs into flow-centric threads (grouping implement & verify runs
 // for the same issue and PR, preserving pre-PR implementation runs when their PR
 // is created, separating distinct PRs into separate threads, and keeping discuss
@@ -310,14 +344,22 @@ export function groupHistoryThreads(
   liveRuns?: LiveRunInfo[] | null,
   activeFlows?: ActiveFlowInfo[] | null,
 ): HistoryThread[] {
-  if (!historyRuns || historyRuns.length === 0) return [];
-
   const live = liveRuns || [];
   const flows = activeFlows || [];
 
+  const seenRunIds = new Set((historyRuns || []).map((r) => r.id));
+  const combinedRuns: HistoryRunInfo[] = [...(historyRuns || [])];
+  for (const lr of live) {
+    if (!lr || !lr.id || seenRunIds.has(lr.id)) continue;
+    seenRunIds.add(lr.id);
+    combinedRuns.push(liveRunToHistoryRun(lr));
+  }
+
+  if (combinedRuns.length === 0) return [];
+
   // Normalize runs in chronological order (oldest first) so we can link pre-PR
   // implement runs to the PR created for that flow window.
-  const enriched = historyRuns.map((r) => {
+  const enriched = combinedRuns.map((r) => {
     const { issue, pr } = resolveRunIssueAndPR(r);
     return {
       run: r,
@@ -327,6 +369,19 @@ export function groupHistoryThreads(
       endedMs: new Date(r.ended || r.created).getTime() || 0,
     };
   });
+
+  // Resolve issue from PR when a verify/live run only specifies PR.
+  const issueByPR = new Map<number, number>();
+  for (const item of enriched) {
+    if (item.issue && item.pr && !issueByPR.has(item.pr)) {
+      issueByPR.set(item.pr, item.issue);
+    }
+  }
+  for (const item of enriched) {
+    if (!item.issue && item.pr && issueByPR.has(item.pr)) {
+      item.issue = issueByPR.get(item.pr);
+    }
+  }
 
   const chronological = [...enriched].sort((a, b) => {
     if (a.createdMs !== b.createdMs) return a.createdMs - b.createdMs;
@@ -455,13 +510,17 @@ export function groupHistoryThreads(
     }
 
     // Pre-PR implement run: associate with the PR created for its flow window if one exists.
-    if (issue && !pr) {
+    if (issue && !pr && r.thread_key !== `flow:issue:${issue}`) {
       const windows = prWindowsByIssue.get(issue);
       if (windows && windows.length > 0) {
         for (let i = 0; i < windows.length; i++) {
           const w = windows[i];
           const prevLastMs = i > 0 ? windows[i - 1].lastMs : -Infinity;
-          if (item.createdMs > prevLastMs && item.createdMs <= w.lastMs) {
+          const isLastWindow = i === windows.length - 1;
+          const withinWindow =
+            item.createdMs > prevLastMs &&
+            (item.createdMs <= w.lastMs || (isLastWindow && (Boolean(r.active) || r.status === 'running')));
+          if (withinWindow) {
             pr = w.pr;
             pr_url = pr_url || w.pr_url;
             pr_title = pr_title || w.pr_title;
@@ -772,13 +831,120 @@ export function reconcileExpandedThread(
   return currentKey;
 }
 
+function parseTimelineRunEventSummary(runId: string, detail?: string): string {
+  if (!detail) return '';
+  const trimmed = detail.trim();
+  if (!trimmed || trimmed.startsWith(`Run ${runId}`)) {
+    return '';
+  }
+  return trimmed;
+}
+
 // Combine all runs in the expanded flow and forge timeline events into a single
 // chronological flow timeline with explicit run boundaries.
+// Consumes backend `type: "run"` events by `run_id` so ended runs are deduplicated
+// and live runs receive explicit run boundaries and constituent-run entries.
 export function buildFlowTimeline(
   thread: HistoryThread,
   issueTimeline?: IssueTimeline | null,
 ): FlowTimelineEntry[] {
-  const runs = [...thread.runs].sort((a, b) => {
+  const runsById = new Map<string, HistoryRunInfo>();
+  const actorMetaByActor = new Map<string, { family: string; harness: string }>();
+
+  for (const r of thread.runs) {
+    runsById.set(r.id, { ...r });
+    if (r.actor && (r.family || r.harness) && !actorMetaByActor.has(r.actor)) {
+      actorMetaByActor.set(r.actor, { family: r.family || '', harness: r.harness || '' });
+    }
+  }
+
+  const rawEvents = issueTimeline?.events || [];
+
+  // Pass 1: consume `type: "run"` events by `run_id` (deduplicating ended runs
+  // already in `thread.runs` and incorporating live or newly started runs into
+  // the run/boundary model).
+  for (const ev of rawEvents) {
+    if (ev.type !== 'run') continue;
+    const runId = ev.run_id || `run:${ev.time}`;
+    const isLive = !ev.ended && (!ev.status || ev.status === 'live' || ev.status === 'running');
+    const normalizedStatus = isLive
+      ? 'running'
+      : ev.status === 'live'
+        ? 'running'
+        : ev.status || 'succeeded';
+    const summaryFromEv = parseTimelineRunEventSummary(runId, ev.detail);
+
+    const existing = runsById.get(runId);
+    if (existing) {
+      runsById.set(runId, {
+        ...existing,
+        ended: existing.ended || ev.ended,
+        duration: existing.duration || ev.duration || '',
+        kind: existing.kind || ev.kind || 'implement',
+        actor: existing.actor || ev.actor || '',
+        status:
+          existing.status === 'running' && ev.ended && normalizedStatus !== 'running'
+            ? normalizedStatus
+            : existing.status || normalizedStatus,
+        active: ev.ended ? false : Boolean(existing.active) || isLive,
+        summary: existing.summary || summaryFromEv,
+        target_url: existing.target_url || ev.url || '',
+      });
+      continue;
+    }
+
+    const kind =
+      ev.kind ||
+      (ev.title?.includes(': verify ')
+        ? 'verify'
+        : ev.title?.includes(': discuss ')
+          ? 'discuss'
+          : 'implement');
+    const actor = ev.actor || '';
+    const actorMeta = actorMetaByActor.get(actor);
+    const target =
+      kind === 'verify' && thread.pr
+        ? `!${thread.pr}`
+        : thread.issue
+          ? `#${thread.issue}`
+          : thread.pr
+            ? `!${thread.pr}`
+            : '';
+    const targetUrl =
+      ev.url ||
+      (kind === 'verify' && thread.pr_url
+        ? thread.pr_url
+        : thread.issue_url || thread.pr_url || '');
+
+    runsById.set(runId, {
+      id: runId,
+      target,
+      target_url: targetUrl,
+      issue: thread.issue,
+      issue_url: thread.issue_url,
+      issue_title: thread.issue_title,
+      pr: thread.pr,
+      pr_url: thread.pr_url,
+      pr_title: thread.pr_title,
+      milestone: thread.milestone,
+      thread_key: thread.key,
+      active: isLive,
+      kind,
+      actor,
+      family: actorMeta?.family || '',
+      harness: actorMeta?.harness || '',
+      mode: 'batch',
+      status: normalizedStatus,
+      created: ev.time,
+      ended: ev.ended,
+      duration: ev.duration || '',
+      summary: summaryFromEv,
+      purged: false,
+      denials: [],
+    });
+  }
+
+  const runs = Array.from(runsById.values()).sort((a, b) => {
     const tA = new Date(a.created).getTime() || 0;
     const tB = new Date(b.created).getTime() || 0;
     return tA - tB || a.id.localeCompare(b.id);
@@ -823,12 +989,11 @@ export function buildFlowTimeline(
   });
 
   const standaloneEvents: TimelineEvent[] = [];
-  const rawEvents = issueTimeline?.events || [];
 
   for (const ev of rawEvents) {
-    // Skip raw run_started / run_ended events since we construct explicit run_boundary
-    // blocks for all constituent runs in the flow (and exclude foreign/discuss runs).
-    if (ev.type === 'run_started' || ev.type === 'run_ended') {
+    // Skip raw `run`, `run_started`, and `run_ended` events since all flow runs
+    // have been consumed by `run_id` into explicit `run_boundary` entries.
+    if (ev.type === 'run' || ev.type === 'run_started' || ev.type === 'run_ended') {
       continue;
     }
 
@@ -894,5 +1059,22 @@ export function buildFlowTimeline(
   });
 
   return entries;
+}
+
+// Return all constituent runs for an expanded flow, incorporating both `thread.runs`
+// and any live/timeline runs consumed by `buildFlowTimeline`.
+export function buildFlowConstituentRuns(
+  thread: HistoryThread,
+  entries?: FlowTimelineEntry[] | null,
+): HistoryRunInfo[] {
+  if (entries && entries.length > 0) {
+    const boundaryRuns = entries
+      .filter((e): e is FlowTimelineRunBoundary => e.entry_type === 'run_boundary')
+      .map((e) => e.run);
+    if (boundaryRuns.length > 0) {
+      return boundaryRuns;
+    }
+  }
+  return thread.runs;
 }
 

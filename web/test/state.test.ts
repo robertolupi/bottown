@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildFlowActionPayload,
+  buildFlowConstituentRuns,
   buildFlowTimeline,
   buildRunActionPayload,
   filterHistoryRuns,
@@ -529,21 +530,22 @@ test('toggleExpandedThread enforces at-most-one expanded flow andformatThreadMai
   assert.equal(withoutMilestone.text, '#30 · !31');
 });
 
-test('buildFlowTimeline combines all flow runs with explicit run boundaries and forge events', () => {
-  const runs = [
+test('buildFlowTimeline consumes backend type:"run" events by run_id, deduplicating ended runs and creating explicit boundaries for live runs', () => {
+  const endedRuns = [
     {
       id: 'r-imp-1',
       target: '#10',
       target_url: 'http://forge/issues/10',
       issue: 10,
       pr: 11,
+      pr_url: 'http://forge/pulls/11',
       kind: 'implement',
       actor: 'claude',
       family: 'anthropic',
       status: 'succeeded',
       created: '2026-11-01T10:10:00Z',
       ended: '2026-11-01T10:25:00Z',
-      duration: '15m0s',
+      duration: '15m 00s',
       summary: 'Opened !11',
       denials: [],
     },
@@ -553,45 +555,124 @@ test('buildFlowTimeline combines all flow runs with explicit run boundaries and 
       target_url: 'http://forge/pulls/11',
       issue: 10,
       pr: 11,
+      pr_url: 'http://forge/pulls/11',
       kind: 'verify',
       actor: 'agy',
       family: 'google',
       status: 'succeeded',
       created: '2026-11-01T10:30:00Z',
       ended: '2026-11-01T10:40:00Z',
-      duration: '10m0s',
-      summary: 'Approved !11',
+      duration: '10m 00s',
+      summary: 'Requested changes on !11',
       denials: [],
     },
   ] as any[];
 
-  const [thread] = groupHistoryThreads(runs);
+  // Exact payload shape emitted by ComputeFlowTimeline in internal/webui/runs.go:
+  // each ended or live run is emitted as `type: "run"` with `run_id`, `kind`, `status`, etc.
   const issueTimeline = {
     issue: 10,
     pr: 11,
+    pr_url: 'http://forge/pulls/11',
+    pr_title: 'Threads in Run History',
+    milestone: 'Iteration 2',
+    thread_key: 'flow:issue:10:pr:11',
     title: 'Threads in Run History',
-    state: 'closed',
+    state: 'open',
     url: 'http://forge/issues/10',
     events: [
-      { type: 'issue_created', time: '2026-11-01T10:00:00Z', title: 'Issue #10 opened', actor: 'owner' },
-      { type: 'run_started', time: '2026-11-01T10:10:00Z', title: 'implement run started (claude)', run_id: 'r-imp-1' },
-      { type: 'pr_opened', time: '2026-11-01T10:20:00Z', title: 'PR !11 opened', actor: 'claude' },
-      { type: 'run_ended', time: '2026-11-01T10:25:00Z', title: 'implement run succeeded (claude)', run_id: 'r-imp-1' },
-      { type: 'comment', time: '2026-11-01T10:27:00Z', title: 'Comment by owner', detail: 'Please verify carefully', actor: 'owner' },
-      { type: 'run_started', time: '2026-11-01T10:30:00Z', title: 'verify run started (agy)', run_id: 'r-ver-1' },
-      { type: 'review', time: '2026-11-01T10:38:00Z', title: 'Review APPROVED on !11', detail: 'LGTM', actor: 'agy' },
-      { type: 'run_ended', time: '2026-11-01T10:40:00Z', title: 'verify run succeeded (agy)', run_id: 'r-ver-1' },
-      { type: 'pr_merged', time: '2026-11-01T10:45:00Z', title: 'PR !11 merged', actor: 'owner' },
+      {
+        type: 'issue_created',
+        time: '2026-11-01T10:00:00Z',
+        title: 'Issue #10 opened',
+        detail: 'Threads in Run History',
+        actor: 'rlupi',
+        url: 'http://forge/issues/10',
+      },
+      {
+        type: 'run',
+        time: '2026-11-01T10:10:00Z',
+        ended: '2026-11-01T10:25:00Z',
+        duration: '15m 00s',
+        kind: 'implement',
+        title: 'Run r-imp-1: implement by claude',
+        detail: 'Opened !11',
+        actor: 'claude',
+        status: 'succeeded',
+        run_id: 'r-imp-1',
+        url: 'http://forge/issues/10',
+      },
+      {
+        type: 'pr_opened',
+        time: '2026-11-01T10:20:00Z',
+        title: 'Pull request !11 opened',
+        detail: 'Threads in Run History',
+        actor: 'claude',
+        url: 'http://forge/pulls/11',
+      },
+      {
+        type: 'comment',
+        time: '2026-11-01T10:27:00Z',
+        title: 'Comment by rlupi',
+        detail: 'Please verify carefully',
+        actor: 'rlupi',
+        url: 'http://forge/issues/10',
+      },
+      {
+        type: 'run',
+        time: '2026-11-01T10:30:00Z',
+        ended: '2026-11-01T10:40:00Z',
+        duration: '10m 00s',
+        kind: 'verify',
+        title: 'Run r-ver-1: verify by agy',
+        detail: 'Requested changes on !11',
+        actor: 'agy',
+        status: 'succeeded',
+        run_id: 'r-ver-1',
+        url: 'http://forge/pulls/11',
+      },
+      {
+        type: 'review',
+        time: '2026-11-01T10:38:00Z',
+        title: 'Review on !11: REQUEST_CHANGES',
+        detail: 'Fix timeline events',
+        actor: 'agy',
+        status: 'REQUEST_CHANGES',
+        url: 'http://forge/pulls/11',
+      },
+      {
+        type: 'run',
+        time: '2026-11-01T10:45:00Z',
+        duration: '',
+        kind: 'implement',
+        title: 'Run r-imp-2: implement by claude',
+        detail: 'Run r-imp-2 (implement)',
+        actor: 'claude',
+        status: 'live',
+        run_id: 'r-imp-2',
+        url: 'http://forge/issues/10',
+      },
+      {
+        type: 'comment',
+        time: '2026-11-01T10:48:00Z',
+        title: 'Comment by claude',
+        detail: 'Addressing review feedback',
+        actor: 'claude',
+        url: 'http://forge/issues/10',
+      },
     ],
   };
 
-  const entries = buildFlowTimeline(thread, issueTimeline);
+  // Case 1: thread built from endedRuns only; live run arrives via ComputeFlowTimeline `type: "run"` event.
+  const [threadFromEnded] = groupHistoryThreads(endedRuns);
+  const entries = buildFlowTimeline(threadFromEnded, issueTimeline);
+
   // Expect:
   // 0: standalone issue_created
-  // 1: run_boundary for r-imp-1 (containing run_started, pr_opened, run_ended)
+  // 1: run_boundary for r-imp-1 (containing ONLY run_started, pr_opened, run_ended — no extra `run` event)
   // 2: standalone comment between runs
-  // 3: run_boundary for r-ver-1 (containing run_started, review, run_ended)
-  // 4: standalone pr_merged
+  // 3: run_boundary for r-ver-1 (containing ONLY run_started, review, run_ended — no extra `run` event)
+  // 4: run_boundary for live run r-imp-2 (status: 'running', ended: undefined, containing run_started and comment)
   assert.equal(entries.length, 5);
   assert.equal(entries[0].entry_type, 'event');
   if (entries[0].entry_type === 'event') {
@@ -621,15 +702,75 @@ test('buildFlowTimeline combines all flow runs with explicit run boundaries and 
     );
   }
 
-  assert.equal(entries[4].entry_type, 'event');
-  if (entries[4].entry_type === 'event') {
-    assert.equal(entries[4].event.type, 'pr_merged');
+  assert.equal(entries[4].entry_type, 'run_boundary');
+  if (entries[4].entry_type === 'run_boundary') {
+    assert.equal(entries[4].run.id, 'r-imp-2');
+    assert.equal(entries[4].status, 'running');
+    assert.equal(entries[4].ended, undefined);
+    assert.equal(entries[4].run.actor, 'claude');
+    assert.equal(entries[4].run.family, 'anthropic');
+    assert.deepEqual(
+      entries[4].events.map((e) => e.type),
+      ['run_started', 'comment'],
+    );
+  }
+
+  // Constituent runs helper includes the live run from the timeline boundaries
+  const constituentRuns = buildFlowConstituentRuns(threadFromEnded, entries);
+  assert.deepEqual(
+    constituentRuns.map((r) => r.id),
+    ['r-imp-1', 'r-ver-1', 'r-imp-2'],
+  );
+
+  // Case 2: groupHistoryThreads also incorporates liveRuns directly into thread.runs,
+  // and buildFlowTimeline deduplicates the live run by run_id against issueTimeline.
+  const liveRuns = [
+    {
+      id: 'r-imp-2',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      pr: 11,
+      pr_url: 'http://forge/pulls/11',
+      thread_key: 'flow:issue:10:pr:11',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      harness: 'claude',
+      interactive: false,
+      created: '2026-11-01T10:45:00Z',
+      expires: '2026-11-01T11:45:00Z',
+      elapsed: '4m 10s',
+      timeout: '60m',
+      log_tail: [],
+      denials: [],
+    },
+  ] as any[];
+
+  const [threadWithLive] = groupHistoryThreads(endedRuns, liveRuns);
+  assert.equal(threadWithLive.active, true);
+  assert.equal(threadWithLive.run_count, 3);
+  assert.deepEqual(
+    threadWithLive.runs.map((r) => r.id),
+    ['r-imp-1', 'r-ver-1', 'r-imp-2'],
+  );
+
+  const entriesWithLive = buildFlowTimeline(threadWithLive, issueTimeline);
+  assert.equal(entriesWithLive.length, 5);
+  assert.equal(entriesWithLive[4].entry_type, 'run_boundary');
+  if (entriesWithLive[4].entry_type === 'run_boundary') {
+    assert.equal(entriesWithLive[4].run.id, 'r-imp-2');
+    assert.equal(entriesWithLive[4].duration, '4m 10s');
+    assert.deepEqual(
+      entriesWithLive[4].events.map((e) => e.type),
+      ['run_started', 'comment'],
+    );
   }
 
   // Filtering threads preserves constituent runs
   const now = Date.parse('2026-11-01T11:00:00Z');
-  const filtered = filterHistoryThreads([thread], { actor: 'agy', kind: 'verify', search: '!11' }, now);
+  const filtered = filterHistoryThreads([threadWithLive], { actor: 'agy', kind: 'verify', search: '!11' }, now);
   assert.equal(filtered.length, 1);
-  assert.equal(filtered[0].runs.length, 2);
+  assert.equal(filtered[0].runs.length, 3);
 });
 
