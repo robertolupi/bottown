@@ -143,7 +143,9 @@ git pull --ff-only bottown main
 A repository can declare what to run after pulling in a `.bottown.toml`
 at its root, `after_pull = ["make install"]`; bottown reads it from the
 forge's `main` only. `bottown web ui` shows those steps after its Pull and
-runs them only when you confirm.
+runs them only when you confirm. The same file can set
+`milestones_dir`, where milestone plan files live (default
+`docs/milestones`).
 
 If the verifier requests changes, start a new implement run on the same
 issue: it resumes `issue/1`, and the new head needs a new verify run.
@@ -238,6 +240,7 @@ repository. They hold no token: the server enforces the policy.
 | `comment [N] --body-file -` | Comment on the run's issue, or the PR in a verify run. |
 | `review submit --event E --commit SHA --body-file -` | A verify run's one verdict: `APPROVED`, `REQUEST_CHANGES` or `COMMENT`. |
 | `api METHOD PATH [--data JSON]` | Any Forgejo API endpoint, under the same policy. |
+| `milestone check <slug\|path>` | Check a milestone plan file, offline: `<milestones_dir>/<slug>.md` in the checkout, or the path given. |
 
 If actor run startup or ending fails, retry `bottown run end`. It reconciles
 the recorded run using the permanent actor credential, revokes interrupted

@@ -1048,7 +1048,7 @@
                     {status.health.repo_settings.error}
                   {:else if status.health.repo_settings.found}
                     <code>{status.health.repo_settings.file}</code> on {status.health.repo_settings.branch}:
-                    {status.health.repo_settings.after_pull.length} after-pull step{status.health.repo_settings.after_pull.length === 1 ? '' : 's'}
+                    {status.health.repo_settings.after_pull.length} after-pull step{status.health.repo_settings.after_pull.length === 1 ? '' : 's'}{#if status.health.repo_settings.milestones_dir}; milestone plans in <code>{status.health.repo_settings.milestones_dir}</code>{/if}
                   {:else}
                     No <code>{status.health.repo_settings.file}</code> on {status.health.repo_settings.branch}; using the defaults
                   {/if}
