@@ -680,11 +680,15 @@ func renderCodexLog(log []byte) []LogLine {
 			case "file_change":
 				for _, ch := range ev.Item.Changes {
 					if ch.Path != "" {
+						arg := ch.Path
+						if ch.Kind != "" {
+							arg = fmt.Sprintf("%s (%s)", ch.Path, ch.Kind)
+						}
 						lines = append(lines, LogLine{
 							Kind:      LineTool,
 							Tool:      "Edit",
 							ToolClass: ToolEdit,
-							Text:      joinToolCall("Edit", ch.Path),
+							Text:      joinToolCall("Edit", arg),
 						})
 					}
 				}
