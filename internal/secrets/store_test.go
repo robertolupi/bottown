@@ -117,6 +117,35 @@ func TestEndRunDigest(t *testing.T) {
 	}
 }
 
+func TestSetOutcome(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, 1)
+	if ok, err := s.SetOutcome("r-1", OutcomeCommented); !ok || err != nil {
+		t.Fatalf("set outcome: %v %v", ok, err)
+	}
+	// A newer verdict replaces the older, and survives the run's end.
+	s.SetOutcome("r-1", OutcomeChangesRequested)
+	run, _, _ := s.EndRun("r-1", "succeeded", now, Digest{Summary: "done"})
+	if run.Outcome != OutcomeChangesRequested {
+		t.Fatalf("outcome after end: %q", run.Outcome)
+	}
+	// An ended or unknown run takes no outcome.
+	if ok, _ := s.SetOutcome("r-1", OutcomeApproved); ok {
+		t.Error("outcome set on an ended run")
+	}
+	if ok, _ := s.SetOutcome("r-2", OutcomeApproved); ok {
+		t.Error("outcome set on an unknown run")
+	}
+	st, _ := s.Read()
+	if st.Runs["r-1"].Outcome != OutcomeChangesRequested {
+		t.Fatalf("stored outcome: %q", st.Runs["r-1"].Outcome)
+	}
+}
+
 func TestBatchRunLimit(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {

@@ -343,6 +343,17 @@ constituent runs and their individual logs and policy denials. Live activity
 updates statuses, highlighting, and the selected active flow's timeline
 without changing the selected flow.
 
+**Status and outcome.** A run's status says whether it executed
+(succeeded, failed, revoked); its **outcome** says what work it produced,
+as the server recorded it from the run's tools: a verify run's latest
+review verdict (Approved, Changes requested, Commented) and an implement
+or plan run's opened PR (PR opened). History rows, flow rows (the latest
+run's), the timeline's run boundaries and the constituent runs show both,
+the outcome as an outlined badge with a glyph and a label, so it reads
+without color. A run with no recorded outcome, including every run from
+before outcomes were recorded, says "None recorded": the outcome is never
+guessed from a summary or log.
+
 **Denials.** A live run's card and a history row (when expanded) list
 the operations the server's policy refused the run (denied or rejected),
 including those outside its repository: when, the request or operation,
@@ -506,6 +517,11 @@ The UI uses the server's existing API where it can. What changes:
   bytes) and `usage`, whatever the host extracted, each field absent when
   unknown. The server stores it with the run, once: a second end changes
   nothing.
+- **Run outcomes.** While a run is live, the server records its `outcome`
+  on its record when its tools produce one: `review_submit` stores the
+  verdict (`approved`, `changes_requested`, `commented`; a later review
+  replaces it) and `pr_create` stores `pr_opened`. Ending the run keeps
+  it; it is absent when none was recorded.
 - **Purging keeps digests.** `POST /v1/runs/purge` (used by `run gc`)
   drops full run records, keys included, but keeps each run, with its
   digest, in a history, marked `purged`. `GET /v1/runs/{id}` finds it

@@ -680,7 +680,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 		{
 			ID: "r-51-ver", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
 			PR: 51, Branch: "issue/50", Created: t0.Add(30 * time.Minute), Ended: end(40 * time.Minute),
-			Status: "succeeded", Digest: secrets.Digest{Summary: "Requested changes on !51"},
+			Status: "succeeded", Outcome: secrets.OutcomeChangesRequested, Digest: secrets.Digest{Summary: "Requested changes on !51"},
 		},
 		// Standalone discuss run on #50
 		{
@@ -697,7 +697,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 		{
 			ID: "r-52-imp1", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
 			Issue: 50, Branch: "issue/50", Created: t0.Add(70 * time.Minute), Ended: end(80 * time.Minute),
-			Status: "succeeded", Digest: secrets.Digest{Summary: "Opened PR !52"},
+			Status: "succeeded", Outcome: secrets.OutcomePROpened, Digest: secrets.Digest{Summary: "Opened PR !52"},
 		},
 		{
 			ID: "r-52-ver1", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
@@ -712,7 +712,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 		{
 			ID: "r-52-ver2", Kind: "verify", Actor: "agy", Family: "google", Repo: "bottown",
 			PR: 52, Branch: "issue/50", Created: t0.Add(120 * time.Minute), Ended: end(130 * time.Minute),
-			Status: "succeeded", Digest: secrets.Digest{Summary: "Approved !52"},
+			Status: "succeeded", Outcome: secrets.OutcomeApproved, Digest: secrets.Digest{Summary: "Approved !52"},
 		},
 		// Pre-PR implement run on issue #60 (no PR yet, no milestone)
 		{
@@ -815,7 +815,17 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 		t.Fatalf("r-60-imp1: expected pre-PR thread flow:issue:60 with empty milestone, got %+v", pre60)
 	}
 
-	// 5. Scoped timeline for PR 51 excludes PR 52 runs/reviews/comments and excludes discuss runs
+	// 5. Recorded outcomes pass through apart from status; none stays empty.
+	for id, want := range map[string]string{
+		"r-51-ver": secrets.OutcomeChangesRequested, "r-52-imp1": secrets.OutcomePROpened,
+		"r-52-ver2": secrets.OutcomeApproved, "r-52-imp2": "", "r-51-pre": "",
+	} {
+		if got := byID[id].Outcome; got != want {
+			t.Errorf("%s outcome = %q, want %q", id, got, want)
+		}
+	}
+
+	// 6. Scoped timeline for PR 51 excludes PR 52 runs/reviews/comments and excludes discuss runs
 	tl51, err := s.ComputeFlowTimeline(ctx, 50, 51)
 	if err != nil {
 		t.Fatal(err)
@@ -842,7 +852,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 		t.Fatalf("tl51 runs = %v, want [r-51-pre r-51-imp r-51-ver]", tl51Runs)
 	}
 
-	// 6. Scoped timeline for PR 52 includes only PR 52's 5 runs and PR 52's reviews/comments
+	// 7. Scoped timeline for PR 52 includes only PR 52's 5 runs and PR 52's reviews/comments
 	tl52, err := s.ComputeFlowTimeline(ctx, 50, 52)
 	if err != nil {
 		t.Fatal(err)
@@ -852,6 +862,9 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 	for _, ev := range tl52.Events {
 		if ev.Type == "run" {
 			tl52Runs = append(tl52Runs, ev.RunID)
+			if ev.RunID == "r-52-ver2" && ev.Outcome != secrets.OutcomeApproved {
+				t.Errorf("r-52-ver2 timeline outcome = %q", ev.Outcome)
+			}
 		}
 		if ev.Type == "review" {
 			tl52Reviews++

@@ -573,6 +573,7 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 		return PRCreateOut{}, err
 	}
 	s.toolAudit(p, "", "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
+	s.recordOutcome(run.ID, secrets.OutcomePROpened)
 	return PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch}, nil
 }
 
@@ -707,6 +708,21 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 	return CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created}, nil
 }
 
+// reviewOutcomes maps a submitted review's event to the run outcome.
+var reviewOutcomes = map[sdk.ReviewStateType]string{
+	sdk.ReviewStateApproved:       secrets.OutcomeApproved,
+	sdk.ReviewStateRequestChanges: secrets.OutcomeChangesRequested,
+	sdk.ReviewStateComment:        secrets.OutcomeCommented,
+}
+
+// recordOutcome stores what a run's tool call produced on its record. The
+// forge write has already happened, so a failure is logged, not returned.
+func (s *Server) recordOutcome(runID, outcome string) {
+	if _, err := s.Store.SetOutcome(runID, outcome); err != nil {
+		s.Log.Error("record run outcome", "run", runID, "outcome", outcome, "err", err)
+	}
+}
+
 // opReview submits a verify run's review pinned to the run's commit; it is
 // refused if the PR has moved since the run started, because the verdict
 // would not cover the new commits.
@@ -752,5 +768,6 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 		return ReviewOut{}, err
 	}
 	s.toolAudit(p, "", "review_submit", "allow", fmt.Sprintf("%s #%d at %s", event, run.PR, run.SHA))
+	s.recordOutcome(run.ID, reviewOutcomes[event])
 	return ReviewOut{ID: rv.ID, Reviewer: login(rv.Reviewer), State: string(rv.State), CommitID: rv.CommitID, Body: rv.Body, Official: rv.Official}, nil
 }

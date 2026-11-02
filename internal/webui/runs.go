@@ -90,31 +90,34 @@ type ActiveFlowInfo struct {
 
 // HistoryRunInfo represents a finished run in the history view.
 type HistoryRunInfo struct {
-	ID         string         `json:"id"`
-	Target     string         `json:"target"` // "#51" or "!51"
-	TargetURL  string         `json:"target_url"`
-	Issue      int64          `json:"issue,omitempty"`
-	IssueURL   string         `json:"issue_url,omitempty"`
-	IssueTitle string         `json:"issue_title,omitempty"`
-	PR         int64          `json:"pr,omitempty"`
-	PRURL      string         `json:"pr_url,omitempty"`
-	PRTitle    string         `json:"pr_title,omitempty"`
-	Milestone  string         `json:"milestone,omitempty"`
-	ThreadKey  string         `json:"thread_key,omitempty"`
-	Active     bool           `json:"active,omitempty"`
-	Kind       string         `json:"kind"`
-	Actor      string         `json:"actor"`
-	Family     string         `json:"family"`
-	Harness    string         `json:"harness"`
-	Mode       string         `json:"mode"`   // "batch" or "interactive"
-	Status     string         `json:"status"` // "succeeded", "failed", "revoked"
-	Created    time.Time      `json:"created"`
-	Ended      *time.Time     `json:"ended,omitempty"`
-	Duration   string         `json:"duration"` // e.g. "2m 15s"
-	Summary    string         `json:"summary"`  // first line of handover
-	Usage      *secrets.Usage `json:"usage,omitempty"`
-	Purged     bool           `json:"purged"`
-	Denials    []Denial       `json:"denials"`
+	ID         string `json:"id"`
+	Target     string `json:"target"` // "#51" or "!51"
+	TargetURL  string `json:"target_url"`
+	Issue      int64  `json:"issue,omitempty"`
+	IssueURL   string `json:"issue_url,omitempty"`
+	IssueTitle string `json:"issue_title,omitempty"`
+	PR         int64  `json:"pr,omitempty"`
+	PRURL      string `json:"pr_url,omitempty"`
+	PRTitle    string `json:"pr_title,omitempty"`
+	Milestone  string `json:"milestone,omitempty"`
+	ThreadKey  string `json:"thread_key,omitempty"`
+	Active     bool   `json:"active,omitempty"`
+	Kind       string `json:"kind"`
+	Actor      string `json:"actor"`
+	Family     string `json:"family"`
+	Harness    string `json:"harness"`
+	Mode       string `json:"mode"`   // "batch" or "interactive"
+	Status     string `json:"status"` // "succeeded", "failed", "revoked"
+	// Outcome is the work result the server recorded (secrets.Outcome*),
+	// apart from Status: empty when none was recorded.
+	Outcome  string         `json:"outcome,omitempty"`
+	Created  time.Time      `json:"created"`
+	Ended    *time.Time     `json:"ended,omitempty"`
+	Duration string         `json:"duration"` // e.g. "2m 15s"
+	Summary  string         `json:"summary"`  // first line of handover
+	Usage    *secrets.Usage `json:"usage,omitempty"`
+	Purged   bool           `json:"purged"`
+	Denials  []Denial       `json:"denials"`
 }
 
 // HistoryFilter specifies criteria for filtering ended runs.
@@ -136,6 +139,7 @@ type TimelineEvent struct {
 	Detail   string     `json:"detail,omitempty"`
 	Actor    string     `json:"actor,omitempty"`
 	Status   string     `json:"status,omitempty"`
+	Outcome  string     `json:"outcome,omitempty"` // run events: see HistoryRunInfo.Outcome
 	RunID    string     `json:"run_id,omitempty"`
 	URL      string     `json:"url,omitempty"`
 }
@@ -910,6 +914,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			Harness:    harness,
 			Mode:       mode,
 			Status:     sr.Status,
+			Outcome:    sr.Outcome,
 			Created:    sr.Created,
 			Ended:      sr.Ended,
 			Duration:   duration,
@@ -1116,6 +1121,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 			Detail:   detail,
 			Actor:    sr.Actor,
 			Status:   status,
+			Outcome:  sr.Outcome,
 			RunID:    sr.ID,
 			URL:      runURL,
 		})

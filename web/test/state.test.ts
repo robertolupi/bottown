@@ -19,6 +19,7 @@ import {
   parseLivePollSnapshot,
   reconcileExpandedThread,
   resolveInboxAction,
+  runOutcome,
   selectDefaultActors,
   standaloneLiveRuns,
   toggleExpandedThread,
@@ -944,6 +945,64 @@ test('aggregateThreadUsage preserves undefined for unknown usage fields on parti
   assert.equal(
     aggregateThreadUsage([{ ...durationOnlyRun[0], usage: {} } as any]),
     undefined,
+  );
+});
+
+test('runOutcome labels recorded outcomes apart from execution status, and keeps missing ones neutral', () => {
+  const ended = '2026-11-01T10:40:00Z';
+  const approved = runOutcome({ status: 'succeeded', outcome: 'approved', ended });
+  const changes = runOutcome({ status: 'succeeded', outcome: 'changes_requested', ended });
+  assert.equal(approved?.label, 'Approved');
+  assert.equal(changes?.label, 'Changes requested');
+  // Distinct in text and glyph, not only in tone.
+  assert.notEqual(approved?.icon, changes?.icon);
+  assert.notEqual(approved?.tone, changes?.tone);
+  assert.match(changes?.title || '', /^Outcome: Changes requested/);
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'pr_opened', ended })?.label, 'PR opened');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'commented', ended })?.label, 'Commented');
+
+  // A failed run keeps its recorded verdict; status stays separate, and no
+  // outcome uses the error tone that marks execution failures.
+  assert.equal(runOutcome({ status: 'failed', outcome: 'changes_requested', ended })?.label, 'Changes requested');
+  for (const o of ['approved', 'changes_requested', 'commented', 'pr_opened']) {
+    assert.notEqual(runOutcome({ status: 'succeeded', outcome: o, ended })?.tone, 'error');
+  }
+
+  // No recorded outcome is explicit and neutral, whatever the summary says.
+  const none = runOutcome({ status: 'succeeded', ended });
+  assert.equal(none?.label, 'None recorded');
+  assert.equal(none?.tone, 'neutral');
+  assert.equal(runOutcome({ status: 'failed', ended })?.label, 'None recorded');
+  // A run still going has no outcome yet.
+  assert.equal(runOutcome({ status: 'running' }), null);
+  // An unknown recorded value is shown as-is, neutrally.
+  const unknown = runOutcome({ status: 'succeeded', outcome: 'merged_later', ended });
+  assert.equal(unknown?.label, 'merged later');
+  assert.equal(unknown?.tone, 'neutral');
+});
+
+test('buildFlowTimeline carries recorded outcomes from history runs and run events', () => {
+  const thread = groupHistoryThreads([
+    {
+      id: 'r-ver-1', target: '!11', target_url: 'http://forge/pulls/11', issue: 10, pr: 11,
+      kind: 'verify', actor: 'agy', family: 'google', harness: 'agy', mode: 'batch',
+      status: 'succeeded', outcome: 'changes_requested',
+      created: '2026-11-01T10:30:00Z', ended: '2026-11-01T10:40:00Z', duration: '10m', summary: '', purged: false, denials: [],
+    },
+  ] as any[])[0];
+  const entries = buildFlowTimeline(thread, {
+    issue: 10, pr: 11, title: 't', state: 'open', url: 'http://forge/issues/10',
+    events: [
+      { type: 'run', time: '2026-11-01T10:30:00Z', ended: '2026-11-01T10:40:00Z', kind: 'verify', title: 'Run r-ver-1', actor: 'agy', status: 'succeeded', outcome: 'changes_requested', run_id: 'r-ver-1' },
+      { type: 'run', time: '2026-11-01T10:50:00Z', ended: '2026-11-01T11:00:00Z', kind: 'verify', title: 'Run r-ver-2', actor: 'agy', status: 'succeeded', outcome: 'approved', run_id: 'r-ver-2' },
+    ],
+  } as any);
+  assert.deepEqual(
+    buildFlowConstituentRuns(thread, entries).map((r) => [r.id, r.status, r.outcome]),
+    [
+      ['r-ver-1', 'succeeded', 'changes_requested'],
+      ['r-ver-2', 'succeeded', 'approved'],
+    ],
   );
 });
 

@@ -24,6 +24,7 @@
     parseLivePollSnapshot,
     reconcileExpandedThread,
     resolveInboxAction,
+    runOutcome,
     selectDefaultActors,
     standaloneLiveRuns,
     toggleExpandedThread,
@@ -580,6 +581,18 @@
   {/if}
 {/snippet}
 
+{#snippet outcomeBadge(run: HistoryRunInfo | undefined)}
+  {@const o = run ? runOutcome(run) : null}
+  {#if o}
+    <span class="badge badge-{o.tone} outcome-badge outcome-{run?.outcome || 'none'}" title={o.title}>
+      <span class="sr-only">Outcome: </span><span aria-hidden="true">{o.icon}</span>
+      {o.label}
+    </span>
+  {:else}
+    <span class="muted" title="No outcome yet">—</span>
+  {/if}
+{/snippet}
+
 <main class="container">
   <header class="header">
     <div class="header-left">
@@ -930,6 +943,7 @@
                     <th>Kind</th>
                     <th>Actors</th>
                     <th>Status</th>
+                    <th>Outcome</th>
                     <th>Duration</th>
                     <th>Usage</th>
                     <th>Summary</th>
@@ -975,6 +989,7 @@
                             </span>
                           {/if}
                         </td>
+                        <td>{@render outcomeBadge(h)}</td>
                         <td class="muted">{h.duration || '—'}</td>
                         <td class="muted text-sm">{formatUsage(h.usage)}</td>
                         <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
@@ -994,7 +1009,7 @@
                       {#if expandedLogs[h.id]}
                         {@const logState = expandedLogs[h.id]}
                         <tr class="log-expand-row">
-                          <td colspan="9">
+                          <td colspan="10">
                             {@render denialList(h.denials)}
                             <div class="log-tail-box history-log-box">
                               <div class="log-tail-header">
@@ -1103,6 +1118,7 @@
                             {/if}
                           </div>
                         </td>
+                        <td>{@render outcomeBadge(thread.runs[thread.runs.length - 1])}</td>
                         <td class="muted">{thread.duration || '—'}</td>
                         <td class="muted text-sm">{formatUsage(thread.usage)}</td>
                         <td class="summary-cell" title={thread.summary}>{thread.summary || '—'}</td>
@@ -1127,7 +1143,7 @@
                         {@const flowTimelineEntries = buildFlowTimeline(thread, threadTimelines[thread.key])}
                         {@const constituentRuns = buildFlowConstituentRuns(thread, flowTimelineEntries)}
                         <tr class="flow-expand-row">
-                          <td colspan="9">
+                          <td colspan="10">
                             <div class="flow-expanded-panel">
                               <!-- 1. Combined Flow Timeline at the top of the expanded flow -->
                               <div class="flow-timeline-section">
@@ -1166,6 +1182,9 @@
                                             <span class="badge badge-{entry.status === 'succeeded' ? 'success' : entry.status === 'failed' ? 'error' : entry.status === 'running' ? 'accent' : 'warning'}">
                                               {entry.status}
                                             </span>
+                                            {#if runOutcome(entry.run)}
+                                              {@render outcomeBadge(entry.run)}
+                                            {/if}
                                             {#if entry.duration && entry.duration !== '-'}
                                               <span class="muted text-sm">{entry.duration}</span>
                                             {/if}
@@ -1249,6 +1268,7 @@
                                       <th>Target</th>
                                       <th>Kind</th>
                                       <th>Actor</th>
+                                      <th>Status</th>
                                       <th>Outcome</th>
                                       <th>Duration</th>
                                       <th>Usage</th>
@@ -1276,6 +1296,7 @@
                                             </span>
                                           {/if}
                                         </td>
+                                        <td>{@render outcomeBadge(r)}</td>
                                         <td class="muted">{r.duration || '—'}</td>
                                         <td class="muted text-sm">{formatUsage(r.usage)}</td>
                                         <td class="summary-cell" title={r.summary}>{r.summary || '—'}</td>
@@ -1293,7 +1314,7 @@
                                       {#if expandedLogs[r.id]}
                                         {@const logState = expandedLogs[r.id]}
                                         <tr class="log-expand-row">
-                                          <td colspan="10">
+                                          <td colspan="11">
                                             {@render denialList(r.denials)}
                                             <div class="log-tail-box history-log-box">
                                               <div class="log-tail-header">
@@ -1980,6 +2001,26 @@
   .badge-error { background: var(--error-bg); color: var(--error); }
   .badge-neutral { background: rgba(125, 125, 125, 0.15); color: var(--text-muted); }
   .badge-accent { background: rgba(37, 99, 235, 0.15); color: var(--accent); }
+
+  /* An outcome is outlined and carries a glyph, so it reads apart from the
+     filled execution-status badge even without color. */
+  .outcome-badge {
+    gap: 4px;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   .pr-badge {
     background: rgba(99, 102, 241, 0.15);
