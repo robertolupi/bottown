@@ -11,7 +11,7 @@
 //	<repo>/.bottown/runs/<id>.mcp.json  harness MCP config (0600)
 //	<repo>/.bottown/runs/<id>.prompt.md the goal prompt
 //	<repo>/.bottown/runs/<id>.attachments/ the issue's attachments, while the run lasts
-//	<repo>/.bottown/runs/<id>.tmp/      the run's scratch directory, while the run lasts
+//	<launcher temp>/bottown-<workspace hash>-<id>/ the run's scratch directory
 //
 // Per-run files sit next to the worktree, never inside it, so an agent's
 // `git add -A` cannot commit them. Runs never touch the user's checkout:
@@ -21,6 +21,7 @@ package runs
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -183,9 +184,14 @@ func (w *Workspace) DefaultBranch(ctx context.Context) (string, error) {
 // WorktreeDir is where run id's worktree lives.
 func (w *Workspace) WorktreeDir(id string) string { return filepath.Join(w.RunsDir, id) }
 
-// TmpDir is where launched run id keeps its scratch directory, next to
-// the worktree.
-func (w *Workspace) TmpDir(id string) string { return w.Path(id, ".tmp") }
+// TmpDir is where launched run id keeps its scratch directory. Use the
+// launcher's temporary directory rather than nesting it in the owner's checkout:
+// tests launched by the harness may need temporary directories outside git.
+// Include the workspace in the name to isolate runs from different checkouts.
+func (w *Workspace) TmpDir(id string) string {
+	sum := sha256.Sum256([]byte(w.RunsDir))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("bottown-%x-%s", sum[:8], id))
+}
 
 // AddImplement adds a worktree on branch, resuming origin/<branch> if it
 // exists (a later run continues the same branch) or starting it from

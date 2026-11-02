@@ -98,6 +98,14 @@ External links are not listed. The files belong to the run:
   by bottown]`. The Live Runs tail applies the same rule when it renders a
   log, including logs written before this change.
 
+Launched runs get a private scratch directory under the launcher's temporary
+directory, named `bottown-<workspace hash>-<run id>`. The harness receives it
+as `TMPDIR` (and Claude receives it through `--add-dir`), so tests that need
+temporary directories outside a git checkout can run normally. The launcher
+removes it when the run returns; `run gc` uses the path saved in the local
+record if the launcher died. Older runs' scratch directories beside their
+worktrees are also removed by gc.
+
 A launched run can choose its harness's model: wherever a command takes an
 actor (`run implement|verify|discuss|plan -a`, `flow --implement` and
 `--verify`), it also takes `ACTOR:SPEC`, split at the first colon. The actor

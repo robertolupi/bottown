@@ -124,14 +124,23 @@ func TestRemoveFilesRemovesAttachments(t *testing.T) {
 		t.Fatalf("AttachmentsDir %s", dir)
 	}
 	tmp := w.TmpDir("r-1")
-	if tmp != filepath.Join(w.RunsDir, "r-1.tmp") {
-		t.Fatalf("TmpDir %s", tmp)
+	if err := w.Save(Record{ID: "r-1", TmpDir: tmp}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := w.Path("r-1", ".tmp")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	_ = os.MkdirAll(dir, 0o700)
 	_ = os.WriteFile(filepath.Join(dir, "1-a.png"), png, 0o600)
 	_ = os.MkdirAll(tmp, 0o700)
 	_ = os.WriteFile(filepath.Join(tmp, "scratch.txt"), []byte("data"), 0o600)
+	// GC may run with a different temporary root than the launcher.
+	t.Setenv("TMPDIR", t.TempDir())
 	w.RemoveFiles("r-1")
+	if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("legacy scratch survives: %v", err)
+	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("attachments survive RemoveFiles: %v", err)
 	}

@@ -51,6 +51,8 @@ type Record struct {
 	// Attachments is the run's directory of issue attachments (see
 	// attachments.go); empty for runs started before it existed.
 	Attachments string `json:"attachments,omitempty"`
+	// TmpDir records the launcher's scratch path so gc need not share its TMPDIR.
+	TmpDir string `json:"tmp_dir,omitempty"`
 }
 
 // Target is "#<issue>" or "!<pr>".
@@ -187,11 +189,15 @@ func (w *Workspace) Records() ([]Record, error) {
 
 // RemoveFiles deletes a run's files (not its worktree).
 func (w *Workspace) RemoveFiles(id string) {
+	if r, err := w.Load(id); err == nil && r.TmpDir != "" {
+		_ = os.RemoveAll(r.TmpDir)
+	}
 	for _, s := range []string{".json", ".log", ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md"} {
 		_ = os.Remove(w.Path(id, s))
 	}
 	_ = RemoveAttachments(w.AttachmentsDir(id))
-	_ = os.RemoveAll(w.TmpDir(id))
+	// Clean up scratch directories from runs created before TmpDir was recorded.
+	_ = os.RemoveAll(w.Path(id, ".tmp"))
 }
 
 // LauncherAlive reports whether the process that launched the run, and

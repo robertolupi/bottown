@@ -281,13 +281,14 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// is saved before anything is downloaded, so gc finds the run, as dead,
 	// even if this process dies before the run is running.
 	attachDir := rc.ws.AttachmentsDir(run.ID)
+	tmpDir := rc.ws.TmpDir(run.ID)
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName, Spec: run.Spec,
 		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
-		Message: strings.TrimSpace(o.message), Attachments: attachDir,
+		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
 	}
 	if err := rc.ws.Save(rec); err != nil {
 		return err
@@ -297,7 +298,6 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
 		}
 	}()
-	tmpDir := rc.ws.TmpDir(run.ID)
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		return err
 	}
