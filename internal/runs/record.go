@@ -17,7 +17,7 @@ const (
 	StatusRunning   = "running"
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
-	StatusDead      = "dead" // recorded as running, but its process is gone
+	StatusDead      = "dead" // recorded as preparing or running, but its process is gone
 )
 
 // Record is the host-side record of a run, written next to its worktree.
@@ -46,6 +46,9 @@ type Record struct {
 	Worktree        string     `json:"worktree"`
 	Key             string     `json:"key,omitempty"` // only while the run is live
 	ServerURL       string     `json:"server_url"`
+	// Attachments is the run's directory of issue attachments (see
+	// attachments.go); empty for runs started before it existed.
+	Attachments string `json:"attachments,omitempty"`
 }
 
 // Target is "#<issue>" or "!<pr>".
@@ -151,8 +154,8 @@ func LoadFile(path string) (Record, error) {
 	return r, err
 }
 
-// Records lists local runs, newest first, marking running records whose
-// process is gone as dead.
+// Records lists local runs, newest first, marking preparing and running
+// records whose launcher is gone as dead.
 func (w *Workspace) Records() ([]Record, error) {
 	ents, err := os.ReadDir(w.RunsDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -171,7 +174,7 @@ func (w *Workspace) Records() ([]Record, error) {
 		if err != nil {
 			continue
 		}
-		if r.Status == StatusRunning && !r.LauncherAlive() {
+		if (r.Status == StatusPreparing || r.Status == StatusRunning) && !r.LauncherAlive() {
 			r.Status = StatusDead
 		}
 		out = append(out, r)
@@ -185,6 +188,7 @@ func (w *Workspace) RemoveFiles(id string) {
 	for _, s := range []string{".json", ".log", ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md"} {
 		_ = os.Remove(w.Path(id, s))
 	}
+	_ = RemoveAttachments(w.AttachmentsDir(id))
 }
 
 // LauncherAlive reports whether the process that launched the run, and

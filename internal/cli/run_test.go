@@ -127,6 +127,78 @@ func TestSignalHarnessNoGroup(t *testing.T) {
 	}
 }
 
+// A launcher killed while it downloads a run's attachments, before the run
+// is running, leaves a preparing record: gc keeps the run while the launcher
+// lives, then revokes it and removes its attachments once it is dead.
+func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
+	if dir := os.Getenv("BOTTOWN_GC_TEST_DIR"); dir != "" {
+		// The launcher: the same steps as startRun up to the download.
+		ws := &runs.Workspace{RunsDir: dir}
+		attach := ws.AttachmentsDir("r-prep")
+		rec := runs.Record{ID: "r-prep", Kind: policy.Implement, Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(), Key: "k", Attachments: attach}
+		if err := ws.Save(rec); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(attach, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(attach, ".download-1"), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		os.Stdout.WriteString("ready\n")
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n') // killed here
+		return
+	}
+	mirror := filepath.Join(t.TempDir(), "mirror.git")
+	if out, err := exec.Command("git", "init", "-q", "--bare", mirror).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	ws := &runs.Workspace{RunsDir: t.TempDir(), Mirror: mirror}
+	c := exec.Command(os.Args[0], "-test.run=^TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing$")
+	c.Env = append(os.Environ(), "BOTTOWN_GC_TEST_DIR="+ws.RunsDir)
+	stdin, _ := c.StdinPipe()
+	defer stdin.Close()
+	stdout, _ := c.StdoutPipe()
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+		_ = c.Process.Kill()
+		_ = c.Wait()
+		t.Fatalf("launcher: %q, %v", line, err)
+	}
+	attach := ws.AttachmentsDir("r-prep")
+
+	var revoked []string
+	revoke := func(id string) { revoked = append(revoked, id) }
+	recs, err := ws.Records()
+	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusPreparing {
+		t.Fatalf("live launcher: records %+v, %v", recs, err)
+	}
+	if removed, keep := gcLocal(ws, recs, true, os.Stderr, revoke); removed != 0 || !slices.Equal(keep, []string{"r-prep"}) || revoked != nil {
+		t.Errorf("live launcher: gc removed %d, kept %v, revoked %v", removed, keep, revoked)
+	}
+	if _, err := os.Stat(filepath.Join(attach, ".download-1")); err != nil {
+		t.Fatalf("gc removed a live run's download: %v", err)
+	}
+
+	_ = c.Process.Kill()
+	_ = c.Wait()
+	recs, err = ws.Records()
+	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusDead {
+		t.Fatalf("killed launcher: records %+v, %v", recs, err)
+	}
+	if removed, keep := gcLocal(ws, recs, false, os.Stderr, revoke); removed != 1 || keep != nil || !slices.Equal(revoked, []string{"r-prep"}) {
+		t.Errorf("killed launcher: gc removed %d, kept %v, revoked %v", removed, keep, revoked)
+	}
+	if _, err := os.Stat(attach); !os.IsNotExist(err) {
+		t.Errorf("attachments survive gc: %v", err)
+	}
+	if _, err := os.Stat(ws.Path("r-prep", ".json")); !os.IsNotExist(err) {
+		t.Errorf("record survives gc: %v", err)
+	}
+}
+
 func TestExpiredLive(t *testing.T) {
 	now := time.Now().UTC()
 	ended := now.Add(-time.Hour)
@@ -134,12 +206,14 @@ func TestExpiredLive(t *testing.T) {
 		{ID: "r-active", Expires: now.Add(time.Hour)},
 		{ID: "r-expired", Expires: now.Add(-time.Minute)},
 		{ID: "r-launched", Expires: now.Add(-time.Minute)},
+		{ID: "r-preparing", Expires: now.Add(-time.Minute)},
 		{ID: "r-dead-launcher", Expires: now.Add(-time.Minute)},
 		{ID: "r-ended", Expires: now.Add(-time.Minute), Ended: &ended},
 		{ID: "r-no-expiry"},
 	}
 	local := []runs.Record{
 		{ID: "r-launched", Status: runs.StatusRunning, PID: os.Getpid()},
+		{ID: "r-preparing", Status: runs.StatusPreparing, PID: os.Getpid()},
 		{ID: "r-dead-launcher", Status: runs.StatusDead},
 	}
 	got := expiredLive(live, local, now)

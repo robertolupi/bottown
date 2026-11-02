@@ -395,7 +395,11 @@ func TestPrintIssueShowAndList(t *testing.T) {
 	t.Run("IssueShowInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
 		r := newInteractiveRenderer(&buf)
-		printIssueShow(&buf, r, is)
+		atts := []runs.Attachment{
+			{ID: 3, Name: "shot.png", Size: 2048, ContentType: "image/png", Path: "/run/attachments/3-shot.png"},
+			{ID: 4, Name: "log.txt", Size: 10, Comment: 9, Error: "download failed: 404 Not Found"},
+		}
+		printIssueShow(&buf, r, is, atts)
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -403,6 +407,15 @@ func TestPrintIssueShowAndList(t *testing.T) {
 		stripped := stripANSI(got)
 		if !strings.Contains(stripped, "#11 Colorify CLI [open] by agy (enhancement)") {
 			t.Errorf("unexpected stripped header:\n%s", stripped)
+		}
+		for _, want := range []string{
+			"--- attachments (2)\n",
+			"- `/run/attachments/3-shot.png`: \"shot.png\" (image/png, 2.0 KiB, on the description)\n",
+			"- \"log.txt\" (10 bytes, on comment 9): download failed: 404 Not Found\n",
+		} {
+			if !strings.Contains(stripped, want) {
+				t.Errorf("issue show lacks %q:\n%s", want, stripped)
+			}
 		}
 	})
 

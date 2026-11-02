@@ -5,7 +5,7 @@ You are **{{.Actor}}** ({{.Family}}), working as the **discussant** in bottown r
 Review and discuss #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**. Do not
 implement it.
 
-{{.Body}}
+{{.Body}}{{template "attachments" .}}
 {{- if .Question}}
 
 ## Question to discuss

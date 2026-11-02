@@ -55,7 +55,7 @@ and repository:
 ```
 bottown whoami                      # actor, run or last run, HEAD vs main
 bottown issue list [--state open|closed|all] [--repo R] [--json]
-bottown issue show [N] [--repo R] [--json]
+bottown issue show [N] [--repo R] [--json] [--download DIR]
 bottown issue create --title T --body-file -
 bottown pr list [--state open|closed|all] [--repo R] [--json]
 bottown pr show [N] [--repo R] [--diff [--full] | --stat] [--json]
@@ -83,6 +83,10 @@ bottown run end [--failed] --summary-file -
   a conversation. Outside a run the repository is the one your worktree's
   `bottown` remote points at. Filing is the one write a read-only key may
   make.
+- **Issue attachments** (screenshots, logs) are downloaded for a run: the
+  prompt and `issue show` list their local paths, so open them with your
+  own tools. They are removed when the run ends; outside a run,
+  `issue show --download DIR` fetches them.
 - **Cross-family rule:** a verifier must be from another model family than
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end

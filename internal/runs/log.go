@@ -9,8 +9,17 @@ import (
 )
 
 // RenderLog parses a batch log into readable lines (one line per assistant
-// message or tool call), for the live tail in the web UI.
+// message or tool call), for the live tail in the web UI. Encoded payloads
+// are elided, also from logs written before the launcher redacted them.
 func RenderLog(harness string, log []byte) []string {
+	lines := renderLog(harness, log)
+	for i, l := range lines {
+		lines[i] = string(RedactEncoded([]byte(l)))
+	}
+	return lines
+}
+
+func renderLog(harness string, log []byte) []string {
 	switch harness {
 	case "claude":
 		return renderClaudeLog(log)

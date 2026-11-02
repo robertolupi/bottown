@@ -10,6 +10,7 @@
 //	<repo>/.bottown/runs/<id>.log       harness output
 //	<repo>/.bottown/runs/<id>.mcp.json  harness MCP config (0600)
 //	<repo>/.bottown/runs/<id>.prompt.md the goal prompt
+//	<repo>/.bottown/runs/<id>.attachments/ the issue's attachments, while the run lasts
 //
 // Per-run files sit next to the worktree, never inside it, so an agent's
 // `git add -A` cannot commit them. Runs never touch the user's checkout:

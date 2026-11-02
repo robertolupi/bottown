@@ -128,6 +128,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
 		Interactive: true, Harness: run.Harness, Status: runs.StatusPreparing, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
+		Attachments: leaseAttachments(a),
 	}
 	if inst, _ := git(a.Worktree, "config", "--get", gitInstanceKey); inst != "" {
 		rec.Instance = inst
@@ -174,6 +175,11 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &item); err != nil {
 			return err
 		}
+		// A previous run's files, if its cleanup was interrupted, go first.
+		if err := runs.RemoveAttachments(rec.Attachments); err != nil {
+			return err
+		}
+		atts := rk.fetchAttachments(cmd.Context(), rec.Attachments, "", item)
 		top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
 		base, _ := remoteDefaultBranch(top, a.Remote)
 		self, _ := os.Executable()
@@ -182,6 +188,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 			Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 			Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
 			Bottown: self, Remote: a.Remote, SelfEnd: true,
+			AttachmentsOf: item.Number, Attachments: atts, AttachmentsError: item.AttachmentsError,
 		}
 		if kind == policy.Plan {
 			// bottown reads the repository's settings from its default branch.
@@ -206,6 +213,11 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		return err
 	})
 }
+
+// leaseAttachments is the attachments directory of an actor worktree's
+// runs: in its git dir, next to run.json and prompt.md, outside the
+// checkout so a `git add -A` cannot commit the files.
+func leaseAttachments(a *agentCtx) string { return filepath.Join(a.KeyDir, "attachments") }
 
 func saveRecord(path string, rec runs.Record) error {
 	ws := &runs.Workspace{RunsDir: filepath.Dir(path)}
@@ -311,6 +323,11 @@ func finishLease(a *agentCtx, rec runs.Record, ended secrets.Run) error {
 		return fmt.Errorf("worktree now belongs to run %s; refusing cleanup of %s", id, rec.ID)
 	}
 	if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, ""); err != nil {
+		return err
+	}
+	// The run's attachments end with it. Before the record is finalized,
+	// so that a failure here leaves the next run end or start to retry.
+	if err := runs.RemoveAttachments(leaseAttachments(a)); err != nil {
 		return err
 	}
 	rec.Status, rec.Ended, rec.Key = ended.Status, ended.Ended, ""

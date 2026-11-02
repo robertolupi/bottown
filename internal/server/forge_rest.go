@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 )
@@ -10,6 +11,7 @@ import (
 // CLI that agents run in their worktrees:
 //
 //	GET  /v1/forge/issue?repo=&number=
+//	GET  /v1/forge/issue/attachment?repo=&number=&id=   (the file's bytes)
 //	POST /v1/forge/issue    {repo, title, body}
 //	GET  /v1/forge/pr?repo=&number=&diff=1
 //	POST /v1/forge/pr       {title, body}
@@ -22,6 +24,30 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opIssue(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/issue/attachment", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		if id <= 0 {
+			writeError(w, http.StatusBadRequest, "id is required")
+			return
+		}
+		d, err := s.opAttachment(r.Context(), Who(r.Context()), targetFromQuery(r), id)
+		if err != nil {
+			writeError(w, errStatus(err), err.Error())
+			return
+		}
+		defer d.Body.Close()
+		ct := d.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if d.Length >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(d.Length, 10))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, d.Body)
 	})))
 	mux.Handle("GET /v1/forge/issues", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opIssueList(r.Context(), Who(r.Context()), IssueListIn{

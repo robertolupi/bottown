@@ -2,8 +2,10 @@ package forgejo
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // Extensions: Forgejo API surface that forgejo-sdk v3 does not model. Keep
@@ -52,6 +54,72 @@ func (c *Client) ApplyToAdmins(owner, repo, rule string) (bool, error) {
 // SetApplyToAdmins sets that flag.
 func (c *Client) SetApplyToAdmins(owner, repo, rule string, v bool) error {
 	return c.do(http.MethodPatch, protectionPath(owner, repo, rule), map[string]bool{"apply_to_admins": v}, nil)
+}
+
+// Attachment is a file attached to an issue, a pull request or one of their
+// comments. The SDK's Issue and Comment types lack their "assets".
+type Attachment struct {
+	ID      int64     `json:"id"`
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	UUID    string    `json:"uuid"`
+	Created time.Time `json:"created_at"`
+	// Type is "attachment" for an uploaded file, "external" for a link.
+	Type    string `json:"type"`
+	Comment int64  `json:"-"` // the comment it is on; 0 for the description
+}
+
+// IssueAttachments lists the files attached to issue (or pull request)
+// index: its description's, then each comment's in order. Forgejo returns
+// an issue's comments in one page.
+func (c *Client) IssueAttachments(owner, repo string, index int64) ([]Attachment, error) {
+	base := fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo))
+	var out []Attachment
+	if err := c.do(http.MethodGet, fmt.Sprintf("%s/%d/assets", base, index), nil, &out); err != nil {
+		return nil, err
+	}
+	var comments []struct {
+		ID     int64        `json:"id"`
+		Assets []Attachment `json:"assets"`
+	}
+	if err := c.do(http.MethodGet, fmt.Sprintf("%s/%d/comments", base, index), nil, &comments); err != nil {
+		return nil, err
+	}
+	for _, cm := range comments {
+		for _, a := range cm.Assets {
+			a.Comment = cm.ID
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// DownloadAttachment opens an attachment's contents. Forgejo serves them on
+// its web route /attachments/<uuid>, not under /api/v1, but accepts the
+// API token there; the caller closes the body.
+func (c *Client) DownloadAttachment(uuid string) (*http.Response, error) {
+	path := "/attachments/" + url.PathEscape(uuid)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "token "+c.token)
+	}
+	// No client timeout: a large file may take longer than an API call;
+	// the caller's context bounds it. Redirects are not followed: Forgejo
+	// answers a request it did not authenticate with one to its login page.
+	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, &APIError{Method: http.MethodGet, Path: path, Status: resp.StatusCode, Body: string(b)}
+	}
+	return resp, nil
 }
 
 func protectionPath(owner, repo, rule string) string {

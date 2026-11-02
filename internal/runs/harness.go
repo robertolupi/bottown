@@ -37,6 +37,11 @@ type PromptData struct {
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 	Question                   string // discuss: the owner's question, if given to the command
 	MilestonesDir              string // plan: where the repository keeps milestone plans
+	// The issue or PR whose attachments were fetched for the run, with
+	// their local paths, or why they could not be listed.
+	AttachmentsOf    int64
+	Attachments      []Attachment
+	AttachmentsError string
 }
 
 // Prompt renders the goal prompt for kind (a run role: "implement",

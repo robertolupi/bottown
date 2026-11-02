@@ -4,7 +4,7 @@ You are **{{.Actor}}**, working as the **implementer** in bottown run `{{.RunID}
 
 Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 
-{{.Body}}
+{{.Body}}{{template "attachments" .}}
 
 ## How this run works
 

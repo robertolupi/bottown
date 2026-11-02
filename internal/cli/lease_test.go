@@ -247,6 +247,82 @@ func TestLeaseRecoveryPreservesDifferentWorktreeRun(t *testing.T) {
 	}
 }
 
+// A leased run's attachments end with it: on run end, on recovery of an
+// interrupted startup, and on a failed setup's rollback.
+func TestLeaseRemovesAttachments(t *testing.T) {
+	fill := func(t *testing.T, f *leaseFixture) string {
+		t.Helper()
+		dir := leaseAttachments(f.a)
+		if dir != filepath.Join(f.a.KeyDir, "attachments") {
+			t.Fatalf("attachments dir %s", dir)
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "1-shot.png"), []byte("png"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	gone := func(t *testing.T, dir string) {
+		t.Helper()
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("attachments survive: %v", err)
+		}
+	}
+	t.Run("end", func(t *testing.T) {
+		f := newLeaseFixture(t)
+		dir := fill(t, f)
+		if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
+			t.Fatal(err)
+		}
+		gone(t, dir)
+	})
+	t.Run("interrupted startup", func(t *testing.T) {
+		f := newLeaseFixture(t)
+		dir := fill(t, f)
+		if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+			t.Fatal(err)
+		}
+		if recovered, err := recoverLease(f.a); err != nil || !recovered {
+			t.Fatalf("recovery = %v, %v", recovered, err)
+		}
+		gone(t, dir)
+	})
+	t.Run("rollback", func(t *testing.T) {
+		f := newLeaseFixture(t)
+		var dir string
+		if err := prepareLease(f.a, f.rec, func() error {
+			dir = fill(t, f)
+			return errors.New("prompt failed")
+		}); err == nil {
+			t.Fatal("expected setup failure")
+		}
+		gone(t, dir)
+	})
+	t.Run("removal failure is retried", func(t *testing.T) {
+		f := newLeaseFixture(t)
+		dir := fill(t, f)
+		if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err == nil {
+			t.Fatal("expected cleanup failure")
+		}
+		if rec, err := runs.LoadFile(filepath.Join(f.a.KeyDir, "run.json")); err != nil || rec.Key == "" {
+			t.Fatalf("record finalized before cleanup: %+v %v", rec, err)
+		}
+		_ = os.Chmod(dir, 0o700)
+		if recovered, err := recoverLease(f.a); err != nil || !recovered {
+			t.Fatalf("recovery = %v, %v", recovered, err)
+		}
+		gone(t, dir)
+	})
+}
+
 func TestRunEndRetryAfterCleanup(t *testing.T) {
 	f := newLeaseFixture(t)
 	if _, err := git(f.a.Worktree, "config", "--worktree", gitActorKey, "codex"); err != nil {
