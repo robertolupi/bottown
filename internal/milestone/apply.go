@@ -425,6 +425,30 @@ func (a *applier) epicContent() string {
 	return b.String()
 }
 
+var (
+	epicHeaderRE = regexp.MustCompile("^_Implementation Epic for kickoff #([0-9]+), filed by `bottown milestone apply` from \\[`([^`]+)`\\]")
+	epicDesignRE = regexp.MustCompile(" Design: \\[`([^`]+)`\\]")
+)
+
+// EpicHeader reads what the first line of an epic's body, as epicContent
+// writes it, says: the kickoff issue, the plan file and the design
+// document ("" if none). ok is false if the body does not start with it.
+func EpicHeader(body string) (kickoff int64, file, design string, ok bool) {
+	first, _, _ := strings.Cut(normalize(body), "\n")
+	sub := epicHeaderRE.FindStringSubmatch(first)
+	if sub == nil {
+		return 0, "", "", false
+	}
+	kickoff, err := strconv.ParseInt(sub[1], 10, 64)
+	if err != nil {
+		return 0, "", "", false
+	}
+	if d := epicDesignRE.FindStringSubmatch(first); d != nil {
+		design = d[1]
+	}
+	return kickoff, sub[2], design, true
+}
+
 var checklistRE = regexp.MustCompile("^- \\[[ x]\\] #[0-9]+ — .* \\(`([a-z0-9-]+)`(?:, depends on (#[0-9]+(?:, #[0-9]+)*))?\\)$")
 
 // declared reads the dependencies the epic's checklist says each key had

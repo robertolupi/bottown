@@ -295,7 +295,9 @@ and when a milestone flow is done.
 ## 4. Views
 
 The first phases build three views: the owner inbox, runs (live and
-history), and upstream and repository health. A run detail view with the
+history), and upstream and repository health, on one tab. A second tab,
+Milestones, shows each Implementation Epic's dependency DAG
+([milestones design](milestones.md) §2.7). A run detail view with the
 transcript comes later.
 
 ### 4.1 Owner inbox

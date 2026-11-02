@@ -270,6 +270,12 @@ func TestApplyFirstAndIdempotent(t *testing.T) {
 	if epic.Title != "Demo epic" || strings.Contains(epic.Body, "Flagged") {
 		t.Errorf("epic: %q\n%s", epic.Title, epic.Body)
 	}
+	if k, file, design, ok := EpicHeader(epic.Body); !ok || k != 1 || file != "docs/milestones/demo.md" || design != "docs/d.md" {
+		t.Errorf("EpicHeader = %d %q %q %v", k, file, design, ok)
+	}
+	if _, _, _, ok := EpicHeader("Some other text"); ok {
+		t.Error("EpicHeader accepted a body without the header")
+	}
 	if rep.Writes != len(f.writes) || rep.Writes != 5+4+4 {
 		t.Errorf("writes: report %d, forge %v", rep.Writes, f.writes)
 	}

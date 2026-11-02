@@ -11,6 +11,7 @@
   import { lifecycleChange } from './lifecycle';
   import IssueReference from './IssueReference.svelte';
   import LiveLogTail from './LiveLogTail.svelte';
+  import Milestones from './Milestones.svelte';
   import {
     buildFlowActionPayload,
     buildFlowConstituentRuns,
@@ -94,6 +95,29 @@
   let timelineLoading = $state<boolean>(false);
 
   let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowImplement, flowVerify));
+
+  // Views: the overview (inbox, runs, health) and Milestones, kept in the
+  // URL's fragment so a reload stays on the same one.
+  let view = $state<'overview' | 'milestones'>(location.hash === '#milestones' ? 'milestones' : 'overview');
+  let milestonesRefresh = $state<number>(0);
+
+  function selectView(next: 'overview' | 'milestones') {
+    view = next;
+    history.replaceState(null, '', next === 'milestones' ? '#milestones' : location.pathname + location.search);
+  }
+
+  // The Milestones view starts flows and runs on an issue with the same
+  // dialogs as the Live Runs card.
+  function openFlowFor(issue: number) {
+    flowIssue = issue;
+    showFlowModal = true;
+  }
+
+  function openRunFor(issue: number) {
+    runKind = 'implement';
+    runTarget = issue;
+    showRunModal = true;
+  }
 
   function formatElapsed(createdIso: string): string {
     if (!createdIso) return '';
@@ -350,6 +374,7 @@
       }
       actionMessage = { type: 'success', text: data.output };
       showFlowModal = false;
+      milestonesRefresh++;
       await loadStatus(true);
       await loadHistory();
     } catch (e: any) {
@@ -384,6 +409,7 @@
       }
       actionMessage = { type: 'success', text: data.output };
       showRunModal = false;
+      milestonesRefresh++;
       await loadStatus(true);
       await loadHistory();
     } catch (e: any) {
@@ -608,7 +634,7 @@
       {#if status?.upstream?.fetched_at}
         <span class="muted text-sm">origin as of {formatTime(status.upstream.fetched_at)}</span>
       {/if}
-      <button class="btn btn-secondary" onclick={() => { loadStatus(true); loadHistory(); }} disabled={refreshing}>
+      <button class="btn btn-secondary" onclick={() => { loadStatus(true); loadHistory(); milestonesRefresh++; }} disabled={refreshing}>
         {#if refreshing}Refreshing...{:else}Refresh{/if}
       </button>
       {#if status?.links?.repo}
@@ -633,7 +659,26 @@
     </div>
   {/if}
 
-  {#if loading && !status}
+  <div class="tabs" role="tablist">
+    <button
+      class="tab"
+      class:tab-active={view === 'overview'}
+      role="tab"
+      aria-selected={view === 'overview'}
+      onclick={() => selectView('overview')}
+    >Inbox · Runs · Health</button>
+    <button
+      class="tab"
+      class:tab-active={view === 'milestones'}
+      role="tab"
+      aria-selected={view === 'milestones'}
+      onclick={() => selectView('milestones')}
+    >Milestones</button>
+  </div>
+
+  {#if view === 'milestones'}
+    <Milestones refreshKey={milestonesRefresh} onFlow={openFlowFor} onRun={openRunFor} />
+  {:else if loading && !status}
     <div class="loading-state">Loading status...</div>
   {:else if status}
     <div class="grid">
@@ -1979,6 +2024,34 @@
     gap: 12px;
   }
 
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-bottom: -1px;
+  }
+
+  .tab:hover {
+    color: var(--text);
+  }
+
+  .tab-active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+
   .logo {
     margin: 0;
     font-size: 24px;
@@ -1986,49 +2059,177 @@
     letter-spacing: -0.5px;
   }
 
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: 9999px;
-    font-size: 12px;
-    font-weight: 500;
-  }
+  /* Shared primitives: global, so components such as Milestones.svelte
+     use the same cards, badges, buttons and banners. */
+  :global {
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
 
-  .repo-badge {
-    background: rgba(56, 189, 248, 0.15);
-    color: var(--primary);
-  }
+    .repo-badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--primary);
+    }
 
-  .instance-badge {
-    background: rgba(125, 125, 125, 0.15);
-    color: var(--text-muted);
-  }
+    .instance-badge {
+      background: rgba(125, 125, 125, 0.15);
+      color: var(--text-muted);
+    }
 
-  .badge-success { background: var(--success-bg); color: var(--success); }
-  .badge-warning { background: var(--warning-bg); color: var(--warning); }
-  .badge-error { background: var(--error-bg); color: var(--error); }
-  .badge-neutral { background: rgba(125, 125, 125, 0.15); color: var(--text-muted); }
-  .badge-accent { background: rgba(37, 99, 235, 0.15); color: var(--accent); }
+    .badge-success { background: var(--success-bg); color: var(--success); }
+    .badge-warning { background: var(--warning-bg); color: var(--warning); }
+    .badge-error { background: var(--error-bg); color: var(--error); }
+    .badge-neutral { background: rgba(125, 125, 125, 0.15); color: var(--text-muted); }
+    .badge-accent { background: rgba(37, 99, 235, 0.15); color: var(--accent); }
 
-  /* An outcome is outlined and carries a glyph, so it reads apart from the
-     filled execution-status badge even without color. */
-  .outcome-badge {
-    gap: 4px;
-    white-space: nowrap;
-    border: 1px solid currentColor;
-  }
+    /* An outcome is outlined and carries a glyph, so it reads apart from the
+       filled execution-status badge even without color. */
+    .outcome-badge {
+      gap: 4px;
+      white-space: nowrap;
+      border: 1px solid currentColor;
+    }
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: background-color 0.15s ease;
+      text-decoration: none;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-secondary { background: rgba(125, 125, 125, 0.15); color: var(--text); }
+    .btn-secondary:hover:not(:disabled) { background: rgba(125, 125, 125, 0.25); }
+    .btn-accent { background: var(--accent); color: #fff; }
+    .btn-accent:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-danger { background: var(--error); color: #fff; }
+    .btn-danger:hover:not(:disabled) { opacity: 0.9; }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+
+    .banner {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+    }
+
+    .banner-success { background: var(--success-bg); color: var(--success); }
+    .banner-error { background: var(--error-bg); color: var(--error); }
+
+    .close-btn {
+      background: none;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      color: inherit;
+      padding: 0 4px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .full-width {
+      grid-column: 1 / -1;
+    }
+
+    .card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .card-header-left, .card-header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .card-header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .card-body {
+      padding: 20px;
+      flex: 1;
+    }
+
+    .inbox-zero {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 24px;
+      color: var(--text-muted);
+      font-size: 14px;
+      justify-content: center;
+    }
+
+    .inbox-zero-icon {
+      font-size: 20px;
+      color: var(--success);
+    }
   }
 
   .pr-badge {
@@ -2041,129 +2242,6 @@
     border-radius: 4px;
   }
   .pr-badge:hover { text-decoration: underline; }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    border: none;
-    transition: background-color 0.15s ease;
-    text-decoration: none;
-  }
-
-  .btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .btn-primary { background: var(--primary); color: #fff; }
-  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
-  .btn-secondary { background: rgba(125, 125, 125, 0.15); color: var(--text); }
-  .btn-secondary:hover:not(:disabled) { background: rgba(125, 125, 125, 0.25); }
-  .btn-accent { background: var(--accent); color: #fff; }
-  .btn-accent:hover:not(:disabled) { background: var(--accent-hover); }
-  .btn-danger { background: var(--error); color: #fff; }
-  .btn-danger:hover:not(:disabled) { opacity: 0.9; }
-
-  .btn-sm {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
-  .banner {
-    padding: 12px 16px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 14px;
-  }
-
-  .banner-success { background: var(--success-bg); color: var(--success); }
-  .banner-error { background: var(--error-bg); color: var(--error); }
-
-  .close-btn {
-    background: none;
-    border: none;
-    font-size: 16px;
-    cursor: pointer;
-    color: inherit;
-    padding: 0 4px;
-  }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 24px;
-  }
-
-  @media (max-width: 900px) {
-    .grid {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  .card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .full-width {
-    grid-column: 1 / -1;
-  }
-
-  .card-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-
-  .card-header-left, .card-header-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .card-header h2 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .card-body {
-    padding: 20px;
-    flex: 1;
-  }
-
-  .inbox-zero {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 24px;
-    color: var(--text-muted);
-    font-size: 14px;
-    justify-content: center;
-  }
-
-  .inbox-zero-icon {
-    font-size: 20px;
-    color: var(--success);
-  }
 
   .inbox-list {
     display: flex;
@@ -2667,9 +2745,11 @@
     margin-top: 20px;
   }
 
-  .muted { color: var(--text-muted); }
-  .text-sm { font-size: 12px; }
-  .loading-state { text-align: center; padding: 48px; color: var(--text-muted); }
+  :global {
+    .muted { color: var(--text-muted); }
+    .text-sm { font-size: 12px; }
+    .loading-state { text-align: center; padding: 48px; color: var(--text-muted); }
+  }
 
   /* Flow-centric Run History styles */
   .flow-thread-row {
