@@ -5,15 +5,16 @@
     computePreservedScrollTop,
     isScrolledToBottom,
     buildKeyedLogLines,
+    updateLogTailFollow,
   } from './state';
 
   let { runId, lines = [] }: { runId: string; lines?: string[] } = $props();
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let isFollowing = $state<boolean>(true);
-  let previousLines = $state<string[]>([]);
-  let baseIndex = $state<number>(0);
-  let isProgrammaticScroll = false;
+  let previousLines: string[] = [];
+  let baseIndex = 0;
+  let programmaticScrollTarget: number | null = null;
 
   let pendingTrimmedHeight = 0;
   let pendingOldScrollTop = 0;
@@ -22,26 +23,43 @@
 
   function scrollToBottom() {
     if (!scrollContainer) return;
-    isProgrammaticScroll = true;
-    scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    setTimeout(() => {
-      isProgrammaticScroll = false;
-    }, 50);
+    const current = scrollContainer.scrollTop;
+    const target = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+    if (Math.abs(current - target) > 1) {
+      programmaticScrollTarget = target;
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    }
+  }
+
+  function applyPreservedScroll(newScroll: number) {
+    if (!scrollContainer) return;
+    const current = scrollContainer.scrollTop;
+    if (Math.abs(current - newScroll) > 1) {
+      programmaticScrollTarget = newScroll;
+      scrollContainer.scrollTop = newScroll;
+    }
   }
 
   function handleFollowClick() {
-    isFollowing = true;
+    isFollowing = updateLogTailFollow(isFollowing, true, 'follow_click');
     scrollToBottom();
   }
 
   function handleScroll() {
-    if (isProgrammaticScroll || !scrollContainer) return;
+    if (!scrollContainer) return;
+    if (programmaticScrollTarget !== null) {
+      if (Math.abs(scrollContainer.scrollTop - programmaticScrollTarget) <= 1) {
+        programmaticScrollTarget = null;
+        return;
+      }
+      programmaticScrollTarget = null;
+    }
     const atBottom = isScrolledToBottom(
       scrollContainer.scrollTop,
       scrollContainer.scrollHeight,
       scrollContainer.clientHeight,
     );
-    isFollowing = atBottom;
+    isFollowing = updateLogTailFollow(isFollowing, atBottom, 'scroll');
   }
 
   onMount(() => {
@@ -74,7 +92,7 @@
         }
       }
     }
-    previousLines = [...curr];
+    previousLines = curr;
   });
 
   $effect(() => {
@@ -87,11 +105,7 @@
       scrollToBottom();
     } else if (pendingTrimmedHeight > 0) {
       const newScroll = computePreservedScrollTop(pendingOldScrollTop, pendingTrimmedHeight);
-      isProgrammaticScroll = true;
-      scrollContainer.scrollTop = newScroll;
-      setTimeout(() => {
-        isProgrammaticScroll = false;
-      }, 50);
+      applyPreservedScroll(newScroll);
       pendingTrimmedHeight = 0;
       pendingOldScrollTop = 0;
     }
