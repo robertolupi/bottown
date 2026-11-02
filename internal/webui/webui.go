@@ -516,12 +516,21 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetIssueTimeline(w http.ResponseWriter, r *http.Request) {
 	numStr := r.PathValue("number")
 	issueNum, err := strconv.ParseInt(numStr, 10, 64)
-	if err != nil || issueNum <= 0 {
+	var prFilter int64 = -1
+	if prStr := r.URL.Query().Get("pr"); prStr != "" {
+		parsed, prErr := strconv.ParseInt(prStr, 10, 64)
+		if prErr != nil || parsed < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid pr number required"})
+			return
+		}
+		prFilter = parsed
+	}
+	if err != nil || (issueNum <= 0 && prFilter <= 0) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "valid issue number required"})
 		return
 	}
 
-	timeline, err := s.ComputeIssueTimeline(r.Context(), issueNum)
+	timeline, err := s.ComputeFlowTimeline(r.Context(), issueNum, prFilter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

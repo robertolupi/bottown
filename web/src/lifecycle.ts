@@ -29,7 +29,7 @@ export function lifecycleChange(
   nextRuns: List<LiveRunInfo>,
   nextFlows: List<ActiveFlowInfo>,
 ): LifecycleChange {
-  const runKey = (r: LiveRunInfo) => r.id;
+  const runKey = (r: LiveRunInfo) => `${r.id}:${r.pr || 0}:${r.thread_key || ''}`;
   const flowKey = (f: ActiveFlowInfo) => String(f.issue);
   const pr = keys(prevRuns, runKey);
   const nr = keys(nextRuns, runKey);

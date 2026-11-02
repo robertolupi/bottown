@@ -328,10 +328,20 @@ shows a **live tail of its log**, readable rather than raw JSON (assistant
 text and tool calls, one line each), refreshed while it runs; the UI is
 on the host, so it reads `.bottown/runs/<id>.log` directly.
 
-**History.** A table of ended runs: when, target, kind, actor, harness,
-mode, status, duration, usage where known, and the first line of the
-handover. It can be filtered by actor, kind, status and date. An issue's **timeline** lists every run on it in order, with the
-reviews and the merge between them.
+**History.** A flow-centric table of history threads. Each flow thread groups
+`implement` and `verify` runs for the same issue and PR (including manual
+runs, retries, stops/resumes, repeated rounds, and pre-PR implementation runs
+that stay in the thread once its PR is opened; a different PR on the same
+issue forms a separate thread). `discuss` runs appear as separate entries.
+The main line shows the issue, PR, and milestone name together (omitting the
+milestone when none is assigned), along with latest status, active flow
+highlighting, run count, actors, duration, usage, summary, and last activity.
+Clicking a flow expands it (at most one flow is expanded at a time) to show a
+combined flow **timeline** at the top — covering all runs in the flow with
+clear run boundaries, reviews, comments, and merge events — followed by the
+constituent runs and their individual logs and policy denials. Live activity
+updates statuses, highlighting, and the selected active flow's timeline
+without changing the selected flow.
 
 **Denials.** A live run's card and a history row (when expanded) list
 the operations the server's policy refused the run (denied or rejected),

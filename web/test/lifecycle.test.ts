@@ -57,3 +57,9 @@ test('an unchanged snapshot, reordered or with progress within a flow, refreshes
 test('empty and missing lists are the same snapshot', () => {
   assert.deepEqual(lifecycleChange(undefined, null, [], []), none);
 });
+
+test('a live run opening a PR transitions its thread key and refreshes status and history', () => {
+  const before = [{ id: 'r-open', issue: 20, thread_key: 'flow:issue:20' }] as any;
+  const after = [{ id: 'r-open', issue: 20, pr: 21, thread_key: 'flow:issue:20:pr:21' }] as any;
+  assert.deepEqual(lifecycleChange(before, [flow(20)], after, [flow(20)]), both);
+});
