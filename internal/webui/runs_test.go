@@ -269,7 +269,7 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if !strings.Contains(r.Flow.Label, "#51 · round 2/3 · verifying with kimi") {
 		t.Fatalf("unexpected flow label: %q", r.Flow.Label)
 	}
-	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LinePlain, Text: "Bash: make check"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LinePlain, Text: "Running checks now"}) {
+	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LineTool, Tool: "Bash", ToolClass: runs.ToolShell, Text: "Bash: make check"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LineText, Text: "Running checks now"}) {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
 	// The run's refusals outside its repository and with no repository

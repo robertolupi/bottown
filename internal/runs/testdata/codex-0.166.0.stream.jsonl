@@ -1,4 +1,7 @@
+Reading additional input from stdin...
 {"type":"thread.started","thread_id":"01a1974b-bad9-78b2-8a94-685c46892ae9"}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"internal/runs/log.go","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'git diff bottown/main...HEAD'","aggregated_output":"fatal: bad revision 'bottown/main...HEAD'\n","exit_code":128,"status":"failed"}}
 {"type":"turn.completed","usage":{"input_tokens":17722,"cached_input_tokens":17536,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}

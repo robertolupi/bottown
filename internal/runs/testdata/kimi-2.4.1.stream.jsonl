@@ -1,3 +1,13 @@
 {"role":"meta","type":"system.version","version":"2.4.1"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"tool_1","function":{"name":"Bash","arguments":"{\"command\":\"git status\"}"}}]}
+# On branch issue/178
+# Changes not staged for commit:
+#   modified:   internal/runs/log.go
+#   modified:   internal/runs/log_test.go
+# no changes added to commit
+{"role":"assistant","tool_calls":[{"type":"function","id":"tool_2","function":{"name":"Bash","arguments":"{\"command\":\"cat missing.txt\"}"}}]}
+{"role":"tool","tool_call_id":"tool_2","content":"Command failed with exit code 1: cat: missing.txt: No such file or directory"}
+Waiting 1s / 1 background task still running
+Waiting 2s / 1 background task still running
 {"role":"assistant","content":"hello"}
 {"role":"meta","type":"session.resume_hint","session_id":"session_6eb8c082-d72d-4405-969b-cae41b15d90e","command":"kimi -r session_6eb8c082-d72d-4405-969b-cae41b15d90e","content":"To resume this session: kimi -r session_6eb8c082-d72d-4405-969b-cae41b15d90e"}
