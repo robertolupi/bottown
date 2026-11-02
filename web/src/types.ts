@@ -193,7 +193,10 @@ export interface HistoryRunInfo {
   family: string;
   harness: string;
   mode: string;
-  status: string;
+  status: string; // execution: succeeded | failed | revoked | running
+  // The work result the server recorded from the run's tools: approved,
+  // changes_requested, commented, pr_opened. Absent when none was recorded.
+  outcome?: string;
   created: string;
   ended?: string;
   duration: string;
@@ -213,6 +216,7 @@ export interface TimelineEvent {
   detail?: string;
   actor?: string;
   status?: string;
+  outcome?: string; // run events: see HistoryRunInfo.outcome
   run_id?: string;
   url?: string;
 }

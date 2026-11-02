@@ -984,6 +984,28 @@ func TestE2E(t *testing.T) {
 		}
 		must(aw, "", "run", "end", "--summary", "approved")
 
+		// The server recorded each run's outcome, apart from its status.
+		var ended []struct {
+			Kind, Actor, Status, Outcome string
+			PR                           int64
+		}
+		oreq, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs?repo=demo&state=ended", nil)
+		oreq.Header.Set("Authorization", "Bearer "+owner)
+		if resp, err := http.DefaultClient.Do(oreq); err != nil {
+			t.Fatal(err)
+		} else {
+			json.NewDecoder(resp.Body).Decode(&ended)
+			resp.Body.Close()
+		}
+		var implOutcome, verifyOutcome bool
+		for _, r := range ended {
+			implOutcome = implOutcome || (r.Kind == "implement" && r.Actor == "claude" && r.Status == "succeeded" && r.Outcome == "pr_opened")
+			verifyOutcome = verifyOutcome || (r.Kind == "verify" && r.Actor == "agy" && r.PR == prn && r.Outcome == "approved")
+		}
+		if !implOutcome || !verifyOutcome {
+			t.Errorf("run outcomes: implement pr_opened %v, verify approved %v in %+v", implOutcome, verifyOutcome, ended)
+		}
+
 		var comments []struct {
 			User struct{ Login string }
 			Body string

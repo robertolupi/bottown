@@ -76,6 +76,10 @@ type Run struct {
 	Status    string     `json:"status,omitempty"` // set when ended: succeeded | failed | revoked
 	// Digest is what the run's ender reported: set once, when it ends.
 	Digest
+	// Outcome is the work result the server saw the run produce through
+	// its tools, kept apart from Status (whether the run executed): one of
+	// the Outcome constants, or empty when none was recorded.
+	Outcome string `json:"outcome,omitempty"`
 	// Purged runs were dropped by PurgeRuns: only their digest is kept.
 	Purged bool `json:"purged,omitempty"`
 }
@@ -86,6 +90,15 @@ type Digest struct {
 	Summary string `json:"summary,omitempty"`
 	Usage   *Usage `json:"usage,omitempty"`
 }
+
+// Run outcomes. A verify run's is its latest review verdict; an implement
+// or plan run's is the pull request it opened.
+const (
+	OutcomeApproved         = "approved"
+	OutcomeChangesRequested = "changes_requested"
+	OutcomeCommented        = "commented"
+	OutcomePROpened         = "pr_opened"
+)
 
 // MaxSummary bounds a stored digest summary, in bytes.
 const MaxSummary = 4000
@@ -253,6 +266,23 @@ func (s *Store) EndRun(id, status string, at time.Time, d Digest) (Run, bool, er
 		return nil
 	})
 	return run, ok, err
+}
+
+// SetOutcome records the outcome of a run that has not ended; a later call
+// replaces it (a verifier's newer review supersedes the older). It reports
+// false if the run does not exist or has ended.
+func (s *Store) SetOutcome(id, outcome string) (bool, error) {
+	var ok bool
+	err := s.Update(func(st *State) error {
+		run, found := st.Runs[id]
+		if !found || run.Ended != nil {
+			return nil
+		}
+		run.Outcome, ok = outcome, true
+		st.Runs[id] = run
+		return nil
+	})
+	return ok, err
 }
 
 // PurgeRuns drops the ended runs for which match is true, with any keys

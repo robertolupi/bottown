@@ -252,6 +252,35 @@ function parseDurationStringMs(dur: string | undefined): number {
   return total;
 }
 
+export interface OutcomeBadge {
+  label: string;
+  // A glyph shown before the label, so tones are not told apart by color alone.
+  icon: string;
+  tone: 'success' | 'warning' | 'error' | 'accent' | 'neutral';
+  title: string;
+}
+
+const outcomeBadges: Record<string, Omit<OutcomeBadge, 'title'>> = {
+  approved: { label: 'Approved', icon: '✓', tone: 'success' },
+  changes_requested: { label: 'Changes requested', icon: '✗', tone: 'warning' },
+  commented: { label: 'Commented', icon: '…', tone: 'neutral' },
+  pr_opened: { label: 'PR opened', icon: '↗', tone: 'accent' },
+};
+
+// runOutcome describes a run's work outcome, apart from its execution status:
+// only what the server recorded (a review verdict, an opened PR), never one
+// guessed from the summary. A run that recorded none says so, in a neutral
+// tone; a run still going has no outcome yet (null).
+export function runOutcome(run: { status?: string; outcome?: string; ended?: string }): OutcomeBadge | null {
+  if (run.outcome) {
+    const known = outcomeBadges[run.outcome];
+    const badge = known || { label: run.outcome.replace(/_/g, ' '), icon: '•', tone: 'neutral' as const };
+    return { ...badge, title: `Outcome: ${badge.label} (recorded by the server)` };
+  }
+  if (!run.ended || run.status === 'running') return null;
+  return { label: 'None recorded', icon: '–', tone: 'neutral', title: 'Outcome: none recorded for this run' };
+}
+
 export function formatDurationMs(ms: number): string {
   if (!ms || ms <= 0) return '-';
   const totalSec = Math.round(ms / 1000);
@@ -996,6 +1025,7 @@ export function buildFlowTimeline(
           existing.status === 'running' && ev.ended && normalizedStatus !== 'running'
             ? normalizedStatus
             : existing.status || normalizedStatus,
+        outcome: existing.outcome || ev.outcome,
         active: ev.ended ? false : Boolean(existing.active) || isLive,
         summary: existing.summary || summaryFromEv,
         target_url: existing.target_url || ev.url || '',
@@ -1045,6 +1075,7 @@ export function buildFlowTimeline(
       harness: actorMeta?.harness || '',
       mode: 'batch',
       status: normalizedStatus,
+      outcome: ev.outcome,
       created: ev.time,
       ended: ev.ended,
       duration: ev.duration || '',
