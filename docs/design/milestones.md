@@ -1,7 +1,9 @@
 # Design: milestones: plan, check, apply and run
 
-Status: **design**, written with the owner in issue #74; Phase 1 (§5) is
-built (`internal/milestone`, `bottown milestone check`). Extends
+Status: **design**, written with the owner in issue #74; Phases 1 and 2
+(§5) are built (`internal/milestone`, `bottown milestone check`; the base
+issue/PR/milestone rules, the `plan` run kind, `bottown run plan` /
+`milestone plan` and `/bottown-plan`). Extends
 [the local web UI and supervisor design](web-ui.md) (§3.7).
 
 ## 1. Goal

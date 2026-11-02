@@ -788,6 +788,7 @@
               <option value="implement">Implement</option>
               <option value="verify">Verify</option>
               <option value="discuss">Discuss</option>
+              <option value="plan">Plan</option>
             </select>
             <select class="input input-sm select-sm" bind:value={filterStatus}>
               <option value="">All Statuses</option>
@@ -1261,6 +1262,7 @@
               <option value="implement">Implement (Issue)</option>
               <option value="verify">Verify (PR)</option>
               <option value="discuss">Discuss (Issue/PR)</option>
+              <option value="plan">Plan (Kickoff issue)</option>
             </select>
           </div>
 

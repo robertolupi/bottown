@@ -25,9 +25,9 @@ var harnessTmpl = template.Must(template.ParseFS(harnessFS, "harness/*.md"))
 const harnessMarker = "written by `bottown harness setup`; re-run it to refresh"
 
 // harnessCommands describes, per harness, where its global slash commands
-// live and which templates render them: one for implement and verify, and
-// one for discuss, which also takes a free-text question. skillDirs puts
-// each command in its own directory as SKILL.md.
+// live and which templates render them: one for implement, verify and plan,
+// and one for discuss, which also takes a free-text question. skillDirs
+// puts each command in its own directory as SKILL.md.
 var harnessCommands = map[string]struct {
 	dir               func(home string) string
 	template, discuss string
@@ -43,10 +43,10 @@ var harnessCommands = map[string]struct {
 	// Kimi Code user skills: invoked as /skill:bottown-implement; the agent
 	// runs `bottown run start` like agy's.
 	"kimi": {kimiSkillsDir, "kimi-skill.md", "kimi-discuss.md", true, "/skill:"},
-	// Codex user skills: ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md,
+	// Codex user skills: ~/.codex/skills/bottown-{implement,verify,discuss,plan}/SKILL.md,
 	// invoked as $bottown-implement.
 	"codex": {codexSkillsDir, "codex-skill.md", "codex-discuss.md", true, "$"},
-	// Crush user skills: ~/.config/crush/skills/bottown-{implement,verify,discuss}/SKILL.md,
+	// Crush user skills: ~/.config/crush/skills/bottown-{implement,verify,discuss,plan}/SKILL.md,
 	// invoked as /bottown-implement.
 	"crush": {crushSkillsDir, "crush-skill.md", "crush-discuss.md", true, "/"},
 }
@@ -79,28 +79,38 @@ type commandData struct {
 	Kind, Target, Bottown, Marker string
 }
 
+// harnessKinds are the commands setup installs, /bottown-<kind>, one per
+// run role, and what each takes a number of.
+var harnessKinds = []commandData{
+	{Kind: "implement", Target: "issue"},
+	{Kind: "verify", Target: "pull request"},
+	{Kind: "discuss", Target: "issue"},
+	{Kind: "plan", Target: "kickoff issue"},
+}
+
 func newHarness() *cobra.Command {
 	h := &cobra.Command{Use: "harness", Short: "Set up agent harnesses for bottown"}
 	var force bool
 	setup := &cobra.Command{
 		Use:   "setup [claude|agy|kimi|codex|crush]...",
-		Short: "Install /bottown-implement, /bottown-verify and /bottown-discuss in harnesses' global commands",
-		Long: `Install /bottown-implement, /bottown-verify and /bottown-discuss for each
-harness (default: all):
+		Short: "Install /bottown-implement, /bottown-verify, /bottown-discuss and /bottown-plan in harnesses' global commands",
+		Long: `Install /bottown-implement, /bottown-verify, /bottown-discuss and /bottown-plan
+for each harness (default: all):
 
-  claude  ~/.claude/commands/bottown-{implement,verify,discuss}.md
-  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss}.md
-  kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss}/SKILL.md
+  claude  ~/.claude/commands/bottown-{implement,verify,discuss,plan}.md
+  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss,plan}.md
+  kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
           (invoked as /skill:bottown-implement 12)
-  codex   ~/.codex/skills/bottown-{implement,verify,discuss}/SKILL.md
+  codex   ~/.codex/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
           (invoked as $bottown-implement 12)
-  crush   ~/.config/crush/skills/bottown-{implement,verify,discuss}/SKILL.md
+  crush   ~/.config/crush/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
           (invoked as /bottown-implement 12)
 
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
 QUESTION starts a discuss run: the agent answers on the issue, without
-implementing it. The files name this
+implementing it. /bottown-plan 12 starts a plan run on kickoff issue 12: the
+agent opens a pull request with the milestone plan. The files name this
 bottown binary by absolute path. Re-running refreshes them; a same-named file
 bottown did not write is left alone unless --force.
 
@@ -142,11 +152,7 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, c := range []commandData{
-		{Kind: "implement", Target: "issue"},
-		{Kind: "verify", Target: "pull request"},
-		{Kind: "discuss", Target: "issue"},
-	} {
+	for _, c := range harnessKinds {
 		c.Bottown, c.Marker = selfPath(), harnessMarker
 		tmpl := hc.template
 		if c.Kind == "discuss" {
@@ -207,11 +213,7 @@ func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
 		allInstalled := true
 		allCurrent := true
 
-		for _, c := range []commandData{
-			{Kind: "implement", Target: "issue"},
-			{Kind: "verify", Target: "pull request"},
-			{Kind: "discuss", Target: "issue"},
-		} {
+		for _, c := range harnessKinds {
 			c.Bottown, c.Marker = selfPath(), harnessMarker
 			tmpl := hc.template
 			if c.Kind == "discuss" {

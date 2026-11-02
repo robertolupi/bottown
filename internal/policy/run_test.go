@@ -6,6 +6,7 @@ func TestRunScopeAPI(t *testing.T) {
 	impl := RunScope{Org: "bottown", Repo: "demo", Role: Implement}
 	ver := RunScope{Org: "bottown", Repo: "demo", Role: Verify}
 	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
+	plan := RunScope{Org: "bottown", Repo: "demo", Role: Plan}
 	cases := []struct {
 		s            RunScope
 		method, path string
@@ -41,6 +42,16 @@ func TestRunScopeAPI(t *testing.T) {
 		{dis, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "review-via-tool"},
 		{dis, "POST", "/repos/bottown/demo/contents/README", false, "role-discuss"},
 		{dis, "POST", "/repos/bottown/other/issues/1/comments", false, "run-repo"},
+		// Plan runs are implement runs that may not file issues.
+		{plan, "GET", "/repos/bottown/demo/issues/1", true, "run-read"},
+		{plan, "POST", "/repos/bottown/demo/issues", false, "role-plan-no-issues"},
+		{plan, "POST", "/repos/bottown/demo/issues/1/comments", true, "run-plan"},
+		{plan, "PATCH", "/repos/bottown/demo/issues/comments/9", true, "run-plan"},
+		{plan, "POST", "/repos/bottown/demo/pulls", true, "run-plan"},
+		{plan, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "role-implement-review"},
+		{plan, "POST", "/repos/bottown/demo/pulls/2/requested_reviewers", false, "role-implement-review-requests"},
+		{plan, "POST", "/repos/bottown/other/pulls", false, "run-repo"},
+		{impl, "POST", "/repos/bottown/demo/issues", true, "run-implement"},
 	}
 	for _, c := range cases {
 		d := c.s.DecideAPI(c.method, c.path)
@@ -54,11 +65,16 @@ func TestRunScopeGit(t *testing.T) {
 	impl := RunScope{Org: "bottown", Repo: "demo", Role: Implement}
 	ver := RunScope{Org: "bottown", Repo: "demo", Role: Verify}
 	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
+	plan := RunScope{Org: "bottown", Repo: "demo", Role: Plan}
 	cases := []struct {
 		s             RunScope
 		path, service string
 		allow         bool
 	}{
+		{plan, "/bottown/demo.git/info/refs", "git-upload-pack", true},
+		{plan, "/bottown/demo.git/info/refs", "git-receive-pack", true},
+		{plan, "/bottown/demo.git/git-receive-pack", "", true},
+		{plan, "/bottown/other.git/git-receive-pack", "", false},
 		{impl, "/bottown/demo.git/info/refs", "git-upload-pack", true},
 		{impl, "/bottown/demo.git/info/refs", "git-receive-pack", true},
 		{impl, "/bottown/demo.git/git-receive-pack", "", true},

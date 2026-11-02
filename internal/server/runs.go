@@ -24,7 +24,7 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind            string `json:"kind"` // implement | verify | discuss
+	Kind            string `json:"kind"` // implement | verify | discuss | plan
 	Actor           string `json:"actor"`
 	Repo            string `json:"repo"` // name within the org
 	Issue           int64  `json:"issue,omitempty"`
@@ -129,9 +129,11 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	}
 
 	switch req.Kind {
-	case policy.Implement:
+	case policy.Implement, policy.Plan:
+		// A plan run works its kickoff issue on issue/<N> like an
+		// implementer, but proposes a milestone plan file instead of code.
 		if req.Issue <= 0 {
-			return run, runErr(http.StatusBadRequest, "implement runs need an issue")
+			return run, runErr(http.StatusBadRequest, "%s runs need an issue", req.Kind)
 		}
 		is, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue)
 		switch {
@@ -140,7 +142,7 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		case err != nil:
 			return run, err
 		case is.PullRequest != nil:
-			return run, runErr(http.StatusBadRequest, "#%d is a pull request; implement runs take an issue", req.Issue)
+			return run, runErr(http.StatusBadRequest, "#%d is a pull request; %s runs take an issue", req.Issue, req.Kind)
 		case is.State != "open":
 			return run, runErr(http.StatusConflict, "issue #%d is %s", req.Issue, is.State)
 		}
@@ -201,7 +203,7 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		run.Issue, run.SHA = req.Issue, b.Commit.ID
 
 	default:
-		return run, runErr(http.StatusBadRequest, `kind must be %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss)
+		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan)
 	}
 	return run, nil
 }

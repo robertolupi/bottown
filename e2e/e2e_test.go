@@ -967,6 +967,45 @@ func TestE2E(t *testing.T) {
 			!strings.Contains(comments[k-1].Body, "Discussed against") || !strings.Contains(comments[k-1].Body, "answered blah") {
 			t.Errorf("discuss comments on the issue: %+v", comments)
 		}
+
+		// A plan run pushes a plan file and opens its PR, but files no
+		// issues and edits none.
+		var kickoff struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "plan kickoff", "body": "plan the demo milestone"}, &kickoff)
+		k := fmt.Sprint(kickoff.Number)
+		pp := must(cw, "", "run", "start", "plan", k)
+		if !strings.Contains(pp, "**planner**") || !strings.Contains(pp, "`docs/milestones/<slug>.md`") || !strings.Contains(pp, "plan the demo milestone") {
+			t.Fatalf("plan prompt:\n%s", pp)
+		}
+		if got := git(t, cw, "rev-parse", "--abbrev-ref", "HEAD"); got != "issue/"+k {
+			t.Errorf("plan worktree branch %s", got)
+		}
+		if out, err := agent(cw, "", "issue", "create", "--title", "a planned issue"); err == nil || !strings.Contains(out, "plan runs may not create issues") {
+			t.Errorf("issue create in a plan run: %v %s", err, out)
+		}
+		if out, err := agent(cw, "", "api", "POST", "/repos/bottown/demo/issues", "--data", `{"title":"a planned issue"}`); err == nil || !strings.Contains(out, "role-plan-no-issues") {
+			t.Errorf("api issue create in a plan run: %v %s", err, out)
+		}
+		if out, err := agent(cw, "", "api", "PATCH", "/repos/bottown/demo/issues/"+k, "--data", `{"state":"closed"}`); err == nil || !strings.Contains(out, "issue-edit") {
+			t.Errorf("issue close in a plan run: %v %s", err, out)
+		}
+		os.MkdirAll(filepath.Join(cw, "docs", "milestones"), 0o755)
+		plan := "+++\ntitle = \"Demo\"\nkickoff = " + k + "\n+++\n\n## First\n\n```issue\nkey = \"first\"\n```\n\nDo the first thing.\n"
+		os.WriteFile(filepath.Join(cw, "docs", "milestones", "demo.md"), []byte(plan), 0o644)
+		if out := must(cw, "", "milestone", "check", "demo"); !strings.Contains(out, "ok, 1 issue(s)") {
+			t.Errorf("milestone check in a plan run: %s", out)
+		}
+		git(t, cw, "add", "docs/milestones/demo.md")
+		git(t, cw, "commit", "-q", "-m", "plan demo")
+		if out, err := exec.Command("git", "-C", cw, "push", "-q", "bottown-"+a.name, "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("push from a plan run: %v %s", err, out)
+		}
+		if out := must(cw, "the demo plan", "pr", "create", "--title", "Plan the demo milestone", "--body-file", "-"); !strings.Contains(out, "opened !") {
+			t.Errorf("pr create in a plan run: %s", out)
+		}
+		if out := must(cw, "", "run", "end", "--summary", "planned demo"); !strings.Contains(out, "succeeded; key revoked") {
+			t.Errorf("plan run end: %s", out)
+		}
 	})
 
 	t.Run("mcp whoami", func(t *testing.T) {

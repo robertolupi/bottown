@@ -57,8 +57,21 @@ func TestInstallCommands(t *testing.T) {
 	if err != nil || !strings.Contains(string(adis), self+" run start discuss <number>") {
 		t.Errorf("agy discuss workflow: %v\n%s", err, adis)
 	}
+	plan, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"!`" + self + " run start plan '$ARGUMENTS'`", "argument-hint: <kickoff issue number>", harnessMarker} {
+		if !strings.Contains(string(plan), want) {
+			t.Errorf("claude plan command lacks %q:\n%s", want, plan)
+		}
+	}
+	aplan, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-plan.md"))
+	if err != nil || !strings.Contains(string(aplan), self+" run start plan <number>") || !strings.Contains(string(aplan), "/bottown-plan") {
+		t.Errorf("agy plan workflow: %v\n%s", err, aplan)
+	}
 
-	for _, kind := range []string{"implement", "verify", "discuss"} {
+	for _, kind := range []string{"implement", "verify", "discuss", "plan"} {
 		skill, err := os.ReadFile(filepath.Join(home, ".kimi-code", "skills", "bottown-"+kind, "SKILL.md"))
 		if err != nil {
 			t.Fatal(err)
@@ -70,7 +83,7 @@ func TestInstallCommands(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"implement", "verify", "discuss"} {
+	for _, kind := range []string{"implement", "verify", "discuss", "plan"} {
 		skill, err := os.ReadFile(filepath.Join(home, ".codex", "skills", "bottown-"+kind, "SKILL.md"))
 		if err != nil {
 			t.Fatal(err)
@@ -85,7 +98,7 @@ func TestInstallCommands(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"implement", "verify", "discuss"} {
+	for _, kind := range []string{"implement", "verify", "discuss", "plan"} {
 		skill, err := os.ReadFile(filepath.Join(home, ".config", "crush", "skills", "bottown-"+kind, "SKILL.md"))
 		if err != nil {
 			t.Fatal(err)
@@ -102,7 +115,7 @@ func TestInstallCommands(t *testing.T) {
 
 	// Re-running is a no-op; a foreign file is protected unless --force.
 	out.Reset()
-	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != 3 {
+	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != len(harnessKinds) {
 		t.Errorf("second install: %v %s", err, out.String())
 	}
 	foreign := filepath.Join(home, ".claude", "commands", "bottown-verify.md")

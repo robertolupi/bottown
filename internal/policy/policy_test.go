@@ -29,6 +29,23 @@ func TestDecide(t *testing.T) {
 		{"claude", "GET", "/admin/users", false, "admin"},
 		{"claude", "POST", "/REPOS/bottown/x/PULLS/3/MERGE", false, "merge"},
 		{"rlupi", "POST", "/repos/bottown/x/pulls/3/merge", true, "exempt"},
+		// Issue, PR and milestone edits are the owner's.
+		{"claude", "PATCH", "/repos/o/r/issues/1", false, "issue-edit"},
+		{"claude", "DELETE", "/repos/o/r/issues/1", false, "issue-edit"},
+		{"claude", "PATCH", "/repos/o/r/pulls/1", false, "pull-edit"},
+		{"claude", "DELETE", "/repos/o/r/pulls/1", false, "pull-edit"},
+		{"claude", "POST", "/repos/o/r/milestones", false, "milestones"},
+		{"claude", "PATCH", "/repos/o/r/milestones/1", false, "milestones"},
+		{"claude", "DELETE", "/repos/o/r/milestones/1", false, "milestones"},
+		{"claude", "PUT", "/repos/o/r/milestones/1", false, "milestones"},
+		{"claude", "GET", "/repos/o/r/milestones/1", true, "default"},
+		{"claude", "GET", "/repos/o/r/issues/1", true, "default"},
+		{"claude", "POST", "/repos/o/r/issues", true, "default"},
+		{"claude", "POST", "/repos/o/r/issues/1/comments", true, "default"},
+		{"claude", "PATCH", "/repos/o/r/issues/comments/9", true, "default"},
+		{"rlupi", "PATCH", "/repos/o/r/issues/1", true, "exempt"},
+		{"rlupi", "PATCH", "/repos/o/r/pulls/1", true, "exempt"},
+		{"rlupi", "POST", "/repos/o/r/milestones", true, "exempt"},
 	}
 	for _, c := range cases {
 		d := p.Decide(c.actor, c.method, c.path)

@@ -13,11 +13,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMilestone() *cobra.Command {
+func newMilestone(g *globals) *cobra.Command {
 	m := &cobra.Command{
 		Use:   "milestone",
 		Short: "Milestone plans: the files that describe a milestone's issues",
 	}
+	// The same command as `run plan`, where milestones start.
+	m.AddCommand(newRunPlan(g))
 	m.AddCommand(&cobra.Command{
 		Use:   "check <slug|path>",
 		Short: "Check a milestone plan file, offline",

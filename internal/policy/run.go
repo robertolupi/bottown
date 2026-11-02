@@ -13,13 +13,17 @@ const (
 	// they read the repository and comment, like a verifier without a
 	// verdict.
 	Discuss = "discuss"
+	// Plan runs write a milestone plan file and open a pull request for it,
+	// like an implement run that may not file issues: the plan's issues are
+	// created by the owner's `milestone apply`, never by the planner.
+	Plan = "plan"
 )
 
 // RunScope confines a run key to one repository and to its role. It applies
 // after the base Policy: a request must pass both.
 type RunScope struct {
 	Org, Repo string
-	Role      string // Implement | Verify | Discuss
+	Role      string // Implement | Verify | Discuss | Plan
 }
 
 // verifyWrites are the only API writes a verify or discuss run may make
@@ -42,6 +46,10 @@ var implementDenied = []Rule{
 	{Name: "role-implement-review", Methods: writes, Pattern: "/repos/*/*/pulls/*/reviews/**"},
 	{Name: "role-implement-review-requests", Methods: writes, Pattern: "/repos/*/*/pulls/*/requested_reviewers"},
 }
+
+// planNoIssues keeps a plan run from filing issues: the plan proposes them
+// in a file, and only the owner's apply creates them.
+var planNoIssues = Rule{Name: "role-plan-no-issues", Methods: []string{"POST"}, Pattern: "/repos/*/*/issues"}
 
 // DecideAPI applies the scope to an API request (path below /api/v1,
 // cleaned by Clean).
@@ -70,13 +78,16 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 			}
 		}
 		return Decision{Allow: false, Rule: "role-" + s.Role}
-	case Implement:
+	case Implement, Plan:
+		if s.Role == Plan && method == "POST" && match(split(planNoIssues.Pattern), segs) {
+			return Decision{Allow: false, Rule: planNoIssues.Name}
+		}
 		for _, r := range implementDenied {
 			if slices.Contains(r.Methods, method) && match(split(r.Pattern), segs) {
 				return Decision{Allow: false, Rule: r.Name}
 			}
 		}
-		return Decision{Allow: true, Rule: "run-implement"}
+		return Decision{Allow: true, Rule: "run-" + s.Role}
 	}
 	return Decision{Allow: false, Rule: "run-role-unknown"}
 }
@@ -90,11 +101,11 @@ func (s RunScope) DecideGit(gitPath, service string) Decision {
 		return Decision{Allow: false, Rule: "run-repo"}
 	}
 	push := service == "git-receive-pack" || (len(segs) > 0 && segs[len(segs)-1] == "git-receive-pack")
-	if push && s.Role != Implement {
+	if push && s.Role != Implement && s.Role != Plan {
 		return Decision{Allow: false, Rule: "role-" + s.Role + "-push"}
 	}
 	if push {
-		return Decision{Allow: true, Rule: "run-implement-push"}
+		return Decision{Allow: true, Rule: "run-" + s.Role + "-push"}
 	}
 	return Decision{Allow: true, Rule: "run-fetch"}
 }

@@ -67,7 +67,7 @@ instance: `bottown up -i dev` builds from the working tree (ports
 Install the slash commands the actors use inside their harness:
 
 ```sh
-bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss
+bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss, /bottown-plan
 ```
 
 In kimi they are skills: `/skill:bottown-implement 1`; in codex, skills in
@@ -211,6 +211,7 @@ has the details.
 | `run implement -a ACTOR [-I] ISSUE` | An agent implements the issue: pushes `issue/N`, opens a PR. |
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
+| `run plan -a ACTOR [-I] ISSUE` | An agent writes the milestone plan for a kickoff issue: pushes `issue/N` with `<milestones_dir>/<slug>.md` and opens a PR; it cannot create issues. Also `milestone plan`. |
 | `run ls [--all]` | List runs: local worktrees merged with the server's records. |
 | `run show RUN` | A run's local record, server record (with its summary and the usage its harness reported) and log tail. |
 | `run stop RUN` | Kill a live batch run's harness, end it as failed and post a stopped handover. |
@@ -231,12 +232,12 @@ repository. They hold no token: the server enforces the policy.
 | Command | What it does |
 |---|---|
 | `whoami` | The actor, its run or last run, and HEAD against the default branch. |
-| `run start implement\|verify\|discuss N` | Start a run and print its goal prompt (what the slash commands call). |
+| `run start implement\|verify\|discuss\|plan N` | Start a run and print its goal prompt (what the slash commands call). |
 | `run end [--failed] --summary-file -` | End the run with a handover summary. |
 | `issue list`, `issue show [N]` | Read issues. |
 | `issue create --title T --body-file -` | File an issue, in or outside a run. |
 | `pr list`, `pr show [N] [--diff \| --stat]` | Read pull requests. |
-| `pr create --title T --body-file -` | Open the PR for an implement run's pushed branch. |
+| `pr create --title T --body-file -` | Open the PR for an implement or plan run's pushed branch. |
 | `comment [N] --body-file -` | Comment on the run's issue, or the PR in a verify run. |
 | `review submit --event E --commit SHA --body-file -` | A verify run's one verdict: `APPROVED`, `REQUEST_CHANGES` or `COMMENT`. |
 | `api METHOD PATH [--data JSON]` | Any Forgejo API endpoint, under the same policy. |
