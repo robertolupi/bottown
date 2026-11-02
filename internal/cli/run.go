@@ -234,7 +234,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}()
 
-	prompt, base, err := renderPrompt(ctx, rc, run, o.question)
+	// The run's attachments last as long as the run: removed however this
+	// returns, and by `run gc` if this process dies.
+	attachDir := rc.ws.AttachmentsDir(run.ID)
+	defer func() {
+		if e := runs.RemoveAttachments(attachDir); e != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
+		}
+	}()
+	rk := &agentCtx{Actor: run.Actor, ServerURL: rc.inst.ServerURL(), Key: created.Key, RunID: run.ID}
+	prompt, base, err := renderPrompt(ctx, rc, run, o.question, rk, attachDir)
 	if err != nil {
 		return err
 	}
@@ -271,6 +280,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName,
 		Status: runs.StatusRunning, PID: os.Getpid(), Started: time.Now().UTC(), Worktree: dir,
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
+		Attachments: attachDir,
 	}
 	if err := rc.ws.Save(rec); err != nil {
 		return err
@@ -298,10 +308,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	defer logf.Close()
+	// The log backs Live Runs and the summary: encoded payloads, such as an
+	// image attachment the harness opened, are elided as it is written.
+	logw := runs.NewRedactingWriter(logf)
 	if o.interactive {
 		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	} else {
-		c.Stdout, c.Stderr = logf, logf
+		c.Stdout, c.Stderr = logw, logw
+		// Through a pipe, a tool process the harness left behind could
+		// hold the log open, and Wait with it.
+		c.WaitDelay = 10 * time.Second
 		fmt.Fprintf(out, "  log: %s\n", rc.ws.Path(run.ID, ".log"))
 		// A batch harness leads its own process group, so run stop and a
 		// cancelled launcher reach its MCP servers and tool shells too.
@@ -320,6 +336,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	runErr := c.Wait()
+	if err := logw.Close(); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: write log: %v\n", err)
+	}
 	code := 0
 	if c.ProcessState != nil {
 		code = c.ProcessState.ExitCode()
@@ -372,9 +391,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	return nil
 }
 
-// renderPrompt fetches the issue or PR and renders the goal prompt. It
-// also returns the repository's default branch.
-func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question string) (string, string, error) {
+// renderPrompt fetches the issue or PR and renders the goal prompt, after
+// downloading its attachments with the run key rk into attachDir. It also
+// returns the repository's default branch.
+func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question string, rk *agentCtx, attachDir string) (string, string, error) {
 	base, err := rc.ws.DefaultBranch(ctx)
 	if err != nil {
 		return "", "", err
@@ -394,7 +414,14 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, question
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: selfPath(), Remote: "origin", Question: question,
+		Bottown: selfPath(), Remote: "origin", Question: question, AttachmentsOf: n,
+	}
+	// Attachments never stop a run: a failure is in the prompt instead.
+	var is server.IssueOut
+	if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is); err != nil {
+		d.AttachmentsError = err.Error()
+	} else {
+		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", is), is.AttachmentsError
 	}
 	if run.Kind == policy.Plan {
 		// bottown reads the repository's settings from its default branch.

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -183,6 +184,31 @@ func (in *instance) mustAPI(key, method, path string, body, out any) {
 			in.t.Fatalf("%s %s: decode: %v", method, path, err)
 		}
 	}
+}
+
+// upload attaches a file to an issue or comment (path: .../assets) through
+// bottown's proxy with key, and returns the attachment's id.
+func (in *instance) upload(key, path, name string, data []byte) int64 {
+	in.t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("attachment", name)
+	fw.Write(data)
+	mw.Close()
+	req, _ := http.NewRequest("POST", in.cfg.ServerURL()+"/forgejo/api/v1"+path, &body)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		in.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var a struct{ ID int64 }
+	if resp.StatusCode != 201 || json.Unmarshal(b, &a) != nil {
+		in.t.Fatalf("upload %s: %d %s", path, resp.StatusCode, b)
+	}
+	return a.ID
 }
 
 func (in *instance) health() map[string]any {
@@ -815,6 +841,13 @@ func TestE2E(t *testing.T) {
 		var issue struct{ Number int64 }
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "agent cli", "body": "add agent.txt"}, &issue)
 		n := fmt.Sprint(issue.Number)
+		// A screenshot on the description, and a file of the same name on a
+		// comment: both reach the run as local files, at distinct paths.
+		shot := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("pixels"), 100)...)
+		shotID := a.upload(owner, "/repos/bottown/demo/issues/"+n+"/assets", "screen shot.png", shot)
+		var cm struct{ ID int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues/"+n+"/comments", map[string]string{"body": "the log"}, &cm)
+		logID := a.upload(owner, fmt.Sprintf("/repos/bottown/demo/issues/comments/%d/assets", cm.ID), "screen shot.png", []byte("log text\n"))
 
 		os.WriteFile(filepath.Join(cw, "stray.txt"), []byte("x"), 0o644)
 		if out, err := agent(cw, "", "run", "start", "implement", n); err == nil || !strings.Contains(out, "uncommitted") {
@@ -830,14 +863,37 @@ func TestE2E(t *testing.T) {
 		if got := git(t, cw, "rev-parse", "--abbrev-ref", "HEAD"); got != "issue/"+n {
 			t.Errorf("worktree branch %s", got)
 		}
+		attachDir := filepath.Join(git(t, cw, "rev-parse", "--absolute-git-dir"), "bottown", "attachments")
+		shotPath := filepath.Join(attachDir, fmt.Sprintf("%d-screen_shot.png", shotID))
+		logPath := filepath.Join(attachDir, fmt.Sprintf("%d-screen_shot.png", logID))
+		if !strings.Contains(prompt, "## Attachments") ||
+			!strings.Contains(prompt, "- `"+shotPath+"`: \"screen shot.png\" (image/png, ") ||
+			!strings.Contains(prompt, "- `"+logPath+"`: \"screen shot.png\" (text/plain; charset=utf-8, 9 bytes, on comment ") ||
+			strings.Contains(prompt, "pixels") {
+			t.Errorf("implement prompt attachments:\n%s", prompt)
+		}
+		if b, err := os.ReadFile(shotPath); err != nil || !bytes.Equal(b, shot) {
+			t.Errorf("screenshot in the run: %v", err)
+		}
+		if b, err := os.ReadFile(logPath); err != nil || string(b) != "log text\n" {
+			t.Errorf("comment attachment in the run: %q %v", b, err)
+		}
+		if st := git(t, cw, "status", "--porcelain"); st != "" {
+			t.Errorf("attachments show in the worktree: %s", st)
+		}
 		if out := must(cw, "", "whoami"); !strings.Contains(out, "implement issue #"+n) {
 			t.Errorf("whoami in run: %s", out)
 		}
 		if out, err := agent(cw, "", "run", "start", "implement", n); err == nil || !strings.Contains(out, "already in run") {
 			t.Errorf("second run start: %v %s", err, out)
 		}
-		if out := must(cw, "", "issue", "show"); !strings.Contains(out, "agent cli") {
+		os.Remove(shotPath) // issue show fetches it again
+		if out := must(cw, "", "issue", "show"); !strings.Contains(out, "agent cli") ||
+			!strings.Contains(out, "attachments (2)") || !strings.Contains(out, "- `"+shotPath+"`") || !strings.Contains(out, "- `"+logPath+"`") {
 			t.Errorf("issue show: %s", out)
+		}
+		if b, err := os.ReadFile(shotPath); err != nil || !bytes.Equal(b, shot) {
+			t.Errorf("screenshot from issue show: %v", err)
 		}
 		if out, err := agent(cw, "", "issue", "create", "--repo", "other", "--title", "x"); err == nil || !strings.Contains(out, "confined to") {
 			t.Errorf("issue create in another repo from a run: %v %s", err, out)
@@ -875,6 +931,9 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "implemented agent.txt", "run", "end", "--summary-file", "-"); !strings.Contains(out, "succeeded; key revoked") {
 			t.Errorf("run end: %s", out)
 		}
+		if _, err := os.Stat(attachDir); !os.IsNotExist(err) {
+			t.Errorf("attachments after run end: %v", err)
+		}
 		if out := must(cw, "", "whoami"); !strings.Contains(out, "no active run") ||
 			!strings.Contains(out, "implement issue #"+n+" in bottown/demo, succeeded") ||
 			!strings.Contains(out, "on issue/"+n+", 1 commit ahead of bottown-"+a.name+"/main") {
@@ -883,8 +942,12 @@ func TestE2E(t *testing.T) {
 		if out := must(cw, "", "issue", "list"); !strings.Contains(out, "follow-up from a run") {
 			t.Errorf("issue list outside run: %s", out)
 		}
-		if out := must(cw, "", "issue", "show", n); !strings.Contains(out, "agent cli") {
+		if out := must(cw, "", "issue", "show", n); !strings.Contains(out, "agent cli") || !strings.Contains(out, "not downloaded outside a run") {
 			t.Errorf("issue show outside run: %s", out)
+		}
+		dl := t.TempDir()
+		if out := must(cw, "", "issue", "show", n, "--download", dl); !strings.Contains(out, "- `"+filepath.Join(dl, fmt.Sprintf("%d-screen_shot.png", shotID))+"`") {
+			t.Errorf("issue show --download outside run: %s", out)
 		}
 		if out := must(cw, "", "pr", "show", fmt.Sprint(prn)); !strings.Contains(out, "agent cli PR") {
 			t.Errorf("pr show outside run: %s", out)
@@ -1321,7 +1384,16 @@ func TestE2E(t *testing.T) {
 		var issue struct{ Number int64 }
 		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "scripted run", "body": "add cli.txt"}, &issue)
 
+		// The prompt names the attachment's local file, issue show lists it,
+		// and the harness's encoded output is elided from the log.
+		diagram := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte("diagram"), 50)...)
+		a.upload(owner, fmt.Sprintf("/repos/bottown/demo/issues/%d/assets", issue.Number), "diagram.png", diagram)
+		want := filepath.Join(t.TempDir(), "diagram.png")
+		os.WriteFile(want, diagram, 0o600)
+		b64 := strings.Repeat("iVBORw0KGgo", 40)
 		implement := "set -e; test -n \"$BOTTOWN_RUN_KEY\"; grep -q 'scripted run' \"$BOTTOWN_PROMPT_FILE\"; " +
+			"grep -q '^## Attachments' \"$BOTTOWN_PROMPT_FILE\"; f=$(grep -o '/[^`]*-diagram.png' \"$BOTTOWN_PROMPT_FILE\" | head -1); " +
+			"cmp \"$f\" " + want + "; " + bin + " issue show | grep -qF \"$f\"; echo " + b64 + "; " +
 			"echo cli > cli.txt; git add cli.txt; git -c commit.gpgsign=false commit -qm 'cli change'; git push -q origin HEAD; " +
 			bin + ` mcp call pr_create '{"title":"cli PR","body":"scripted"}' > /dev/null; ` +
 			// The script harness reads usage from claude-style result events.
@@ -1336,6 +1408,13 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("no run id in: %s", out)
 		}
 		implRun := m[1]
+		if _, err := os.Stat(filepath.Join(demo, ".bottown", "runs", implRun+".attachments")); !os.IsNotExist(err) {
+			t.Errorf("attachments after the run: %v", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(demo, ".bottown", "runs", implRun+".log")); err != nil ||
+			strings.Contains(string(b), b64) || !strings.Contains(string(b), "encoded bytes elided by bottown") {
+			t.Errorf("run log: %v\n%s", err, b)
+		}
 		if _, err := os.Stat(filepath.Join(demo, ".bottown", "mirror.git")); err != nil {
 			t.Fatalf("no mirror: %v", err)
 		}

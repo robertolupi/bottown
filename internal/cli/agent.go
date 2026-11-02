@@ -35,6 +35,7 @@ type agentCtx struct {
 	Worktree  string // actor worktree top, if any
 	KeyDir    string // <gitdir>/bottown of the actor worktree, if any
 	Remote    string // the bottown remote name in this worktree
+	AttachDir string // the run's attachments directory; empty outside a run
 }
 
 // resolveAgent finds the run or actor worktree a command acts for:
@@ -49,7 +50,7 @@ func resolveAgent() (*agentCtx, error) {
 		if rec.Key == "" {
 			return nil, fmt.Errorf("run %s has ended", rec.ID)
 		}
-		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: "origin"}, nil
+		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: "origin", AttachDir: rec.Attachments}, nil
 	}
 	top, err := git(".", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -65,7 +66,7 @@ func resolveAgent() (*agentCtx, error) {
 	}
 	a := &agentCtx{Actor: actor, Worktree: top, KeyDir: filepath.Join(gitDir, "bottown")}
 	if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json")); err == nil && rec.Key != "" {
-		a.ServerURL, a.Key, a.RunID = rec.ServerURL, rec.Key, rec.ID
+		a.ServerURL, a.Key, a.RunID, a.AttachDir = rec.ServerURL, rec.Key, rec.ID, rec.Attachments
 	} else if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "actor.json")); err == nil && rec.Key != "" {
 		a.ServerURL, a.Key = rec.ServerURL, rec.Key
 	} else {
@@ -371,12 +372,16 @@ func (a *agentCtx) defaultRepo() string {
 
 func newIssue() *cobra.Command {
 	issue := &cobra.Command{Use: "issue", Short: "Read and file issues (agent CLI)"}
-	var repo string
+	var repo, download string
 	var asJSON bool
 	show := &cobra.Command{
-		Use:   "show [N]",
-		Short: "Show an issue and its comments (default: the run's issue)",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "show [N] [--download DIR]",
+		Short: "Show an issue, its comments and attachments (default: the run's issue)",
+		Long: `Show an issue, its comments and its attachments: the files on its
+description and comments. In a run they are downloaded into the run's
+attachments directory, which is removed when the run ends, and listed with
+their local paths; outside a run, --download DIR saves them there.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := resolveAgent()
 			if err != nil {
@@ -394,16 +399,30 @@ func newIssue() *cobra.Command {
 			if err := a.call("GET", "/v1/forge/issue"+targetQuery(r, n, nil), nil, &is); err != nil {
 				return err
 			}
+			dir := download
+			if dir == "" {
+				dir = a.AttachDir
+			}
+			var atts []runs.Attachment
+			if dir != "" {
+				atts = a.fetchAttachments(cmd.Context(), dir, r, is)
+			} else {
+				atts = attachmentList(is)
+				for i := range atts {
+					atts[i].Error = "not downloaded outside a run (use --download DIR)"
+				}
+			}
 			if asJSON {
-				return printJSON(cmd, is)
+				return printJSON(cmd, issueShowJSON{IssueOut: is, Attachments: atts})
 			}
 			out := cmd.OutOrStdout()
-			printIssueShow(out, lipgloss.NewRenderer(out), is)
+			printIssueShow(out, lipgloss.NewRenderer(out), is, atts)
 			return nil
 		},
 	}
 	show.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	show.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	show.Flags().StringVar(&download, "download", "", "download the attachments into DIR (in a run, the default is the run's attachments directory)")
 
 	var createRepo, title, body, bodyFile string
 	var createJSON bool
@@ -726,7 +745,7 @@ func newAPI() *cobra.Command {
 	return cmd
 }
 
-func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut) {
+func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut, atts []runs.Attachment) {
 	st := newStyles(r)
 	fmt.Fprintf(out, "%s %s [%s] by %s",
 		st.Info.Bold(true).Render(fmt.Sprintf("#%d", is.Number)),
@@ -744,6 +763,19 @@ func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut) {
 			st.Dim.Render(c.Created.Local().Format(time.DateTime)),
 			strings.TrimSpace(c.Body),
 		)
+	}
+	if len(atts) > 0 || is.AttachmentsError != "" {
+		fmt.Fprintf(out, "\n--- %s\n", st.Bold.Render(fmt.Sprintf("attachments (%d)", len(atts))))
+		for _, at := range atts {
+			line := "- " + at.String()
+			if at.Path == "" {
+				line = st.Warning.Render(line)
+			}
+			fmt.Fprintln(out, line)
+		}
+		if is.AttachmentsError != "" {
+			fmt.Fprintln(out, st.Warning.Render("- the attachments could not be listed: "+is.AttachmentsError))
+		}
 	}
 }
 

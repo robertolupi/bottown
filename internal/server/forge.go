@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -145,6 +146,21 @@ type IssueOut struct {
 	Author   string       `json:"author"`
 	Labels   []string     `json:"labels"`
 	Comments []CommentOut `json:"comments"`
+	// Attachments are the files on the description and the comments, as
+	// metadata: the bytes are at GET /v1/forge/issue/attachment.
+	Attachments []AttachmentOut `json:"attachments"`
+	// AttachmentsError says why the attachments could not be listed; the
+	// rest of the issue is still complete.
+	AttachmentsError string `json:"attachments_error,omitempty"`
+}
+
+// AttachmentOut is a file attached to an issue or one of its comments.
+type AttachmentOut struct {
+	ID      int64     `json:"id"`
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	Comment int64     `json:"comment_id,omitempty"` // 0: on the description
+	Created time.Time `json:"created"`
 }
 
 // CommentOut is one comment.
@@ -309,7 +325,78 @@ func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (I
 	for _, cm := range cs {
 		out.Comments = append(out.Comments, CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created})
 	}
+	out.Attachments = []AttachmentOut{}
+	as, err := issueFiles(c, org, repo, n)
+	if err != nil {
+		out.AttachmentsError = err.Error()
+	}
+	for _, a := range as {
+		out.Attachments = append(out.Attachments, AttachmentOut{ID: a.ID, Name: a.Name, Size: a.Size, Comment: a.Comment, Created: a.Created})
+	}
 	return out, nil
+}
+
+// issueFiles lists an issue's uploaded attachments; external links, which
+// Forgejo also lists as assets, have no bytes to fetch.
+func issueFiles(c *forgejo.Client, org, repo string, n int64) ([]forgejo.Attachment, error) {
+	as, err := c.IssueAttachments(org, repo, n)
+	if err != nil {
+		return nil, fmt.Errorf("listing attachments: %w", err)
+	}
+	files := as[:0]
+	for _, a := range as {
+		if a.Type == "" || a.Type == "attachment" {
+			files = append(files, a)
+		}
+	}
+	return files, nil
+}
+
+// Download is an attachment's contents, for the caller to stream and close.
+type Download struct {
+	AttachmentOut
+	ContentType string
+	Length      int64 // -1 if unknown
+	Body        io.ReadCloser
+}
+
+// opAttachment opens attachment id of an issue (by default the run's), with
+// the actor's token. The id must be attached to that issue, so a run key
+// reaches only its repository's files, as for the rest of the issue.
+func (s *Server) opAttachment(ctx context.Context, p secrets.Principal, in Target, id int64) (*Download, error) {
+	def := int64(0)
+	if p.Run != nil {
+		def = p.Run.Issue
+	}
+	org, repo, n, err := s.resolve(p, in, def)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return nil, err
+	}
+	as, err := issueFiles(c, org, repo, n)
+	if forgejo.IsRawNotFound(err) {
+		return nil, ferr(http.StatusNotFound, "issue #%d not found in %s", n, repo)
+	} else if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(as, func(a forgejo.Attachment) bool { return a.ID == id })
+	if i < 0 {
+		return nil, ferr(http.StatusNotFound, "attachment %d is not on issue #%d in %s", id, n, repo)
+	}
+	a := as[i]
+	resp, err := c.DownloadAttachment(a.UUID)
+	if err != nil {
+		return nil, fmt.Errorf("downloading attachment %d: %w", id, err)
+	}
+	return &Download{
+		AttachmentOut: AttachmentOut{ID: a.ID, Name: a.Name, Size: a.Size, Comment: a.Comment, Created: a.Created},
+		ContentType:   resp.Header.Get("Content-Type"),
+		Length:        resp.ContentLength,
+		Body:          resp.Body,
+	}, nil
 }
 
 // opIssueCreate files an issue as the actor. Unlike other writes it is

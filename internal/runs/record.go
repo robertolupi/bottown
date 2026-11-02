@@ -46,6 +46,9 @@ type Record struct {
 	Worktree        string     `json:"worktree"`
 	Key             string     `json:"key,omitempty"` // only while the run is live
 	ServerURL       string     `json:"server_url"`
+	// Attachments is the run's directory of issue attachments (see
+	// attachments.go); empty for runs started before it existed.
+	Attachments string `json:"attachments,omitempty"`
 }
 
 // Target is "#<issue>" or "!<pr>".
@@ -185,6 +188,7 @@ func (w *Workspace) RemoveFiles(id string) {
 	for _, s := range []string{".json", ".log", ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md"} {
 		_ = os.Remove(w.Path(id, s))
 	}
+	_ = RemoveAttachments(w.AttachmentsDir(id))
 }
 
 // LauncherAlive reports whether the process that launched the run, and
