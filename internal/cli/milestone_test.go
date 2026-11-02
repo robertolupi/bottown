@@ -66,6 +66,12 @@ func TestMilestoneCheck(t *testing.T) {
 	if err == nil || !strings.Contains(errOut, `plans/no-design.md:4: front matter: design "docs/design/missing.md" is not in the checkout`) {
 		t.Fatalf("missing design: %q, %v", errOut, err)
 	}
+	// ... and be a file, not a directory.
+	writeFile(t, filepath.Join(top, "plans", "dir-design.md"), strings.Replace(testPlan, "docs/design/web-ui.md", "docs/design", 1))
+	_, errOut, err = runMilestone(t, top, "check", "dir-design")
+	if err == nil || !strings.Contains(errOut, `plans/dir-design.md:4: front matter: design "docs/design" is not a file`) {
+		t.Fatalf("directory design: %q, %v", errOut, err)
+	}
 	// Diagnostics go to stderr, and the command fails.
 	_, errOut, err = runMilestone(t, top, "check", "broken")
 	if err == nil || !strings.Contains(err.Error(), "plans/broken.md: 1 problem(s)") ||

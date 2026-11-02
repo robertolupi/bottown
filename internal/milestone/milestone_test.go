@@ -136,6 +136,8 @@ func TestCheckRejects(t *testing.T) {
 			[]string{"p.md:3: toml: cannot decode TOML string"}},
 		{"design escapes", "", "+++\ntitle = \"T\"\nkickoff = 7\ndesign = \"../x.md\"\n+++\n## A\n'''issue\nkey = \"a\"\n'''\nBody.\n",
 			[]string{`p.md:4: front matter: design "../x.md" must not contain ..`}},
+		{"design empty", "", "+++\ntitle = \"T\"\nkickoff = 7\ndesign = \"\"\n+++\n## A\n'''issue\nkey = \"a\"\n'''\nBody.\n",
+			[]string{`p.md:4: front matter: design "" must name a path inside the repository`}},
 		{"design absolute", "", "+++\ntitle = \"T\"\nkickoff = 7\ndesign = \"/x.md\"\n+++\n## A\n'''issue\nkey = \"a\"\n'''\nBody.\n",
 			[]string{`design "/x.md" must be relative`}},
 		{"level-1 heading", "", head + "# Top\n## A\n'''issue\nkey = \"a\"\n'''\nBody.\n# Inside\n",

@@ -117,9 +117,9 @@ func (p *parser) errorf(line int, section, format string, args ...any) {
 
 // frontMatter is the plan's TOML front matter.
 type frontMatter struct {
-	Title   string `toml:"title"`
-	Kickoff int64  `toml:"kickoff"`
-	Design  string `toml:"design"`
+	Title   string  `toml:"title"`
+	Kickoff int64   `toml:"kickoff"`
+	Design  *string `toml:"design"` // nil when omitted: an empty value is invalid
 }
 
 // issueBlock is the TOML in a section's ```issue fence.
@@ -320,7 +320,10 @@ func (p *parser) frontMatter(lines []string, first int) {
 	if !p.decode(doc, first, "", &fm) {
 		return
 	}
-	p.plan.Title, p.plan.Kickoff, p.plan.Design = strings.TrimSpace(fm.Title), fm.Kickoff, fm.Design
+	p.plan.Title, p.plan.Kickoff = strings.TrimSpace(fm.Title), fm.Kickoff
+	if fm.Design != nil {
+		p.plan.Design = *fm.Design
+	}
 	if p.plan.Title == "" {
 		p.errorf(1, "", "front matter: title is required")
 	}
@@ -332,9 +335,9 @@ func (p *parser) frontMatter(lines []string, first int) {
 			p.plan.DesignLine = first + i
 		}
 	}
-	if fm.Design != "" {
-		if err := config.CheckRepoPath(fm.Design); err != nil {
-			p.errorf(p.plan.DesignLine, "", "front matter: design %q %v", fm.Design, err)
+	if fm.Design != nil {
+		if err := config.CheckRepoPath(*fm.Design); err != nil {
+			p.errorf(p.plan.DesignLine, "", "front matter: design %q %v", *fm.Design, err)
 		}
 	}
 }

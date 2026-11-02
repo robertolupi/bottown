@@ -79,9 +79,13 @@ func milestoneCheck(out, errw io.Writer, dir, arg string) error {
 		return err
 	}
 	if topErr == nil && plan.Design != "" && config.CheckRepoPath(plan.Design) == nil {
-		if _, err := os.Stat(filepath.Join(top, filepath.FromSlash(plan.Design))); err != nil {
+		switch fi, err := os.Stat(filepath.Join(top, filepath.FromSlash(plan.Design))); {
+		case err != nil:
 			diags = append(diags, milestone.Diagnostic{File: name, Line: plan.DesignLine,
 				Msg: fmt.Sprintf("front matter: design %q is not in the checkout", plan.Design)})
+		case !fi.Mode().IsRegular():
+			diags = append(diags, milestone.Diagnostic{File: name, Line: plan.DesignLine,
+				Msg: fmt.Sprintf("front matter: design %q is not a file", plan.Design)})
 		}
 	}
 	if len(diags) > 0 {
