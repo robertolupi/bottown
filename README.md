@@ -242,6 +242,7 @@ repository. They hold no token: the server enforces the policy.
 | `review submit --event E --commit SHA --body-file -` | A verify run's one verdict: `APPROVED`, `REQUEST_CHANGES` or `COMMENT`. |
 | `api METHOD PATH [--data JSON]` | Any Forgejo API endpoint, under the same policy. |
 | `milestone check <slug\|path>` | Check a milestone plan file, offline: `<milestones_dir>/<slug>.md` in the checkout, or the path given. |
+| `web preview [--fixture NAME] [--port N] [--watch]` | Build the checkout's `web/` and serve it on localhost with the fixture data in `web/fixtures`, without an instance or sign-in: how a run looks at a UI change. |
 
 If actor run startup or ending fails, retry `bottown run end`. It reconciles
 the recorded run using the permanent actor credential, revokes interrupted

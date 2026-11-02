@@ -1232,11 +1232,12 @@ func (s *Server) fetchDenials(ctx context.Context) map[string][]Denial {
 	return out
 }
 
-func orEmpty(d []Denial) []Denial {
-	if d == nil {
-		return []Denial{}
+// orEmpty returns s, or an empty slice for nil, so that it encodes as [].
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
 	}
-	return d
+	return s
 }
 
 func (s *Server) fetchActorMap(ctx context.Context) (map[string]*ActorDetail, error) {

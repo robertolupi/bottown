@@ -616,6 +616,44 @@ API proxy.
   Closing the UI does not stop it; a restarted UI finds it through the
   server's run records.
 
+### 8.1 Previewing the UI in a run
+
+`bottown web ui` needs the owner's key and a `main` checkout, so a run that
+changes the UI cannot use it. `bottown web preview` is for that run, and
+for its verifier:
+
+```
+bottown web preview [--fixture NAME] [--port N] [--watch]
+```
+
+- **It runs anywhere,** a run or actor worktree included, and needs no
+  instance: it never contacts prod or dev, and holds no key.
+- **It serves the checkout's own UI.** It builds `web/` with vite into a
+  temporary directory (running `npm ci` first when `web/node_modules` is
+  missing or stale), prints the URL and serves until interrupted.
+  `--watch` rebuilds when `web/src` changes; reload the page to see it.
+- **The API answers from a fixture,** `web/fixtures/NAME.json` (default
+  `default`): the status, inbox, live runs with their logs, active flows,
+  history, milestones, issue details and timelines, in the API's own JSON.
+  A fixture is decoded strictly into the Go types the API uses, and a test
+  loads every one, so a renamed field fails the tests instead of showing
+  as a blank. `default` exercises every view; `empty` is a repository with
+  nothing going on; `errors` has every error state. Actions do nothing and
+  succeed, unless the fixture's `actions` gives their answer. A change
+  that shows something new adds it to the fixtures.
+- **Tests and people can change the state** while the page is open:
+  `POST /api/preview/logs/RUN` appends lines to a run's log and live tail,
+  `PUT /api/preview/fixture/SECTION` replaces a section, `POST
+  /api/preview/load` reloads the fixture or switches to another, and `GET
+  /api/preview` names the one in use.
+- **Same checks, no sign-in.** It binds `127.0.0.1`, checks `Host` and,
+  on state-changing requests, `Origin`, and sets the same CSP as `bottown
+  web ui`. There is no token: it serves only checked-in fixture data, and
+  its actions do nothing.
+
+The implement and verify prompts mention it when the repository's default
+branch has `web/fixtures`.
+
 ## 9. Phases
 
 Each phase is one issue, small enough for one implement run:

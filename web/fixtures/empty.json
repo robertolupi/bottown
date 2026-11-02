@@ -1,0 +1,106 @@
+{
+  "status": {
+    "instance": "prod",
+    "repo": "bottown/demo",
+    "upstream": {
+      "has_upstream": true,
+      "origin_url": "git@github.com:example/demo.git",
+      "fetched_at": "2026-11-02T10:40:00Z",
+      "head_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "ahead_count": 0,
+      "behind_count": 0,
+      "unpushed_commits": []
+    },
+    "forge": {
+      "remote": "bottown",
+      "repo": "bottown/demo",
+      "forge_url": "http://127.0.0.1:3030",
+      "default_branch": "main",
+      "checkout_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "forge_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "behind_count": 0,
+      "ahead_count": 0
+    },
+    "health": {
+      "agent_instructions": {
+        "found": true,
+        "filename": "AGENTS.md"
+      },
+      "protected_main": {
+        "checked": true,
+        "protected": true
+      },
+      "worktrees": [],
+      "harness_commands": [
+        {
+          "harness": "claude",
+          "installed": true,
+          "current": true,
+          "path": "~/.claude/commands"
+        },
+        {
+          "harness": "agy",
+          "installed": true,
+          "current": false,
+          "path": "~/.gemini/commands"
+        }
+      ],
+      "version": {
+        "cli_version": "87ad131",
+        "server_version": "87ad131",
+        "matches": true
+      },
+      "repo_settings": {
+        "checked": true,
+        "found": true,
+        "file": ".bottown.toml",
+        "branch": "main",
+        "commit": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+        "after_pull": [
+          "make install"
+        ],
+        "milestones_dir": "docs/milestones"
+      }
+    },
+    "links": {
+      "repo": "http://127.0.0.1:3030/bottown/demo",
+      "issues": "http://127.0.0.1:3030/bottown/demo/issues",
+      "pulls": "http://127.0.0.1:3030/bottown/demo/pulls",
+      "commits": "http://127.0.0.1:3030/bottown/demo/commits/branch/main"
+    },
+    "inbox": [],
+    "live_runs": [],
+    "active_flows": [],
+    "actors": [
+      {
+        "name": "claude",
+        "family": "anthropic",
+        "harness": "claude"
+      },
+      {
+        "name": "codex",
+        "family": "openai",
+        "harness": "codex"
+      },
+      {
+        "name": "kimi",
+        "family": "moonshot",
+        "harness": "kimi"
+      },
+      {
+        "name": "agy",
+        "family": "google",
+        "harness": "agy"
+      }
+    ]
+  },
+  "inbox": [],
+  "live_runs": [],
+  "active_flows": [],
+  "history": [],
+  "milestones": [],
+  "logs": {},
+  "issues": {},
+  "timelines": {},
+  "actions": {}
+}

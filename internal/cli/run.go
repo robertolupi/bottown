@@ -480,6 +480,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	} else {
 		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", is), is.AttachmentsError
 	}
+	d.WebPreview = runs.HasWebPreview(rc.ws.Mirror, "origin/"+base)
 	if run.Kind == policy.Plan {
 		// bottown reads the repository's settings from its default branch.
 		settings, err := runs.RepoSettingsAt(rc.ws.Mirror, "origin/"+base)

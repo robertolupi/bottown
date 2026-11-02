@@ -27,6 +27,12 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
     that should not block this pull request.
 - Run checks as plain commands; write scratch files under `$TMPDIR`.
+{{- if .WebPreview}}
+- To look at a web UI change, run `{{.Bottown}} web preview` in this
+  worktree, in the background: it builds `web/` and prints a localhost URL
+  that serves it with the fixture data in `web/fixtures` (`--fixture NAME`
+  picks a scenario). It needs no sign-in and touches no instance.
+{{- end}}
 
 ## Done means
 
