@@ -44,6 +44,34 @@ func TestPlanHandover(t *testing.T) {
 	}
 }
 
+// The owner's --message is in the handover, so the issue shows what the
+// agent was told beyond it.
+func TestMessageHandover(t *testing.T) {
+	rec := runs.Record{ID: "r-msg", Kind: policy.Verify, Actor: "codex", Family: "openai", SHA: "abc123", Message: "also read\nthe epic #123"}
+	got := handoverText(rec, runs.StatusSucceeded, 0, "approved")
+	if want := "Owner's note:" + quoteLines(rec.Message); !strings.Contains(got, want) {
+		t.Errorf("handover lacks %q:\n%s", want, got)
+	}
+	rec.Message = ""
+	if got := handoverText(rec, runs.StatusSucceeded, 0, "approved"); strings.Contains(got, "Owner's note") {
+		t.Errorf("handover without a message:\n%s", got)
+	}
+}
+
+// The commands that start implement, verify and plan runs take --message.
+func TestMessageFlags(t *testing.T) {
+	root := newRoot()
+	for _, path := range [][]string{{"run", "implement"}, {"run", "verify"}, {"run", "plan"}, {"milestone", "plan"}, {"flow"}} {
+		c, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("%v: %v", path, err)
+		}
+		if f := c.Flags().Lookup("message"); f == nil || f.Shorthand != "m" {
+			t.Errorf("%v lacks -m/--message", path)
+		}
+	}
+}
+
 // `run plan` and its alias `milestone plan` launch plan runs as an actor.
 func TestPlanCommands(t *testing.T) {
 	root := newRoot()

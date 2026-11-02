@@ -165,6 +165,29 @@ func TestDiscussPromptQuestion(t *testing.T) {
 	}
 }
 
+// --message puts the owner's note in implement, verify and plan prompts,
+// after the issue, and leaves the prompt as it was without one.
+func TestPromptMessage(t *testing.T) {
+	for _, kind := range []string{"implement", "verify", "plan"} {
+		d := PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 7, PR: 8, Title: "T", Body: "the body", SHA: "abc", Base: "main", Bottown: "/b", MilestonesDir: "docs/milestones"}
+		without, err := Prompt(kind, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Message = "also read the epic #123"
+		with, err := Prompt(kind, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(with, "the body\n\n## Note from the owner\n\n") || !strings.Contains(with, "\n\nalso read the epic #123\n") {
+			t.Errorf("%s prompt with a message:\n%s", kind, with)
+		}
+		if strings.Contains(without, "Note from the owner") {
+			t.Errorf("%s prompt without a message:\n%s", kind, without)
+		}
+	}
+}
+
 func TestKimiPrepareMCP(t *testing.T) {
 	dir, runsDir, home := t.TempDir(), t.TempDir(), t.TempDir()
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {

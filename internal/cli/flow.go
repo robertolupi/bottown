@@ -12,7 +12,7 @@ import (
 )
 
 func newFlow(g *globals) *cobra.Command {
-	var implement, verify, repo string
+	var implement, verify, repo, message string
 	var rounds int
 	var timeout time.Duration
 	cmd := &cobra.Command{
@@ -42,7 +42,7 @@ func newFlow(g *globals) *cobra.Command {
 				}
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
-				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo})
+				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message})
 				cmd.SetContext(previous)
 				if err != nil && strings.Contains(err.Error(), "live batch run") {
 					return fmt.Errorf("%w: %v", flow.ErrActorLimit, err)
@@ -64,6 +64,7 @@ func newFlow(g *globals) *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "maximum implement runs, including the first")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
+	cmd.Flags().StringVarP(&message, "message", "m", "", `a note added to the goal prompt of every run the flow starts, implement and verify, e.g. "also read the epic #123"`)
 	_ = cmd.MarkFlagRequired("implement")
 	_ = cmd.MarkFlagRequired("verify")
 	return cmd

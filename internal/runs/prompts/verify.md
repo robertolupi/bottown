@@ -5,7 +5,7 @@ You are **{{.Actor}}** ({{.Family}}), working as the **verifier** in bottown run
 Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
 {{.Author}}. Decide whether it should be merged.
 
-{{.Body}}{{template "attachments" .}}
+{{.Body}}{{template "attachments" .}}{{template "message" .}}
 {{if .AllowSameFamily}}
 > This is a same-family review (you and the author are both {{.Family}}),
 > allowed by the owner. Be especially skeptical of reasoning that feels

@@ -36,6 +36,7 @@ type PromptData struct {
 	Remote                     string // the bottown remote in the worktree
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 	Question                   string // discuss: the owner's question, if given to the command
+	Message                    string // implement, verify, plan: the owner's note, if given to the command
 	MilestonesDir              string // plan: where the repository keeps milestone plans
 	// The issue or PR whose attachments were fetched for the run, with
 	// their local paths, or why they could not be listed.
