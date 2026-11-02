@@ -91,6 +91,14 @@ type Harness interface {
 	Usage(log []byte) *secrets.Usage
 }
 
+// ModelLister is implemented by bindings whose CLI lists the models it
+// accepts as the SPEC of ACTOR:SPEC (bottown models).
+type ModelLister interface {
+	// ModelsCommand is the harness's own listing command, with args (a
+	// filter, say) passed on to it.
+	ModelsCommand(ctx context.Context, args []string) *exec.Cmd
+}
+
 // HarnessCmdEnv names a testing hook: when set, every run executes this
 // shell command instead of the actor's harness.
 const HarnessCmdEnv = "BOTTOWN_HARNESS_CMD"
@@ -100,6 +108,12 @@ func LookupHarness(name string) (Harness, error) {
 	if cmd := os.Getenv(HarnessCmdEnv); cmd != "" {
 		return scriptHarness{cmd: cmd}, nil
 	}
+	return Binding(name)
+}
+
+// Binding returns the binding for a harness name, ignoring the
+// HarnessCmdEnv testing hook (which stands in for runs, not listings).
+func Binding(name string) (Harness, error) {
 	switch name {
 	case "claude":
 		return claudeHarness{}, nil
@@ -385,6 +399,11 @@ func (agyHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "agy", args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
 	return cmd, nil
+}
+
+// ModelsCommand is agy models: the names --model takes.
+func (agyHarness) ModelsCommand(ctx context.Context, args []string) *exec.Cmd {
+	return exec.CommandContext(ctx, "agy", append([]string{"models"}, args...)...)
 }
 
 // Summary takes the response of agy's final stream-json event
@@ -958,6 +977,11 @@ func (crushHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, crushBinary(), args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
 	return cmd, nil
+}
+
+// ModelsCommand is crush models: the models of its configured providers.
+func (crushHarness) ModelsCommand(ctx context.Context, args []string) *exec.Cmd {
+	return exec.CommandContext(ctx, crushBinary(), append([]string{"models"}, args...)...)
 }
 
 // crushModel is crush's -m value for a spec: PROVIDER:MODEL becomes

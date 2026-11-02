@@ -75,7 +75,7 @@ func newRoot() *cobra.Command {
 		"instance name ($BOTTOWN_INSTANCE; otherwise inferred from the checkout's git config bottown.instance or remotes)")
 	root.AddCommand(
 		newUp(g), newDown(g), newStatus(g), newLogs(g), newImage(g),
-		newRepo(g), newCredential(g), newWeb(g), newRun(g), newFlow(g), newMCP(g), newActor(g), newHarness(), newClone(g), newGit(g),
+		newRepo(g), newCredential(g), newWeb(g), newRun(g), newFlow(g), newModels(g), newMCP(g), newActor(g), newHarness(), newClone(g), newGit(g),
 		newServe(), newAdmin(),
 		&cobra.Command{
 			Use:   "version",
