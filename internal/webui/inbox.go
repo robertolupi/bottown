@@ -37,6 +37,8 @@ type InboxItem struct {
 	Description string        `json:"description"`
 	Target      string        `json:"target"`
 	TargetURL   string        `json:"target_url"`
+	Issue       int64         `json:"issue,omitempty"`
+	IssueTitle  string        `json:"issue_title,omitempty"`
 	Action      *InboxAction  `json:"action,omitempty"`
 	Created     time.Time     `json:"created"`
 }
@@ -180,6 +182,21 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	issues, err := listAll[*sdk.Issue](ctx, s, issuesPath)
 	if err != nil {
 		return nil, fmt.Errorf("fetch open issues: %w", err)
+	}
+
+	issuesByIndex := make(map[int64]*sdk.Issue, len(issues))
+	for _, issue := range issues {
+		issuesByIndex[issue.Index] = issue
+	}
+	issueForPR := func(pr *sdk.PullRequest) (int64, string) {
+		if pr.Head == nil {
+			return 0, ""
+		}
+		issueNum := parseIssueRef(pr.Head.Ref)
+		if issue := issuesByIndex[issueNum]; issue != nil {
+			return issueNum, issue.Title
+		}
+		return issueNum, ""
 	}
 
 	var items []InboxItem
@@ -549,6 +566,26 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			TargetURL:   issueURL,
 			Created:     issue.Created,
 		})
+	}
+
+	prByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	for _, pr := range prs {
+		prByIndex[pr.Index] = pr
+	}
+	for i := range items {
+		var targetNum int64
+		if _, err := fmt.Sscanf(items[i].Target, "#%d", &targetNum); err == nil {
+			items[i].Issue = targetNum
+			if issue := issuesByIndex[targetNum]; issue != nil {
+				items[i].IssueTitle = issue.Title
+			}
+			continue
+		}
+		if _, err := fmt.Sscanf(items[i].Target, "!%d", &targetNum); err == nil {
+			if pr := prByIndex[targetNum]; pr != nil {
+				items[i].Issue, items[i].IssueTitle = issueForPR(pr)
+			}
+		}
 	}
 
 	// Sort newest first

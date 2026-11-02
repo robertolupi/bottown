@@ -100,6 +100,8 @@ export interface InboxItem {
   description: string;
   target: string;
   target_url: string;
+  issue?: number;
+  issue_title?: string;
   action?: InboxAction;
   created: string;
 }

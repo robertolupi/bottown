@@ -143,6 +143,7 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 		Created:   &now,
 	}
 	fix.prs = []*sdk.PullRequest{pr}
+	fix.issues = []*sdk.Issue{{Index: 10, Title: "Feature X issue", State: sdk.StateOpen}}
 	fix.reviews[10] = []*sdk.PullReview{
 		{
 			ID:        1,
@@ -178,6 +179,9 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Kind != InboxReadyToMerge || items[0].Target != "!10" {
 		t.Fatalf("expected 1 ready_to_merge item for !10, got: %+v", items)
+	}
+	if items[0].Issue != 10 || items[0].IssueTitle != "Feature X issue" {
+		t.Fatalf("ready_to_merge issue metadata = #%d %q, got: %+v", items[0].Issue, items[0].IssueTitle, items[0])
 	}
 
 	// 2. Go-away condition 1: PR merged
@@ -765,6 +769,9 @@ func TestInbox_ActorFiledIssue(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Kind != InboxActorFiledIssue || items[0].Target != "#60" {
 		t.Fatalf("expected actor_filed_issue for #60, got: %+v", items)
+	}
+	if items[0].Issue != 60 || items[0].IssueTitle != "Found a bug in X" {
+		t.Fatalf("actor-filed issue metadata = #%d %q, got: %+v", items[0].Issue, items[0].IssueTitle, items[0])
 	}
 
 	// 2. Go-away condition 1: Milestone assigned
