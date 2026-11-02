@@ -148,6 +148,58 @@ func TestFlowFollowUpAndOutOfRounds(t *testing.T) {
 	}
 }
 
+type delayedReviewSettlementAPI struct {
+	*fakeAPI
+	reads int
+}
+
+func (f *delayedReviewSettlementAPI) PR(ctx context.Context, repo string, number int64) (server.PROut, error) {
+	if f.pr.HeadSHA == "h2" {
+		f.reads++
+		if f.reads == 3 {
+			for i := range f.pr.Reviews {
+				f.pr.Reviews[i].Stale = f.pr.Reviews[i].CommitID != f.pr.HeadSHA
+			}
+		}
+	}
+	return f.fakeAPI.PR(ctx, repo, number)
+}
+
+func TestFlowWaitsForPushBeforeVerify(t *testing.T) {
+	base := &fakeAPI{}
+	api := &delayedReviewSettlementAPI{fakeAPI: base}
+	implements, verifies := 0, 0
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if req.Kind == policy.Implement {
+			implements++
+			reviews := base.pr.Reviews
+			base.open, base.pr = true, openPR()
+			base.pr.HeadSHA = []string{"", "h1", "h2"}[implements]
+			base.pr.Reviews = reviews
+			return nil
+		}
+		verifies++
+		for _, r := range base.pr.Reviews {
+			if r.CommitID != base.pr.HeadSHA && !r.Stale {
+				t.Errorf("verify started before Forgejo settled the push: %+v", r)
+			}
+		}
+		for i := range base.pr.Reviews {
+			base.pr.Reviews[i].Official = false
+		}
+		if verifies == 2 {
+			approve(base)
+			return nil
+		}
+		base.pr.Reviews = append(base.pr.Reviews, server.ReviewOut{ID: 1, Reviewer: "agy", Official: true, State: "REQUEST_CHANGES", CommitID: base.pr.HeadSHA})
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge || implements != 2 || verifies != 2 {
+		t.Fatalf("result = %+v, error = %v, calls = %d/%d", result, err, implements, verifies)
+	}
+}
+
 func TestFlowResumeStartsAtVerify(t *testing.T) {
 	api := &fakeAPI{open: true, pr: openPR()}
 	var calls []string
