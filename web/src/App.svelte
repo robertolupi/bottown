@@ -10,6 +10,7 @@
   } from './types';
   import { lifecycleChange } from './lifecycle';
   import IssueReference from './IssueReference.svelte';
+  import LiveLogTail from './LiveLogTail.svelte';
   import {
     buildFlowActionPayload,
     buildFlowConstituentRuns,
@@ -834,20 +835,7 @@
                         </div>
 
                         {#if !run.interactive}
-                          <div class="log-tail-box">
-                            <div class="log-tail-header">
-                              <span>Live Tail (.bottown/runs/{run.id}.log)</span>
-                            </div>
-                            <div class="log-tail-content">
-                              {#if !run.log_tail || run.log_tail.length === 0}
-                                <div class="log-line muted">Waiting for agent activity...</div>
-                              {:else}
-                                {#each run.log_tail as line}
-                                  <div class="log-line">{line}</div>
-                                {/each}
-                              {/if}
-                            </div>
-                          </div>
+                          <LiveLogTail runId={run.id} lines={run.log_tail} />
                         {/if}
                         {@render denialList(run.denials)}
                       </div>
@@ -893,20 +881,7 @@
                   </div>
 
                   {#if !run.interactive}
-                    <div class="log-tail-box">
-                      <div class="log-tail-header">
-                        <span>Live Tail (.bottown/runs/{run.id}.log)</span>
-                      </div>
-                      <div class="log-tail-content">
-                        {#if !run.log_tail || run.log_tail.length === 0}
-                          <div class="log-line muted">Waiting for agent activity...</div>
-                        {:else}
-                          {#each run.log_tail as line}
-                            <div class="log-line">{line}</div>
-                          {/each}
-                        {/if}
-                      </div>
-                    </div>
+                    <LiveLogTail runId={run.id} lines={run.log_tail} />
                   {/if}
                   {@render denialList(run.denials)}
                 </div>
@@ -2606,8 +2581,8 @@
   }
 
   .history-table-container {
-    max-height: 440px;
-    max-block-size: 440px;
+    max-height: 1320px;
+    max-block-size: 1320px;
     overflow: auto;
   }
 

@@ -1126,7 +1126,7 @@ func TestHistoryTableScrollStyles(t *testing.T) {
 		t.Fatalf("read App.svelte: %v", err)
 	}
 	src := string(data)
-	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: 440px", "max-block-size: 440px", "overflow: auto", "position: sticky"} {
+	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: 1320px", "max-block-size: 1320px", "overflow: auto", "position: sticky"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("expected App.svelte to contain %q", want)
 		}
