@@ -367,7 +367,13 @@ func (s *PreviewServer) handlePreviewInfo(w http.ResponseWriter, _ *http.Request
 	s.mu.Lock()
 	name := s.name
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"fixture": name, "fixtures": orEmpty(FixtureNames(s.cfg.FixturesDir))})
+	// pid identifies the server answering here, so a state file naming a
+	// pid can tell whether that pid is still this preview.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fixture":  name,
+		"fixtures": orEmpty(FixtureNames(s.cfg.FixturesDir)),
+		"pid":      os.Getpid(),
+	})
 }
 
 // handlePreviewLoad reloads a fixture from disk, the current one when the

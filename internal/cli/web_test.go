@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,6 +96,12 @@ func TestWebPreview(t *testing.T) {
 	_, _, done := runPreviewCmd(context.Background(), "--fixture", "nope")
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "have: default") {
 		t.Errorf("missing fixture: %v", err)
+	}
+	// So does --detach, before it starts a child that would only find it
+	// after the build, from the log.
+	_, _, done = runPreviewCmd(context.Background(), "--detach", "--fixture", "nope")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "have: default") {
+		t.Errorf("missing fixture with --detach: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,8 +217,20 @@ func TestWebPreviewDetachedChild(t *testing.T) {
 	}
 }
 
-// TestStopPreview ends the process named by the state file, and removes it.
-func TestStopPreview(t *testing.T) {
+// fakePreviewServer answers the preview's /api/preview with pid, standing
+// in for a running preview without a real one.
+func fakePreviewServer(t *testing.T, pid int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"fixture": "default", "fixtures": ["default"], "pid": %d}`, pid)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestStopPreviewStopsPreview stops the process the state file names when
+// it is still the preview serving there.
+func TestStopPreviewStopsPreview(t *testing.T) {
 	sleeper := exec.Command("sleep", "30")
 	if err := sleeper.Start(); err != nil {
 		t.Skipf("cannot start a sleeper: %v", err)
@@ -222,7 +242,9 @@ func TestStopPreview(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state.json")
 	logPath := state + ".log"
 	writeFile(t, logPath, "log\n")
-	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1234", Log: logPath}); err != nil {
+	st := previewState{PID: sleeper.Process.Pid, Log: logPath}
+	st.URL = fakePreviewServer(t, sleeper.Process.Pid)
+	if err := savePreviewState(state, st); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,6 +273,66 @@ func TestStopPreview(t *testing.T) {
 	}
 }
 
+// TestStopPreviewLeavesReusedPID stops nothing when the pid a stale state
+// file names is now an unrelated process, not the preview.
+func TestStopPreviewLeavesReusedPID(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	go func() { _ = sleeper.Wait() }()
+	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+
+	state := filepath.Join(t.TempDir(), "state.json")
+	st := previewState{PID: sleeper.Process.Pid}
+	// The URL serves a preview that reports a different pid.
+	st.URL = fakePreviewServer(t, sleeper.Process.Pid+1)
+	if err := savePreviewState(state, st); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &lockedBuffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(out)
+	if err := stopPreview(cmd, state); err != nil {
+		t.Fatal(err)
+	}
+	if !processAlive(sleeper.Process.Pid) {
+		t.Errorf("process %d was signalled", sleeper.Process.Pid)
+	}
+	if !strings.Contains(out.String(), "was not running") {
+		t.Errorf("output: %q", out.String())
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state file left behind: %v", err)
+	}
+}
+
+// TestStopPreviewLeavesUnrelatedPID stops nothing when the state file's
+// URL answers nothing: the pid is not a preview.
+func TestStopPreviewLeavesUnrelatedPID(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	go func() { _ = sleeper.Wait() }()
+	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+
+	state := filepath.Join(t.TempDir(), "state.json")
+	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1"}); err != nil {
+		t.Fatal(err)
+	}
+	out := &lockedBuffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(out)
+	if err := stopPreview(cmd, state); err != nil {
+		t.Fatal(err)
+	}
+	if !processAlive(sleeper.Process.Pid) {
+		t.Errorf("process %d was signalled", sleeper.Process.Pid)
+	}
+}
+
 // TestDetachPreviewRefusesWhenRunning leaves a live preview in place alone.
 func TestDetachPreviewRefusesWhenRunning(t *testing.T) {
 	sleeper := exec.Command("sleep", "30")
@@ -260,7 +342,8 @@ func TestDetachPreviewRefusesWhenRunning(t *testing.T) {
 	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
 
 	state := filepath.Join(t.TempDir(), "state.json")
-	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1234"}); err != nil {
+	st := previewState{PID: sleeper.Process.Pid, URL: fakePreviewServer(t, sleeper.Process.Pid)}
+	if err := savePreviewState(state, st); err != nil {
 		t.Fatal(err)
 	}
 	cmd := &cobra.Command{}
@@ -269,6 +352,84 @@ func TestDetachPreviewRefusesWhenRunning(t *testing.T) {
 	err := detachPreview(cmd, t.TempDir(), state, previewSettings{})
 	if err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Errorf("detach with a live preview: %v", err)
+	}
+}
+
+// TestPreviewAlive checks that a state file counts as running only while
+// its pid still serves its URL, so a stale or reused pid is not the preview.
+func TestPreviewAlive(t *testing.T) {
+	if previewAlive(previewState{PID: 0, URL: "http://127.0.0.1:1"}) {
+		t.Errorf("pid 0 reported alive")
+	}
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	go func() { _ = sleeper.Wait() }()
+	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+
+	if previewAlive(previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1"}) {
+		t.Errorf("a process with no preview at its URL reported alive")
+	}
+	if !previewAlive(previewState{PID: sleeper.Process.Pid, URL: fakePreviewServer(t, sleeper.Process.Pid)}) {
+		t.Errorf("a live preview reported not alive")
+	}
+	if previewAlive(previewState{PID: sleeper.Process.Pid, URL: fakePreviewServer(t, sleeper.Process.Pid+1)}) {
+		t.Errorf("a reused pid reported alive")
+	}
+}
+
+// TestLockPreviewExcludes checks that a second lock fails while the first
+// is held, which is what keeps two detaches from both starting.
+func TestLockPreviewExcludes(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	unlock, err := lockPreview(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockPreview(state); err == nil {
+		t.Errorf("second lock succeeded")
+	}
+	unlock()
+	unlock2, err := lockPreview(state)
+	if err != nil {
+		t.Fatalf("lock after release: %v", err)
+	}
+	unlock2()
+}
+
+// TestStopRunPreviews stops previews recorded in a run's scratch directory.
+func TestStopRunPreviews(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	go func() { _ = sleeper.Wait() }()
+	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "bottown-preview-abc.json")
+	st := previewState{PID: sleeper.Process.Pid, URL: fakePreviewServer(t, sleeper.Process.Pid)}
+	if err := savePreviewState(state, st); err != nil {
+		t.Fatal(err)
+	}
+	// A state file for another run's checkout is not in this directory and
+	// is left alone.
+	other := filepath.Join(t.TempDir(), "bottown-preview-xyz.json")
+	if err := savePreviewState(other, previewState{PID: sleeper.Process.Pid, URL: st.URL}); err != nil {
+		t.Fatal(err)
+	}
+
+	warn := &lockedBuffer{}
+	stopRunPreviews(warn, dir)
+	if processAlive(sleeper.Process.Pid) {
+		t.Errorf("preview %d still alive; warnings:\n%s", sleeper.Process.Pid, warn.String())
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state file left behind: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("other run's state file removed: %v", err)
 	}
 }
 
