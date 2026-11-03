@@ -14,7 +14,7 @@ func TestPlanPrompt(t *testing.T) {
 	p, err := Prompt("plan", PromptData{
 		RunID: "r-1", Actor: "claude", Family: "anthropic", Repo: "o/r", Issue: 7,
 		Title: "Kickoff", Body: "Plan the thing.", Branch: "issue/7", Base: "main",
-		Bottown: "/b", Remote: "origin", SelfEnd: true, MilestonesDir: "plans",
+		Bottown: "/b", Remote: "bottown", SelfEnd: true, MilestonesDir: "plans",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestPlanPrompt(t *testing.T) {
 		"**planner**", "kickoff issue #7 in `o/r`", "**Kickoff**", "Plan the thing.",
 		"`plans/<slug>.md`", "creates\nno issues", "/b issue show", "/b milestone check <slug>",
 		"repository's checks", "AGENTS.md (or README)", "Commit only the plan file on `issue/7`",
-		"git push origin HEAD", "pull request into `main`", "/b pr create", "kickoff = 7",
+		"git push bottown HEAD", "pull request into `main`", "/b pr create", "kickoff = 7",
 		"/b run end --summary-file -",
 	} {
 		if !strings.Contains(p, want) {

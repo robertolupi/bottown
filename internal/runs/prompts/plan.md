@@ -69,6 +69,7 @@ model family approves it and the owner merges it, the owner's
 
 - Your working directory is a git worktree on branch `{{.Branch}}`.
   Commits you make are attributed to you ({{.Actor}}).
+- `{{.Remote}}` is the bottown forge.
   You cannot push to `{{.Base}}`; it is protected.
 - Use the bottown CLI, `{{.Bottown}}`, for the forge. It acts as you, within
   this run's limits:

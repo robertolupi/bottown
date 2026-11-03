@@ -19,6 +19,7 @@ implement it.
   of `{{.Base}}` when this run started. Read the code and run commands to
   understand it, but do not change it: this run cannot push, open pull
   requests or review.
+- `{{.Remote}}` is the bottown forge.
 - Use the bottown CLI, `{{.Bottown}}`, for the forge:
   - `{{.Bottown}} issue show` prints the issue and its discussion so far.
   - `{{.Bottown}} comment --body-file -` comments on it.

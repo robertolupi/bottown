@@ -153,7 +153,7 @@ func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
 		return nil, err
 	}
 	auth := []string{"-c", "credential.helper=", "-c", fmt.Sprintf("credential.helper=!%q -i %s credential", self, inst.Name)}
-	ws, err := runs.Open(top, inst.ServerURL()+"/git/"+full+".git", auth)
+	ws, err := runs.Open(top, inst.Remote(), inst.ServerURL()+"/git/"+full+".git", auth)
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +502,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: selfPath(), Remote: "origin", Question: rec.Question, Message: rec.Message, AttachmentsOf: n,
+		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message, AttachmentsOf: n,
 	}
 	// Attachments never stop a run: a failure is in the prompt instead.
 	var is server.IssueOut
@@ -511,13 +511,13 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	} else {
 		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", is), is.AttachmentsError
 	}
-	d.WebPreview = runs.HasWebPreview(rc.ws.Mirror, "origin/"+base)
+	d.WebPreview = runs.HasWebPreview(rc.ws.Mirror, rc.ws.Remote+"/"+base)
 	if run.Kind == policy.Verify {
 		d.Reviewed = rk.prReviewed(run.PR)
 	}
 	if run.Kind == policy.Plan {
 		// bottown reads the repository's settings from its default branch.
-		settings, err := runs.RepoSettingsAt(rc.ws.Mirror, "origin/"+base)
+		settings, err := runs.RepoSettingsAt(rc.ws.Mirror, rc.ws.Remote+"/"+base)
 		if err != nil {
 			return "", "", err
 		}

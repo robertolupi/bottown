@@ -577,7 +577,7 @@ one rule on the server (`POST /v1/runs` and `opPRCreate`):
      (`"main"`).
 - `secrets.Run` and `runs.Record` store `Base string` (`json:"base,omitempty"`):
   - `ws.AddImplement(run.ID, run.Branch, run.Base)` creates `issue/<C>` from
-    `origin/<run.Base>` when `origin/issue/<C>` does not yet exist.
+    the forge remote's `<run.Base>` when `issue/<C>` does not yet exist there.
   - The implement prompt renders `run.Base` as the base branch to merge from
     and open PRs against.
   - `opPRCreate` sets `Base: run.Base` on the created pull request.
@@ -701,8 +701,8 @@ into `milestone/<E>` first, `!<P2>` may no longer merge cleanly into
   `REQUEST_CHANGES` review and each conflict-resolution implement run counts as
   one round):
   1. Starts an `implement` run on `#<C2>` (whose prompt tells the implementer
-     to merge `origin/milestone/<E>` into `issue/<C2>`, resolve conflicts, run
-     checks, and push).
+     to merge the forge remote's `milestone/<E>` into `issue/<C2>`, resolve
+     conflicts, run checks, and push).
   2. Starts a fresh cross-family `verify` run at the new head SHA.
   3. If approved and mergeable, auto-merges `!<P2>` into `milestone/<E>`.
 - If no rounds remain, `#<C2>` stops with `out of rounds (conflicts with milestone/<E>)`.

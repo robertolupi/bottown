@@ -138,21 +138,23 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 			return err
 		}
 		if kind == policy.Implement || kind == policy.Plan {
-			start := a.Remote + "/" + run.Branch
+			upstream := run.Branch
+			start := a.Remote + "/" + upstream
 			if _, err := git(a.Worktree, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
 				top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
 				base, err := remoteDefaultBranch(top, a.Remote)
 				if err != nil {
 					return err
 				}
-				start = a.Remote + "/" + base
+				upstream = base
+				start = a.Remote + "/" + upstream
 			}
 			if _, err := git(a.Worktree, "checkout", "-q", "-B", run.Branch, start); err != nil {
 				return err
 			}
 			for _, kv := range [][2]string{
 				{"branch." + run.Branch + ".remote", a.Remote},
-				{"branch." + run.Branch + ".merge", "refs/heads/" + run.Branch},
+				{"branch." + run.Branch + ".merge", "refs/heads/" + upstream},
 			} {
 				if _, err := git(a.Worktree, "config", kv[0], kv[1]); err != nil {
 					return err

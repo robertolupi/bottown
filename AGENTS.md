@@ -31,9 +31,9 @@ bootstrap design, including Forgejo quirks we found, in
 
 - **`main` is the owner's.** Actors work only in their own worktree, and
   never edit `main` or another actor's worktree.
-- **The `bottown` remote is the prod forge.** `main` is protected: only the
-  owner pushes or merges there. Actors push their `issue/<n>` branch during
-  a run.
+- **The `bottown` remote is the prod forge** in both permanent actor
+  worktrees and ephemeral run worktrees. `main` is protected: only the owner
+  pushes or merges there. Actors push their `issue/<n>` branch during a run.
 - **`origin`, if present, is the external upstream.** Pushes to it are
   blocked in actor worktrees.
 

@@ -50,7 +50,11 @@ func resolveAgent() (*agentCtx, error) {
 		if rec.Key == "" {
 			return nil, fmt.Errorf("run %s has ended", rec.ID)
 		}
-		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: "origin", AttachDir: rec.Attachments}, nil
+		inst := rec.Instance
+		if inst == "" {
+			inst = config.DefaultInstance
+		}
+		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: config.Instance{Name: inst}.Remote(), AttachDir: rec.Attachments}, nil
 	}
 	top, err := git(".", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -171,7 +175,7 @@ func newWhoami() *cobra.Command {
 				head = worktreeHead(cmd.Context(), a.Worktree, a.Remote)
 			}
 			if asJSON {
-				m := map[string]any{"actor": who.Actor, "instance": who.Instance, "run": who.RunRaw, "worktree": a.Worktree}
+				m := map[string]any{"actor": who.Actor, "instance": who.Instance, "remote": a.Remote, "run": who.RunRaw, "worktree": a.Worktree}
 				if last != nil {
 					m["last_run"] = map[string]any{"id": last.ID, "kind": last.Kind, "repo": last.Repo, "issue": last.Issue, "pr": last.PR, "status": last.Status, "ended": last.Ended}
 				}
@@ -188,7 +192,7 @@ func newWhoami() *cobra.Command {
 					run = &wr
 				}
 			}
-			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, run, last, head)
+			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, a.Remote, run, last, head)
 			return nil
 		},
 	}
@@ -201,9 +205,10 @@ type whoamiRun struct {
 	Issue, PR                   int64
 }
 
-func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance string, run *whoamiRun, last *runs.Record, head *headInfo) {
+func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance, remote string, run *whoamiRun, last *runs.Record, head *headInfo) {
 	st := newStyles(r)
 	fmt.Fprintf(out, "actor %s on instance %s\n", st.Info.Bold(true).Render(actor), st.Bold.Render(instance))
+	fmt.Fprintf(out, "forge remote %s\n", st.Bold.Render(remote))
 	if run != nil {
 		target := fmt.Sprintf("issue #%d", run.Issue)
 		if run.PR > 0 {
