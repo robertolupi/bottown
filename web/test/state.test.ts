@@ -14,6 +14,7 @@ import {
   computePreservedScrollTop,
   detectTrimmedLineCount,
   filterHistoryRuns,
+  filterInboxItems,
   filterHistoryThreads,
   formatThreadMainLine,
   groupHistoryThreads,
@@ -244,6 +245,18 @@ test('actorModelPlaceholder shows the host default model or the harness default'
   assert.equal(actorModelPlaceholder(withModels, 'agy'), 'default: gemini-3.8-flash');
   assert.equal(actorModelPlaceholder(withModels, 'claude'), 'harness default');
   assert.equal(actorModelPlaceholder(undefined, 'agy'), 'harness default');
+});
+
+test('filterInboxItems hides actor-filed issues unless requested', () => {
+  const items = [
+    { id: 'ready', kind: 'ready_to_merge' },
+    { id: 'filed', kind: 'actor_filed_issue' },
+    { id: 'discuss', kind: 'discuss_answer' },
+  ] as any[];
+
+  assert.deepEqual(filterInboxItems(items, false).map((item) => item.id), ['ready', 'discuss']);
+  assert.deepEqual(filterInboxItems(items, true).map((item) => item.id), ['ready', 'filed', 'discuss']);
+  assert.deepEqual(filterInboxItems(undefined, false), []);
 });
 
 test('resolveInboxAction and parseIssueNumber route inbox and timeline actions', () => {

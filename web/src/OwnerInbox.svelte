@@ -3,7 +3,7 @@
   // each item with a link and, for some, an action (gc, stop) that opens
   // its confirmation dialog.
   import type { InboxItem } from './types';
-  import { resolveInboxAction } from './state';
+  import { filterInboxItems, resolveInboxAction } from './state';
   import IssueReference from './IssueReference.svelte';
   import TargetLink from './TargetLink.svelte';
 
@@ -15,6 +15,8 @@
   }
 
   let { inbox, inboxError, onGC, onStop }: Props = $props();
+  let showActorFiled = $state(false);
+  let visibleInbox = $derived(filterInboxItems(inbox, showActorFiled));
 </script>
 
 <section class="card full-width">
@@ -23,11 +25,17 @@
       <h2>Owner Inbox</h2>
       {#if inboxError}
         <span class="badge badge-error">Error</span>
-      {:else if inbox && inbox.length > 0}
-        <span class="badge badge-warning">{inbox.length} item{inbox.length > 1 ? 's' : ''}</span>
+      {:else if visibleInbox.length > 0}
+        <span class="badge badge-warning">{visibleInbox.length} item{visibleInbox.length > 1 ? 's' : ''}</span>
       {:else}
         <span class="badge badge-success">Inbox zero</span>
       {/if}
+    </div>
+    <div class="card-header-right">
+      <label class="muted">
+        <input type="checkbox" bind:checked={showActorFiled} />
+        Show actor-filed issues
+      </label>
     </div>
   </div>
 
@@ -36,14 +44,14 @@
       <div class="banner banner-error">
         <span>Failed to load inbox: {inboxError}</span>
       </div>
-    {:else if !inbox || inbox.length === 0}
+    {:else if visibleInbox.length === 0}
       <div class="inbox-zero">
         <span class="inbox-zero-icon">✓</span>
         <span>Nothing waiting on the owner in this repository.</span>
       </div>
     {:else}
       <div class="inbox-list">
-        {#each inbox as item (item.id)}
+        {#each visibleInbox as item (item.id)}
           <div class="inbox-item">
             <div class="inbox-badge-col">
               {#if item.kind === 'ready_to_merge'}

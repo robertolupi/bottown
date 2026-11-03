@@ -316,6 +316,10 @@ be recomputed.
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
 
+Actor-filed issues are hidden by default. The **Show actor-filed issues**
+checkbox reveals them; the inbox count and inbox-zero state follow the
+current filter.
+
 Each row links to the issue or PR in Forgejo (merging happens there) and
 offers the matching bottown action (§5): re-run the flow, end or clean up
 the run. Issue-backed rows show the full issue title next to the reference.
