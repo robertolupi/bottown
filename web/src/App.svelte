@@ -57,8 +57,8 @@
   let gcIncludeFailed = $state<boolean>(false);
 
   // The flow and run forms' values, kept between openings
-  let flowForm = $state<FlowForm>({ issue: '', implement: '', verify: '', rounds: 3, timeout: '60m' });
-  let runForm = $state<RunForm>({ kind: 'implement', target: '', actor: '', question: '', allowSameFamily: false });
+  let flowForm = $state<FlowForm>({ issue: '', implement: '', implementModel: '', verify: '', verifyModel: '', rounds: 3, timeout: '60m' });
+  let runForm = $state<RunForm>({ kind: 'implement', target: '', actor: '', model: '', question: '', allowSameFamily: false });
 
   // Timer & Polling
   let nowTime = $state<number>(Date.now());

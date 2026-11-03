@@ -110,6 +110,8 @@ export interface ActorDetail {
   name: string;
   family: string;
   harness: string;
+  // The host's default model spec ([actor_models]), when it names one.
+  model?: string;
 }
 
 export interface FlowInfo {

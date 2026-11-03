@@ -4,7 +4,9 @@ import type { ActionResult } from './types';
 export interface FlowForm {
   issue: number | string;
   implement: string;
+  implementModel: string;
   verify: string;
+  verifyModel: string;
   rounds: number;
   timeout: string;
 }
@@ -14,6 +16,7 @@ export interface RunForm {
   kind: 'implement' | 'verify' | 'discuss';
   target: number | string;
   actor: string;
+  model: string;
   question: string;
   allowSameFamily: boolean;
 }

@@ -171,6 +171,20 @@ export function nextPollDelayMs(
   return hasActive ? 2500 : 10000;
 }
 
+// actorSpec joins an actor and an optional model as ACTOR[:SPEC]; an empty
+// model leaves the host's default ([actor_models]) to the CLI.
+export function actorSpec(actor: string, model: string | undefined): string {
+  const m = (model ?? '').trim();
+  return m ? `${actor}:${m}` : actor;
+}
+
+// actorModelPlaceholder is a model field's hint: the host's default for the
+// actor, or the harness's own when the host names none.
+export function actorModelPlaceholder(actors: ActorDetail[] | undefined | null, name: string): string {
+  const model = actors?.find((a) => a.name === name)?.model;
+  return model ? `default: ${model}` : 'harness default';
+}
+
 export interface FlowActionPayload {
   issue: number;
   implement: string;
@@ -182,14 +196,16 @@ export interface FlowActionPayload {
 export function buildFlowActionPayload(input: {
   issue: number | string;
   implement: string;
+  implementModel?: string;
   verify: string;
+  verifyModel?: string;
   rounds: number | string;
   timeout: string;
 }): FlowActionPayload {
   return {
     issue: Number(input.issue),
-    implement: input.implement,
-    verify: input.verify,
+    implement: actorSpec(input.implement, input.implementModel),
+    verify: actorSpec(input.verify, input.verifyModel),
     rounds: Number(input.rounds) || 3,
     timeout: input.timeout || '60m',
   };
@@ -207,13 +223,14 @@ export function buildRunActionPayload(input: {
   kind: 'implement' | 'verify' | 'discuss';
   target: number | string;
   actor: string;
+  model?: string;
   question: string;
   allowSameFamily: boolean;
 }): RunActionPayload {
   return {
     kind: input.kind,
     target: Number(input.target),
-    actor: input.actor,
+    actor: actorSpec(input.actor, input.model),
     question: input.kind === 'discuss' ? input.question : undefined,
     allow_same_family: input.kind === 'verify' ? input.allowSameFamily : undefined,
   };

@@ -4,6 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   aggregateThreadUsage,
+  actorModelPlaceholder,
+  actorSpec,
   buildFlowActionPayload,
   buildFlowConstituentRuns,
   buildFlowTimeline,
@@ -188,6 +190,60 @@ test('buildFlowActionPayload and buildRunActionPayload normalize action requests
       allow_same_family: undefined,
     },
   );
+});
+
+test('action payloads send a chosen model as ACTOR:SPEC and leave a blank one to the host', () => {
+  assert.deepEqual(
+    buildFlowActionPayload({
+      issue: 15,
+      implement: 'claude',
+      implementModel: ' opus ',
+      verify: 'crush',
+      verifyModel: 'openrouter:~deepseek/latest',
+      rounds: 2,
+      timeout: '30m',
+    }),
+    {
+      issue: 15,
+      implement: 'claude:opus',
+      verify: 'crush:openrouter:~deepseek/latest',
+      rounds: 2,
+      timeout: '30m',
+    },
+  );
+  assert.equal(
+    buildRunActionPayload({
+      kind: 'implement',
+      target: 15,
+      actor: 'agy',
+      model: '   ',
+      question: '',
+      allowSameFamily: false,
+    }).actor,
+    'agy',
+  );
+  assert.equal(
+    buildRunActionPayload({
+      kind: 'verify',
+      target: 16,
+      actor: 'agy',
+      model: 'gemini-3.8-flash',
+      question: '',
+      allowSameFamily: false,
+    }).actor,
+    'agy:gemini-3.8-flash',
+  );
+  assert.equal(actorSpec('kimi', undefined), 'kimi');
+});
+
+test('actorModelPlaceholder shows the host default model or the harness default', () => {
+  const withModels = [
+    { name: 'agy', family: 'google', harness: 'agy', model: 'gemini-3.8-flash' },
+    { name: 'claude', family: 'anthropic', harness: 'claude' },
+  ];
+  assert.equal(actorModelPlaceholder(withModels, 'agy'), 'default: gemini-3.8-flash');
+  assert.equal(actorModelPlaceholder(withModels, 'claude'), 'harness default');
+  assert.equal(actorModelPlaceholder(undefined, 'agy'), 'harness default');
 });
 
 test('resolveInboxAction and parseIssueNumber route inbox and timeline actions', () => {

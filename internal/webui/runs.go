@@ -26,6 +26,9 @@ type ActorDetail struct {
 	Name    string `json:"name"`
 	Family  string `json:"family"`
 	Harness string `json:"harness"`
+	// Model is the host's default spec for the actor ([actor_models]),
+	// which a run started without one gets.
+	Model string `json:"model,omitempty"`
 }
 
 // LiveRunInfo represents an active run.

@@ -336,14 +336,23 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	res.ActiveFlows = s.ComputeActiveFlows(ctx, res.LiveRuns)
 
 	// 6. Actors
-	var actors []ActorDetail
-	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actors); err == nil && actors != nil {
-		res.Actors = actors
-	} else {
-		res.Actors = []ActorDetail{}
-	}
+	res.Actors = s.fetchActors(ctx)
 
 	return res, nil
+}
+
+// fetchActors lists the instance's actors, each with the host's default
+// model ([actor_models]) for the run and flow forms; it is empty when the
+// server cannot be reached.
+func (s *Server) fetchActors(ctx context.Context) []ActorDetail {
+	var actors []ActorDetail
+	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actors); err != nil || actors == nil {
+		return []ActorDetail{}
+	}
+	for i := range actors {
+		actors[i].Model = s.cfg.Instance.ActorModel(actors[i].Name)
+	}
+	return actors
 }
 
 func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {

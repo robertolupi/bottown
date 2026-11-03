@@ -124,7 +124,8 @@
       {
         "name": "agy",
         "family": "google",
-        "harness": "agy"
+        "harness": "agy",
+        "model": "gemini-3.8-flash"
       },
       {
         "name": "crush",
