@@ -221,9 +221,12 @@ func RunEnv(l Launch) []string {
 }
 
 // defaultAllowed are the tools a batch claude run may use without asking:
-// bottown's MCP tools, file tools, and common build/test/git commands.
+// bottown's MCP tools, file tools, and common build/test/git commands. The
+// worktree's own build (`make build` writes bin/bottown) is allowed too, so a
+// run can try what it changed, such as `./bin/bottown web preview --detach`;
+// it grants nothing `go run ./cmd/bottown` does not.
 var defaultAllowed = []string{
-	"mcp__bottown", "Bash(bottown:*)", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite",
+	"mcp__bottown", "Bash(bottown:*)", "Bash(./bin/bottown:*)", "Bash(bin/bottown:*)", "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite",
 	"Bash(git:*)", "Bash(go:*)", "Bash(gofmt:*)", "Bash(make:*)",
 	"Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(cargo:*)", "Bash(python3:*)",
 	"Bash(ls:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(rg:*)", "Bash(find:*)",
