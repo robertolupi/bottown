@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -406,6 +408,7 @@ func TestKimiSummary(t *testing.T) {
 // which hold only local setup, removed).
 func TestHarnessDigests(t *testing.T) {
 	i64 := func(n int64) *int64 { return &n }
+	f64 := func(f float64) *float64 { return &f }
 	cost := 0.0491618
 	for _, tc := range []struct {
 		h       Harness
@@ -435,6 +438,8 @@ func TestHarnessDigests(t *testing.T) {
 			Turns: i64(1),
 		}},
 		{crushHarness{}, "crush-0.99.0.log", "hello", nil},
+		// Only the cost: crush's token counts are not the run's totals.
+		{crushHarness{}, "crush-0.99.0-session.log", "APPROVED !153 at `fbd7043`. Checks pass.", &secrets.Usage{CostUSD: f64(0.0421)}},
 	} {
 		log, err := os.ReadFile(filepath.Join("testdata", tc.file))
 		if err != nil {
@@ -623,6 +628,80 @@ func TestCrushCommand(t *testing.T) {
 func TestCrushSummary(t *testing.T) {
 	if got := (crushHarness{}).Summary([]byte("All checks passed.\n")); got != "All checks passed." {
 		t.Fatalf("summary = %q", got)
+	}
+	// Stopped before crush printed its final message: the transcript's
+	// last assistant text.
+	log := "\n" + `{"meta":{"id":"s1","created":"2026-11-02T14:03:11Z"}}
+{"id":"m1","role":"assistant","parts":[{"type":"text","text":"Running "},{"type":"text","text":"the checks."},{"type":"tool_call","name":"bash","input":"{}"}]}
+{"id":"m2","role":"assistant","parts":[{"type":"tool_call","name":"bash","input":"{}"}]}
+{"id":"m3","role":"tool","parts":[{"type":"tool_result","content":"ok"}]}
+`
+	if got := (crushHarness{}).Summary([]byte(log)); got != "Running the checks." {
+		t.Fatalf("summary from the transcript = %q", got)
+	}
+}
+
+// fakeCrush puts a crush on PATH that prints out for crush session last
+// --json, and fails, printing to stderr, for anything else.
+func fakeCrush(t *testing.T, out string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "out.json"), []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n[ \"$*\" = 'session last --json' ] || { echo \"unexpected: $*\" >&2; exit 1; }\ncat '" + filepath.Join(dir, "out.json") + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "crush"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// The export is written as one line for the meta, then one per message, and
+// reads back as the testdata does.
+func TestCrushTranscript(t *testing.T) {
+	since := time.Date(2026, 11, 2, 13, 3, 11, 500e6, time.UTC)
+	export := `{"meta":{"id":"abc","uuid":"u","title":"Verify PR 153","created":"2026-11-02T14:03:11+01:00","modified":"2026-11-02T14:09:47+01:00","cost":0.5,"prompt_tokens":1,"completion_tokens":2,"total_tokens":3},"messages":[{"id":"m1","role":"assistant","created":"2026-11-02T14:03:15+01:00","parts":[{"type":"text","text":"Checking.\nNow."},{"type":"tool_call","tool_call_id":"c1","name":"bash","input":"{\"command\":\"make check\"}"}]},{"id":"m2","role":"tool","created":"2026-11-02T14:03:16+01:00","parts":[{"type":"tool_result","tool_call_id":"c1","name":"bash","content":"ok"}]}]}` + "\n"
+	fakeCrush(t, export)
+	l := Launch{Dir: t.TempDir(), Key: "k"}
+	var b bytes.Buffer
+	b.WriteString("Done.")
+	if err := (crushHarness{}).Transcript(t.Context(), l, since, &b); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(b.String(), "\n")
+	// crush stopped mid-line: the transcript starts on a line of its own.
+	if len(lines) != 5 || lines[0] != "Done." ||
+		!strings.HasPrefix(lines[1], `{"meta":{"id":"abc",`) ||
+		!strings.HasPrefix(lines[2], `{"id":"m1",`) || !strings.HasPrefix(lines[3], `{"id":"m2",`) || lines[4] != "" {
+		t.Fatalf("transcript:\n%s", b.String())
+	}
+	// The output is not the session's text: it follows, as is.
+	want := []string{"session started: Verify PR 153", "Checking.", "bash: make check", "Done."}
+	if got := lineTexts(RenderLog("crush", b.Bytes())); !reflect.DeepEqual(got, want) {
+		t.Errorf("rendered %v, want %v", got, want)
+	}
+	if got := (crushHarness{}).Summary(b.Bytes()); got != "Done." {
+		t.Errorf("summary %q", got)
+	}
+	if u := (crushHarness{}).Usage(b.Bytes()); u == nil || u.CostUSD == nil || *u.CostUSD != 0.5 || u.InputTokens != nil {
+		t.Errorf("usage %+v", u)
+	}
+
+	// A session from before the run is not the run's.
+	var old bytes.Buffer
+	err := (crushHarness{}).Transcript(t.Context(), l, since.Add(time.Second), &old)
+	if err == nil || !strings.Contains(err.Error(), "before the run started") || old.Len() != 0 {
+		t.Errorf("older session: %v, wrote %q", err, old.String())
+	}
+
+	// crush's own error is reported.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "crush"), []byte("#!/bin/sh\necho 'no sessions found' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := (crushHarness{}).Transcript(t.Context(), l, since, &old); err == nil || !strings.Contains(err.Error(), "no sessions found") || old.Len() != 0 {
+		t.Errorf("no session: %v, wrote %q", err, old.String())
 	}
 }
 

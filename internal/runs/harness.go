@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -99,6 +101,16 @@ type ModelLister interface {
 	// ModelsCommand is the harness's own listing command, with args (a
 	// filter, say) passed on to it.
 	ModelsCommand(ctx context.Context, args []string) *exec.Cmd
+}
+
+// Transcriber is implemented by bindings whose batch output is only the
+// agent's final message. When a batch harness exits, the launcher has
+// Transcript append the session's transcript, its tool calls and results,
+// to the run log.
+type Transcriber interface {
+	// Transcript writes the transcript of the session the run started at
+	// or after since to w; it fails, writing nothing, if there is none.
+	Transcript(ctx context.Context, l Launch, since time.Time, w io.Writer) error
 }
 
 // HarnessCmdEnv names a testing hook: when set, every run executes this
@@ -879,7 +891,9 @@ func (codexHarness) Usage(log []byte) *secrets.Usage {
 // crushHarness runs Charm's Crush CLI. Like agy, kimi, and codex, the launcher
 // writes the workspace file <worktree>/.crush.json (excluded from git), which
 // references BOTTOWN_RUN_KEY via shell expansion instead of holding the raw key.
-// Batch runs execute non-interactively via `crush run --quiet`.
+// Batch runs execute non-interactively via `crush run --quiet`, which prints
+// only the final message; the launcher then appends the session's transcript
+// (see Transcript) to the log.
 type crushHarness struct{}
 
 // CrushMCPPath is the workspace config path inside a worktree.
@@ -1009,14 +1023,89 @@ func crushModel(spec string) string {
 	return provider + "/" + model
 }
 
-// Summary is the agent's text response from stdout.
-func (crushHarness) Summary(log []byte) string {
-	return strings.TrimSpace(string(log))
+// Transcript exports the run's session with crush session last --json, from
+// the worktree's crush data directory, where crush run created it: the most
+// recently updated top-level session, if it was created at or after since
+// (else crush failed before it started one, and the last session is an older
+// one). It is written as JSON lines: {"meta":…}, then each message as crush
+// exports it (see crushSession), so that no line is the whole session.
+func (crushHarness) Transcript(ctx context.Context, l Launch, since time.Time, w io.Writer) error {
+	cmd := exec.CommandContext(ctx, crushBinary(), "session", "last", "--json")
+	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(bytes.TrimSpace(ee.Stderr)) > 0 {
+			return fmt.Errorf("crush session last: %s", formatAssistantText(string(ee.Stderr)))
+		}
+		return fmt.Errorf("crush session last: %w", err)
+	}
+	var s struct {
+		Meta     json.RawMessage   `json:"meta"`
+		Messages []json.RawMessage `json:"messages"`
+	}
+	var meta crushMeta
+	if err := json.Unmarshal(out, &s); err != nil || json.Unmarshal(s.Meta, &meta) != nil {
+		return fmt.Errorf("crush session last: unexpected output %q", formatAssistantText(string(out)))
+	}
+	created, err := time.Parse(time.RFC3339, meta.Created)
+	if err != nil {
+		return fmt.Errorf("crush session last: session %s: bad created time %q", meta.ID, meta.Created)
+	}
+	// crush keeps whole seconds.
+	if created.Before(since.Truncate(time.Second)) {
+		return fmt.Errorf("crush session last: session %s was created at %s, before the run started", meta.ID, meta.Created)
+	}
+	// A newline first, in case crush was stopped mid-line.
+	var b bytes.Buffer
+	b.WriteByte('\n')
+	line := func(raw []byte) error {
+		if err := json.Compact(&b, raw); err != nil {
+			return fmt.Errorf("crush session last: %w", err)
+		}
+		b.WriteByte('\n')
+		return nil
+	}
+	if err := line(append(append([]byte(`{"meta":`), s.Meta...), '}')); err != nil {
+		return err
+	}
+	for _, m := range s.Messages {
+		if err := line(m); err != nil {
+			return err
+		}
+	}
+	_, err = w.Write(b.Bytes())
+	return err
 }
 
-// Usage is nil: crush run outputs model text and does not report token usage
-// on stdout.
-func (crushHarness) Usage([]byte) *secrets.Usage { return nil }
+// Summary is the agent's final message: what crush printed, else the last
+// assistant text in the transcript (a run stopped before crush printed it).
+func (crushHarness) Summary(log []byte) string {
+	cl := parseCrushLog(log)
+	if s := strings.TrimSpace(string(cl.output)); s != "" || cl.meta == nil {
+		return s
+	}
+	for i := len(cl.messages) - 1; i >= 0; i-- {
+		if m := cl.messages[i]; m.Role == "assistant" {
+			if s := strings.TrimSpace(m.text()); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// Usage is the session's cost, from the transcript. crush's session token
+// counts are the last step's context and output, not the run's totals, so
+// they are left out.
+func (crushHarness) Usage(log []byte) *secrets.Usage {
+	cl := parseCrushLog(log)
+	if cl.meta == nil || cl.meta.Cost <= 0 {
+		return nil
+	}
+	cost := cl.meta.Cost
+	return &secrets.Usage{CostUSD: &cost}
+}
 
 type scriptHarness struct{ cmd string }
 

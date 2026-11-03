@@ -125,6 +125,11 @@
         "name": "agy",
         "family": "google",
         "harness": "agy"
+      },
+      {
+        "name": "crush",
+        "family": "mixed",
+        "harness": "crush"
       }
     ]
   },
@@ -512,6 +517,32 @@
       "denials": []
     },
     {
+      "id": "r-0c1d2e3f",
+      "target": "#44",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue": 44,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue_title": "Should exports stream CSV or build it in memory?",
+      "thread_key": "discuss:r-0c1d2e3f",
+      "kind": "discuss",
+      "actor": "crush",
+      "family": "mixed",
+      "harness": "crush",
+      "spec": "openrouter:~deepseek/latest",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "commented",
+      "created": "2026-11-01T16:40:00Z",
+      "ended": "2026-11-01T16:47:00Z",
+      "duration": "7m 0s",
+      "summary": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB.",
+      "usage": {
+        "cost_usd": 0.04
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
       "id": "r-ffeeddcc",
       "target": "#60",
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/60",
@@ -869,6 +900,58 @@
       {
         "kind": "plain",
         "text": "Commenting on the issue and ending the run as failed."
+      }
+    ],
+    "r-0c1d2e3f": [
+      {
+        "kind": "status",
+        "text": "session started: Discuss streaming exports"
+      },
+      {
+        "kind": "text",
+        "text": "I'll read the issue and the export writer."
+      },
+      {
+        "kind": "tool",
+        "text": "bash: bottown issue show 44",
+        "tool": "bash",
+        "tool_class": "forge"
+      },
+      {
+        "kind": "tool",
+        "text": "view: internal/export/csv.go",
+        "tool": "view",
+        "tool_class": "read"
+      },
+      {
+        "kind": "tool",
+        "text": "grep: Flush\\(",
+        "tool": "grep",
+        "tool_class": "search"
+      },
+      {
+        "kind": "tool",
+        "text": "bash: go test ./internal/export/ -run TestLargeExport",
+        "tool": "bash",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "error",
+        "text": "exit 1: --- FAIL: TestLargeExport (12.40s)"
+      },
+      {
+        "kind": "text",
+        "text": "The writer already flushes per row; the failure is the test's 10s budget, not memory."
+      },
+      {
+        "kind": "tool",
+        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row…",
+        "tool": "mcp_bottown_comment",
+        "tool_class": "forge"
+      },
+      {
+        "kind": "text",
+        "text": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB."
       }
     ]
   },

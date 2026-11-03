@@ -21,14 +21,14 @@ var toolClasses = []struct {
 	names    []string
 	prefixes []string
 }{
-	// claude and kimi; codex commands are rendered as Bash. agy.
-	{class: ToolShell, names: []string{"Bash", "run_command"}},
-	{class: ToolRead, names: []string{"Read", "read_file", "view_file", "list_dir"}},
-	{class: ToolEdit, names: []string{"Edit", "Write", "NotebookEdit", "edit_file", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content"}},
-	{class: ToolSearch, names: []string{"Grep", "Glob", "grep_search", "find_by_name"}},
-	// bottown's MCP tools, by their prefixed and bare names
+	// claude and kimi; codex commands are rendered as Bash. agy. crush.
+	{class: ToolShell, names: []string{"Bash", "run_command", "bash"}},
+	{class: ToolRead, names: []string{"Read", "read_file", "view_file", "list_dir", "view", "ls"}},
+	{class: ToolEdit, names: []string{"Edit", "Write", "NotebookEdit", "edit_file", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content", "edit", "multiedit", "write"}},
+	{class: ToolSearch, names: []string{"Grep", "Glob", "grep_search", "find_by_name", "grep", "glob"}},
+	// bottown's MCP tools, by their prefixed (claude, crush) and bare names
 	// (internal/server/mcp.go and tools.go).
-	{class: ToolForge, prefixes: []string{"mcp__bottown__"}, names: []string{
+	{class: ToolForge, prefixes: []string{"mcp__bottown__", "mcp_bottown_"}, names: []string{
 		"whoami", "forge_status", "forge_api", "issue_get", "issue_create", "issue_list",
 		"pr_get", "pr_list", "pr_create", "comment", "review_submit",
 	}},

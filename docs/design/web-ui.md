@@ -518,7 +518,7 @@ log has, at run end, into the digest:
 | agy | the `result` event | tokens (thinking counted as output), turns and duration from the `result` event; no cost |
 | kimi | the last assistant message without tool calls | none known |
 | codex | the last completed `agent_message` item | input (excluding cached), cached input as cache reads, output and turns, summed over `turn.completed` events; no cost or duration |
-| crush | the assistant text from stdout | none known |
+| crush | the assistant text from stdout, else the transcript's last assistant text | cost, from the transcript's session; its token counts are the last step's, not the run's, and are left out |
 
 The live tail renders the same events, one line per assistant message or
 tool call, each with a kind and, for a tool call, a tool class (§4.2).
@@ -541,8 +541,17 @@ as status. kimi's messages are typed: assistant text, tool_calls with
 their class, tool results that start with failure messages as errors,
 non-JSON tool output capped to a few lines, and the latest of
 consecutive background task waits and meta messages (system.version,
-session.resume_hint) as status. The script fallback is still `plain`,
-and crush's, only its final message, `text`.
+session.resume_hint) as status. `crush run` prints only the final
+message, so when a crush batch run ends the launcher appends the
+session's transcript to its log (`crush session last --json`, if crush
+created that session during the run), as JSON lines: the session's meta,
+then each message. Its lines are typed: assistant text, tool calls with
+their class, tool results crush marks as errors, commands whose output
+ends `Exit code N` with N non-zero, and finishes other than a normal end
+as errors, and the session start as status; output lines the assistant
+text does not hold (an error crush printed) follow as `plain`. Until the
+run ends, and in logs without a transcript, crush's lines are its output,
+as `text`. The script fallback is still `plain`.
 Unknown usage stays unknown.
 
 ## 7. Server APIs
