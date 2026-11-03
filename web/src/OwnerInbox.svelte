@@ -111,6 +111,9 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    max-height: var(--panel-max-height);
+    max-block-size: var(--panel-max-height);
+    overflow: auto;
   }
 
   .inbox-item {

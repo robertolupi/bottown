@@ -353,8 +353,6 @@
     <div class="loading-state">Loading status...</div>
   {:else if status}
     <div class="grid">
-      <OwnerInbox inbox={status.inbox} inboxError={status.inbox_error} onGC={openGC} onStop={openStop} />
-
       <LiveRuns
         liveRuns={status.live_runs}
         activeFlows={status.active_flows}
@@ -365,6 +363,8 @@
         onGC={() => (showGCModal = true)}
         onStop={openStop}
       />
+
+      <OwnerInbox inbox={status.inbox} inboxError={status.inbox_error} onGC={openGC} onStop={openStop} />
 
       <RunHistory
         history={runHistory}

@@ -95,8 +95,8 @@
   }
 
   .history-table-container {
-    max-height: 1320px;
-    max-block-size: 1320px;
+    max-height: var(--panel-max-height);
+    max-block-size: var(--panel-max-height);
     overflow: auto;
   }
 
