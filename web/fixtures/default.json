@@ -555,6 +555,63 @@
       "ended": "2026-11-02T08:52:00Z",
       "duration": "22m 0s",
       "summary": "Blocked: three binaries load settings; the issue covers one. Asked on the issue.",
+      "failure": {
+        "cause": "reported",
+        "detail": "the agent ended the run as failed"
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-6a7b8c9d",
+      "target": "#62",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/62",
+      "issue": 62,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/62",
+      "issue_title": "Retry webhook deliveries with jitter",
+      "thread_key": "flow:issue:62",
+      "kind": "implement",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "mode": "batch",
+      "status": "failed",
+      "flow_state": "needs_intervention",
+      "created": "2026-11-02T09:20:00Z",
+      "ended": "2026-11-02T09:20:04Z",
+      "duration": "4s",
+      "summary": "",
+      "failure": {
+        "cause": "startup",
+        "detail": "git worktree add -q -B issue/62 /src/demo/.bottown/runs/r-6a7b8c9d bottown/main: exit status 128: fatal: 'issue/62' is already used by worktree at '/src/demo/.bottown/runs/r-5f6a7b8c'"
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-5f6a7b8c",
+      "target": "#62",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/62",
+      "issue": 62,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/62",
+      "issue_title": "Retry webhook deliveries with jitter",
+      "thread_key": "flow:issue:62",
+      "kind": "implement",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "mode": "batch",
+      "status": "failed",
+      "flow_state": "needs_intervention",
+      "created": "2026-11-02T09:00:00Z",
+      "ended": "2026-11-02T09:14:00Z",
+      "duration": "14m 0s",
+      "summary": "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment.",
+      "failure": {
+        "cause": "harness_exit",
+        "detail": "the harness exited with code 1",
+        "exit_code": 1
+      },
       "purged": false,
       "denials": []
     },
@@ -834,6 +891,20 @@
     }
   ],
   "logs": {
+    "r-5f6a7b8c": [
+      {
+        "kind": "status",
+        "text": "session started: claude-opus-5-5, acceptEdits"
+      },
+      {
+        "kind": "text",
+        "text": "I'll read the webhook delivery code first."
+      },
+      {
+        "kind": "error",
+        "text": "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment."
+      }
+    ],
     "r-1a2b3c4d": [
       {
         "kind": "status",
@@ -1107,6 +1178,13 @@
       "state": "open",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/47"
     },
+    "62": {
+      "issue": 62,
+      "title": "Retry webhook deliveries with jitter",
+      "body": "Add jitter to the webhook retry backoff so that retries from one outage do not arrive together.",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/62"
+    },
     "51": {
       "issue": 51,
       "title": "Rate-limit the public API",
@@ -1286,6 +1364,45 @@
           "detail": "Three binaries load settings; should all of them move?",
           "actor": "agy",
           "url": "http://127.0.0.1:3030/bottown/demo/issues/47#issuecomment-377"
+        }
+      ]
+    },
+    "62": {
+      "issue": 62,
+      "thread_key": "flow:issue:62",
+      "title": "Retry webhook deliveries with jitter",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/62",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-02T07:45:00Z",
+          "title": "Issue #62 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/62"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T09:00:00Z",
+          "ended": "2026-11-02T09:14:00Z",
+          "duration": "14m 0s",
+          "kind": "implement",
+          "title": "implement by claude",
+          "detail": "API Error: 500 Internal server error. This is a server-side issue, usually temporary — try again in a moment.",
+          "actor": "claude",
+          "status": "failed",
+          "run_id": "r-5f6a7b8c"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T09:20:00Z",
+          "ended": "2026-11-02T09:20:04Z",
+          "duration": "4s",
+          "kind": "implement",
+          "title": "implement by claude",
+          "actor": "claude",
+          "status": "failed",
+          "run_id": "r-6a7b8c9d"
         }
       ]
     },

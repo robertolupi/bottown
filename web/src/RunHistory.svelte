@@ -22,6 +22,7 @@
   let filteredThreads = $derived(filterHistoryThreads(threads, history.filters, now));
   const onToggleLog = (id: string) => history.toggleLog(id);
   const onSelectFlow = (thread: HistoryThread) => history.selectFlow(thread);
+  const onShowRun = (thread: HistoryThread, runId: string) => history.showRun(thread, runId);
 </script>
 
 <section class="card full-width">
@@ -78,6 +79,7 @@
                   timelineError={history.timelineError[thread.key]}
                   expandedLogs={history.logs}
                   onSelect={onSelectFlow}
+                  {onShowRun}
                   {onToggleLog}
                 />
               {/if}

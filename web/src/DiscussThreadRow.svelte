@@ -2,8 +2,9 @@
   // A discuss thread in the run history: its one run's row and, when
   // expanded, that run's log.
   import type { HistoryThread, RunLogState } from './types';
-  import { formatThreadMainLine } from './state';
+  import { describeRunFailure, formatThreadMainLine } from './state';
   import { formatTime, formatUsage } from './format';
+  import FailureReason from './FailureReason.svelte';
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import RunLogRow from './RunLogRow.svelte';
@@ -19,6 +20,7 @@
 
   let mainLine = $derived(formatThreadMainLine(thread));
   let h = $derived(thread.runs[0]);
+  let failure = $derived(thread.active ? null : describeRunFailure(h));
 </script>
 
 <tr class="discuss-thread-row" class:flow-row-active={thread.active}>
@@ -57,7 +59,13 @@
   <td><OutcomeBadge run={h} /></td>
   <td class="muted">{h.duration || '—'}</td>
   <td class="muted text-sm">{formatUsage(h.usage)}</td>
-  <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
+  {#if failure}
+    <td class="summary-cell">
+      <FailureReason {failure} onDetails={() => !logState && onToggleLog(h.id)} />
+    </td>
+  {:else}
+    <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
+  {/if}
   <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
   <td>
     <div class="row-actions">
@@ -72,7 +80,7 @@
   </td>
 </tr>
 {#if logState}
-  <RunLogRow title={`Run Log (${h.id})`} runId={h.id} colspan={10} denials={h.denials} {logState} />
+  <RunLogRow title={`Run Log (${h.id})`} runId={h.id} colspan={10} denials={h.denials} {failure} {logState} />
 {/if}
 
 <style>

@@ -1,6 +1,7 @@
 import type {
   ActiveFlowInfo,
   ActorDetail,
+  FailureDescription,
   FlowStateInfo,
   FlowStateKind,
   FlowTimelineEntry,
@@ -11,6 +12,7 @@ import type {
   IssueTimeline,
   LiveRunInfo,
   LogLine,
+  RunFailure,
   TimelineEvent,
   UsageInfo,
 } from './types';
@@ -307,6 +309,63 @@ export function runOutcome(run: { status?: string; outcome?: string; ended?: str
   }
   if (!run.ended || run.status === 'running') return null;
   return { label: 'None recorded', icon: '–', tone: 'neutral', title: 'Outcome: none recorded for this run' };
+}
+
+const failureLabels: Record<string, string> = {
+  startup: 'Startup failed',
+  timeout: 'Timed out',
+  stopped: 'Stopped by the owner',
+  interrupted: 'Interrupted',
+  expired: 'Key expired while live',
+  reported: 'Agent ended the run as failed',
+};
+
+// Causes whose detail adds to their label; the others' repeats it.
+const failureDetailed = new Set(['startup', 'timeout', 'interrupted', 'expired']);
+
+// describeRunFailure explains a failed or revoked run for the history: what
+// bottown observed (the recorded failure) apart from what the agent
+// reported (its summary), or that neither was recorded. It never derives a
+// cause from the summary. Other runs, and runs still going, get null.
+export function describeRunFailure(run: {
+  status?: string;
+  ended?: string;
+  summary?: string;
+  failure?: RunFailure;
+}): FailureDescription | null {
+  if (run.status !== 'failed' && run.status !== 'revoked') return null;
+  const f = run.failure;
+  let observed: string | undefined;
+  let observedDetail: string | undefined;
+  if (f?.cause) {
+    if (f.cause === 'harness_exit') {
+      observed = f.exit_code !== undefined && f.exit_code !== null
+        ? `Harness exited with code ${f.exit_code}`
+        : 'Harness exited with an error';
+    } else {
+      observed = failureLabels[f.cause] || f.cause.replace(/_/g, ' ');
+    }
+    if (f.detail && (failureDetailed.has(f.cause) || !failureLabels[f.cause] && f.cause !== 'harness_exit')) {
+      observedDetail = f.detail;
+    }
+  }
+  const reported = run.summary?.trim() || undefined;
+  return {
+    observed,
+    observedDetail,
+    reported,
+    unavailable: !observed && !reported,
+    hasLog: f?.cause !== 'startup',
+  };
+}
+
+// failureText is a failure description on one line, for titles and search.
+export function failureText(d: FailureDescription): string {
+  const parts: string[] = [];
+  if (d.observed) parts.push(`Observed: ${d.observed}${d.observedDetail ? ` (${d.observedDetail})` : ''}`);
+  if (d.reported) parts.push(`Agent reported: ${d.reported}`);
+  if (d.unavailable) parts.push('Reason unavailable');
+  return parts.join(' · ');
 }
 
 // deriveFlowState derives a concise flow-level state (Ready to merge, Needs changes,
@@ -1066,6 +1125,7 @@ export function filterHistoryThreads(
         (r) =>
           r.target.toLowerCase().includes(searchLower) ||
           r.summary.toLowerCase().includes(searchLower) ||
+          (r.failure?.detail || '').toLowerCase().includes(searchLower) ||
           r.id.toLowerCase().includes(searchLower) ||
           r.actor.toLowerCase().includes(searchLower),
       );
@@ -1313,13 +1373,14 @@ export function buildFlowTimeline(
     };
     const innerEvents: TimelineEvent[] = [startEvt];
     if (r.ended) {
+      const failure = describeRunFailure(r);
       innerEvents.push({
         type: 'run_ended',
         time: r.ended,
         duration: r.duration,
         kind: r.kind,
         title: `${r.kind} run ${r.status} (${r.actor})`,
-        detail: r.summary,
+        detail: failure ? failureText(failure) : r.summary,
         actor: r.actor,
         status: r.status,
         run_id: r.id,

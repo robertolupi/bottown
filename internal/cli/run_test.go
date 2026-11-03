@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -335,4 +337,63 @@ func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
 			t.Errorf("unexpected error message: %v", err)
 		}
 	})
+}
+
+func TestObservedFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		ctxErr  error
+		stopped bool
+		code    int
+		cause   string
+	}{
+		{"time limit", context.DeadlineExceeded, false, -1, secrets.FailureTimeout},
+		{"cancelled launcher", context.Canceled, false, -1, secrets.FailureInterrupted},
+		{"owner stop", nil, true, -1, secrets.FailureStopped},
+		{"harness exit", nil, false, 1, secrets.FailureHarnessExit},
+		{"clean exit", nil, false, 0, ""},
+	}
+	for _, c := range cases {
+		f := observedFailure(c.ctxErr, c.stopped, c.code, 90*time.Second)
+		if c.cause == "" {
+			if f != nil {
+				t.Errorf("%s: observed %+v, want none", c.name, f)
+			}
+			continue
+		}
+		if f == nil || f.Cause != c.cause || f.Detail == "" {
+			t.Errorf("%s: observed %+v, want cause %s", c.name, f, c.cause)
+		}
+	}
+	if f := observedFailure(nil, false, 3, time.Second); f.ExitCode == nil || *f.ExitCode != 3 {
+		t.Errorf("harness exit code not kept: %+v", f)
+	}
+	if f := observedFailure(context.DeadlineExceeded, false, -1, 90*time.Second); !strings.Contains(f.Detail, "1m30s") {
+		t.Errorf("timeout detail %q lacks the elapsed time", f.Detail)
+	}
+}
+
+// The launcher's error is a failure only until the digest is final: after
+// it, the error returned for a failed run is its outcome, which must not
+// read as a launcher failure. A clean interactive exit the owner marks
+// failed observes nothing, and the digest records nothing (#132).
+func TestLauncherFailure(t *testing.T) {
+	boom := errors.New("git worktree add: exit status 128")
+	if f := launcherFailure(launchStarting, boom); f == nil || f.Cause != secrets.FailureStartup || f.Detail != boom.Error() {
+		t.Errorf("before the harness: %+v, want startup with the error", f)
+	}
+	if f := launcherFailure(launchHarnessRan, boom); f == nil || f.Cause != secrets.FailureInterrupted {
+		t.Errorf("after the harness ran: %+v, want interrupted", f)
+	}
+	for _, p := range []launchPhase{launchStarting, launchHarnessRan, launchFinalized} {
+		if f := launcherFailure(p, nil); f != nil {
+			t.Errorf("phase %d without an error: %+v", p, f)
+		}
+	}
+	// startRun's end for an interactive run that exited 0 and that the
+	// owner marked failed: nothing observed, then its outcome error.
+	observed := observedFailure(nil, false, 0, time.Second)
+	if f := launcherFailure(launchFinalized, outcomeError("r-1", runs.StatusFailed)); observed != nil || f != nil {
+		t.Errorf("clean exit marked failed: observed %+v, launcher %+v; want neither", observed, f)
+	}
 }

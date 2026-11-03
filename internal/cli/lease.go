@@ -286,6 +286,11 @@ func newRunEnd() *cobra.Command {
 			}
 			// In-harness runs leave no log: the digest is the handover.
 			end := server.EndRunRequest{Status: status, Digest: secrets.Digest{Summary: cleanSummary(rec, text)}}
+			if failed {
+				// What is observed is only that the agent said so; why is
+				// its summary.
+				end.Failure = &secrets.Failure{Cause: secrets.FailureReported, Detail: "the agent ended the run as failed"}
+			}
 			if err := endLease(a, rec, end); err != nil {
 				return err
 			}
@@ -389,7 +394,8 @@ func recoverLease(a *agentCtx) (bool, error) {
 		return true, finishLease(a, rec, remote)
 	}
 	if rec.Status == runs.StatusPreparing {
-		return true, endLease(a, rec, server.EndRunRequest{Status: "revoked"})
+		return true, endLease(a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+			Cause: secrets.FailureStartup, Detail: "its startup was interrupted before the agent received the prompt"}}})
 	}
 	return false, nil
 }
@@ -399,7 +405,8 @@ func prepareLease(a *agentCtx, rec runs.Record, setup func() error) (err error) 
 	// preparing run even if this process dies or rollback cannot reach the server.
 	defer func() {
 		if err != nil {
-			cleanupErr := endLease(a, rec, server.EndRunRequest{Status: "revoked"})
+			cleanupErr := endLease(a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+				Cause: secrets.FailureStartup, Detail: err.Error()}}})
 			if cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("rollback run %s (retry run end): %w", rec.ID, cleanupErr))
 			}

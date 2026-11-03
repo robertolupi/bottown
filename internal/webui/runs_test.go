@@ -436,6 +436,7 @@ func TestRuns_HistoryRunsAndFilters(t *testing.T) {
 			Status:  "failed",
 			Digest: secrets.Digest{
 				Summary: "Checks failed\nDetails here",
+				Failure: &secrets.Failure{Cause: secrets.FailureHarnessExit, Detail: "the harness exited with code 1"},
 			},
 		},
 	}
@@ -479,6 +480,13 @@ func TestRuns_HistoryRunsAndFilters(t *testing.T) {
 		}
 		if h.Denials == nil || len(h.Denials) != want {
 			t.Fatalf("run %s: denials %+v, want %d", h.ID, h.Denials, want)
+		}
+		// The observed failure is passed on apart from the agent's summary.
+		if got := h.Failure != nil; got != (h.ID == "r-ended-2") {
+			t.Fatalf("run %s: failure %+v", h.ID, h.Failure)
+		}
+		if h.Failure != nil && (h.Failure.Cause != secrets.FailureHarnessExit || h.Summary != "Checks failed") {
+			t.Fatalf("run %s: failure %+v, summary %q", h.ID, h.Failure, h.Summary)
 		}
 	}
 

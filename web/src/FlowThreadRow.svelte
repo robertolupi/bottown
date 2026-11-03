@@ -1,11 +1,13 @@
 <script lang="ts">
   // A flow thread in the run history: one row for the flow (issue, PR,
   // milestone, actors, status) that expands, one flow at a time, to the
-  // flow's combined timeline and its constituent runs.
+  // flow's combined timeline and its constituent runs. When its latest run
+  // failed, the summary cell is that run's failure reason.
   import type { HistoryThread, IssueTimeline, RunLogState } from './types';
-  import { buildFlowConstituentRuns, buildFlowTimeline, formatThreadMainLine } from './state';
+  import { buildFlowConstituentRuns, buildFlowTimeline, describeRunFailure, formatThreadMainLine } from './state';
   import { formatTime, formatUsage } from './format';
   import ConstituentRuns from './ConstituentRuns.svelte';
+  import FailureReason from './FailureReason.svelte';
   import FlowStateBadge from './FlowStateBadge.svelte';
   import FlowTimeline from './FlowTimeline.svelte';
   import IssueReference from './IssueReference.svelte';
@@ -21,14 +23,18 @@
     timelineError: string | undefined;
     expandedLogs: Record<string, RunLogState>;
     onSelect: (thread: HistoryThread) => void;
+    onShowRun: (thread: HistoryThread, runId: string) => void;
     onToggleLog: (runId: string) => void;
   }
 
-  let { thread, expanded, timeline, timelineLoading, timelineError, expandedLogs, onSelect, onToggleLog }: Props =
+  let { thread, expanded, timeline, timelineLoading, timelineError, expandedLogs, onSelect, onShowRun, onToggleLog }: Props =
     $props();
 
   let mainLine = $derived(formatThreadMainLine(thread));
   let lastRun = $derived(thread.runs[thread.runs.length - 1]);
+  // A flow whose latest run failed, and that is not going again, leads
+  // with why.
+  let failure = $derived(thread.active || !lastRun ? null : describeRunFailure(lastRun));
 </script>
 
 <tr
@@ -92,7 +98,13 @@
   <td><OutcomeBadge run={lastRun} /></td>
   <td class="muted">{thread.duration || '—'}</td>
   <td class="muted text-sm">{formatUsage(thread.usage)}</td>
-  <td class="summary-cell" title={thread.summary}>{thread.summary || '—'}</td>
+  {#if failure}
+    <td class="summary-cell">
+      <FailureReason {failure} onDetails={() => onShowRun(thread, lastRun.id)} />
+    </td>
+  {:else}
+    <td class="summary-cell" title={thread.summary}>{thread.summary || '—'}</td>
+  {/if}
   <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
   <td>
     <div class="row-actions">

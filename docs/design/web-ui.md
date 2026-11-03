@@ -433,6 +433,23 @@ without color. A run with no recorded outcome, including every run from
 before outcomes were recorded, says "None recorded": the outcome is never
 guessed from a summary or log.
 
+**Failure reasons.** A failed or revoked run's summary cell says why
+(#132), in two labelled parts: what bottown **observed**, recorded in the
+run's digest by whatever ended it, and what the **agent reported**, its
+summary. The observed causes are a startup failure before the harness
+ran, so with no log (the launcher's error), a non-zero harness exit (its
+code), the flow's time limit, an owner's stop, a cancelled or vanished
+launcher (`run gc` revokes its run), a key that expired while live, and
+an agent ending its run with `run end --failed` (why is its summary). A
+run with neither, such as one from before failures were recorded, or an
+interactive run that exited cleanly and the owner marked failed, says
+"Reason unavailable"; a cause is never guessed from the summary or log.
+A flow row shows its latest run's reason unless the flow is going again.
+Each reason links to the run: View log expands the flow, if needed, and
+the run's log, whose row repeats the reason in full; View details does
+the same for a run that wrote no log, and says so. The timeline's run
+ended event carries the reason too.
+
 **Flow-level state.** In addition to execution status and run outcome, flow
 history rows show the next owner action derived from authoritative current
 flow, PR, and review data (#155): Ready to merge, Needs changes, In progress,
@@ -648,8 +665,10 @@ The UI uses the server's existing API where it can. What changes:
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when
-  unknown. The server stores it with the run, once: a second end changes
-  nothing.
+  unknown, and, for a run that did not succeed, `failure`: the observed
+  `cause`, a `detail` (cut to 1000 bytes) and the harness's `exit_code`
+  (§4.2, Failure reasons). The server stores it with the run, once: a
+  second end changes nothing.
 - **Run outcomes.** While a run is live, the server records its `outcome`
   on its record when its tools produce one: `review_submit` stores the
   verdict (`approved`, `changes_requested`, `commented`; a later review

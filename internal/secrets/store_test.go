@@ -106,9 +106,16 @@ func TestEndRunDigest(t *testing.T) {
 	now := time.Now()
 	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, 1)
 	long := strings.Repeat("é", MaxSummary)
-	run, _, _ := s.EndRun("r-1", "failed", now, Digest{Summary: long})
+	failure := &Failure{Cause: FailureStartup, Detail: long}
+	run, _, _ := s.EndRun("r-1", "failed", now, Digest{Summary: long, Failure: failure})
 	if len(run.Summary) > MaxSummary || !utf8.ValidString(run.Summary) || !strings.HasSuffix(run.Summary, "…") {
 		t.Fatalf("summary not cut cleanly: %d bytes", len(run.Summary))
+	}
+	if run.Failure == nil || run.Failure.Cause != FailureStartup || len(run.Failure.Detail) > MaxFailureDetail || !utf8.ValidString(run.Failure.Detail) {
+		t.Fatalf("failure not kept or not cut cleanly: %+v", run.Failure)
+	}
+	if failure.Detail != long {
+		t.Fatal("EndRun changed the caller's failure")
 	}
 	// A second end changes neither status nor digest.
 	run, _, _ = s.EndRun("r-1", "revoked", now.Add(time.Minute), Digest{Summary: "later"})
