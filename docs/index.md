@@ -106,6 +106,14 @@ removes it when the run returns; `run gc` uses the path saved in the local
 record if the launcher died. Older runs' scratch directories beside their
 worktrees are also removed by gc.
 
+Runs share the host with each other and with the owner. The implement and
+verify prompts say so: a run must not stop, kill or remove processes,
+containers or worktrees it did not start, nor run `bottown up` or `down`;
+when shared state blocks it, it waits or comments and stops. `bottown up`
+and `down` also refuse inside a run (with `$BOTTOWN_RUN_FILE` set, in a run
+worktree, or in an actor worktree whose run is live), except on the
+throwaway `e2e-*` instances that `make e2e` creates and purges.
+
 A launched run can choose its harness's model: wherever a command takes an
 actor (`run implement|verify|discuss|plan -a`, `flow --implement` and
 `--verify`), it also takes `ACTOR:SPEC`, split at the first colon. The actor
