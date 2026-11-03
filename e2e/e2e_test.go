@@ -1973,12 +1973,25 @@ fi`
 				}
 			}
 
+			t.Run("bypasses the actor slot by default", func(t *testing.T) {
+				bypassIssue := newIssue("flow bypass actor slot")
+				bypassDir := t.TempDir()
+				out, err := withHarness(flowScript(bypassDir, "approve"), "flow", fmt.Sprint(bypassIssue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+				if err != nil || !strings.Contains(out, "ready to merge") {
+					t.Fatalf("flow bypass actor slot: %v\n%s", err, out)
+				}
+				if readCount(filepath.Join(bypassDir, "implements")) != "1" || readCount(filepath.Join(bypassDir, "verifies")) != "1" {
+					t.Error("bypassing flow used more than one round")
+				}
+				assertStopComment(bypassIssue, "ready to merge")
+			})
+
 			startFlow := func(name string) (*exec.Cmd, *os.File) {
 				log, err := os.Create(filepath.Join(dir, name))
 				if err != nil {
 					t.Fatal(err)
 				}
-				cmd := exec.Command(bin, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+				cmd := exec.Command(bin, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--wait-actors", "--timeout", "10s")
 				cmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+flowScript(dir, "approve"))
 				cmd.Dir = demo
 				cmd.Stdout, cmd.Stderr = log, log

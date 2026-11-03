@@ -38,12 +38,13 @@ var ErrActorLimit = errors.New("actor at live batch run limit")
 // and Verify are ACTOR[:SPEC] (runs.SplitActorSpec): the spec, a model
 // choice, goes to the run unchanged and never changes the actor's family.
 type Options struct {
-	Issue     int64
-	Repo      string
-	Implement string
-	Verify    string
-	Rounds    int
-	Timeout   time.Duration
+	Issue      int64
+	Repo       string
+	Implement  string
+	Verify     string
+	Rounds     int
+	Timeout    time.Duration
+	WaitActors bool
 }
 
 // Result is the flow's final position.
@@ -67,11 +68,12 @@ func (e *StopError) Error() string {
 
 // RunRequest is one batch run requested by the supervisor.
 type RunRequest struct {
-	Kind  string
-	Repo  string
-	Actor string // ACTOR[:SPEC], as given in Options
-	Issue int64
-	PR    int64
+	Kind             string
+	Repo             string
+	Actor            string // ACTOR[:SPEC], as given in Options
+	Issue            int64
+	PR               int64
+	BypassActorLimit bool
 }
 
 // Runner executes a batch run and waits for it to finish.
@@ -326,6 +328,7 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 	if delay == 0 {
 		delay = time.Second
 	}
+	req.BypassActorLimit = !opts.WaitActors
 	for {
 		if s.Out != nil {
 			target := fmt.Sprintf("#%d", req.Issue)
@@ -341,7 +344,7 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		if err == nil {
 			return nil
 		}
-		if errors.Is(err, ErrActorLimit) {
+		if opts.WaitActors && errors.Is(err, ErrActorLimit) {
 			if s.Out != nil {
 				fmt.Fprintf(s.Out, "flow #%d: waiting for %s's actor slot\n", opts.Issue, req.Actor)
 			}

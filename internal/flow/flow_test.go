@@ -247,25 +247,55 @@ func TestFlowMovedHeadGetsAnotherVerify(t *testing.T) {
 	}
 }
 
-func TestFlowRetriesActorLimit(t *testing.T) {
-	api := &fakeAPI{}
-	attempts := 0
-	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
-		if req.Kind == policy.Implement {
-			attempts++
-			if attempts == 1 {
-				return ErrActorLimit
+func TestFlowActorLimitPolicy(t *testing.T) {
+	t.Run("bypass by default", func(t *testing.T) {
+		api := &fakeAPI{}
+		var calls []RunRequest
+		runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+			calls = append(calls, req)
+			if req.Kind == policy.Implement {
+				api.open, api.pr = true, openPR()
+			} else {
+				approve(api)
 			}
-			api.open, api.pr = true, openPR()
 			return nil
+		})
+		result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+		if err != nil || result.Reason != ReadyToMerge || len(calls) != 2 {
+			t.Fatalf("result = %+v, error = %v, calls = %v", result, err, calls)
 		}
-		approve(api)
-		return nil
+		for _, req := range calls {
+			if !req.BypassActorLimit {
+				t.Errorf("%s run did not bypass the actor limit", req.Kind)
+			}
+		}
 	})
-	result, err := (&Supervisor{API: api, Runner: runner, RetryDelay: time.Millisecond}).Run(context.Background(), testOptions())
-	if err != nil || result.Reason != ReadyToMerge || attempts != 2 {
-		t.Fatalf("result = %+v, error = %v, implement attempts = %d", result, err, attempts)
-	}
+
+	t.Run("wait when requested", func(t *testing.T) {
+		api := &fakeAPI{}
+		attempts := 0
+		runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+			if req.BypassActorLimit {
+				t.Error("waiting flow bypassed the actor limit")
+			}
+			if req.Kind == policy.Implement {
+				attempts++
+				if attempts == 1 {
+					return ErrActorLimit
+				}
+				api.open, api.pr = true, openPR()
+				return nil
+			}
+			approve(api)
+			return nil
+		})
+		opts := testOptions()
+		opts.WaitActors = true
+		result, err := (&Supervisor{API: api, Runner: runner, RetryDelay: time.Millisecond}).Run(context.Background(), opts)
+		if err != nil || result.Reason != ReadyToMerge || attempts != 2 {
+			t.Fatalf("result = %+v, error = %v, implement attempts = %d", result, err, attempts)
+		}
+	})
 }
 
 func TestFlowImplementWithoutPRFails(t *testing.T) {

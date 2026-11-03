@@ -25,15 +25,16 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind            string `json:"kind"` // implement | verify | discuss | plan
-	Actor           string `json:"actor"`
-	Spec            string `json:"spec,omitempty"` // the harness's model, recorded as given
-	Repo            string `json:"repo"`           // name within the org
-	Issue           int64  `json:"issue,omitempty"`
-	PR              int64  `json:"pr,omitempty"`
-	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
-	Interactive     bool   `json:"interactive,omitempty"`
-	TTLSeconds      int64  `json:"ttl_seconds,omitempty"`
+	Kind             string `json:"kind"` // implement | verify | discuss | plan
+	Actor            string `json:"actor"`
+	Spec             string `json:"spec,omitempty"` // the harness's model, recorded as given
+	Repo             string `json:"repo"`           // name within the org
+	Issue            int64  `json:"issue,omitempty"`
+	PR               int64  `json:"pr,omitempty"`
+	AllowSameFamily  bool   `json:"allow_same_family,omitempty"`
+	BypassActorLimit bool   `json:"bypass_actor_limit,omitempty"`
+	Interactive      bool   `json:"interactive,omitempty"`
+	TTLSeconds       int64  `json:"ttl_seconds,omitempty"`
 }
 
 // RunResponse is a created run and its key. The key is returned once.
@@ -75,6 +76,9 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		case req.AllowSameFamily:
 			writeError(w, http.StatusForbidden, "only the owner can allow a same-family review")
 			return
+		case req.BypassActorLimit:
+			writeError(w, http.StatusForbidden, "only the owner can bypass the actor run limit")
+			return
 		case req.Spec != "":
 			// A self-started run is in the actor's own TUI, which chose
 			// its model; bottown launches nothing that could use a spec.
@@ -94,7 +98,11 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run.StartedBy = p.Actor
 	actor, _ := s.desired().Actor(run.Actor)
-	key, err := s.Store.NewRun(run, actor.BatchRunLimit())
+	limit := actor.BatchRunLimit()
+	if req.BypassActorLimit {
+		limit = 0
+	}
+	key, err := s.Store.NewRun(run, limit)
 	if err != nil {
 		var limit *secrets.RunLimitError
 		if errors.As(err, &limit) {

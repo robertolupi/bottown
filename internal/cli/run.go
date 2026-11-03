@@ -23,14 +23,15 @@ import (
 )
 
 type runOpts struct {
-	actor           string
-	repo            string
-	interactive     bool
-	allowSameFamily bool
-	allow           []string
-	keep            bool
-	question        string // discuss: the owner's question for the prompt
-	message         string // implement, verify, plan: the owner's note for the prompt
+	actor            string
+	repo             string
+	interactive      bool
+	allowSameFamily  bool
+	bypassActorLimit bool
+	allow            []string
+	keep             bool
+	question         string // discuss: the owner's question for the prompt
+	message          string // implement, verify, plan: the owner's note for the prompt
 }
 
 func newRun(g *globals) *cobra.Command {
@@ -241,7 +242,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Interactive: o.interactive}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, BypassActorLimit: o.bypassActorLimit, Interactive: o.interactive}
 	if kind == policy.Verify {
 		req.PR = n
 	} else {

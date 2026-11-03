@@ -95,6 +95,8 @@ bottown flow 51 --implement claude --verify kimi
   rejections.
 - `--repo R`: as for `run`; defaults to the checkout's repository.
 - `--timeout D` (default 60m): per run (§3.5).
+- `--wait-actors`: enforce each actor's live batch run limit and wait for a
+  slot. By default a flow bypasses the limit (§3.4).
 - It is an owner command, run from the `main` checkout like `run`. It
   prints one line per step and ends with the stop reason. Exit code 0 means
   "ready to merge"; any other stop is non-zero, so scripts can tell them
@@ -223,14 +225,17 @@ window is the real limit. Each actor has a **limit on live batch runs**,
 a per-actor `max_batch_runs` setting with a default of 1 (0 means no limit).
 
 The server enforces it, atomically: `POST /v1/runs` refuses a batch run
-for an actor already at its limit, with an error that says so. A flow that
-is refused waits and tries again. Checking in each flow instead would race:
-two flows started together (side by side in the UI, or by a milestone)
-could both see the actor as free. Because the server counts, the limit
-covers every batch run, whoever starts it. Interactive runs do not count.
+for an actor already at its limit, with an error that says so. An owner's
+request may bypass the limit; actors may not. A flow bypasses it by default.
+With `--wait-actors`, a refused flow waits and tries again. Checking in each
+waiting flow instead would race: two flows started together (side by side in
+the UI, or by a milestone) could both see the actor as free. Because the
+server counts, an enforced limit covers every batch run, whoever starts it.
+Interactive runs do not count.
 
-Flows on different issues run in parallel, as separate processes; the
-limit is the only coordination between them.
+Flows on different issues run in parallel, as separate processes. By default
+there is no actor-slot coordination between them; `--wait-actors` serializes
+each actor's batch runs.
 
 ### 3.5 Failures and budgets
 
@@ -257,7 +262,7 @@ actor during provisioning, and only bottown sets or clears them, when the
 owner queues an issue from the CLI or the UI (actors already cannot change
 labels: the proxy policy keeps labels for bottown). An open issue with both
 labels is queued; the long-running loop takes queued issues, runs each as
-a flow under §3.4's per-actor limit, and removes the labels when the flow
+a flow with §3.4's actor-limit policy, and removes the labels when the flow
 stops. The labels make the queue visible and searchable in Forgejo, and
 they are state the supervisor can rebuild from the forge.
 
@@ -280,8 +285,8 @@ the pool: #1 implemented by agy and verified by claude, #2 implemented by
 claude and verified by agy, and so on. Nothing above stands in its way:
 
 - each issue's flow is the single-issue flow of §3.2, with its own worktrees;
-- the per-actor limit on the server (§3.4) is what keeps the pool's actors
-  from being over-committed, whatever the number of flows;
+- with `--wait-actors`, the per-actor limit on the server (§3.4) keeps the
+  pool's actors from being over-committed, whatever the number of flows;
 - its state is the milestone's issues, their labels (§3.6), PRs and
   reviews, so it resumes from the forge like a single flow;
 - conflicts between its PRs, as the owner merges them one by one, are the
