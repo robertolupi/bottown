@@ -20,6 +20,62 @@ import (
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
+func TestPRCreateAlreadyOpen(t *testing.T) {
+	creates := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/repos/bottown/demo":
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": "demo", "default_branch": "main"})
+		case "POST /api/v1/repos/bottown/demo/pulls":
+			creates++
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "pull request already exists for these targets"})
+		case "GET /api/v1/repos/bottown/demo/pulls":
+			if state := r.URL.Query().Get("state"); state != "open" {
+				t.Errorf("list pull requests state = %q, want open", state)
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"number": 10, "head": map[string]string{"ref": "issue/10", "sha": "other"}, "base": map[string]string{"ref": "main"}},
+				{"number": 12, "html_url": "http://forge/bottown/demo/pulls/12", "title": "original", "body": "original description",
+					"head": map[string]string{"ref": "issue/4", "sha": "abc123"}, "base": map[string]string{"ref": "main"}},
+			})
+		default:
+			t.Errorf("unexpected upstream request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *secrets.State) error {
+		st.Tokens = map[string]secrets.ActorToken{"claude": {Token: "token"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	run := secrets.Run{ID: "r-follow-up", Kind: policy.Implement, Actor: "claude", Org: "bottown", Repo: "demo", Issue: 4, Branch: "issue/4", Created: now, Expires: now.Add(time.Hour)}
+	if _, err := store.NewRun(run, 1); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL}, Log: slog.Default()}
+	got, err := s.opPRCreate(t.Context(), secrets.Principal{Actor: "claude", Run: &run}, PRCreateIn{Title: "replacement", Body: "replacement description"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := PRCreateOut{Number: 12, URL: "http://forge/bottown/demo/pulls/12", Head: "issue/4", Base: "main", HeadSHA: "abc123", AlreadyOpen: true}
+	if got != want {
+		t.Errorf("existing PR = %+v, want %+v", got, want)
+	}
+	if creates != 1 {
+		t.Errorf("create attempts = %d, want 1", creates)
+	}
+}
+
 func TestParseState(t *testing.T) {
 	for _, tc := range []struct {
 		in   string

@@ -238,7 +238,7 @@ repository. They hold no token: the server enforces the policy.
 | `issue list`, `issue show [N]` | Read issues. |
 | `issue create --title T --body-file -` | File an issue, in or outside a run. |
 | `pr list`, `pr show [N] [--diff \| --stat \| --since-review [--reviewer R]]` | Read pull requests; `--since-review` shows what changed since the latest review (same patch rebased, or a range-diff). |
-| `pr create --title T --body-file -` | Open the PR for an implement or plan run's pushed branch. |
+| `pr create --title T --body-file -` | Open the PR for an implement or plan run's pushed branch, or report the branch's already-open PR without changing it. |
 | `comment [N] --body-file -` | Comment on the run's issue, or the PR in a verify run. |
 | `review submit --event E --commit SHA --body-file -` | A verify run's one verdict: `APPROVED`, `REQUEST_CHANGES` or `COMMENT`. |
 | `api METHOD PATH [--data JSON]` | Any Forgejo API endpoint, under the same policy. |

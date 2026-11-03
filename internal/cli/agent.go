@@ -630,6 +630,11 @@ Without an earlier review it shows the full diff.`,
 			if createJSON {
 				return printJSON(cmd, out)
 			}
+			if out.AlreadyOpen {
+				fmt.Fprintf(cmd.OutOrStdout(), "!%d already open for %s; the push updated it (head %s)\n", out.Number, out.Head, out.HeadSHA)
+				fmt.Fprintln(cmd.OutOrStdout(), "Title and description were left unchanged.")
+				return nil
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "opened !%d (%s -> %s): %s\n", out.Number, out.Head, out.Base, out.URL)
 			return nil
 		},
