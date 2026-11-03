@@ -236,6 +236,14 @@ export function buildRunActionPayload(input: {
   };
 }
 
+export function filterInboxItems(
+  inbox: InboxItem[] | undefined | null,
+  showActorFiled: boolean,
+): InboxItem[] {
+  const items = inbox || [];
+  return showActorFiled ? items : items.filter((item) => item.kind !== 'actor_filed_issue');
+}
+
 export type ResolvedInboxAction =
   | { modal: 'gc'; includeFailed: boolean }
   | { modal: 'stop'; stopRunId: string }
