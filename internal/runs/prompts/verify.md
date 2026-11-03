@@ -31,6 +31,15 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
     against the new ones. Use it to focus on what is new; your verdict
     still covers all of `{{.SHA}}`.
 {{- end}}
+  - `pr show` also lists the checks recorded at the head, by whom: what
+    the implementer's `bottown check` reported.
+  - `{{.Bottown}} check --e2e` runs the repository's checks, keeps their
+    full output in a log, and prints a short summary: each step, its
+    result and duration, the first failing lines with their line numbers
+    in the log, and the dependency manifests (`go.mod`, `package.json`, …)
+    the pull request changes, with the lines it adds. It records your
+    result on `{{.SHA}}`. Read the log at those lines rather than
+    re-running the checks to see more.
   - `{{.Bottown}} issue show N` prints the linked issue.
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
@@ -60,8 +69,11 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
 ## Done means
 
 1. You have read the diff, built the code, and run the repository's checks
-   at `{{.SHA}}`: the ones its AGENTS.md (or README) names, the same ones
-   the implementer ran.
+   at `{{.SHA}}` with `{{.Bottown}} check --e2e`: the ones its
+   `.bottown.toml` names (by default `make check` and `make e2e`, which its
+   AGENTS.md (or README) describes), the same ones the implementer ran.
+   If the summary lists changed dependencies, check that each new
+   third-party package is needed and trustworthy.
 2. You have submitted exactly one verdict:
    `{{.Bottown}} review submit --commit {{.SHA}} --event EVENT --body-file -`,
    with EVENT set to:

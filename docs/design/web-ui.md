@@ -511,8 +511,10 @@ defaults, and the health checklist says it has none.
 # What the owner runs in the main checkout after pulling (§4.3).
 after_pull = ["make install"]
 
-# Later (§4.5): the checks bottown runs itself on a PR's head.
-# checks = ["make check"]
+# What `bottown check` runs (§4.5), in order, with sh -c; e2e only with
+# --e2e. These are the defaults.
+check = ["make check"]
+e2e = ["make e2e"]
 ```
 
 The file names commands; bottown runs them only when the owner asks
@@ -528,12 +530,14 @@ reads the file again and runs nothing unless they are still exactly
 those. The steps run one at a time, with `sh -c`, in the main checkout,
 and stop at the first that fails.
 
-### 4.5 Later: declared checks
+### 4.5 Declared checks
 
-Today the verifier runs "the repository's checks" as the repository's
-AGENTS.md (or README) names them, and the PR description says what the
-implementer ran. Neither is checked by bottown. With `checks` in
-`.bottown.toml`, bottown can run them itself:
+Implementers and verifiers run the checks `check` and `e2e` in
+`.bottown.toml` name with `bottown check [--e2e]` (docs/index.md), which
+records each run's result as the commit statuses `bottown/check` and
+`bottown/e2e` on the commit it ran on, and `pr show` lists them by actor.
+A status is what the run's actor reports it ran, not a verification:
+bottown does not run the checks itself. Later, bottown can:
 
 - on the host, in a fresh worktree at the PR's head, after the implement
   run and before the verify run;

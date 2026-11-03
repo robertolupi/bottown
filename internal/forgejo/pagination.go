@@ -49,3 +49,10 @@ func (c *Client) AllReviews(org, repo string, index int64, opts sdk.ListPullRevi
 		return c.ListPullReviews(org, repo, index, opts)
 	})
 }
+
+// AllStatuses returns every commit status on ref, newest first.
+func (c *Client) AllStatuses(org, repo, ref string) ([]*sdk.Status, *sdk.Response, error) {
+	return allPages(func(page sdk.ListOptions) ([]*sdk.Status, *sdk.Response, error) {
+		return c.ListStatuses(org, repo, ref, sdk.ListStatusesOption{ListOptions: page})
+	})
+}

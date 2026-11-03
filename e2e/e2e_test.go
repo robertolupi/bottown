@@ -1159,6 +1159,138 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("bottown check records statuses on the PR", func(t *testing.T) {
+		cw, aw := filepath.Join(fam, "claude"), filepath.Join(fam, "agy")
+		remote := "bottown-" + a.name
+		agent := func(dir string, args ...string) (string, error) {
+			c := exec.Command(bin, args...)
+			for _, e := range a.env() {
+				if !strings.HasPrefix(e, "BOTTOWN_INSTANCE=") {
+					c.Env = append(c.Env, e)
+				}
+			}
+			c.Dir = dir
+			b, err := c.CombinedOutput()
+			return string(b), err
+		}
+		must := func(dir string, args ...string) string {
+			t.Helper()
+			out, err := agent(dir, args...)
+			if err != nil {
+				t.Fatalf("bottown %s in %s: %v\n%s", strings.Join(args, " "), filepath.Base(dir), err, out)
+			}
+			return out
+		}
+		push := func(dir string) {
+			t.Helper()
+			if out, err := exec.Command("git", "-C", dir, "push", "-q", remote, "HEAD").CombinedOutput(); err != nil {
+				t.Fatalf("push: %v %s", err, out)
+			}
+		}
+
+		// The owner names the checks on main; bottown check reads them there.
+		c := exec.Command("git", "-C", demo, "fetch", "-q", remote)
+		c.Env = a.env()
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("fetch: %v %s", err, out)
+		}
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, ".bottown.toml"), []byte("check = [\"test -f checked.txt\", \"echo all good\"]\ne2e = [\"echo 'e2e_test.go:9: boom'; exit 4\"]\n"), 0o644)
+		git(t, demo, "add", ".bottown.toml")
+		git(t, demo, "commit", "-q", "-m", "name the checks")
+		c = exec.Command("git", "-C", demo, "push", "-q", remote, "HEAD:refs/heads/main")
+		c.Env = a.env()
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("push main: %v %s", err, out)
+		}
+		git(t, demo, "switch", "-q", "main")
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "check me", "body": "add checked.txt"}, &issue)
+		n := fmt.Sprint(issue.Number)
+		// Outside a run, on another branch: the check fails and is not recorded.
+		if out, err := agent(cw, "check"); err == nil || !strings.Contains(out, "test -f checked.txt  failed") ||
+			!strings.Contains(out, "echo all good        skipped") || !strings.Contains(out, "not recorded: no active run") || !strings.Contains(out, "FAILED") {
+			t.Errorf("check outside a run: %v %s", err, out)
+		}
+		must(cw, "run", "start", "implement", n)
+		os.WriteFile(filepath.Join(cw, "checked.txt"), []byte("x\n"), 0o644)
+		os.WriteFile(filepath.Join(cw, "go.mod"), []byte("module demo\n\nrequire example.com/dep v1.2.3\n"), 0o644)
+		git(t, cw, "add", "checked.txt", "go.mod")
+		git(t, cw, "commit", "-q", "-m", "checked")
+		sha := git(t, cw, "rev-parse", "HEAD")
+
+		// Before the push: the checks pass, and nothing can be recorded yet.
+		out := must(cw, "check")
+		logPath := filepath.Join(git(t, cw, "rev-parse", "--absolute-git-dir"), "bottown", "check.log")
+		for _, want := range []string{
+			"bottown check at " + sha[:10] + " on issue/" + n, "log: " + logPath,
+			"test -f checked.txt", "echo all good", "passed",
+			"dependencies changed since " + remote + "/main", "go.mod  +2 -0", "+ require example.com/dep v1.2.3",
+			"not recorded: issue/" + n + " is not on the forge yet: push HEAD first; then `bottown check --report`", "PASSED",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("check before push lacks %q:\n%s", want, out)
+			}
+		}
+		if b, err := os.ReadFile(logPath); err != nil || !strings.Contains(string(b), "==> [check] echo all good\nall good\n") {
+			t.Errorf("check log: %v\n%s", err, b)
+		}
+		push(cw)
+		if out := must(cw, "check", "--report"); !strings.Contains(out, "recorded on "+sha[:10]+": bottown/check success") {
+			t.Errorf("check --report after push: %s", out)
+		}
+
+		// With --e2e the failing e2e step fails the command, and is recorded.
+		out, err := agent(cw, "check", "--e2e")
+		if err == nil || !strings.Contains(out, "echo 'e2e_test.go:9: boom'; exit 4") || !strings.Contains(out, "exit 4, log lines ") ||
+			!strings.Contains(out, "e2e_test.go:9: boom\n") || !strings.Contains(out, "recorded on "+sha[:10]+": bottown/check success, bottown/e2e failure") ||
+			!strings.Contains(out, "FAILED") {
+			t.Errorf("check --e2e: %v\n%s", err, out)
+		}
+		// A dirty worktree runs the checks but records nothing.
+		os.WriteFile(filepath.Join(cw, "stray.txt"), []byte("x"), 0o644)
+		if out := must(cw, "check"); !strings.Contains(out, "(with uncommitted changes)") || !strings.Contains(out, "not recorded: the worktree had uncommitted changes") {
+			t.Errorf("check in a dirty worktree: %s", out)
+		}
+		os.Remove(filepath.Join(cw, "stray.txt"))
+
+		out = must(cw, "pr", "create", "--title", "check me PR")
+		var prn int64
+		if _, err := fmt.Sscanf(out, "opened !%d", &prn); err != nil {
+			t.Fatalf("pr create: %s", out)
+		}
+		if out := must(cw, "pr", "show", fmt.Sprint(prn)); !strings.Contains(out, "checks at "+sha[:10]+":") ||
+			!strings.Contains(out, "bottown/check  success  by claude  passed: test -f checked.txt; echo all good in ") ||
+			!strings.Contains(out, "dependencies changed: go.mod (implement run r-") ||
+			!strings.Contains(out, "bottown/e2e    failure  by claude  failed: echo 'e2e_test.go:9: boom'; exit 4 (exit 4)") {
+			t.Errorf("pr show checks:\n%s", out)
+		}
+		must(cw, "run", "end", "--summary", "checked")
+
+		// The verifier's result shows next to the implementer's.
+		must(aw, "run", "start", "verify", fmt.Sprint(prn))
+		if out := must(aw, "check"); !strings.Contains(out, "recorded on "+sha[:10]+": bottown/check success") {
+			t.Errorf("check in a verify run: %s", out)
+		}
+		var p struct {
+			Checks []struct{ Context, State, Creator, Description string }
+		}
+		if err := json.Unmarshal([]byte(must(aw, "pr", "show", "--json")), &p); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, c := range p.Checks {
+			got = append(got, c.Context+" "+c.Creator+" "+c.State)
+		}
+		if strings.Join(got, ", ") != "bottown/check agy success, bottown/check claude success, bottown/e2e claude failure" ||
+			!strings.Contains(p.Checks[0].Description, "(verify run r-") {
+			t.Errorf("pr show --json checks: %+v", p.Checks)
+		}
+		must(aw, "run", "end", "--summary", "checked only")
+		a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn), map[string]string{"state": "closed"}, nil)
+	})
+
 	t.Run("mcp whoami", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

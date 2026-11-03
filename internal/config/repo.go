@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -28,12 +29,28 @@ type RepoSettings struct {
 	// MilestonesDir is the repository-relative directory holding milestone
 	// plan files, <MilestonesDir>/<slug>.md.
 	MilestonesDir string `toml:"milestones_dir"`
+	// Check and E2E are the commands `bottown check` runs, in order, each
+	// with sh -c at the checkout's root: Check always, E2E with --e2e.
+	Check []string `toml:"check"`
+	E2E   []string `toml:"e2e"`
 }
 
+// DefaultCheck and DefaultE2E are the commands `bottown check` runs when
+// RepoSettingsFile names none.
+var (
+	DefaultCheck = []string{"make check"}
+	DefaultE2E   = []string{"make e2e"}
+)
+
 // DefaultRepoSettings is what a repository without RepoSettingsFile gets: no
-// after-pull steps, and milestone plans in DefaultMilestonesDir.
+// after-pull steps, milestone plans in DefaultMilestonesDir, and the checks
+// DefaultCheck and DefaultE2E.
 func DefaultRepoSettings() RepoSettings {
-	return RepoSettings{MilestonesDir: DefaultMilestonesDir}
+	return RepoSettings{
+		MilestonesDir: DefaultMilestonesDir,
+		Check:         slices.Clone(DefaultCheck),
+		E2E:           slices.Clone(DefaultE2E),
+	}
 }
 
 // ParseRepoSettings decodes RepoSettingsFile. Unknown keys are an error, so
@@ -44,9 +61,14 @@ func ParseRepoSettings(b []byte) (RepoSettings, error) {
 	if err := dec.Decode(&s); err != nil {
 		return RepoSettings{}, fmt.Errorf("%s: %w", RepoSettingsFile, err)
 	}
-	for i, c := range s.AfterPull {
-		if strings.TrimSpace(c) == "" {
-			return RepoSettings{}, fmt.Errorf("%s: after_pull[%d] is empty", RepoSettingsFile, i)
+	for _, l := range []struct {
+		key  string
+		cmds []string
+	}{{"after_pull", s.AfterPull}, {"check", s.Check}, {"e2e", s.E2E}} {
+		for i, c := range l.cmds {
+			if strings.TrimSpace(c) == "" {
+				return RepoSettings{}, fmt.Errorf("%s: %s[%d] is empty", RepoSettingsFile, l.key, i)
+			}
 		}
 	}
 	if err := CheckRepoPath(s.MilestonesDir); err != nil {
