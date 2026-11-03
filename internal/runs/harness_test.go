@@ -133,6 +133,7 @@ func TestClaudeDefaultAllowedTools(t *testing.T) {
 		"Bash(node:*)", "Bash(echo:*)", "Bash(test:*)", "Bash([:*)",
 		"Bash(mkdir:*)", "Bash(rm:*)", "Bash(sort:*)", "Bash(uniq:*)",
 		"Bash(xargs:*)", "Bash(jq:*)",
+		"Bash(./bin/bottown:*)", "Bash(bin/bottown:*)",
 	} {
 		if !slices.Contains(tools, want) {
 			t.Errorf("allowedTools lacks %q: %s", want, allowed)
