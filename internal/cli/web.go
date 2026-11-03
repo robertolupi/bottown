@@ -127,7 +127,7 @@ func newWeb(g *globals) *cobra.Command {
 	for _, c := range []*cobra.Command{forgejoCmd, uiCmd, healthCmd} {
 		c.Flags().BoolVar(&printOnly, "print", false, "print the one-time login URL instead of opening a browser")
 	}
-	web.AddCommand(forgejoCmd, uiCmd, healthCmd, newWebPreview())
+	web.AddCommand(forgejoCmd, uiCmd, healthCmd, newWebPreview(), newWebShot())
 	return web
 }
 
@@ -252,18 +252,14 @@ func runPreview(cmd *cobra.Command, webDir, fixtures, state string, s previewSet
 	}
 	defer os.RemoveAll(out)
 
-	// vite itself rather than npm run, so that cancelling ctx stops it.
-	args := []string{"build", "--outDir", out, "--emptyOutDir"}
-	if s.watch {
-		args = append(args, "--watch")
-	}
-	vite := exec.CommandContext(ctx, filepath.Join(webDir, "node_modules", ".bin", "vite"), args...)
-	vite.Dir, vite.Stdout, vite.Stderr = webDir, errOut, errOut
 	if !s.watch {
-		if err := vite.Run(); err != nil {
-			return fmt.Errorf("build the web UI: %w", err)
+		if err := viteBuild(ctx, webDir, out, errOut); err != nil {
+			return err
 		}
 	} else {
+		// vite itself rather than npm run, so that cancelling ctx stops it.
+		vite := exec.CommandContext(ctx, filepath.Join(webDir, "node_modules", ".bin", "vite"), "build", "--outDir", out, "--emptyOutDir", "--watch")
+		vite.Dir, vite.Stdout, vite.Stderr = webDir, errOut, errOut
 		if err := vite.Start(); err != nil {
 			return fmt.Errorf("build the web UI: %w", err)
 		}
