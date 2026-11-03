@@ -35,6 +35,13 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   prints the URL and returns your prompt; `{{.Bottown}} web preview --stop`
   stops it. It needs no sign-in and touches no instance. When your change
   shows something new, add it to the fixtures.
+- To see what the UI renders, run `{{.Bottown}} web shot`: it loads the
+  same build and fixture in a headless Chrome at a wide and a narrow
+  width, light and dark, writes layout metrics (`metrics.json`: panel
+  order, boxes, which elements scroll, sideways overflow, console
+  errors), the rendered DOM and screenshots, prints their paths and
+  exits. Check layout claims against the metrics; `--selector` and
+  `--eval` measure more.
 {{- end}}
 
 ## Done means

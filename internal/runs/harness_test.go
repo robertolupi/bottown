@@ -189,7 +189,7 @@ func TestDiscussPrompt(t *testing.T) {
 }
 
 // TestWebPreviewPrompt checks that implement and verify prompts point at
-// `web preview` only in a repository that has its fixtures.
+// `web preview` and `web shot` only in a repository that has its fixtures.
 func TestWebPreviewPrompt(t *testing.T) {
 	for _, kind := range []string{"implement", "verify"} {
 		for _, has := range []bool{false, true} {
@@ -197,8 +197,10 @@ func TestWebPreviewPrompt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Contains(p, "`/b web preview`"); got != has {
-				t.Errorf("%s prompt with WebPreview %v mentions web preview: %v\n%s", kind, has, got, p)
+			for _, cmd := range []string{"`/b web preview`", "`/b web shot`"} {
+				if got := strings.Contains(p, cmd); got != has {
+					t.Errorf("%s prompt with WebPreview %v mentions %s: %v\n%s", kind, has, cmd, got, p)
+				}
 			}
 		}
 	}

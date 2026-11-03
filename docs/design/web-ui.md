@@ -673,6 +673,48 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
 The implement and verify prompts mention it when the repository's default
 branch has `web/fixtures`.
 
+### 8.2 Capturing the UI in a run
+
+The UI is a Svelte SPA: what the preview serves at `/` is an empty shell,
+so a run that can fetch the page still cannot see what it renders.
+`bottown web shot` renders it in a headless browser and records what came
+out, as numbers to assert on first and pictures second:
+
+```
+bottown web shot [--fixture NAME] [--path /#milestones] [--width 1440,390]
+                 [--height 900] [--scheme light,dark] [--selector CSS]…
+                 [--eval JS] [--wait CSS] [--out DIR] [--browser PATH]
+```
+
+- **One shot, then it exits.** It builds `web/` into `DIR/build`, serves
+  it with the fixture as the preview does, on a random port, loads the
+  page for each width and color scheme, writes the artifacts and stops
+  the server and the browser. It never blocks the shell. `DIR` defaults
+  to a new temporary directory.
+- **Its output is paths,** one per line: `metrics.json` first, then each
+  case's `WIDTH-SCHEME.png` (a full-page screenshot) and
+  `WIDTH-SCHEME.dom.html` (the DOM after the scripts ran), then the built
+  CSS and JS.
+- **`metrics.json` is for runs and tests.** Per case: the `section`
+  panels in document order (`order`, their headings) with their boxes;
+  every element that scrolls or has a `max-height`, with `scrollHeight`,
+  `clientHeight`, the computed `max-height` and whether it scrolls; the
+  outermost elements that reach past the viewport's right edge
+  (`overflowX`, what makes a narrow page scroll sideways); what each
+  `--selector` matches; the `--eval` expression's value; and the page's
+  console errors and uncaught exceptions, which are also printed. Svelte's
+  `svelte-*` scoping classes are left out of element labels, as they
+  change with every build.
+- **A page counts as rendered** after its load event and half a second
+  without network requests, so the fetches the UI makes on load have
+  answered; `--wait` also waits for a selector.
+- **It drives Chrome, Chromium or Edge** over the DevTools protocol, with
+  a fresh profile it removes afterwards: `--browser`, else
+  `$BOTTOWN_BROWSER`, else an installed one. Without a browser, or where a
+  run's sandbox does not let it start one, it fails with that reason and
+  what the browser said; `web preview --detach` still serves the page for
+  the owner to open.
+
 ## 9. Phases
 
 Each phase is one issue, small enough for one implement run:

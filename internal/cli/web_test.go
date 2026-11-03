@@ -58,6 +58,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$out" ] || { echo "no --outDir" >&2; exit 1; }
+mkdir -p "$out"
 printf '<!doctype html><title>built by the stand-in</title>' > "$out/index.html"
 `)
 	if err := os.Chmod(vite, 0o755); err != nil {
