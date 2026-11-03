@@ -152,6 +152,27 @@ func TestPromptsNameWhereChecksAre(t *testing.T) {
 	}
 }
 
+// Runs share the host: implement and verify prompts say not to touch what
+// another run started, nor the shared instances.
+func TestPromptsSayRunsShareTheHost(t *testing.T) {
+	for _, kind := range []string{"implement", "verify"} {
+		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/b"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"Other runs may be active on this host",
+			"Do not stop,\n  kill or remove processes, containers or worktrees this run did not start",
+			"do not run `/b up` or `down` on any instance",
+			"wait for it to clear, or say so with\n  `comment` and stop",
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s prompt lacks %q:\n%s", kind, want, p)
+			}
+		}
+	}
+}
+
 func TestDiscussPrompt(t *testing.T) {
 	p, err := Prompt("discuss", PromptData{RunID: "r-1", Actor: "claude", Family: "anthropic", Repo: "o/r", Issue: 7, Title: "T", SHA: "abc", Base: "main", Bottown: "/b", SelfEnd: true})
 	if err != nil {

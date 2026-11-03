@@ -1,11 +1,16 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 func TestOwnerEmail(t *testing.T) {
@@ -79,4 +84,90 @@ func TestSameImageSource(t *testing.T) {
 			t.Errorf("sameImageSource(%s, %.12s) = %v, want %v", c.image, c.ref, got, c.want)
 		}
 	}
+}
+
+func TestUpDownRefuseInRun(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	t.Setenv("BOTTOWN_RUN_FILE", "")
+	t.Setenv("BOTTOWN_INSTANCE", "")
+	t.Setenv("BOTTOWN_HOME", t.TempDir())
+	dir := t.TempDir()
+	mustGit := func(dir string, args ...string) {
+		t.Helper()
+		if _, err := git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runDir := filepath.Join(dir, "main", ".bottown", "runs", "r-test")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(runDir, "init", "-q")
+
+	actorDir := filepath.Join(dir, "claude")
+	if err := os.MkdirAll(actorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(actorDir, "init", "-q")
+	mustGit(actorDir, "config", "extensions.worktreeConfig", "true")
+	mustGit(actorDir, "config", "--worktree", gitActorKey, "claude")
+	keyDir := filepath.Join(actorDir, ".git", "bottown")
+	if err := os.MkdirAll(keyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRun := func(rec runs.Record) {
+		t.Helper()
+		b, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(keyDir, "run.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRun(runs.Record{ID: "r-live", Actor: "claude", Key: "k"})
+
+	for _, c := range []struct {
+		name, dir string
+		args      []string
+		want      string
+	}{
+		{"up in a run worktree", runDir, []string{"up", "-i", "dev"}, "this is a run worktree: `bottown up` would change instance dev"},
+		{"down in a run worktree", runDir, []string{"down", "-i", "prod"}, "this is a run worktree: `bottown down` would change instance prod"},
+		{"up in an actor worktree during a run", actorDir, []string{"up", "-i", "dev"}, "actor claude's worktree is in run r-live"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Chdir(c.dir)
+			root := newRoot()
+			root.SetArgs(c.args)
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			err := root.ExecuteContext(context.Background())
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
+	}
+
+	t.Run("run file set", func(t *testing.T) {
+		t.Setenv("BOTTOWN_RUN_FILE", filepath.Join(dir, "run.json"))
+		if err := refuseInRun("up", "dev"); err == nil || !strings.Contains(err.Error(), "this is a bottown run") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("e2e instances allowed", func(t *testing.T) {
+		t.Chdir(runDir)
+		if err := refuseInRun("down", "e2e-abc123"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("ended run in actor worktree allowed", func(t *testing.T) {
+		writeRun(runs.Record{ID: "r-live", Actor: "claude"})
+		t.Chdir(actorDir)
+		if err := refuseInRun("up", "dev"); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

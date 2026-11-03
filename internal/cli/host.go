@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -49,6 +50,33 @@ func (g *globals) loadInstance() (config.Instance, error) {
 	return inst, nil
 }
 
+// refuseInRun stops up and down from changing a shared instance from inside
+// a run: other runs and the owner use dev and prod while the run works. The
+// throwaway e2e-* instances, which make e2e creates and purges, are allowed.
+func refuseInRun(cmd, instance string) error {
+	if strings.HasPrefix(instance, "e2e-") {
+		return nil
+	}
+	where := ""
+	if os.Getenv("BOTTOWN_RUN_FILE") != "" {
+		where = "this is a bottown run"
+	} else if top, err := git(".", "rev-parse", "--show-toplevel"); err == nil {
+		if strings.Contains(filepath.ToSlash(top), "/.bottown/") {
+			where = "this is a run worktree"
+		} else if actor, _ := git(top, "config", "--worktree", "--get", gitActorKey); actor != "" {
+			if gitDir, err := git(top, "rev-parse", "--absolute-git-dir"); err == nil {
+				if rec, err := runs.LoadFile(filepath.Join(gitDir, "bottown", "run.json")); err == nil && rec.Key != "" {
+					where = fmt.Sprintf("actor %s's worktree is in run %s", actor, rec.ID)
+				}
+			}
+		}
+	}
+	if where == "" {
+		return nil
+	}
+	return fmt.Errorf("%s: `bottown %s` would change instance %s, which other runs and the owner share; only the owner runs it, from the main checkout", where, cmd, instance)
+}
+
 func newUp(g *globals) *cobra.Command {
 	var image, ref, src string
 	var ifChanged bool
@@ -68,6 +96,9 @@ image (docs/ and Markdown outside the embedded templates), instead of
 building and switching to a new one. make install uses it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := refuseInRun("up", g.instance); err != nil {
+				return err
+			}
 			if ifChanged && ref == "" {
 				return errors.New("--if-changed needs --ref")
 			}
@@ -528,6 +559,9 @@ func newDown(g *globals) *cobra.Command {
 		Short: "Stop an instance; --purge also deletes its container, volume and host config",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := refuseInRun("down", g.instance); err != nil {
+				return err
+			}
 			ctx, d := cmd.Context(), g.docker()
 			inst, _, err := config.LoadInstance(g.instance)
 			if err != nil {

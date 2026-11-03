@@ -27,6 +27,12 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
     that should not block this pull request.
 - Run checks as plain commands; write scratch files under `$TMPDIR`.
+- Other runs may be active on this host at the same time. Do not stop,
+  kill or remove processes, containers or worktrees this run did not start,
+  and do not run `{{.Bottown}} up` or `down` on any instance: other runs and
+  the owner share them. If shared state blocks you (a port in use, a lock
+  held, another run's containers), wait for it to clear, or say so with
+  `comment` and stop.
 {{- if .WebPreview}}
 - To look at a web UI change, run `{{.Bottown}} web preview` in this
   worktree, in the background: it builds `web/` and prints a localhost URL
