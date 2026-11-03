@@ -33,3 +33,7 @@ test('an outcome badge contains its screen-reader label', () => {
   // containing block is outside History's scrolling table.
   assert.match(rule(src('global.css'), '.outcome-badge'), /position:\s*relative/);
 });
+
+test('a flow state badge contains its screen-reader label', () => {
+  assert.match(rule(src('global.css'), '.flow-state-badge'), /position:\s*relative/);
+});

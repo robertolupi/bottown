@@ -5,6 +5,7 @@
   import type { ThreadMainLine } from './state';
   import { runOutcome } from './state';
   import { formatTime } from './format';
+  import FlowStateBadge from './FlowStateBadge.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import TimelineEventItem from './TimelineEventItem.svelte';
@@ -34,6 +35,9 @@
       {/if}
       {#if mainLine.milestone}
         <span class="badge milestone-badge">{mainLine.milestone}</span>
+      {/if}
+      {#if thread.flow_state}
+        <FlowStateBadge state={thread.flow_state} />
       {/if}
       {#if thread.active}
         <span class="badge badge-accent">Live updating</span>

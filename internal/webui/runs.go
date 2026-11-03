@@ -17,6 +17,7 @@ import (
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -123,6 +124,14 @@ type HistoryRunInfo struct {
 	Usage    *secrets.Usage `json:"usage,omitempty"`
 	Purged   bool           `json:"purged"`
 	Denials  []Denial       `json:"denials"`
+
+	// Flow-level state and authoritative PR/review data (§4.2, #155).
+	PRHead         string `json:"pr_head,omitempty"`
+	PRMerged       bool   `json:"pr_merged,omitempty"`
+	PRMergeable    *bool  `json:"pr_mergeable,omitempty"`
+	ReviewDecision string `json:"review_decision,omitempty"`
+	ReviewAtHead   bool   `json:"review_at_head,omitempty"`
+	FlowState      string `json:"flow_state,omitempty"`
 }
 
 // HistoryFilter specifies criteria for filtering ended runs.
@@ -852,7 +861,51 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	denials := s.fetchDenials(ctx)
 
 	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
-	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	prs, err := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	for _, pr := range prs {
+		if pr != nil && pr.Index > 0 {
+			prsByIndex[pr.Index] = pr
+		}
+	}
+
+	ownerLogin := s.cfg.Instance.OwnerLogin
+	if ownerLogin == "" {
+		var who struct {
+			Actor string `json:"actor"`
+		}
+		if err := s.callServer(ctx, http.MethodGet, "/v1/whoami", nil, &who); err == nil && who.Actor != "" {
+			ownerLogin = who.Actor
+		}
+	}
+
+	actors := make(map[string]string)
+	for name, a := range actorMap {
+		if a != nil {
+			actors[name] = a.Family
+		}
+	}
+
+	assessments := make(map[int64]review.Assessment)
+	if err == nil {
+		for _, pr := range prs {
+			if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
+				continue
+			}
+			revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+			revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
+			if err != nil {
+				continue
+			}
+			head := ""
+			if pr.Head != nil {
+				head = pr.Head.Sha
+			}
+			assessments[pr.Index] = review.Assess(head, review.FromForge(revs), review.Policy{
+				Author: userLogin(pr.Poster), Owner: ownerLogin, Families: actors, Grants: review.Grants(allRuns, repo, pr.Index),
+			})
+		}
+	}
 
 	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=all&type=issues", org, repo)
 	issues, _ := listAll[*sdk.Issue](ctx, s, issuesPath)
@@ -910,34 +963,92 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		summary := firstLine(sr.Digest.Summary)
 		meta := metaMap[sr.ID]
 
+		var prHead string
+		var prMerged bool
+		var prMergeable *bool
+		var reviewDecision string
+		var reviewAtHead bool
+		flowState := ""
+
+		if sr.Kind != "discuss" {
+			flowState = "unknown"
+			if meta.Active {
+				flowState = "in_progress"
+			} else if meta.PR > 0 {
+				if pr := prsByIndex[meta.PR]; pr != nil {
+					if pr.Head != nil {
+						prHead = pr.Head.Sha
+					}
+					prMerged = pr.HasMerged
+					if prMerged {
+						flowState = "merged"
+					} else if pr.State == sdk.StateOpen {
+						m := pr.Mergeable
+						prMergeable = &m
+						if !m {
+							flowState = "needs_intervention"
+						} else if sr.Status == "failed" || sr.Status == "revoked" {
+							flowState = "needs_intervention"
+						} else if a, ok := assessments[meta.PR]; ok {
+							reviewDecision = string(a.Decision)
+							reviewAtHead = a.AtHead(prHead)
+							switch a.Decision {
+							case review.Approved:
+								flowState = "ready_to_merge"
+							case review.ChangesRequested:
+								flowState = "needs_changes"
+							case review.Commented:
+								flowState = "needs_intervention"
+							case review.NeedsReview:
+								flowState = "needs_review"
+							}
+						} else {
+							flowState = "unknown"
+						}
+					} else if pr.State == sdk.StateClosed {
+						flowState = "needs_intervention"
+					}
+				}
+			} else {
+				// Pre-PR flow run
+				flowState = "needs_intervention"
+			}
+		}
+
 		history = append(history, HistoryRunInfo{
-			ID:         sr.ID,
-			Target:     target,
-			TargetURL:  targetURL,
-			Issue:      meta.Issue,
-			IssueURL:   meta.IssueURL,
-			IssueTitle: meta.IssueTitle,
-			PR:         meta.PR,
-			PRURL:      meta.PRURL,
-			PRTitle:    meta.PRTitle,
-			Milestone:  meta.Milestone,
-			ThreadKey:  meta.ThreadKey,
-			Active:     meta.Active,
-			Kind:       sr.Kind,
-			Actor:      sr.Actor,
-			Family:     family,
-			Harness:    harness,
-			Spec:       sr.Spec,
-			Mode:       mode,
-			Status:     sr.Status,
-			Outcome:    sr.Outcome,
-			Created:    sr.Created,
-			Ended:      sr.Ended,
-			Duration:   duration,
-			Summary:    summary,
-			Usage:      sr.Digest.Usage,
-			Purged:     sr.Purged,
-			Denials:    orEmpty(denials[sr.ID]),
+			ID:             sr.ID,
+			Target:         target,
+			TargetURL:      targetURL,
+			Issue:          meta.Issue,
+			IssueURL:       meta.IssueURL,
+			IssueTitle:     meta.IssueTitle,
+			PR:             meta.PR,
+			PRURL:          meta.PRURL,
+			PRTitle:        meta.PRTitle,
+			Milestone:      meta.Milestone,
+			ThreadKey:      meta.ThreadKey,
+			Active:         meta.Active,
+			Kind:           sr.Kind,
+			Actor:          sr.Actor,
+			Family:         family,
+			Harness:        harness,
+			Spec:           sr.Spec,
+			Mode:           mode,
+			Status:         sr.Status,
+			Outcome:        sr.Outcome,
+			Created:        sr.Created,
+			Ended:          sr.Ended,
+			Duration:       duration,
+			Summary:        summary,
+			Usage:          sr.Digest.Usage,
+			Purged:         sr.Purged,
+			Denials:        orEmpty(denials[sr.ID]),
+			PRHead:         prHead,
+			PRMerged:       prMerged,
+			PRMergeable:    prMergeable,
+			ReviewDecision: reviewDecision,
+			ReviewAtHead:   reviewAtHead,
+			FlowState:      flowState,
 		})
 	}
 

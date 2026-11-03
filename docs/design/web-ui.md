@@ -378,6 +378,15 @@ without color. A run with no recorded outcome, including every run from
 before outcomes were recorded, says "None recorded": the outcome is never
 guessed from a summary or log.
 
+**Flow-level state.** In addition to execution status and run outcome, flow
+history rows show the next owner action derived from authoritative current
+flow, PR, and review data (#155): Ready to merge, Needs changes, In progress,
+Needs intervention, Needs review, or Merged. Stale approvals at an older head
+do not imply readiness. Missing or read-failed data remains explicitly neutral
+(Unknown), never inferred from summaries. The badge includes a glyph, label,
+and screen-reader prefix so it is accessible without color, consistent with
+Inbox and flow stop reasons.
+
 **Denials.** A live run's card and a history row (when expanded) list
 the operations the server's policy refused the run (denied or rejected),
 including those outside its repository: when, the request or operation,
