@@ -184,7 +184,7 @@
   }
 
   .summary-cell {
-    max-width: 280px;
+    max-width: max(280px, 25vw);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
