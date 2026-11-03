@@ -885,6 +885,9 @@ func printPRShow(out io.Writer, r *lipgloss.Renderer, p server.PROut, diff, stat
 		p.Mergeable,
 		strings.TrimSpace(p.Body),
 	)
+	if p.Assessment.Reason != "" {
+		fmt.Fprintf(out, "\n%s: %s\n", st.reviewVerdict(string(p.Assessment.Decision)), p.Assessment.Reason)
+	}
 	for _, rev := range p.Reviews {
 		flags := ""
 		if rev.Stale {
@@ -948,6 +951,10 @@ func printPRList(out io.Writer, r *lipgloss.Renderer, prs []server.PRItem) {
 		if authorPad < 0 {
 			authorPad = 0
 		}
+		reason := ""
+		if p.ReviewReason != "" {
+			reason = " " + st.Dim.Render("("+p.ReviewReason+")")
+		}
 		revPad := 18 - len(p.ReviewState)
 		if revPad < 0 {
 			revPad = 0
@@ -958,7 +965,7 @@ func printPRList(out io.Writer, r *lipgloss.Renderer, prs []server.PRItem) {
 			st.Dim.Render(sha), strings.Repeat(" ", shaPad),
 			st.Bold.Render(p.Author), strings.Repeat(" ", authorPad),
 			st.reviewVerdict(p.ReviewState), strings.Repeat(" ", revPad),
-			p.Title,
+			p.Title+reason,
 		)
 	}
 }

@@ -26,6 +26,7 @@ func TestInboxSharedReviewCases(t *testing.T) {
 			}
 			fix.whoami = map[string]any{"actor": reviewtest.Owner}
 			fix.runs = tc.Runs
+			fix.carries = map[int64][]review.Carry{reviewtest.PR: tc.Carries}
 			now := time.Now()
 			fix.prs = []*sdk.PullRequest{{
 				Index: reviewtest.PR, State: sdk.StateOpen, Mergeable: true, Created: &now,
@@ -69,6 +70,9 @@ func TestInboxSharedReviewCases(t *testing.T) {
 			}
 			if len(items) != 1 || items[0].Kind != want || !strings.Contains(items[0].Title, title) {
 				t.Fatalf("items = %+v, want one %s (%s)", items, want, title)
+			}
+			if carried := want == InboxReadyToMerge && !tc.WantAtHead; carried != strings.Contains(items[0].Description, "carried over") {
+				t.Fatalf("description %q: carried over %v", items[0].Description, carried)
 			}
 			if want == InboxReadyToMerge && len(tc.Runs) > 0 && !strings.Contains(items[0].Description, "same-family override") {
 				t.Fatalf("description %q does not name the override", items[0].Description)

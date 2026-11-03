@@ -27,6 +27,7 @@ type containerEnv struct {
 	Data       string
 	Listen     string
 	ForgejoURL string
+	GitRoot    string // Forgejo's repositories
 	PublicURL  string // Forgejo as the owner's browser sees it
 	Owner      provision.Owner
 }
@@ -37,6 +38,7 @@ func readContainerEnv() (containerEnv, error) {
 		Data:       getenv("BOTTOWN_DATA", "/data/bottown"),
 		Listen:     getenv("BOTTOWN_LISTEN", ":8080"),
 		ForgejoURL: getenv("BOTTOWN_FORGEJO_URL", "http://127.0.0.1:3000"),
+		GitRoot:    getenv("BOTTOWN_GIT_ROOT", "/data/git/repositories"),
 		PublicURL:  strings.TrimRight(os.Getenv("FORGEJO__server__ROOT_URL"), "/"),
 		Owner: provision.Owner{
 			Login:    os.Getenv("BOTTOWN_OWNER_LOGIN"),
@@ -111,6 +113,7 @@ func serve(ctx context.Context) error {
 		Instance: e.Instance, Version: Version, ForgejoURL: fu, Owner: e.Owner.Login,
 		Store: store, Rec: rec, Policy: policy.Default(e.Owner.Login), Log: log,
 		Audit:            audit,
+		GitRoot:          e.GitRoot,
 		PublicForgejoURL: e.PublicURL,
 		ForgejoCookie:    config.ForgejoCookie(e.Instance),
 		UICookie:         config.UICookie(e.Instance),

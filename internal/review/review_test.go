@@ -1,6 +1,7 @@
 package review_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/robertolupi/bottown/internal/review"
@@ -50,5 +51,33 @@ func TestGrants(t *testing.T) {
 	}, "demo", 12)
 	if len(grants) != 1 || grants[0] != (review.Grant{Reviewer: "haiku", Commit: "h2"}) {
 		t.Fatalf("grants = %+v", grants)
+	}
+}
+
+func TestSamePatch(t *testing.T) {
+	for _, tc := range reviewtest.PatchCases(t) {
+		t.Run(tc.Name, func(t *testing.T) {
+			onto, same, err := review.SamePatch(context.Background(), tc.GitDir, tc.BaseRef, tc.Old, tc.Head)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if same != tc.Same {
+				t.Fatalf("same = %v, want %v", same, tc.Same)
+			}
+			if onto == "" {
+				t.Fatal("no merge base")
+			}
+		})
+	}
+	if _, _, err := review.SamePatch(context.Background(), t.TempDir(), "refs/heads/main", "--output=x", "abcdef0"); err == nil {
+		t.Fatal("accepted an option as a commit")
+	}
+}
+
+func TestCarriedReason(t *testing.T) {
+	a := review.Assess("e50b14a99", []review.Review{{ID: 1, Reviewer: "agy", State: review.StateApproved, CommitID: "7d27b2e11", Official: true, Stale: true}},
+		review.Policy{Author: "claude", Families: reviewtest.Families, Carries: []review.Carry{{From: "7d27b2e11", Onto: "e50b14a00"}}})
+	if want := "approval at 7d27b2e carried over: same patch rebased onto e50b14a"; a.Decision != review.Approved || a.Reason != want {
+		t.Fatalf("assessment = %+v, want approved with reason %q", a, want)
 	}
 }

@@ -25,7 +25,8 @@ not for a team or a cloud. That shapes everything:
   not a model; the product owner is you.
 - **Enforced, not advised.** Rules live in the forge's branch protection and
   in supervisor checks over forge data, never only in prompts. Approvals die
-  on new commits, reviews are bound to a commit, only the manager account
+  on new commits unless the patch only moved onto a newer main, reviews are
+  bound to a commit, only the manager account
   merges, and a verification check cannot be forged by the agent that wrote
   the code.
 - **Two operating modes per issue.** `ask` (the default) stops before merge

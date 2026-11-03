@@ -16,6 +16,7 @@ import (
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -27,6 +28,7 @@ type fixtureForge struct {
 	runs     []secrets.Run
 	prs      []*sdk.PullRequest
 	reviews  map[int64][]*sdk.PullReview
+	carries  map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
 	issues   []*sdk.Issue
 	comments map[int64][]*sdk.Comment
 }
@@ -53,6 +55,13 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			_ = json.NewEncoder(w).Encode(fix.whoami)
 		case p == "/v1/runs":
 			_ = json.NewEncoder(w).Encode(fix.runs)
+		case p == "/v1/forge/pr/carries":
+			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
+			carries := fix.carries[num]
+			if carries == nil {
+				carries = []review.Carry{}
+			}
+			_ = json.NewEncoder(w).Encode(carries)
 		case strings.HasSuffix(p, "/pulls"):
 			_ = json.NewEncoder(w).Encode(paginate(r, fix.prs))
 		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):

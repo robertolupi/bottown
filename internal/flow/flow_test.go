@@ -18,6 +18,7 @@ type fakeAPI struct {
 	pr       server.PROut
 	open     bool
 	runs     []secrets.Run
+	carries  []review.Carry
 	comments []string
 }
 
@@ -36,12 +37,13 @@ func (f *fakeAPI) OpenPR(context.Context, string, string) (server.PRItem, bool, 
 // fixtures' families: claude (anthropic) is the author.
 func (f *fakeAPI) PR(context.Context, string, int64) (server.PROut, error) {
 	pr := f.pr
+	pr.Carries = f.carries
 	reviews := make([]review.Review, 0, len(pr.Reviews))
 	for _, r := range pr.Reviews {
 		reviews = append(reviews, review.Review{ID: r.ID, Reviewer: r.Reviewer, State: r.State, CommitID: r.CommitID, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official})
 	}
 	pr.Assessment = review.Assess(pr.HeadSHA, reviews, review.Policy{
-		Author: reviewtest.Author, Owner: reviewtest.Owner, Families: reviewtest.Families, Grants: review.Grants(f.runs, "demo", pr.Number),
+		Author: reviewtest.Author, Owner: reviewtest.Owner, Families: reviewtest.Families, Grants: review.Grants(f.runs, "demo", pr.Number), Carries: f.carries,
 	})
 	return pr, nil
 }

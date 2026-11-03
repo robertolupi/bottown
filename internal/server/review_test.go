@@ -5,6 +5,7 @@ import (
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/review/reviewtest"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
@@ -29,12 +30,15 @@ func TestAssessReviewsSharedCases(t *testing.T) {
 			}
 			// Another PR's override must not count for this one.
 			other := secrets.Run{Kind: "verify", Actor: "haiku", Repo: reviewtest.Repo, PR: reviewtest.PR + 1, SHA: reviewtest.Head, AllowSameFamily: true}
-			got := assessReviews(d, reviewtest.Owner, append([]secrets.Run{other}, tc.Runs...), reviewtest.Repo, pr, rs)
+			got := assessReviews(d, reviewtest.Owner, append([]secrets.Run{other}, tc.Runs...), reviewtest.Repo, pr, rs, tc.Carries)
 			if got.Decision != tc.Want {
 				t.Fatalf("decision = %q, want %q", got.Decision, tc.Want)
 			}
 			if tc.WantID != 0 && (got.Review == nil || got.Review.ID != tc.WantID) {
 				t.Fatalf("review = %+v, want id %d", got.Review, tc.WantID)
+			}
+			if carried := tc.Want == review.Approved && !tc.WantAtHead; (got.Reason != "") != carried {
+				t.Fatalf("reason = %q, want one only for a carried approval", got.Reason)
 			}
 		})
 	}

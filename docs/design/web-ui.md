@@ -193,12 +193,17 @@ never counts a review the forge would not:
   actor of another family than the author's, or an actor whose verify run
   at H the owner allowed to be same-family (`--allow-same-family`, read
   from the server's run records, never from review text).
+- An approval at an older head **carries over** to H when the patch is
+  unchanged (below). It must be official and undismissed, and pass the
+  cross-family rule at its own commit, as it did before the move.
 - An actor's `COMMENT` at H is an undecided verdict; the owner's is
   discussion.
 
 Precedence, first match: a request for changes at H → changes requested;
 a qualifying approval with a request for changes at an older head →
-changes requested (held back); a qualifying approval → approved; an
+changes requested (held back); a qualifying approval at H → approved; a
+carried-over approval → approved, with a reason ("approval at 7d27b2e
+carried over: same patch rebased onto e50b14a"); an
 actor's comment at H → commented; otherwise needs review, even when an
 older head's request still blocks, because the next step is a verdict at
 H. The decision names the review behind it: the newest of its kind.
@@ -214,6 +219,49 @@ Each surface presents the same decision its own way, on purpose:
 | needs review | verify run | nothing | `needs review` |
 
 The shared fixtures in `internal/review/reviewtest` run through all three.
+
+**Approval carry-over.** A rebase onto a newer main, or a merge of main,
+moves the head without changing what was reviewed, and should not cost a
+verify run. The patch is unchanged when the diff from each head's merge
+base with the base branch to that head has the same `git patch-id
+--stable` (`review.SamePatch`). That is the owner's rule, an empty `git
+range-diff` between `<old-base>..<old-head>` and `<new-base>..<new-head>`,
+compared as one diff, so a squash of the same change still counts. As
+with range-diff, a change to the diff's context lines (main editing lines
+next to the PR's) is a change, and so is any conflict resolution. The
+server runs it in the container, on Forgejo's copy of the repository
+(`BOTTOWN_GIT_ROOT`, default `/data/git/repositories`), for each official
+approval at an older head of an open PR, and passes the matches to
+`review.Assess` as `Policy.Carries`. The web UI, which has no git, asks
+`GET /v1/forge/pr/carries?repo=R&number=N`. The flow's ready-to-merge
+comment, `pr show` and `pr list` and the inbox give the reason. `pr show`
+also lists every carried commit (`carries`), whichever approval decides:
+after a push the flow waits for Forgejo to mark reviews at older heads
+stale, except at those commits, which Forgejo may leave unstale. An old
+head that Forgejo has garbage-collected no longer matches.
+
+Forgejo's branch protection has its own view. On a push it compares the
+heads with a combined diff (`git diff --name-only NEW OLD BASE`); when no
+file was changed by both the PR and main it leaves the reviews alone, and
+the approval still counts there. Otherwise, under "dismiss stale
+approvals", it marks the reviews stale and dismisses the approvals, with
+the timeline message "New commits pushed, approval review dismissed
+automatically according to repository settings". Forgejo has no setting
+for "same patch": turning dismissal off would let an approval survive any
+push. So whenever the server finds a carry-over (pr show, pr list, the
+carries endpoint) it also undismisses a carried approval that Forgejo
+dismissed with that message, using the owner's token
+(`POST …/reviews/{id}/undismissals`), and records `review_carry_over` in
+the audit log. Forgejo counts an official, undismissed approval even when
+stale, because bottown leaves "ignore stale approvals" off, so the merge
+gate then agrees. A dismissal with anyone's own message stands. The
+review keeps its old commit and stale flag in Forgejo: what carried it
+over is the assessment's reason, not a new review. If Forgejo dismisses
+an approval after the flow has read the PR, the next read (the inbox, `pr
+show`) undismisses it.
+
+Only approvals carry over. A request for changes at an older head keeps
+its usual meaning, and a comment at an older head is still no verdict.
 With `required_approvals` above 1 the forge asks for more approvals than
 "approved" here means.
 
