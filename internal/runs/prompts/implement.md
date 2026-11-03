@@ -18,6 +18,9 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   - `{{.Bottown}} comment --body-file -` comments on the issue.
   - `{{.Bottown}} pr create --title "…" --body-file -` opens the pull request
     once your branch is pushed.
+  - On a review follow-up, push your new commits, then comment on the existing
+    PR with what changed. `pr create` reports that PR and succeeds; it does not
+    change its title or description.
   - `{{.Bottown}} api GET /repos/…` reaches any other Forgejo endpoint.
   - `{{.Bottown}} check --e2e` runs the repository's checks (see below),
     keeps their full output in a log, and prints a short summary: each

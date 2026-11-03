@@ -217,12 +217,14 @@ type PRCreateIn struct {
 	Body  string `json:"body,omitempty" jsonschema:"description; bottown appends 'Closes #<issue>'"`
 }
 
-// PRCreateOut is a created pull request.
+// PRCreateOut is a created or already-open pull request.
 type PRCreateOut struct {
-	Number int64  `json:"number"`
-	URL    string `json:"url"`
-	Head   string `json:"head"`
-	Base   string `json:"base"`
+	Number      int64  `json:"number"`
+	URL         string `json:"url"`
+	Head        string `json:"head"`
+	Base        string `json:"base"`
+	HeadSHA     string `json:"head_sha,omitempty"`
+	AlreadyOpen bool   `json:"already_open,omitempty"`
 }
 
 // IssueCreateIn is the input of issue create.
@@ -623,12 +625,29 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	pr, _, err := c.CreatePullRequest(run.Org, run.Repo, sdk.CreatePullRequestOption{
 		Head: run.Branch, Base: repo.DefaultBranch, Title: in.Title, Body: body,
 	})
+	alreadyOpen := false
 	if err != nil {
-		return PRCreateOut{}, err
+		prs, _, listErr := c.AllPullRequests(run.Org, run.Repo, sdk.ListPullRequestsOptions{State: sdk.StateOpen})
+		if listErr != nil {
+			return PRCreateOut{}, err
+		}
+		for _, existing := range prs {
+			if existing.Head != nil && existing.Base != nil && existing.Head.Ref == run.Branch && existing.Base.Ref == repo.DefaultBranch {
+				pr, alreadyOpen = existing, true
+				break
+			}
+		}
+		if !alreadyOpen {
+			return PRCreateOut{}, err
+		}
 	}
 	s.toolAudit(p, "", "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
 	s.recordOutcome(run.ID, secrets.OutcomePROpened)
-	return PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch}, nil
+	out := PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch, AlreadyOpen: alreadyOpen}
+	if pr.Head != nil {
+		out.HeadSHA = pr.Head.Sha
+	}
+	return out, nil
 }
 
 func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn) ([]PRItem, error) {

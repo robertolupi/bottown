@@ -1050,7 +1050,11 @@ func TestE2E(t *testing.T) {
 		ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
 		git(t, demo, "switch", "-q", "main")
 
-		must(cw, "", "run", "start", "implement", n)
+		followUpPrompt := must(cw, "", "run", "start", "implement", n)
+		if !strings.Contains(followUpPrompt, "On a review follow-up, push your new commits") ||
+			!strings.Contains(followUpPrompt, "comment on the existing") {
+			t.Errorf("follow-up implement prompt:\n%s", followUpPrompt)
+		}
 		git(t, cw, "fetch", "-q", remote)
 		git(t, cw, "rebase", "-q", remote+"/main")
 		if out, err := exec.Command("git", "-C", cw, "push", "-q", "-f", remote, "HEAD").CombinedOutput(); err != nil {
@@ -1065,6 +1069,18 @@ func TestE2E(t *testing.T) {
 		if out, err := exec.Command("git", "-C", cw, "push", "-q", remote, "HEAD").CombinedOutput(); err != nil {
 			t.Fatalf("push the fix: %v %s", err, out)
 		}
+		followUpSHA := git(t, cw, "rev-parse", "HEAD")
+		out = must(cw, "replacement description", "pr", "create", "--title", "replacement title", "--body-file", "-")
+		wantExisting := fmt.Sprintf("!%d already open for issue/%s; the push updated it (head %s)", prn, n, followUpSHA)
+		if !strings.Contains(out, wantExisting) || !strings.Contains(out, "Title and description were left unchanged.") {
+			t.Errorf("pr create on the follow-up branch: %s", out)
+		}
+		var unchanged struct{ Title, Body string }
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn), nil, &unchanged)
+		if unchanged.Title != "agent cli PR" || !strings.Contains(unchanged.Body, "what changed: agent.txt") || strings.Contains(unchanged.Body, "replacement description") {
+			t.Errorf("pr create changed the existing PR: %+v", unchanged)
+		}
+		must(cw, "follow-up: fixed agent.txt", "comment", fmt.Sprint(prn), "--body-file", "-")
 		if out := must(aw, "", "pr", "show", fmt.Sprint(prn), "--since-review", "--reviewer", "agy"); !strings.Contains(out, "the patch changed: git range-diff ") ||
 			!strings.Contains(out, "= 1:") || !strings.Contains(out, "agent change") ||
 			!strings.Contains(out, "--- new since the review: ") || !strings.Contains(out, "+fixed") || strings.Contains(out, "same patch") {
