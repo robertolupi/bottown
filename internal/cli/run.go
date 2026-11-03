@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -392,8 +393,24 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		_ = c.Wait()
 		return err
 	}
+	t, transcribes := h.(runs.Transcriber)
+	transcribes = transcribes && !o.interactive
+	livePath := rc.ws.Path(run.ID, runs.LiveTranscriptSuffix)
+	var following sync.WaitGroup
+	followCtx, stopFollowing := context.WithCancel(context.WithoutCancel(ctx))
+	if transcribes {
+		// The harness prints only its final message: Live Runs follows the
+		// session's transcript so far instead.
+		following.Go(func() {
+			runs.FollowTranscript(followCtx, t, l, started, livePath, runs.FollowTranscriptEvery)
+		})
+	}
 	runErr := c.Wait()
-	if t, ok := h.(runs.Transcriber); ok && !o.interactive {
+	stopFollowing()
+	following.Wait()
+	// Before the log gets the transcript, so that no reader sees it twice.
+	_ = os.Remove(livePath)
+	if transcribes {
 		// Also for a stopped run, whose transcript shows how far it got;
 		// bounded, so a stuck export cannot hold the run open.
 		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
@@ -862,7 +879,7 @@ func newRunShow(g *globals) *cobra.Command {
 				srErr = err
 			}
 			logPath := rc.ws.Path(args[0], ".log")
-			if b, err := os.ReadFile(logPath); err == nil && len(b) > 0 {
+			if b, err := runs.ReadLog(logPath); err == nil && len(b) > 0 {
 				logContent = string(b)
 			}
 			printRunShow(out, lipgloss.NewRenderer(out), rec, sr, srErr, logPath, logContent)

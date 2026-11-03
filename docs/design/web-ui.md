@@ -545,13 +545,17 @@ session.resume_hint) as status. `crush run` prints only the final
 message, so when a crush batch run ends the launcher appends the
 session's transcript to its log (`crush session last --json`, if crush
 created that session during the run), as JSON lines: the session's meta,
-then each message. Its lines are typed: assistant text, tool calls with
+then each message. While the run goes on, the launcher exports the
+transcript every 3 seconds into `<id>.transcript` beside the log,
+replacing it whole; the tail reads it after the log, so Live Runs follows
+the session as it grows, and the launcher removes it before appending the
+final transcript. Its lines are typed: assistant text, tool calls with
 their class, tool results crush marks as errors, commands whose output
 ends `Exit code N` with N non-zero, and finishes other than a normal end
 as errors, and the session start as status; output lines the assistant
-text does not hold (an error crush printed) follow as `plain`. Until the
-run ends, and in logs without a transcript, crush's lines are its output,
-as `text`. The script fallback is still `plain`.
+text does not hold (an error crush printed) follow as `plain`. Before
+crush starts its session, and in logs without a transcript, crush's lines
+are its output, as `text`. The script fallback is still `plain`.
 Unknown usage stays unknown.
 
 ## 7. Server APIs

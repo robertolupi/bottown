@@ -296,7 +296,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		var logTail []runs.LogLine
 		if !sr.Interactive {
 			logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", sr.ID+".log")
-			if logBytes, err := os.ReadFile(logPath); err == nil {
+			if logBytes, err := runs.ReadLog(logPath); err == nil {
 				parsed := runs.RenderLog(harness, logBytes)
 				if len(parsed) > 25 {
 					logTail = parsed[len(parsed)-25:]

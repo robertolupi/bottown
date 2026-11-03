@@ -104,9 +104,10 @@ type ModelLister interface {
 }
 
 // Transcriber is implemented by bindings whose batch output is only the
-// agent's final message. When a batch harness exits, the launcher has
-// Transcript append the session's transcript, its tool calls and results,
-// to the run log.
+// agent's final message. While a batch harness runs, the launcher exports
+// the session's transcript, its tool calls and results, every few seconds
+// for Live Runs (FollowTranscript); when it exits, the launcher has
+// Transcript append it to the run log.
 type Transcriber interface {
 	// Transcript writes the transcript of the session the run started at
 	// or after since to w; it fails, writing nothing, if there is none.
@@ -892,7 +893,8 @@ func (codexHarness) Usage(log []byte) *secrets.Usage {
 // writes the workspace file <worktree>/.crush.json (excluded from git), which
 // references BOTTOWN_RUN_KEY via shell expansion instead of holding the raw key.
 // Batch runs execute non-interactively via `crush run --quiet`, which prints
-// only the final message; the launcher then appends the session's transcript
+// only the final message; while it runs, the launcher keeps the session's
+// transcript so far beside the log (FollowTranscript), and then appends it
 // (see Transcript) to the log.
 type crushHarness struct{}
 
