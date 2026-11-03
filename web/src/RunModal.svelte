@@ -3,6 +3,7 @@
   // between openings and the Milestones view can preset the issue.
   import type { ActorDetail } from './types';
   import type { RunForm } from './actions';
+  import { actorModelPlaceholder } from './state';
   import Modal from './Modal.svelte';
 
   interface Props {
@@ -47,15 +48,29 @@
       </div>
     </div>
 
-    <div class="form-group">
-      <label for="run-act">Actor</label>
-      <select id="run-act" class="input" bind:value={form.actor}>
-        {#if actors}
-          {#each actors as act}
-            <option value={act.name}>{act.name} ({act.family})</option>
-          {/each}
-        {/if}
-      </select>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="run-act">Actor</label>
+        <!-- A model is the harness's: changing the actor clears it. -->
+        <select id="run-act" class="input" bind:value={form.actor} onchange={() => (form.model = '')}>
+          {#if actors}
+            {#each actors as act}
+              <option value={act.name}>{act.name} ({act.family})</option>
+            {/each}
+          {/if}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="run-model">Model (optional)</label>
+        <input
+          id="run-model"
+          type="text"
+          class="input"
+          placeholder={actorModelPlaceholder(actors, form.actor)}
+          bind:value={form.model}
+        />
+      </div>
     </div>
 
     {#if form.kind === 'discuss'}

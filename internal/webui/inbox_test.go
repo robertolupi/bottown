@@ -125,6 +125,39 @@ func defaultFixture() *fixtureForge {
 	}
 }
 
+func TestFetchActors_HostDefaultModels(t *testing.T) {
+	fix := defaultFixture()
+	_, port := newFixtureServer(t, fix)
+	s, err := NewServer(Config{
+		Instance: config.Instance{
+			Name:        "prod",
+			ServerPort:  port,
+			OwnerLogin:  "rlupi",
+			ActorModels: map[string]string{"agy": "gemini-3.8-flash"},
+		},
+		RepoTop:  t.TempDir(),
+		FullRepo: "bottown/bottown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	models := map[string]string{}
+	for _, a := range s.fetchActors(context.Background()) {
+		models[a.Name] = a.Model
+	}
+	if len(models) != len(fix.actors) {
+		t.Fatalf("actors = %v, want %d", models, len(fix.actors))
+	}
+	if models["agy"] != "gemini-3.8-flash" {
+		t.Errorf("agy model = %q, want the host default", models["agy"])
+	}
+	if m, ok := models["claude"]; !ok || m != "" {
+		t.Errorf("claude model = %q (listed %v), want none", m, ok)
+	}
+}
+
 func TestInbox_ReadyToMerge(t *testing.T) {
 	fix := defaultFixture()
 	_, port := newFixtureServer(t, fix)

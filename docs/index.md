@@ -129,7 +129,8 @@ to bottown and only the actor's harness binding reads it:
 | crush | `crush:openrouter:~deepseek/latest`, `crush:lmstudio:qwen/qwen3.8-27b` | `-m PROVIDER/MODEL`: the spec's first colon separates the provider; a spec without one is a bare model |
 
 - **Defaults.** `~/.bottown/<instance>/config.toml` may name a host's
-  default spec per actor, used when the command gives none:
+  default spec per actor, used when the command gives none (the web UI's
+  run and flow forms show it in their model fields):
 
   ```toml
   [actor_models]

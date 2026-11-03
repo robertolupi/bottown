@@ -488,8 +488,10 @@ ask first.
 | Push `main` to origin | `git push origin main` | confirm |
 | Queue or unqueue an issue (later, §3.6) | sets or clears the bottown-managed labels | no |
 
-Starting a flow or a run picks actors from lists of the instance's actors.
-The UI refuses a same-family verifier before anything starts, as the CLI
+Starting a flow or a run picks actors from lists of the instance's actors,
+each with an optional model field: a model given starts the actor as
+`ACTOR:SPEC`, and an empty field leaves the host's `[actor_models]` entry,
+which the field shows as its placeholder, to apply. The UI refuses a same-family verifier before anything starts, as the CLI
 does.
 
 Merging, editing issues and PRs, reviewing, and milestones are not

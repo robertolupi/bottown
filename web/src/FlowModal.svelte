@@ -3,6 +3,7 @@
   // between openings and the Milestones view can preset the issue.
   import type { ActorDetail } from './types';
   import type { FlowForm } from './actions';
+  import { actorModelPlaceholder } from './state';
   import Modal from './Modal.svelte';
 
   interface Props {
@@ -42,7 +43,8 @@
     <div class="form-row">
       <div class="form-group">
         <label for="flow-imp">Implementer</label>
-        <select id="flow-imp" class="input" bind:value={form.implement}>
+        <!-- A model is the harness's: changing the actor clears it. -->
+        <select id="flow-imp" class="input" bind:value={form.implement} onchange={() => (form.implementModel = '')}>
           {#if actors}
             {#each actors as act}
               <option value={act.name}>{act.name} ({act.family})</option>
@@ -53,13 +55,37 @@
 
       <div class="form-group">
         <label for="flow-ver">Verifier (Cross-Family)</label>
-        <select id="flow-ver" class="input" bind:value={form.verify}>
+        <select id="flow-ver" class="input" bind:value={form.verify} onchange={() => (form.verifyModel = '')}>
           {#if actors}
             {#each actors as act}
               <option value={act.name}>{act.name} ({act.family})</option>
             {/each}
           {/if}
         </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="flow-imp-model">Implementer model (optional)</label>
+        <input
+          id="flow-imp-model"
+          type="text"
+          class="input"
+          placeholder={actorModelPlaceholder(actors, form.implement)}
+          bind:value={form.implementModel}
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="flow-ver-model">Verifier model (optional)</label>
+        <input
+          id="flow-ver-model"
+          type="text"
+          class="input"
+          placeholder={actorModelPlaceholder(actors, form.verify)}
+          bind:value={form.verifyModel}
+        />
       </div>
     </div>
 
