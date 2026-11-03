@@ -87,30 +87,15 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
-	// 1. Actors and their families (GET /v1/actors)
-	var actorList []struct {
-		Name    string `json:"name"`
-		Family  string `json:"family"`
-		Harness string `json:"harness"`
-	}
-	actors := make(map[string]string) // name -> family
-	if err := s.callServer(ctx, http.MethodGet, "/v1/actors", nil, &actorList); err != nil {
+	// 1. Actors and their families
+	actorMap, err := s.fetchActorMap(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("fetch actors: %w", err)
 	}
-	for _, a := range actorList {
-		actors[a.Name] = a.Family
-	}
+	actors := actorFamilies(actorMap)
 
 	// 2. Owner login
-	ownerLogin := s.cfg.Instance.OwnerLogin
-	if ownerLogin == "" {
-		var who struct {
-			Actor string `json:"actor"`
-		}
-		if err := s.callServer(ctx, http.MethodGet, "/v1/whoami", nil, &who); err == nil && who.Actor != "" {
-			ownerLogin = who.Actor
-		}
-	}
+	ownerLogin := s.resolveOwnerLogin(ctx)
 
 	// 3. Server runs for this repo
 	var serverRuns []secrets.Run
@@ -161,21 +146,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	if err := s.callServer(ctx, http.MethodGet, runsPath+"&history=1", nil, &allRuns); err != nil {
 		return nil, fmt.Errorf("fetch run history: %w", err)
 	}
-	assessments := make(map[int64]review.Assessment)
-	for _, pr := range prs {
-		revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-		revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
-		if err != nil {
-			continue
-		}
-		head := ""
-		if pr.Head != nil {
-			head = pr.Head.Sha
-		}
-		assessments[pr.Index] = review.Assess(head, review.FromForge(revs), review.Policy{
-			Author: userLogin(pr.Poster), Owner: ownerLogin, Families: actors, Grants: review.Grants(allRuns, repo, pr.Index),
-		})
-	}
+	assessments := s.assessOpenPullRequests(ctx, repo, prs, ownerLogin, actors, allRuns)
 
 	// 6. Open Issues from Forgejo
 	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues", org, repo)
@@ -611,4 +582,64 @@ func shortSHA(sha string) string {
 		return sha[:10]
 	}
 	return sha
+}
+
+func (s *Server) resolveOwnerLogin(ctx context.Context) string {
+	if s.cfg.Instance.OwnerLogin != "" {
+		return s.cfg.Instance.OwnerLogin
+	}
+	var who struct {
+		Actor string `json:"actor"`
+	}
+	if err := s.callServer(ctx, http.MethodGet, "/v1/whoami", nil, &who); err == nil && who.Actor != "" {
+		return who.Actor
+	}
+	return ""
+}
+
+func actorFamilies(actorMap map[string]*ActorDetail) map[string]string {
+	families := make(map[string]string, len(actorMap))
+	for name, a := range actorMap {
+		if a != nil {
+			families[name] = a.Family
+		}
+	}
+	return families
+}
+
+func (s *Server) assessPullRequest(ctx context.Context, repo string, pr *sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) (review.Assessment, error) {
+	if pr == nil {
+		return review.Assessment{}, fmt.Errorf("nil pull request")
+	}
+	org, _ := s.orgAndRepo()
+	revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+	revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
+	if err != nil {
+		return review.Assessment{}, err
+	}
+	head := ""
+	if pr.Head != nil {
+		head = pr.Head.Sha
+	}
+	return review.Assess(head, review.FromForge(revs), review.Policy{
+		Author:   userLogin(pr.Poster),
+		Owner:    ownerLogin,
+		Families: families,
+		Grants:   review.Grants(allRuns, repo, pr.Index),
+	}), nil
+}
+
+func (s *Server) assessOpenPullRequests(ctx context.Context, repo string, prs []*sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) map[int64]review.Assessment {
+	assessments := make(map[int64]review.Assessment)
+	for _, pr := range prs {
+		if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
+			continue
+		}
+		a, err := s.assessPullRequest(ctx, repo, pr, ownerLogin, families, allRuns)
+		if err != nil {
+			continue
+		}
+		assessments[pr.Index] = a
+	}
+	return assessments
 }

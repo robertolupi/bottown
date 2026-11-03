@@ -76,6 +76,11 @@
       {#if thread.flow_state}
         <FlowStateBadge state={thread.flow_state} />
       {/if}
+      {#if thread.active && thread.active_label}
+        <span class="badge badge-accent flow-live-badge">
+          {thread.active_label}
+        </span>
+      {/if}
       <StatusBadge status={thread.status} />
       {#if thread.total_denials > 0}
         <span class="badge badge-error" title="Operations refused by server policy in this flow">
@@ -176,6 +181,10 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+  }
+
+  .flow-live-badge {
+    font-weight: 600;
   }
 
   .summary-cell {

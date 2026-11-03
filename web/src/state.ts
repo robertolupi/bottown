@@ -410,7 +410,7 @@ export function deriveFlowState(input: {
   if (latestRun?.review_decision) {
     switch (latestRun.review_decision) {
       case 'approved':
-        if (latestRun.review_at_head !== false) {
+        if (latestRun.review_at_head === true) {
           return {
             state: 'ready_to_merge',
             label: 'Ready to merge',

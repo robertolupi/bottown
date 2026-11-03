@@ -130,7 +130,7 @@ type HistoryRunInfo struct {
 	PRMerged       bool   `json:"pr_merged,omitempty"`
 	PRMergeable    *bool  `json:"pr_mergeable,omitempty"`
 	ReviewDecision string `json:"review_decision,omitempty"`
-	ReviewAtHead   bool   `json:"review_at_head,omitempty"`
+	ReviewAtHead   bool   `json:"review_at_head"`
 	FlowState      string `json:"flow_state,omitempty"`
 }
 
@@ -861,7 +861,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	denials := s.fetchDenials(ctx)
 
 	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
-	prs, err := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	prs, pullsErr := listAll[*sdk.PullRequest](ctx, s, pullsPath)
 	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
 	for _, pr := range prs {
 		if pr != nil && pr.Index > 0 {
@@ -869,42 +869,12 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		}
 	}
 
-	ownerLogin := s.cfg.Instance.OwnerLogin
-	if ownerLogin == "" {
-		var who struct {
-			Actor string `json:"actor"`
-		}
-		if err := s.callServer(ctx, http.MethodGet, "/v1/whoami", nil, &who); err == nil && who.Actor != "" {
-			ownerLogin = who.Actor
-		}
-	}
+	ownerLogin := s.resolveOwnerLogin(ctx)
+	actors := actorFamilies(actorMap)
 
-	actors := make(map[string]string)
-	for name, a := range actorMap {
-		if a != nil {
-			actors[name] = a.Family
-		}
-	}
-
-	assessments := make(map[int64]review.Assessment)
-	if err == nil {
-		for _, pr := range prs {
-			if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
-				continue
-			}
-			revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-			revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
-			if err != nil {
-				continue
-			}
-			head := ""
-			if pr.Head != nil {
-				head = pr.Head.Sha
-			}
-			assessments[pr.Index] = review.Assess(head, review.FromForge(revs), review.Policy{
-				Author: userLogin(pr.Poster), Owner: ownerLogin, Families: actors, Grants: review.Grants(allRuns, repo, pr.Index),
-			})
-		}
+	var assessments map[int64]review.Assessment
+	if pullsErr == nil {
+		assessments = s.assessOpenPullRequests(ctx, repo, prs, ownerLogin, actors, allRuns)
 	}
 
 	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=all&type=issues", org, repo)
@@ -974,6 +944,9 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			flowState = "unknown"
 			if meta.Active {
 				flowState = "in_progress"
+			} else if pullsErr != nil {
+				// Missing / read-failed PR data must remain explicitly neutral/unknown
+				flowState = "unknown"
 			} else if meta.PR > 0 {
 				if pr := prsByIndex[meta.PR]; pr != nil {
 					if pr.Head != nil {
@@ -1003,15 +976,22 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 								flowState = "needs_review"
 							}
 						} else {
+							// Review read failed or unavailable
 							flowState = "unknown"
 						}
 					} else if pr.State == sdk.StateClosed {
 						flowState = "needs_intervention"
 					}
+				} else {
+					flowState = "unknown"
 				}
 			} else {
-				// Pre-PR flow run
-				flowState = "needs_intervention"
+				// Pre-PR flow run with PR data read successfully
+				if sr.Status == "failed" || sr.Status == "revoked" || sr.Outcome == "failed" {
+					flowState = "needs_intervention"
+				} else {
+					flowState = "unknown"
+				}
 			}
 		}
 

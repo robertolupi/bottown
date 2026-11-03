@@ -21,14 +21,3 @@
     {state.label}
   </span>
 {/if}
-
-<style>
-  .flow-state-badge {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-</style>

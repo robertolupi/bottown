@@ -81,6 +81,13 @@ func TestComputeHistoryRuns_FlowState(t *testing.T) {
 			Created: now.Add(-25 * time.Minute), Ended: &ended2,
 		},
 
+		// Issue 65: Succeeded run without PR -> Unknown
+		{
+			ID: "r-nopr-imp", Kind: "implement", Actor: "claude", Family: "anthropic",
+			Repo: "bottown", Issue: 65, Status: "succeeded",
+			Created: now.Add(-25 * time.Minute), Ended: &ended2,
+		},
+
 		// Issue 70: Active flow -> In progress
 		{
 			ID: "r-active-imp", Kind: "implement", Actor: "claude", Family: "anthropic",
@@ -161,6 +168,7 @@ func TestComputeHistoryRuns_FlowState(t *testing.T) {
 		{Index: 40, Title: "Issue 40"},
 		{Index: 50, Title: "Issue 50"},
 		{Index: 60, Title: "Issue 60"},
+		{Index: 65, Title: "Issue 65"},
 		{Index: 70, Title: "Issue 70"},
 		{Index: 80, Title: "Issue 80"},
 	}
@@ -249,10 +257,16 @@ func TestComputeHistoryRuns_FlowState(t *testing.T) {
 		t.Fatalf("r-merged-imp: flow_state = %q, pr_merged = %v, want merged", h50.FlowState, h50.PRMerged)
 	}
 
-	// 6. Failed run
+	// 6. Failed run without PR -> Needs intervention
 	h60 := byID["r-failed-imp"]
 	if h60.FlowState != "needs_intervention" {
 		t.Fatalf("r-failed-imp: flow_state = %q, want needs_intervention", h60.FlowState)
+	}
+
+	// 6b. Succeeded run without PR -> Unknown (never guessed or inferred from outcome)
+	h65 := byID["r-nopr-imp"]
+	if h65.FlowState != "unknown" {
+		t.Fatalf("r-nopr-imp: flow_state = %q, want unknown", h65.FlowState)
 	}
 
 	// 7. Active flow -> in_progress
@@ -266,4 +280,144 @@ func TestComputeHistoryRuns_FlowState(t *testing.T) {
 	if h80.FlowState != "" {
 		t.Fatalf("r-discuss: flow_state = %q, want empty for discuss", h80.FlowState)
 	}
+}
+
+// TestComputeHistoryRuns_ReadFailures tests that missing or read-failed PR and review data
+// leaves the flow-level state explicitly unknown/neutral, rather than Needs intervention or Ready.
+func TestComputeHistoryRuns_ReadFailures(t *testing.T) {
+	now := time.Now().UTC()
+	h := "commit-head"
+	ended := now.Add(-10 * time.Minute)
+
+	actors := []ActorDetail{
+		{Name: "claude", Family: "anthropic", Harness: "claude"},
+		{Name: "kimi", Family: "moonshot", Harness: "kimi"},
+	}
+
+	runs := []secrets.Run{
+		// Implement run on issue 10 (succeeded, pr_opened)
+		{
+			ID: "r-imp", Kind: "implement", Actor: "claude", Family: "anthropic",
+			Repo: "bottown", Issue: 10, Branch: "issue/10", Status: "succeeded", Outcome: "pr_opened",
+			Created: now.Add(-30 * time.Minute), Ended: &ended,
+			Digest: secrets.Digest{Summary: "Opened PR !11"},
+		},
+		// Verify run on PR 11 (succeeded, approved)
+		{
+			ID: "r-ver", Kind: "verify", Actor: "kimi", Family: "moonshot",
+			Repo: "bottown", Issue: 10, PR: 11, Status: "succeeded", Outcome: "approved",
+			Created: now.Add(-20 * time.Minute), Ended: &ended,
+		},
+	}
+
+	prs := []*sdk.PullRequest{
+		{
+			Index: 11, State: sdk.StateOpen, Mergeable: true,
+			Poster: &sdk.User{UserName: "claude"}, Head: &sdk.PRBranchInfo{Ref: "issue/10", Sha: h},
+		},
+	}
+
+	reviews := map[int64][]*sdk.PullReview{
+		11: {
+			{
+				ID: 1, Reviewer: &sdk.User{UserName: "kimi"}, State: sdk.ReviewStateApproved,
+				CommitID: h, Official: true, Stale: false, Dismissed: false, Submitted: ended,
+			},
+		},
+	}
+
+	issues := []*sdk.Issue{
+		{Index: 10, Title: "Issue 10"},
+	}
+
+	t.Run("pulls read failure (500) results in unknown", func(t *testing.T) {
+		fix := &runsFixture{
+			actors:   actors,
+			runs:     runs,
+			prs:      prs,
+			reviews:  reviews,
+			issues:   issues,
+			pullsErr: 500,
+		}
+
+		_, port := newRunsFixtureServer(t, fix)
+		top := t.TempDir()
+
+		s, err := NewServer(Config{
+			Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
+			RepoTop:  top,
+			FullRepo: "bottown/bottown",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+
+		ctx := context.Background()
+		history, err := s.ComputeHistoryRuns(ctx, HistoryFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		byID := make(map[string]HistoryRunInfo, len(history))
+		for _, item := range history {
+			byID[item.ID] = item
+		}
+
+		// When pulls read fails, implement run loses its resolved PR.
+		// It must NOT show needs_intervention; it must remain explicitly unknown!
+		hImp := byID["r-imp"]
+		if hImp.FlowState != "unknown" {
+			t.Fatalf("r-imp with pulls 500: flow_state = %q, want unknown", hImp.FlowState)
+		}
+
+		// Verify run has explicit PR 11 in run record, but PR cannot be read.
+		// It must also remain explicitly unknown!
+		hVer := byID["r-ver"]
+		if hVer.FlowState != "unknown" {
+			t.Fatalf("r-ver with pulls 500: flow_state = %q, want unknown", hVer.FlowState)
+		}
+	})
+
+	t.Run("reviews read failure (500) results in unknown", func(t *testing.T) {
+		fix := &runsFixture{
+			actors:     actors,
+			runs:       runs,
+			prs:        prs,
+			reviews:    reviews,
+			issues:     issues,
+			reviewsErr: map[int64]int{11: 500},
+		}
+
+		_, port := newRunsFixtureServer(t, fix)
+		top := t.TempDir()
+
+		s, err := NewServer(Config{
+			Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
+			RepoTop:  top,
+			FullRepo: "bottown/bottown",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+
+		ctx := context.Background()
+		history, err := s.ComputeHistoryRuns(ctx, HistoryFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		byID := make(map[string]HistoryRunInfo, len(history))
+		for _, item := range history {
+			byID[item.ID] = item
+		}
+
+		// PR is open and mergeable, but reviews read failed (500).
+		// Must remain explicitly unknown!
+		hVer := byID["r-ver"]
+		if hVer.FlowState != "unknown" {
+			t.Fatalf("r-ver with reviews 500: flow_state = %q, want unknown", hVer.FlowState)
+		}
+	})
 }

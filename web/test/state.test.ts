@@ -1327,6 +1327,23 @@ test('deriveFlowState derives concise flow state from authoritative data without
   assert.equal(staleState.icon, '👁');
   assert.notEqual(staleState.state, 'ready_to_merge');
 
+  // 3b. Approval with missing/false review_at_head: must NOT imply readiness!
+  const missingAtHeadState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1b', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved without at_head confirmation', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'approved', review_at_head: false,
+    },
+  });
+  assert.equal(missingAtHeadState.state, 'needs_review');
+  assert.equal(missingAtHeadState.label, 'Needs review');
+  assert.notEqual(missingAtHeadState.state, 'ready_to_merge');
+
   // 4. Changes requested
   const changesState = deriveFlowState({
     active: false,
@@ -1463,6 +1480,30 @@ test('groupHistoryThreads attaches flow_state to flow threads while keeping stat
   const discussThread = threads.find((t) => t.kind === 'discuss');
   assert.ok(discussThread);
   assert.equal(discussThread?.flow_state, undefined);
+
+  // Active flow thread preserves both active_label and flow_state (In progress)
+  const activeThreads = groupHistoryThreads(
+    [
+      {
+        id: 'r-act-1', target: '#51', target_url: 'http://forge/issues/51', issue: 51,
+        kind: 'implement', actor: 'codex', family: 'openai', harness: 'codex', mode: 'batch',
+        status: 'running', created: '2026-11-01T10:00:00Z', summary: '', purged: false, denials: [],
+      } as any,
+    ],
+    null,
+    [
+      {
+        issue: 51, implement: 'codex', verify: 'kimi', round: 2, max_rounds: 3,
+        step: 'verifying with kimi', label: '#51 · round 2/3 · verifying with kimi', waiting: false,
+      },
+    ],
+  );
+  const activeFlow = activeThreads.find((t) => t.issue === 51);
+  assert.ok(activeFlow);
+  assert.equal(activeFlow?.active, true);
+  assert.equal(activeFlow?.active_label, '#51 · round 2/3 · verifying with kimi');
+  assert.equal(activeFlow?.flow_state?.state, 'in_progress');
+  assert.equal(activeFlow?.flow_state?.label, 'In progress');
 });
 
 
