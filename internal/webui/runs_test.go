@@ -1152,9 +1152,47 @@ func TestHistoryTableScrollStyles(t *testing.T) {
 		t.Fatalf("read RunHistory.svelte: %v", err)
 	}
 	src := string(data)
-	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: 1320px", "max-block-size: 1320px", "overflow: auto", "position: sticky"} {
+	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: var(--panel-max-height)", "max-block-size: var(--panel-max-height)", "overflow: auto", "position: sticky"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("expected RunHistory.svelte to contain %q", want)
 		}
+	}
+}
+
+func TestOwnerInboxScrollStyles(t *testing.T) {
+	// The Owner Inbox scrolls at the same maximum height as the run
+	// history, both from the shared --panel-max-height. The built bundle is
+	// not tracked, so check the source.
+	inbox, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "OwnerInbox.svelte"))
+	if err != nil {
+		t.Fatalf("read OwnerInbox.svelte: %v", err)
+	}
+	inboxSrc := string(inbox)
+	for _, want := range []string{".inbox-list {", "max-height: var(--panel-max-height)", "max-block-size: var(--panel-max-height)", "overflow: auto"} {
+		if !strings.Contains(inboxSrc, want) {
+			t.Errorf("expected OwnerInbox.svelte to contain %q", want)
+		}
+	}
+
+	css, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "global.css"))
+	if err != nil {
+		t.Fatalf("read global.css: %v", err)
+	}
+	if !strings.Contains(string(css), "--panel-max-height:") {
+		t.Errorf("expected global.css to define --panel-max-height")
+	}
+}
+
+func TestOverviewOrdersLiveRunsFirst(t *testing.T) {
+	// The overview shows Live Runs above the Owner Inbox.
+	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "App.svelte"))
+	if err != nil {
+		t.Fatalf("read App.svelte: %v", err)
+	}
+	src := string(data)
+	liveIdx := strings.Index(src, "<LiveRuns")
+	inboxIdx := strings.Index(src, "<OwnerInbox")
+	if liveIdx < 0 || inboxIdx < 0 || liveIdx > inboxIdx {
+		t.Errorf("expected LiveRuns before OwnerInbox in App.svelte (live %d, inbox %d)", liveIdx, inboxIdx)
 	}
 }

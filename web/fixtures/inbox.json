@@ -1,0 +1,1519 @@
+{
+  "status": {
+    "instance": "prod",
+    "repo": "bottown/demo",
+    "upstream": {
+      "has_upstream": true,
+      "origin_url": "git@github.com:example/demo.git",
+      "fetched_at": "2026-11-02T10:40:00Z",
+      "head_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "ahead_count": 1,
+      "behind_count": 0,
+      "unpushed_commits": [
+        {
+          "sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+          "short_sha": "4f2a9c1",
+          "subject": "Merge pull request 'Paginate the export endpoint' (#55) from issue/40 into main",
+          "author": "owner",
+          "date": "2026-11-02T09:58:00Z",
+          "pr_number": 55
+        }
+      ]
+    },
+    "forge": {
+      "remote": "bottown",
+      "repo": "bottown/demo",
+      "forge_url": "http://127.0.0.1:3030",
+      "default_branch": "main",
+      "checkout_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "forge_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "behind_count": 0,
+      "ahead_count": 0
+    },
+    "health": {
+      "agent_instructions": {
+        "found": true,
+        "filename": "AGENTS.md"
+      },
+      "protected_main": {
+        "checked": true,
+        "protected": true
+      },
+      "worktrees": [
+        {
+          "actor": "claude",
+          "path": "~/src/fams/demo/claude",
+          "head": "issue/42",
+          "is_dirty": true,
+          "active_run": "r-1a2b3c4d"
+        },
+        {
+          "actor": "codex",
+          "path": "~/src/fams/demo/codex",
+          "head": "main",
+          "is_dirty": false,
+          "last_run": "r-5e6f7a8b"
+        },
+        {
+          "actor": "kimi",
+          "path": "~/src/fams/demo/main/.bottown/runs/r-9c8d7e6f",
+          "head": "8d3e1f0",
+          "is_dirty": false,
+          "active_run": "r-9c8d7e6f",
+          "ephemeral": true,
+          "kind": "verify",
+          "target": "!57"
+        }
+      ],
+      "harness_commands": [
+        {
+          "harness": "claude",
+          "installed": true,
+          "current": true,
+          "path": "~/.claude/commands"
+        },
+        {
+          "harness": "agy",
+          "installed": true,
+          "current": false,
+          "path": "~/.gemini/commands"
+        }
+      ],
+      "version": {
+        "cli_version": "87ad131",
+        "server_version": "87ad131",
+        "matches": true
+      },
+      "repo_settings": {
+        "checked": true,
+        "found": true,
+        "file": ".bottown.toml",
+        "branch": "main",
+        "commit": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+        "after_pull": [
+          "make install"
+        ],
+        "milestones_dir": "docs/milestones"
+      }
+    },
+    "links": {
+      "repo": "http://127.0.0.1:3030/bottown/demo",
+      "issues": "http://127.0.0.1:3030/bottown/demo/issues",
+      "pulls": "http://127.0.0.1:3030/bottown/demo/pulls",
+      "commits": "http://127.0.0.1:3030/bottown/demo/commits/branch/main"
+    },
+    "inbox": [],
+    "live_runs": [],
+    "active_flows": [],
+    "actors": [
+      {
+        "name": "claude",
+        "family": "anthropic",
+        "harness": "claude"
+      },
+      {
+        "name": "codex",
+        "family": "openai",
+        "harness": "codex"
+      },
+      {
+        "name": "kimi",
+        "family": "moonshot",
+        "harness": "kimi"
+      },
+      {
+        "name": "agy",
+        "family": "google",
+        "harness": "agy"
+      },
+      {
+        "name": "crush",
+        "family": "mixed",
+        "harness": "crush"
+      }
+    ]
+  },
+  "inbox": [
+    {
+      "id": "ready:100",
+      "kind": "ready_to_merge",
+      "title": "!100 is approved and ready to merge",
+      "description": "Review and merge it in Forgejo.",
+      "target": "!100",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/100",
+      "issue": 100,
+      "issue_title": "Demo issue 100",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "conflict:101",
+      "kind": "conflicts_with_main",
+      "title": "!101 conflicts with main",
+      "description": "main moved since the approval. Re-run the flow to bring main in.",
+      "target": "!101",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/101",
+      "issue": 101,
+      "issue_title": "Demo issue 101",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "stopped:102",
+      "kind": "stopped_flow",
+      "title": "Flow on #102 stopped: run failed",
+      "description": "Read its handover, fix the issue text, then re-run.",
+      "target": "#102",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/102",
+      "issue": 102,
+      "issue_title": "Demo issue 102",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "broken:103",
+      "kind": "broken_run",
+      "title": "Run r-00000067 is broken",
+      "description": "The harness exited without ending the run.",
+      "target": "#103",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/103",
+      "issue": 103,
+      "issue_title": "Demo issue 103",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "discuss:104",
+      "kind": "discuss_answer",
+      "title": "kimi answered on #104",
+      "description": "A discussion run left its answer on the issue.",
+      "target": "#104",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/104",
+      "issue": 104,
+      "issue_title": "Demo issue 104",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "filed:105",
+      "kind": "actor_filed_issue",
+      "title": "claude filed #105",
+      "description": "A follow-up the actor found while working.",
+      "target": "#105",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/105",
+      "issue": 105,
+      "issue_title": "Demo issue 105",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "ready:106",
+      "kind": "ready_to_merge",
+      "title": "!106 is approved and ready to merge",
+      "description": "Review and merge it in Forgejo.",
+      "target": "!106",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/106",
+      "issue": 106,
+      "issue_title": "Demo issue 106",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "conflict:107",
+      "kind": "conflicts_with_main",
+      "title": "!107 conflicts with main",
+      "description": "main moved since the approval. Re-run the flow to bring main in.",
+      "target": "!107",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/107",
+      "issue": 107,
+      "issue_title": "Demo issue 107",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "stopped:108",
+      "kind": "stopped_flow",
+      "title": "Flow on #108 stopped: run failed",
+      "description": "Read its handover, fix the issue text, then re-run.",
+      "target": "#108",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/108",
+      "issue": 108,
+      "issue_title": "Demo issue 108",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "broken:109",
+      "kind": "broken_run",
+      "title": "Run r-0000006d is broken",
+      "description": "The harness exited without ending the run.",
+      "target": "#109",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/109",
+      "issue": 109,
+      "issue_title": "Demo issue 109",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "discuss:110",
+      "kind": "discuss_answer",
+      "title": "kimi answered on #110",
+      "description": "A discussion run left its answer on the issue.",
+      "target": "#110",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/110",
+      "issue": 110,
+      "issue_title": "Demo issue 110",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "filed:111",
+      "kind": "actor_filed_issue",
+      "title": "claude filed #111",
+      "description": "A follow-up the actor found while working.",
+      "target": "#111",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/111",
+      "issue": 111,
+      "issue_title": "Demo issue 111",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "ready:112",
+      "kind": "ready_to_merge",
+      "title": "!112 is approved and ready to merge",
+      "description": "Review and merge it in Forgejo.",
+      "target": "!112",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/112",
+      "issue": 112,
+      "issue_title": "Demo issue 112",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "conflict:113",
+      "kind": "conflicts_with_main",
+      "title": "!113 conflicts with main",
+      "description": "main moved since the approval. Re-run the flow to bring main in.",
+      "target": "!113",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/113",
+      "issue": 113,
+      "issue_title": "Demo issue 113",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "stopped:114",
+      "kind": "stopped_flow",
+      "title": "Flow on #114 stopped: run failed",
+      "description": "Read its handover, fix the issue text, then re-run.",
+      "target": "#114",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/114",
+      "issue": 114,
+      "issue_title": "Demo issue 114",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "broken:115",
+      "kind": "broken_run",
+      "title": "Run r-00000073 is broken",
+      "description": "The harness exited without ending the run.",
+      "target": "#115",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/115",
+      "issue": 115,
+      "issue_title": "Demo issue 115",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "discuss:116",
+      "kind": "discuss_answer",
+      "title": "kimi answered on #116",
+      "description": "A discussion run left its answer on the issue.",
+      "target": "#116",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/116",
+      "issue": 116,
+      "issue_title": "Demo issue 116",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "filed:117",
+      "kind": "actor_filed_issue",
+      "title": "claude filed #117",
+      "description": "A follow-up the actor found while working.",
+      "target": "#117",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/117",
+      "issue": 117,
+      "issue_title": "Demo issue 117",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "ready:118",
+      "kind": "ready_to_merge",
+      "title": "!118 is approved and ready to merge",
+      "description": "Review and merge it in Forgejo.",
+      "target": "!118",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/118",
+      "issue": 118,
+      "issue_title": "Demo issue 118",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "conflict:119",
+      "kind": "conflicts_with_main",
+      "title": "!119 conflicts with main",
+      "description": "main moved since the approval. Re-run the flow to bring main in.",
+      "target": "!119",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/119",
+      "issue": 119,
+      "issue_title": "Demo issue 119",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "stopped:120",
+      "kind": "stopped_flow",
+      "title": "Flow on #120 stopped: run failed",
+      "description": "Read its handover, fix the issue text, then re-run.",
+      "target": "#120",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/120",
+      "issue": 120,
+      "issue_title": "Demo issue 120",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "broken:121",
+      "kind": "broken_run",
+      "title": "Run r-00000079 is broken",
+      "description": "The harness exited without ending the run.",
+      "target": "#121",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/121",
+      "issue": 121,
+      "issue_title": "Demo issue 121",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "discuss:122",
+      "kind": "discuss_answer",
+      "title": "kimi answered on #122",
+      "description": "A discussion run left its answer on the issue.",
+      "target": "#122",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/122",
+      "issue": 122,
+      "issue_title": "Demo issue 122",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "filed:123",
+      "kind": "actor_filed_issue",
+      "title": "claude filed #123",
+      "description": "A follow-up the actor found while working.",
+      "target": "#123",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/123",
+      "issue": 123,
+      "issue_title": "Demo issue 123",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "ready:124",
+      "kind": "ready_to_merge",
+      "title": "!124 is approved and ready to merge",
+      "description": "Review and merge it in Forgejo.",
+      "target": "!124",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/124",
+      "issue": 124,
+      "issue_title": "Demo issue 124",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "conflict:125",
+      "kind": "conflicts_with_main",
+      "title": "!125 conflicts with main",
+      "description": "main moved since the approval. Re-run the flow to bring main in.",
+      "target": "!125",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/125",
+      "issue": 125,
+      "issue_title": "Demo issue 125",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "stopped:126",
+      "kind": "stopped_flow",
+      "title": "Flow on #126 stopped: run failed",
+      "description": "Read its handover, fix the issue text, then re-run.",
+      "target": "#126",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/126",
+      "issue": 126,
+      "issue_title": "Demo issue 126",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "broken:127",
+      "kind": "broken_run",
+      "title": "Run r-0000007f is broken",
+      "description": "The harness exited without ending the run.",
+      "target": "#127",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/127",
+      "issue": 127,
+      "issue_title": "Demo issue 127",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "discuss:128",
+      "kind": "discuss_answer",
+      "title": "kimi answered on #128",
+      "description": "A discussion run left its answer on the issue.",
+      "target": "#128",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/128",
+      "issue": 128,
+      "issue_title": "Demo issue 128",
+      "created": "2026-11-02T08:11:00Z"
+    },
+    {
+      "id": "filed:129",
+      "kind": "actor_filed_issue",
+      "title": "claude filed #129",
+      "description": "A follow-up the actor found while working.",
+      "target": "#129",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/129",
+      "issue": 129,
+      "issue_title": "Demo issue 129",
+      "created": "2026-11-02T08:11:00Z"
+    }
+  ],
+  "live_runs": [
+    {
+      "id": "r-1a2b3c4d",
+      "target": "#42",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/42",
+      "issue": 42,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/42",
+      "issue_title": "Retry webhook deliveries with backoff",
+      "thread_key": "flow:issue:42",
+      "kind": "implement",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "spec": "opus",
+      "interactive": false,
+      "created": "2026-11-02T10:31:00Z",
+      "expires": "2026-11-02T11:31:00Z",
+      "elapsed": "12m 40s",
+      "timeout": "60m",
+      "flow": {
+        "issue": 42,
+        "round": 1,
+        "max_rounds": 3,
+        "step": "implementing with claude",
+        "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude"
+      },
+      "log_tail": [],
+      "denials": []
+    },
+    {
+      "id": "r-9c8d7e6f",
+      "target": "!57",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "issue": 51,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue_title": "Rate-limit the public API",
+      "pr": 57,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "pr_title": "Rate-limit the public API",
+      "milestone": "v0.3",
+      "thread_key": "flow:issue:51:pr:57",
+      "kind": "verify",
+      "actor": "kimi",
+      "family": "moonshot",
+      "harness": "kimi",
+      "interactive": false,
+      "created": "2026-11-02T10:39:30Z",
+      "expires": "2026-11-02T11:39:30Z",
+      "elapsed": "4m 10s",
+      "timeout": "60m",
+      "flow": {
+        "issue": 51,
+        "round": 2,
+        "max_rounds": 3,
+        "step": "verifying with kimi",
+        "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi"
+      },
+      "log_tail": [],
+      "denials": [
+        {
+          "time": "2026-11-02T10:42:05Z",
+          "run": "r-9c8d7e6f",
+          "op": "git",
+          "method": "POST",
+          "path": "/bottown/demo.git/git-receive-pack",
+          "rule": "role",
+          "detail": "verify runs cannot push"
+        }
+      ]
+    },
+    {
+      "id": "r-0f1e2d3c",
+      "target": "#44",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue": 44,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue_title": "Should exports stream CSV or build it in memory?",
+      "thread_key": "discuss:r-0f1e2d3c",
+      "kind": "discuss",
+      "actor": "codex",
+      "family": "openai",
+      "harness": "codex",
+      "interactive": true,
+      "created": "2026-11-02T10:20:00Z",
+      "expires": "2026-11-02T12:20:00Z",
+      "elapsed": "23m 40s",
+      "timeout": "120m",
+      "log_tail": [],
+      "denials": []
+    }
+  ],
+  "active_flows": [
+    {
+      "issue": 42,
+      "implement": "claude",
+      "verify": "kimi",
+      "round": 1,
+      "max_rounds": 3,
+      "step": "implementing with claude",
+      "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude",
+      "waiting": false
+    },
+    {
+      "issue": 51,
+      "implement": "codex",
+      "verify": "kimi",
+      "round": 2,
+      "max_rounds": 3,
+      "step": "verifying with kimi",
+      "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi",
+      "waiting": false
+    },
+    {
+      "issue": 53,
+      "implement": "agy",
+      "verify": "claude",
+      "round": 1,
+      "max_rounds": 3,
+      "step": "waiting for a run slot",
+      "label": "#53 \u00b7 round 1/3 \u00b7 waiting for a run slot",
+      "waiting": true
+    }
+  ],
+  "history": [
+    {
+      "id": "r-5e6f7a8b",
+      "target": "#51",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue": 51,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue_title": "Rate-limit the public API",
+      "pr": 57,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "pr_title": "Rate-limit the public API",
+      "milestone": "v0.3",
+      "thread_key": "flow:issue:51:pr:57",
+      "kind": "implement",
+      "actor": "codex",
+      "family": "openai",
+      "harness": "codex",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "pr_opened",
+      "created": "2026-11-02T10:22:00Z",
+      "ended": "2026-11-02T10:39:00Z",
+      "duration": "17m 0s",
+      "summary": "Addressed the review: the bucket now refills per second, with a test for the idle burst.",
+      "usage": {
+        "input_tokens": 48200,
+        "output_tokens": 9100,
+        "cache_read_tokens": 385600,
+        "cost_usd": 1.84,
+        "turns": 31,
+        "duration_ms": 1020000
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-4d5e6f70",
+      "target": "!57",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "issue": 51,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue_title": "Rate-limit the public API",
+      "pr": 57,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "pr_title": "Rate-limit the public API",
+      "milestone": "v0.3",
+      "thread_key": "flow:issue:51:pr:57",
+      "kind": "verify",
+      "actor": "kimi",
+      "family": "moonshot",
+      "harness": "kimi",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "changes_requested",
+      "created": "2026-11-02T09:50:00Z",
+      "ended": "2026-11-02T10:05:00Z",
+      "duration": "15m 0s",
+      "summary": "Requested changes: the bucket refills per request, not per second.",
+      "usage": {
+        "input_tokens": 30100,
+        "output_tokens": 4200,
+        "cache_read_tokens": 240800,
+        "cost_usd": 0.62,
+        "turns": 18,
+        "duration_ms": 900000
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-3c4d5e6f",
+      "target": "#51",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue": 51,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "issue_title": "Rate-limit the public API",
+      "pr": 57,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "pr_title": "Rate-limit the public API",
+      "milestone": "v0.3",
+      "thread_key": "flow:issue:51:pr:57",
+      "kind": "implement",
+      "actor": "codex",
+      "family": "openai",
+      "harness": "codex",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "pr_opened",
+      "created": "2026-11-02T09:10:00Z",
+      "ended": "2026-11-02T09:48:00Z",
+      "duration": "38m 0s",
+      "summary": "Added a token-bucket limiter keyed by API token, and opened !57.",
+      "usage": {
+        "input_tokens": 91500,
+        "output_tokens": 15800,
+        "cache_read_tokens": 732000,
+        "cost_usd": 3.12,
+        "turns": 54,
+        "duration_ms": 2280000
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-2b3c4d5e",
+      "target": "#47",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/47",
+      "issue": 47,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/47",
+      "issue_title": "Migrate settings to TOML",
+      "thread_key": "flow:issue:47",
+      "kind": "implement",
+      "actor": "agy",
+      "family": "google",
+      "harness": "agy",
+      "mode": "batch",
+      "status": "failed",
+      "created": "2026-11-02T08:30:00Z",
+      "ended": "2026-11-02T08:52:00Z",
+      "duration": "22m 0s",
+      "summary": "Blocked: three binaries load settings; the issue covers one. Asked on the issue.",
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-1a2b3c4e",
+      "target": "!55",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/55",
+      "issue": 40,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/40",
+      "issue_title": "Paginate the export endpoint",
+      "pr": 55,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/55",
+      "pr_title": "Paginate the export endpoint",
+      "thread_key": "flow:issue:40:pr:55",
+      "kind": "verify",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "spec": "sonnet",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "approved",
+      "created": "2026-11-02T08:00:00Z",
+      "ended": "2026-11-02T08:11:00Z",
+      "duration": "11m 0s",
+      "summary": "Approved: pagination is stable under concurrent inserts; tests cover the cursor edge cases.",
+      "usage": {
+        "input_tokens": 25400,
+        "output_tokens": 3800,
+        "cache_read_tokens": 203200,
+        "cost_usd": 0.41,
+        "turns": 14,
+        "duration_ms": 660000
+      },
+      "purged": true,
+      "denials": []
+    },
+    {
+      "id": "r-0a1b2c3d",
+      "target": "#44",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue": 44,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue_title": "Should exports stream CSV or build it in memory?",
+      "thread_key": "discuss:r-0a1b2c3d",
+      "kind": "discuss",
+      "actor": "kimi",
+      "family": "moonshot",
+      "harness": "kimi",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "commented",
+      "created": "2026-11-01T17:00:00Z",
+      "ended": "2026-11-01T17:06:00Z",
+      "duration": "6m 0s",
+      "summary": "Recommended streaming: exports reach 2 GB.",
+      "purged": true,
+      "denials": []
+    },
+    {
+      "id": "r-0c1d2e3f",
+      "target": "#44",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue": 44,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "issue_title": "Should exports stream CSV or build it in memory?",
+      "thread_key": "discuss:r-0c1d2e3f",
+      "kind": "discuss",
+      "actor": "crush",
+      "family": "mixed",
+      "harness": "crush",
+      "spec": "openrouter:~deepseek/latest",
+      "mode": "batch",
+      "status": "succeeded",
+      "outcome": "commented",
+      "created": "2026-11-01T16:40:00Z",
+      "ended": "2026-11-01T16:47:00Z",
+      "duration": "7m 0s",
+      "summary": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB.",
+      "usage": {
+        "cost_usd": 0.04
+      },
+      "purged": false,
+      "denials": []
+    },
+    {
+      "id": "r-ffeeddcc",
+      "target": "#60",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/issues/60",
+      "issue": 60,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/60",
+      "issue_title": "Flaky test: TestWebhookRetry times out under -race",
+      "thread_key": "flow:issue:60",
+      "kind": "implement",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "mode": "interactive",
+      "status": "revoked",
+      "created": "2026-11-01T15:00:00Z",
+      "ended": "2026-11-01T15:20:00Z",
+      "duration": "20m 0s",
+      "summary": "",
+      "purged": true,
+      "denials": [
+        {
+          "time": "2026-11-01T15:12:00Z",
+          "run": "r-ffeeddcc",
+          "op": "api",
+          "method": "PATCH",
+          "path": "/api/v1/repos/bottown/demo/issues/60",
+          "rule": "owner-only",
+          "detail": "only the owner edits issues"
+        }
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "id": "milestone:3",
+      "milestone": {
+        "id": 3,
+        "title": "v0.3",
+        "state": "open",
+        "url": "http://127.0.0.1:3030/bottown/demo/milestone/3"
+      },
+      "epic": {
+        "number": 50,
+        "title": "v0.3: public API",
+        "state": "open",
+        "url": "http://127.0.0.1:3030/bottown/demo/issues/50"
+      },
+      "plan": "docs/milestones/v0.3.md",
+      "plan_file": "docs/milestones/v0.3.md",
+      "kickoff": {
+        "number": 49,
+        "title": "Plan v0.3",
+        "state": "closed",
+        "url": "http://127.0.0.1:3030/bottown/demo/issues/49"
+      },
+      "base": "main",
+      "removed": [],
+      "counts": {
+        "total": 5,
+        "closed": 1,
+        "ready": 1,
+        "running": 1,
+        "in_review": 0,
+        "awaiting_merge": 1,
+        "blocked": 1,
+        "stopped": 0
+      },
+      "nodes": [
+        {
+          "number": 40,
+          "title": "Paginate the export endpoint",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/40",
+          "state": "closed",
+          "status": "closed",
+          "layer": 0,
+          "depends_on": [],
+          "key": "export-pages",
+          "pr": {
+            "number": 55,
+            "title": "Paginate the export endpoint",
+            "url": "http://127.0.0.1:3030/bottown/demo/pulls/55",
+            "state": "merged",
+            "review": "approved"
+          }
+        },
+        {
+          "number": 51,
+          "title": "Rate-limit the public API",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+          "state": "open",
+          "status": "running",
+          "layer": 1,
+          "depends_on": [
+            40
+          ],
+          "key": "rate-limit",
+          "implement": "codex",
+          "verify": "kimi",
+          "run": {
+            "id": "r-9c8d7e6f",
+            "kind": "verify",
+            "actor": "kimi",
+            "created": "2026-11-02T10:39:30Z",
+            "elapsed": "4m 10s"
+          },
+          "pr": {
+            "number": 57,
+            "title": "Rate-limit the public API",
+            "url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+            "state": "open",
+            "review": "changes_requested"
+          },
+          "flow": {
+            "implement": "codex",
+            "verify": "kimi"
+          }
+        },
+        {
+          "number": 52,
+          "title": "API keys per client",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/52",
+          "state": "open",
+          "status": "approved",
+          "layer": 1,
+          "depends_on": [
+            40
+          ],
+          "key": "api-keys",
+          "pr": {
+            "number": 59,
+            "title": "API keys per client",
+            "url": "http://127.0.0.1:3030/bottown/demo/pulls/59",
+            "state": "open",
+            "review": "approved"
+          }
+        },
+        {
+          "number": 53,
+          "title": "Usage dashboard endpoint",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/53",
+          "state": "open",
+          "status": "ready",
+          "layer": 1,
+          "depends_on": [
+            40
+          ],
+          "key": "usage",
+          "implement": "agy",
+          "verify": "claude"
+        },
+        {
+          "number": 54,
+          "title": "Billing hooks",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/54",
+          "state": "open",
+          "status": "blocked",
+          "layer": 2,
+          "depends_on": [
+            51,
+            52
+          ],
+          "key": "billing"
+        }
+      ],
+      "edges": [
+        {
+          "from": 40,
+          "to": 51
+        },
+        {
+          "from": 40,
+          "to": 52
+        },
+        {
+          "from": 40,
+          "to": 53
+        },
+        {
+          "from": 51,
+          "to": 54
+        },
+        {
+          "from": 52,
+          "to": 54
+        }
+      ],
+      "layers": 3
+    }
+  ],
+  "logs": {
+    "r-1a2b3c4d": [
+      {
+        "kind": "status",
+        "text": "session started: claude-opus-5-5"
+      },
+      {
+        "kind": "text",
+        "text": "I'll start by reading the issue and the webhook delivery code."
+      },
+      {
+        "kind": "tool",
+        "text": "bottown issue show",
+        "tool": "Bash",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "output",
+        "text": "#42 Retry webhook deliveries with backoff [open] by owner"
+      },
+      {
+        "kind": "tool",
+        "text": "internal/webhook/deliver.go",
+        "tool": "Read",
+        "tool_class": "read"
+      },
+      {
+        "kind": "text",
+        "text": "Deliveries are attempted once; a 5xx or timeout drops the event. I'll add a retry queue with exponential backoff and jitter."
+      },
+      {
+        "kind": "tool",
+        "text": "internal/webhook/retry.go",
+        "tool": "Write",
+        "tool_class": "edit"
+      },
+      {
+        "kind": "tool",
+        "text": "internal/webhook/deliver.go",
+        "tool": "Edit",
+        "tool_class": "edit"
+      },
+      {
+        "kind": "tool",
+        "text": "go test ./internal/webhook/",
+        "tool": "Bash",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "output",
+        "text": "--- FAIL: TestDeliverRetries (0.02s)\n    deliver_test.go:88: attempts = 1, want 3"
+      },
+      {
+        "kind": "text",
+        "text": "The test fails because the client's timeout is not treated as retryable. Fixing the classification."
+      },
+      {
+        "kind": "tool",
+        "text": "internal/webhook/deliver.go",
+        "tool": "Edit",
+        "tool_class": "edit"
+      },
+      {
+        "kind": "tool",
+        "text": "go test ./internal/webhook/",
+        "tool": "Bash",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "output",
+        "text": "ok  \texample.com/demo/internal/webhook\t0.412s"
+      },
+      {
+        "kind": "tool",
+        "text": "make check",
+        "tool": "Bash",
+        "tool_class": "shell"
+      }
+    ],
+    "r-9c8d7e6f": [
+      {
+        "kind": "status",
+        "text": "session started: kimi-k3"
+      },
+      {
+        "kind": "text",
+        "text": "Reviewing PR !57 at 8d3e1f0 for issue #51."
+      },
+      {
+        "kind": "tool",
+        "text": "bottown pr show 57 --diff",
+        "tool": "Shell",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "output",
+        "text": " internal/api/ratelimit.go      | 112 +++++++++\n internal/api/ratelimit_test.go |  64 +++++\n 2 files changed, 176 insertions(+)"
+      },
+      {
+        "kind": "tool",
+        "text": "internal/api/ratelimit.go",
+        "tool": "ReadFile",
+        "tool_class": "read"
+      },
+      {
+        "kind": "text",
+        "text": "The token bucket now refills per second. Checking the idle-burst test."
+      },
+      {
+        "kind": "error",
+        "text": "denied: git push (verify runs cannot push)"
+      }
+    ],
+    "r-5e6f7a8b": [
+      {
+        "kind": "status",
+        "text": "session started: gpt-6-codex"
+      },
+      {
+        "kind": "text",
+        "text": "Addressing the review: refill the bucket per second."
+      },
+      {
+        "kind": "tool",
+        "text": "internal/api/ratelimit.go",
+        "tool": "apply_patch",
+        "tool_class": "edit"
+      },
+      {
+        "kind": "tool",
+        "text": "make check",
+        "tool": "shell",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "output",
+        "text": "ok"
+      },
+      {
+        "kind": "tool",
+        "text": "git push origin HEAD",
+        "tool": "shell",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "status",
+        "text": "result: success \u00b7 31 turns \u00b7 $1.84"
+      }
+    ],
+    "r-2b3c4d5e": [
+      {
+        "kind": "status",
+        "text": "session started"
+      },
+      {
+        "kind": "plain",
+        "text": "Reading internal/settings/load.go"
+      },
+      {
+        "kind": "plain",
+        "text": "The settings loader is used by three binaries; migrating all of them is larger than the issue describes."
+      },
+      {
+        "kind": "error",
+        "text": "make check: exit status 2"
+      },
+      {
+        "kind": "plain",
+        "text": "Commenting on the issue and ending the run as failed."
+      }
+    ],
+    "r-0c1d2e3f": [
+      {
+        "kind": "status",
+        "text": "session started: Discuss streaming exports"
+      },
+      {
+        "kind": "text",
+        "text": "I'll read the issue and the export writer."
+      },
+      {
+        "kind": "tool",
+        "text": "bash: bottown issue show 44",
+        "tool": "bash",
+        "tool_class": "forge"
+      },
+      {
+        "kind": "tool",
+        "text": "view: internal/export/csv.go",
+        "tool": "view",
+        "tool_class": "read"
+      },
+      {
+        "kind": "tool",
+        "text": "grep: Flush\\(",
+        "tool": "grep",
+        "tool_class": "search"
+      },
+      {
+        "kind": "tool",
+        "text": "bash: go test ./internal/export/ -run TestLargeExport",
+        "tool": "bash",
+        "tool_class": "shell"
+      },
+      {
+        "kind": "error",
+        "text": "exit 1: --- FAIL: TestLargeExport (12.40s)"
+      },
+      {
+        "kind": "text",
+        "text": "The writer already flushes per row; the failure is the test's 10s budget, not memory."
+      },
+      {
+        "kind": "tool",
+        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row\u2026",
+        "tool": "mcp_bottown_comment",
+        "tool_class": "forge"
+      },
+      {
+        "kind": "text",
+        "text": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB."
+      }
+    ]
+  },
+  "issues": {
+    "40": {
+      "issue": 40,
+      "title": "Paginate the export endpoint",
+      "body": "Exports return every row at once. Page them with an opaque cursor.\n\n## Acceptance\n- `GET /export?cursor=\u2026` returns at most 500 rows and a `next` cursor.\n- Rows inserted during a paged read are not skipped.",
+      "state": "closed",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/40"
+    },
+    "42": {
+      "issue": 42,
+      "title": "Retry webhook deliveries with backoff",
+      "body": "Webhook deliveries are tried **once**; a 5xx or a timeout drops the event.\n\nRetry with exponential backoff and jitter, up to 6 attempts over ~1 hour.\n\n```go\ntype Retry struct { Attempts int; Base time.Duration }\n```",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/42"
+    },
+    "44": {
+      "issue": 44,
+      "title": "Should exports stream CSV or build it in memory?",
+      "body": "Exports can reach 2 GB. Should the endpoint stream CSV rows as they are read, or build the file and serve it?\n\nThis is a question for a discuss run, not an implementation.",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/44"
+    },
+    "47": {
+      "issue": 47,
+      "title": "Migrate settings to TOML",
+      "body": "Move `settings.yaml` to `settings.toml` and drop the YAML loader.",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/47"
+    },
+    "51": {
+      "issue": 51,
+      "title": "Rate-limit the public API",
+      "body": "The public API has no rate limit. Add a token bucket per API token: 60 requests a minute, bursts of 10.\n\n- 429 with `Retry-After` when empty.\n- Configurable in `settings.toml`.",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/51"
+    },
+    "60": {
+      "issue": 60,
+      "title": "Flaky test: TestWebhookRetry times out under -race",
+      "body": "`TestWebhookRetry` times out under `-race` about one run in five.\n\n<details><summary>log</summary>\n\n```\npanic: test timed out after 30s\n```\n</details>",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/60"
+    }
+  },
+  "timelines": {
+    "51": {
+      "issue": 51,
+      "pr": 57,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+      "pr_title": "Rate-limit the public API",
+      "milestone": "v0.3",
+      "thread_key": "flow:issue:51:pr:57",
+      "title": "Rate-limit the public API",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-01T12:00:00Z",
+          "title": "Issue #51 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/51"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T09:10:00Z",
+          "ended": "2026-11-02T09:48:00Z",
+          "duration": "38m 0s",
+          "kind": "implement",
+          "title": "implement by codex",
+          "detail": "Added a token-bucket limiter keyed by API token, and opened !57.",
+          "actor": "codex",
+          "status": "succeeded",
+          "run_id": "r-3c4d5e6f",
+          "outcome": "pr_opened"
+        },
+        {
+          "type": "pr_opened",
+          "time": "2026-11-02T09:47:00Z",
+          "title": "PR !57 opened",
+          "actor": "codex",
+          "url": "http://127.0.0.1:3030/bottown/demo/pulls/57"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T09:50:00Z",
+          "ended": "2026-11-02T10:05:00Z",
+          "duration": "15m 0s",
+          "kind": "verify",
+          "title": "verify by kimi",
+          "detail": "Requested changes: the bucket refills per request, not per second.",
+          "actor": "kimi",
+          "status": "succeeded",
+          "run_id": "r-4d5e6f70",
+          "outcome": "changes_requested"
+        },
+        {
+          "type": "review",
+          "time": "2026-11-02T10:04:00Z",
+          "title": "kimi requested changes",
+          "detail": "The bucket refills per request, not per second.",
+          "actor": "kimi",
+          "status": "REQUEST_CHANGES",
+          "url": "http://127.0.0.1:3030/bottown/demo/pulls/57#issuecomment-402"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T10:22:00Z",
+          "ended": "2026-11-02T10:39:00Z",
+          "duration": "17m 0s",
+          "kind": "implement",
+          "title": "implement by codex",
+          "detail": "Addressed the review: the bucket now refills per second, with a test for the idle burst.",
+          "actor": "codex",
+          "status": "succeeded",
+          "run_id": "r-5e6f7a8b",
+          "outcome": "pr_opened"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T10:39:30Z",
+          "kind": "verify",
+          "title": "verify by kimi",
+          "actor": "kimi",
+          "status": "active",
+          "run_id": "r-9c8d7e6f"
+        }
+      ]
+    },
+    "42": {
+      "issue": 42,
+      "thread_key": "flow:issue:42",
+      "title": "Retry webhook deliveries with backoff",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/42",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-01T09:00:00Z",
+          "title": "Issue #42 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/42"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T10:31:00Z",
+          "kind": "implement",
+          "title": "implement by claude",
+          "actor": "claude",
+          "status": "active",
+          "run_id": "r-1a2b3c4d"
+        }
+      ]
+    },
+    "47": {
+      "issue": 47,
+      "thread_key": "flow:issue:47",
+      "title": "Migrate settings to TOML",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/47",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-01T08:00:00Z",
+          "title": "Issue #47 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/47"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T08:30:00Z",
+          "ended": "2026-11-02T08:52:00Z",
+          "duration": "22m 0s",
+          "kind": "implement",
+          "title": "implement by agy",
+          "detail": "Blocked: three binaries load settings; the issue covers one. Asked on the issue.",
+          "actor": "agy",
+          "status": "failed",
+          "run_id": "r-2b3c4d5e"
+        },
+        {
+          "type": "comment",
+          "time": "2026-11-02T08:51:00Z",
+          "title": "agy commented",
+          "detail": "Three binaries load settings; should all of them move?",
+          "actor": "agy",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/47#issuecomment-377"
+        }
+      ]
+    },
+    "40": {
+      "issue": 40,
+      "pr": 55,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/55",
+      "pr_title": "Paginate the export endpoint",
+      "thread_key": "flow:issue:40:pr:55",
+      "title": "Paginate the export endpoint",
+      "state": "closed",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/40",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-10-31T10:00:00Z",
+          "title": "Issue #40 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/40"
+        },
+        {
+          "type": "pr_opened",
+          "time": "2026-11-01T16:00:00Z",
+          "title": "PR !55 opened",
+          "actor": "codex",
+          "url": "http://127.0.0.1:3030/bottown/demo/pulls/55"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T08:00:00Z",
+          "ended": "2026-11-02T08:11:00Z",
+          "duration": "11m 0s",
+          "kind": "verify",
+          "title": "verify by claude",
+          "detail": "Approved: pagination is stable under concurrent inserts; tests cover the cursor edge cases.",
+          "actor": "claude",
+          "status": "succeeded",
+          "run_id": "r-1a2b3c4e",
+          "outcome": "approved"
+        },
+        {
+          "type": "pr_merged",
+          "time": "2026-11-02T09:58:00Z",
+          "title": "PR !55 merged",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/pulls/55"
+        }
+      ]
+    },
+    "44": {
+      "issue": 44,
+      "thread_key": "flow:issue:44",
+      "title": "Should exports stream CSV or build it in memory?",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-01T16:30:00Z",
+          "title": "Issue #44 opened",
+          "actor": "owner",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/44"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-01T17:00:00Z",
+          "ended": "2026-11-01T17:06:00Z",
+          "duration": "6m 0s",
+          "kind": "discuss",
+          "title": "discuss by kimi",
+          "detail": "Recommended streaming: exports reach 2 GB.",
+          "actor": "kimi",
+          "status": "succeeded",
+          "run_id": "r-0a1b2c3d",
+          "outcome": "commented"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-02T10:20:00Z",
+          "kind": "discuss",
+          "title": "discuss by codex",
+          "actor": "codex",
+          "status": "active",
+          "run_id": "r-0f1e2d3c"
+        }
+      ]
+    },
+    "60": {
+      "issue": 60,
+      "thread_key": "flow:issue:60",
+      "title": "Flaky test: TestWebhookRetry times out under -race",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/60",
+      "events": [
+        {
+          "type": "issue_created",
+          "time": "2026-11-01T15:18:00Z",
+          "title": "Issue #60 opened",
+          "actor": "claude",
+          "url": "http://127.0.0.1:3030/bottown/demo/issues/60"
+        },
+        {
+          "type": "run",
+          "time": "2026-11-01T15:00:00Z",
+          "ended": "2026-11-01T15:20:00Z",
+          "duration": "20m 0s",
+          "kind": "implement",
+          "title": "implement by claude",
+          "detail": "",
+          "actor": "claude",
+          "status": "revoked",
+          "run_id": "r-ffeeddcc"
+        }
+      ]
+    }
+  },
+  "actions": {
+    "gc": {
+      "success": true,
+      "output": "removed 2 ended run worktrees (preview)"
+    }
+  }
+}

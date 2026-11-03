@@ -19,6 +19,9 @@
   --warning-bg: #fef3c7;
   --error: #dc2626;
   --error-bg: #fee2e2;
+  /* The tallest the scrollable panels (Owner Inbox, Run History) grow
+     before they scroll, so both keep the same height. */
+  --panel-max-height: 1320px;
 }
 
 @media (prefers-color-scheme: dark) {
