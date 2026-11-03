@@ -22,6 +22,14 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   - `{{.Bottown}} pr show --diff` prints the description, reviews so far, a
     file summary, and the diff. Lock files such as `go.sum` are collapsed;
     `--full` shows them.
+{{- if .Reviewed}}
+  - This pull request has been reviewed before.
+    `{{.Bottown}} pr show --since-review` shows what changed since the
+    latest review (`--reviewer R` picks whose): "same patch, rebased onto
+    …" when only the base moved, else a range-diff of the reviewed commits
+    against the new ones. Use it to focus on what is new; your verdict
+    still covers all of `{{.SHA}}`.
+{{- end}}
   - `{{.Bottown}} issue show N` prints the linked issue.
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up

@@ -58,7 +58,7 @@ bottown issue list [--state open|closed|all] [--repo R] [--json]
 bottown issue show [N] [--repo R] [--json] [--download DIR]
 bottown issue create --title T --body-file -
 bottown pr list [--state open|closed|all] [--repo R] [--json]
-bottown pr show [N] [--repo R] [--diff [--full] | --stat] [--json]
+bottown pr show [N] [--repo R] [--diff [--full] | --stat | --since-review [--reviewer R]] [--json]
 bottown pr create --title T --body-file -
 bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -

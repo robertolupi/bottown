@@ -504,12 +504,22 @@ their local paths; outside a run, --download DIR saves them there.`,
 
 func newPR() *cobra.Command {
 	pr := &cobra.Command{Use: "pr", Short: "Read and open pull requests (agent CLI)"}
-	var repo string
-	var asJSON, diff, stat, full bool
+	var repo, reviewer string
+	var asJSON, diff, stat, full, since bool
 	show := &cobra.Command{
-		Use:   "show [N] [--diff [--full] | --stat]",
+		Use:   "show [N] [--diff [--full] | --stat | --since-review [--reviewer R]]",
 		Short: "Show a pull request: head, reviews, and with --diff a file summary and the diff (default: the run's PR)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Show a pull request: its head, description and reviews. --diff adds a
+file summary and the diff; --stat only the summary.
+
+--since-review shows what changed since the latest review (by --reviewer,
+else the latest official one): "no change", "same patch, rebased onto
+<sha>" when only the base moved, or a git range-diff of the reviewed series
+against the new one, plus the full diff when every commit matches but the
+whole change does not (an edit in a merge commit). Whitespace counts as a
+change. It fetches the commits into this checkout from its bottown remote.
+Without an earlier review it shows the full diff.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := resolveAgent()
 			if err != nil {
@@ -523,6 +533,9 @@ func newPR() *cobra.Command {
 			if r == "" {
 				r = a.defaultRepo()
 			}
+			if reviewer != "" && !since {
+				return errors.New("--reviewer needs --since-review")
+			}
 			extra := url.Values{}
 			if diff || stat {
 				extra.Set("diff", "1")
@@ -531,11 +544,49 @@ func newPR() *cobra.Command {
 			if err := a.call("GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
 				return err
 			}
-			if asJSON {
-				return printJSON(cmd, p)
-			}
 			out := cmd.OutOrStdout()
-			printPRShow(out, lipgloss.NewRenderer(out), p, diff, stat, full)
+			rr := lipgloss.NewRenderer(out)
+			if !since {
+				if asJSON {
+					return printJSON(cmd, p)
+				}
+				printPRShow(out, rr, p, diff, stat, full)
+				return nil
+			}
+			rev, ok := sinceReviewOf(p.Reviews, reviewer)
+			if !ok {
+				// No earlier review: everything is new.
+				extra.Set("diff", "1")
+				if err := a.call("GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
+					return err
+				}
+				if asJSON {
+					return printJSON(cmd, prSinceJSON{PROut: p})
+				}
+				printPRShow(out, rr, p, true, false, full)
+				who := "no earlier review"
+				if reviewer != "" {
+					who = "no earlier review by " + reviewer
+				}
+				fmt.Fprintf(out, "\n--- since review: %s; the full diff is above\n", who)
+				return nil
+			}
+			if r != "" && r != a.defaultRepo() && a.RunID == "" {
+				return fmt.Errorf("--since-review compares commits in this checkout, whose %s remote is not %s", a.Remote, r)
+			}
+			dir := a.Worktree
+			if dir == "" {
+				dir = "."
+			}
+			text, err := sinceReview(dir, a.Remote, p.BaseBranch, p.MergeBase, rev.CommitID, p.HeadSHA)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, prSinceJSON{PROut: p, SinceReview: &rev, SinceText: text})
+			}
+			printPRShow(out, rr, p, false, false, full)
+			printSinceReview(out, newStyles(rr), rev, text)
 			return nil
 		},
 	}
@@ -544,7 +595,11 @@ func newPR() *cobra.Command {
 	show.Flags().BoolVar(&diff, "diff", false, "include a file summary and the diff, with lock files such as go.sum collapsed")
 	show.Flags().BoolVar(&stat, "stat", false, "include only the file summary")
 	show.Flags().BoolVar(&full, "full", false, "with --diff, do not collapse lock files")
+	show.Flags().BoolVar(&since, "since-review", false, "show what changed since the latest review: \"same patch\" when only the base moved, else a range-diff (the full diff if there is no review)")
+	show.Flags().StringVar(&reviewer, "reviewer", "", "with --since-review, compare with the latest review by this reviewer")
 	show.MarkFlagsMutuallyExclusive("diff", "stat")
+	show.MarkFlagsMutuallyExclusive("since-review", "diff")
+	show.MarkFlagsMutuallyExclusive("since-review", "stat")
 
 	var title, body, bodyFile string
 	var createJSON bool
