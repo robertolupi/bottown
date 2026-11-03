@@ -515,8 +515,10 @@ file summary and the diff; --stat only the summary.
 --since-review shows what changed since the latest review (by --reviewer,
 else the latest official one): "no change", "same patch, rebased onto
 <sha>" when only the base moved, or a git range-diff of the reviewed series
-against the new one. It fetches the commits into this checkout from its
-bottown remote. Without an earlier review it shows the full diff.`,
+against the new one, plus the full diff when every commit matches but the
+whole change does not (an edit in a merge commit). Whitespace counts as a
+change. It fetches the commits into this checkout from its bottown remote.
+Without an earlier review it shows the full diff.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := resolveAgent()

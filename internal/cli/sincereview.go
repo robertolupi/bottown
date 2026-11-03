@@ -97,9 +97,19 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if newBase == new && mergeBase != "" && mergeBase != new {
-		if _, err := git(dir, "merge-base", "--is-ancestor", mergeBase, new); err == nil {
-			newBase = mergeBase
+	// Once merged, the head is on the base branch, and so is the reviewed
+	// commit unless a rebase replaced it: each branched where it meets the
+	// forge's merge base, a point of the base branch before the merge.
+	if mergeBase != "" {
+		if newBase == new {
+			if _, err := git(dir, "merge-base", "--is-ancestor", mergeBase, new); err == nil {
+				newBase = mergeBase
+			}
+		}
+		if oldBase == old {
+			if mb, err := git(dir, "merge-base", old, mergeBase); err == nil {
+				oldBase = mb
+			}
 		}
 	}
 	for _, c := range [][2]string{{oldBase, old}, {newBase, new}} {
@@ -133,9 +143,14 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 	fmt.Fprintf(&b, "\n%s\n", rd)
 	// range-diff names a commit with no counterpart in the reviewed series
 	// ("-:  ------- > 2:  abc1234 subject") without its patch: add it.
+	differs := false
 	for _, line := range strings.Split(rd, "\n") {
 		f := strings.Fields(line)
-		if len(f) < 5 || f[0] != "-:" || f[2] != ">" {
+		if len(f) < 5 || strings.HasPrefix(line, " ") || !strings.HasSuffix(f[0], ":") {
+			continue // not a commit pair
+		}
+		differs = differs || f[2] != "="
+		if f[0] != "-:" || f[2] != ">" {
 			continue
 		}
 		show, err := git(dir, "show", "--no-color", "--no-ext-diff", "--format=commit %H%n%n    %s", f[4])
@@ -144,15 +159,26 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 		}
 		fmt.Fprintf(&b, "\n--- new since the review: %s\n%s\n", f[4], show)
 	}
+	// Every commit matches, yet the whole change differs: the difference is
+	// in what range-diff leaves out, such as an edit in a merge commit.
+	if !differs {
+		full, err := git(dir, "diff", "--no-color", "--no-ext-diff", newBase, new)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "\nThe commits match, but the whole change differs: the full diff %s..%s follows.\n\n%s\n", short(newBase), short(new), full)
+	}
 	fmt.Fprintf(&b, "\nMerge commits are left out; `git diff %s %s` shows everything between the two heads.\n", short(old), short(new))
 	return b.String(), nil
 }
 
-// patchID is the stable patch ID of the whole change from base to head:
-// equal for the same change on any base, however it is split into commits.
+// patchID is the patch ID of the whole change from base to head: equal for
+// the same change on any base, however it is split into commits. It is
+// --verbatim, as whitespace can matter (indentation, string literals): the
+// default ID ignores it.
 func patchID(dir, base, head string) (string, error) {
 	diff := exec.Command("git", "-C", dir, "diff", "--no-color", "--no-ext-diff", base, head)
-	id := exec.Command("git", "-C", dir, "patch-id", "--stable")
+	id := exec.Command("git", "-C", dir, "patch-id", "--verbatim")
 	var out, errb bytes.Buffer
 	pipe, err := diff.StdoutPipe()
 	if err != nil {

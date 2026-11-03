@@ -42,72 +42,94 @@ func TestSinceReviewOf(t *testing.T) {
 	}
 }
 
-// TestSinceReview pushes a PR branch to a bare remote, moves it as a
-// rebase, a follow-up commit and a merge would, and compares from a separate
-// clone that has to fetch the commits, as a verifier's worktree does.
-func TestSinceReview(t *testing.T) {
+// sinceRepo is a PR's git setup: a bare remote, the author's clone work and
+// a separate clone check that has to fetch the commits, as a verifier's
+// worktree does. main starts with one commit.
+type sinceRepo struct {
+	t                 *testing.T
+	bare, work, check string
+}
+
+func newSinceRepo(t *testing.T) *sinceRepo {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
 	dir := t.TempDir()
-	run := func(d string, args ...string) string {
-		t.Helper()
-		c := exec.Command("git", append([]string{"-C", d, "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false"}, args...)...)
-		out, err := c.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	commit := func(d, file, content, msg string) string {
-		t.Helper()
-		os.WriteFile(filepath.Join(d, file), []byte(content), 0o644)
-		run(d, "add", ".")
-		run(d, "commit", "-qm", msg)
-		return run(d, "rev-parse", "HEAD")
-	}
-	bare, work, check := filepath.Join(dir, "remote.git"), filepath.Join(dir, "work"), filepath.Join(dir, "check")
-	run(dir, "init", "-q", "--bare", "-b", "main", bare)
+	r := &sinceRepo{t: t, bare: filepath.Join(dir, "remote.git"), work: filepath.Join(dir, "work"), check: filepath.Join(dir, "check")}
+	r.run(dir, "init", "-q", "--bare", "-b", "main", r.bare)
 	// Forgejo serves commits by ID even once no branch has them.
-	run(bare, "config", "uploadpack.allowAnySHA1InWant", "true")
-	run(dir, "clone", "-q", bare, work)
-	commit(work, "README", "demo\n", "init")
-	run(work, "push", "-q", "origin", "main")
-	run(dir, "clone", "-q", bare, check)
+	r.run(r.bare, "config", "uploadpack.allowAnySHA1InWant", "true")
+	r.run(dir, "clone", "-q", r.bare, r.work)
+	r.commit("README", "demo\n", "init")
+	r.git("push", "-q", "origin", "main")
+	r.run(dir, "clone", "-q", r.bare, r.check)
+	return r
+}
 
-	run(work, "switch", "-q", "-c", "feature")
-	reviewed := commit(work, "f.txt", "one\n", "add f")
-	run(work, "push", "-q", "origin", "feature")
-	run(work, "switch", "-q", "main")
-	m1 := commit(work, "other.txt", "other\n", "main moves")
-	run(work, "push", "-q", "origin", "main")
-
-	since := func(mergeBase, old, new string) string {
-		t.Helper()
-		out, err := sinceReview(check, "origin", "main", mergeBase, old, new)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out
+func (r *sinceRepo) run(d string, args ...string) string {
+	r.t.Helper()
+	c := exec.Command("git", append([]string{"-C", d, "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false"}, args...)...)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		r.t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+	return strings.TrimSpace(string(out))
+}
 
-	if out := since("", reviewed, reviewed); !strings.HasPrefix(out, "no change: the head is still the reviewed commit "+short(reviewed)) {
+// git runs git in the author's clone.
+func (r *sinceRepo) git(args ...string) string {
+	r.t.Helper()
+	return r.run(r.work, args...)
+}
+
+// commit writes file in the author's clone and commits it.
+func (r *sinceRepo) commit(file, content, msg string) string {
+	r.t.Helper()
+	os.WriteFile(filepath.Join(r.work, file), []byte(content), 0o644)
+	r.git("add", ".")
+	r.git("commit", "-qm", msg)
+	return r.git("rev-parse", "HEAD")
+}
+
+// since is sinceReview from the verifier's clone.
+func (r *sinceRepo) since(mergeBase, old, new string) string {
+	r.t.Helper()
+	out, err := sinceReview(r.check, "origin", "main", mergeBase, old, new)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return out
+}
+
+// TestSinceReview moves a PR branch as a rebase, a follow-up commit and a
+// merge would.
+func TestSinceReview(t *testing.T) {
+	r := newSinceRepo(t)
+	r.git("switch", "-q", "-c", "feature")
+	reviewed := r.commit("f.txt", "one\n", "add f")
+	r.git("push", "-q", "origin", "feature")
+	r.git("switch", "-q", "main")
+	m1 := r.commit("other.txt", "other\n", "main moves")
+	r.git("push", "-q", "origin", "main")
+
+	if out := r.since("", reviewed, reviewed); !strings.HasPrefix(out, "no change: the head is still the reviewed commit "+short(reviewed)) {
 		t.Errorf("same head: %s", out)
 	}
 
 	// A rebase onto the new main: the same patch.
-	run(work, "switch", "-q", "feature")
-	run(work, "rebase", "-q", "main")
-	rebased := run(work, "rev-parse", "HEAD")
-	run(work, "push", "-q", "-f", "origin", "feature")
-	if out := since("", reviewed, rebased); out != "same patch, rebased onto "+short(m1)+" (was on "+short(run(work, "rev-parse", "main~1"))+")\n" {
+	r.git("switch", "-q", "feature")
+	r.git("rebase", "-q", "main")
+	rebased := r.git("rev-parse", "HEAD")
+	r.git("push", "-q", "-f", "origin", "feature")
+	if out := r.since("", reviewed, rebased); out != "same patch, rebased onto "+short(m1)+" (was on "+short(r.git("rev-parse", "main~1"))+")\n" {
 		t.Errorf("rebase: %s", out)
 	}
 
 	// A follow-up that changes the patch: a range-diff.
-	fixed := commit(work, "f.txt", "one\ntwo\n", "fix f")
-	run(work, "push", "-q", "origin", "feature")
-	out := since("", reviewed, fixed)
+	fixed := r.commit("f.txt", "one\ntwo\n", "fix f")
+	r.git("push", "-q", "origin", "feature")
+	out := r.since("", reviewed, fixed)
 	for _, want := range []string{
 		"the patch changed: git range-diff ",
 		"(the base also moved, from ",
@@ -127,11 +149,91 @@ func TestSinceReview(t *testing.T) {
 
 	// Merged: the head is on main, and only the forge's merge base says
 	// where it branched.
-	run(work, "push", "-q", "origin", "feature:main")
-	if _, err := sinceReview(check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
+	r.git("push", "-q", "origin", "feature:main")
+	if _, err := sinceReview(r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
 		t.Errorf("merged without a merge base: %v", err)
 	}
-	if out := since(m1, reviewed, fixed); !strings.Contains(out, "fix f") {
+	if out := r.since(m1, reviewed, fixed); !strings.Contains(out, "fix f") {
 		t.Errorf("merged with the merge base:\n%s", out)
+	}
+}
+
+// TestSinceReviewMergedFollowUp merges a PR whose reviewed commit is still
+// in its history, under a follow-up: both are on main once it merges.
+func TestSinceReviewMergedFollowUp(t *testing.T) {
+	r := newSinceRepo(t)
+	base := r.git("rev-parse", "HEAD")
+	r.git("switch", "-q", "-c", "feature")
+	reviewed := r.commit("f.txt", "one\n", "add f")
+	fixed := r.commit("f.txt", "one\ntwo\n", "fix f")
+	r.git("push", "-q", "origin", "feature:main")
+
+	if _, err := sinceReview(r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
+		t.Errorf("without a merge base: %v", err)
+	}
+	out := r.since(base, reviewed, fixed)
+	for _, want := range []string{"the patch changed: git range-diff " + short(base) + ".." + short(reviewed) + " " + short(base) + ".." + short(fixed), "fix f", "+two"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "base also moved") {
+		t.Errorf("the base did not move:\n%s", out)
+	}
+}
+
+// TestSinceReviewWhitespace changes only indentation, which changes what
+// Python code does: it is not the same patch, as a follow-up commit or
+// amended into the reviewed one.
+func TestSinceReviewWhitespace(t *testing.T) {
+	r := newSinceRepo(t)
+	r.commit("a.py", "def f(x):\n    pass\n", "add f")
+	r.git("push", "-q", "origin", "main")
+	r.git("switch", "-q", "-c", "feature")
+	reviewed := r.commit("a.py", "def f(x):\n    pass\n    if x:\n        print(1)\n        print(2)\n", "print")
+	dedent := "def f(x):\n    pass\n    if x:\n        print(1)\n    print(2)\n"
+	followUp := r.commit("a.py", dedent, "dedent")
+	r.git("push", "-q", "origin", "feature")
+	out := r.since("", reviewed, followUp)
+	for _, want := range []string{"the patch changed: ", "dedent", "-        print(2)", "+    print(2)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("follow-up lacks %q:\n%s", want, out)
+		}
+	}
+
+	// The same, amended into the reviewed commit on the same base.
+	r.git("reset", "-q", "--hard", reviewed)
+	os.WriteFile(filepath.Join(r.work, "a.py"), []byte(dedent), 0o644)
+	r.git("commit", "-qa", "--amend", "--no-edit")
+	amended := r.git("rev-parse", "HEAD")
+	r.git("push", "-q", "-f", "origin", "feature")
+	out = r.since("", reviewed, amended)
+	if !strings.Contains(out, "the patch changed: ") || !strings.Contains(out, "++    print(2)") {
+		t.Errorf("amended:\n%s", out)
+	}
+}
+
+// TestSinceReviewMergeEdit changes the patch inside a merge of main, which
+// range-diff leaves out: every commit matches, so the full diff is shown.
+func TestSinceReviewMergeEdit(t *testing.T) {
+	r := newSinceRepo(t)
+	r.git("switch", "-q", "-c", "feature")
+	reviewed := r.commit("f.txt", "one\n", "add f")
+	r.git("switch", "-q", "main")
+	r.commit("other.txt", "other\n", "main moves")
+	r.git("push", "-q", "origin", "main")
+	r.git("switch", "-q", "feature")
+	r.git("merge", "-q", "--no-commit", "main")
+	os.WriteFile(filepath.Join(r.work, "f.txt"), []byte("one\nhidden\n"), 0o644)
+	r.git("add", ".")
+	r.git("commit", "-qm", "merge main")
+	merged := r.git("rev-parse", "HEAD")
+	r.git("push", "-q", "origin", "feature")
+
+	out := r.since("", reviewed, merged)
+	for _, want := range []string{"the patch changed: ", "1:  " + reviewed[:7] + " = 1:", "The commits match, but the whole change differs", "+hidden"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
 	}
 }
