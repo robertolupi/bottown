@@ -966,6 +966,12 @@ func TestE2E(t *testing.T) {
 		if !strings.Contains(vp, "review submit --commit "+sha) {
 			t.Fatalf("verify prompt lacks the pinned commit %s:\n%s", sha, vp)
 		}
+		if strings.Contains(vp, "--since-review") {
+			t.Errorf("verify prompt of an unreviewed PR mentions --since-review:\n%s", vp)
+		}
+		if out := must(aw, "", "pr", "show", "--since-review"); !strings.Contains(out, "+agent") || !strings.Contains(out, "no earlier review; the full diff is above") {
+			t.Errorf("pr show --since-review before a review: %s", out)
+		}
 		if out := must(aw, "", "pr", "show", "--diff"); !strings.Contains(out, "agent.txt") || !strings.Contains(out, "by claude") ||
 			!strings.Contains(out, " agent.txt | 1 +\n 1 file changed, 1 insertion(+), 0 deletions(-)") || !strings.Contains(out, "+agent") {
 			t.Errorf("pr show --diff: %s", out)
@@ -1017,6 +1023,56 @@ func TestE2E(t *testing.T) {
 		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "implemented agent.txt") {
 			t.Errorf("implement handover on the issue: %+v", comments)
 		}
+
+		// The head moves after agy's review: first a rebase onto a new main,
+		// then a real change. pr show --since-review tells them apart.
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+		}
+		ownerGit("fetch", "-q", remote)
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, "main-moves.txt"), []byte("main moves\n"), 0o644)
+		git(t, demo, "add", "main-moves.txt")
+		git(t, demo, "commit", "-q", "-m", "main moves")
+		newMain := git(t, demo, "rev-parse", "HEAD")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+		git(t, demo, "switch", "-q", "main")
+
+		must(cw, "", "run", "start", "implement", n)
+		git(t, cw, "fetch", "-q", remote)
+		git(t, cw, "rebase", "-q", remote+"/main")
+		if out, err := exec.Command("git", "-C", cw, "push", "-q", "-f", remote, "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("push the rebased branch: %v %s", err, out)
+		}
+		if out := must(aw, "", "pr", "show", fmt.Sprint(prn), "--since-review"); !strings.Contains(out, "since review APPROVED by agy at "+sha[:10]) ||
+			!strings.Contains(out, "same patch, rebased onto "+newMain[:10]) || strings.Contains(out, "+agent") {
+			t.Errorf("pr show --since-review after a rebase: %s", out)
+		}
+		os.WriteFile(filepath.Join(cw, "agent.txt"), []byte("agent\nfixed\n"), 0o644)
+		git(t, cw, "commit", "-q", "-am", "agent fix")
+		if out, err := exec.Command("git", "-C", cw, "push", "-q", remote, "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("push the fix: %v %s", err, out)
+		}
+		if out := must(aw, "", "pr", "show", fmt.Sprint(prn), "--since-review", "--reviewer", "agy"); !strings.Contains(out, "the patch changed: git range-diff ") ||
+			!strings.Contains(out, "= 1:") || !strings.Contains(out, "agent change") ||
+			!strings.Contains(out, "--- new since the review: ") || !strings.Contains(out, "+fixed") || strings.Contains(out, "same patch") {
+			t.Errorf("pr show --since-review after a fix: %s", out)
+		}
+		if out := must(aw, "", "pr", "show", fmt.Sprint(prn), "--since-review", "--reviewer", "codex"); !strings.Contains(out, "no earlier review by codex") || !strings.Contains(out, "+fixed") {
+			t.Errorf("pr show --since-review --reviewer without their review: %s", out)
+		}
+		must(cw, "", "run", "end", "--summary", "rebased and fixed")
+		vp = must(aw, "", "run", "start", "verify", fmt.Sprint(prn))
+		if !strings.Contains(vp, "pr show --since-review") {
+			t.Errorf("verify prompt of a reviewed PR lacks --since-review:\n%s", vp)
+		}
+		must(aw, "", "run", "end", "--failed", "--summary", "not reviewed here")
 
 		// A discuss run reads and comments on the issue, and changes nothing.
 		if out, err := agent(cw, "x", "comment", n, "--body-file", "-"); err == nil || !strings.Contains(out, "read-only") {

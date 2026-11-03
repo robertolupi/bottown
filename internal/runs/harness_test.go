@@ -206,6 +206,20 @@ func TestWebPreviewPrompt(t *testing.T) {
 	}
 }
 
+// TestSinceReviewPrompt checks that the verify prompt points at
+// `pr show --since-review` only when the PR has been reviewed before.
+func TestSinceReviewPrompt(t *testing.T) {
+	for _, reviewed := range []bool{false, true} {
+		p, err := Prompt("verify", PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", PR: 8, Title: "T", SHA: "abc", Bottown: "/b", Reviewed: reviewed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(p, "`/b pr show --since-review`"); got != reviewed {
+			t.Errorf("verify prompt with Reviewed %v mentions --since-review: %v\n%s", reviewed, got, p)
+		}
+	}
+}
+
 func TestHasWebPreview(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) {

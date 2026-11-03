@@ -41,6 +41,7 @@ type PromptData struct {
 	Message                    string // implement, verify, plan: the owner's note, if given to the command
 	MilestonesDir              string // plan: where the repository keeps milestone plans
 	WebPreview                 bool   // implement, verify: the repository has fixtures for `bottown web preview`
+	Reviewed                   bool   // verify: the PR already has reviews, so `pr show --since-review` applies
 	// The issue or PR whose attachments were fetched for the run, with
 	// their local paths, or why they could not be listed.
 	AttachmentsOf    int64

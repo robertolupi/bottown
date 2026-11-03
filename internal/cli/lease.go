@@ -191,6 +191,9 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 			AttachmentsOf: item.Number, Attachments: atts, AttachmentsError: item.AttachmentsError,
 		}
 		d.WebPreview = runs.HasWebPreview(a.Worktree, a.Remote+"/"+base)
+		if kind == policy.Verify {
+			d.Reviewed = rk.prReviewed(run.PR)
+		}
 		if kind == policy.Plan {
 			// bottown reads the repository's settings from its default branch.
 			settings, err := runs.RepoSettingsAt(a.Worktree, a.Remote+"/"+base)

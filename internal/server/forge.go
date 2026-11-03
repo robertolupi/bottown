@@ -182,6 +182,7 @@ type PROut struct {
 	HeadBranch string      `json:"head_branch"`
 	HeadSHA    string      `json:"head_sha"`
 	BaseBranch string      `json:"base_branch"`
+	MergeBase  string      `json:"merge_base,omitempty"` // where the head branched from the base
 	Mergeable  bool        `json:"mergeable"`
 	Reviews    []ReviewOut `json:"reviews"`
 	// Assessment is where the reviews leave the PR (internal/review).
@@ -512,7 +513,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	}
 	out := PROut{
 		Number: pr.Index, Title: pr.Title, Body: pr.Body, State: string(pr.State), Merged: pr.HasMerged,
-		Author: login(pr.Poster), Mergeable: pr.Mergeable, Reviews: []ReviewOut{},
+		Author: login(pr.Poster), MergeBase: pr.MergeBase, Mergeable: pr.Mergeable, Reviews: []ReviewOut{},
 	}
 	if pr.Head != nil {
 		out.HeadBranch, out.HeadSHA = pr.Head.Ref, pr.Head.Sha
