@@ -34,10 +34,11 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   held, another run's containers), wait for it to clear, or say so with
   `comment` and stop.
 {{- if .WebPreview}}
-- To look at a web UI change, run `{{.Bottown}} web preview` in this
-  worktree, in the background: it builds `web/` and prints a localhost URL
-  that serves it with the fixture data in `web/fixtures` (`--fixture NAME`
-  picks a scenario). It needs no sign-in and touches no instance.
+- To look at a web UI change, run `{{.Bottown}} web preview` with
+  `--detach`: it builds `web/` and serves it on a localhost URL with the
+  fixture data in `web/fixtures` (`--fixture NAME` picks a scenario),
+  prints the URL and returns your prompt; `{{.Bottown}} web preview --stop`
+  stops it. It needs no sign-in and touches no instance.
 {{- end}}
 
 ## Done means

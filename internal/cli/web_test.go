@@ -5,12 +5,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // lockedBuffer is an io.Writer that is safe to read while a command writes.
@@ -31,9 +34,10 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// TestWebPreview runs `web preview` in a checkout without an instance, with
-// a stand-in for vite that writes the build where it is told to.
-func TestWebPreview(t *testing.T) {
+// fakeCheckout makes a checkout whose web/ has a stand-in for vite that
+// writes the build where it is told to, and returns its top directory.
+func fakeCheckout(t *testing.T) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the vite stand-in is a shell script")
 	}
@@ -63,29 +67,37 @@ printf '<!doctype html><title>built by the stand-in</title>' > "$out/index.html"
 	if err := os.Chtimes(filepath.Join(web, "node_modules"), later, later); err != nil {
 		t.Fatal(err)
 	}
+	return top
+}
 
+// runPreviewCmd runs `web preview` with args, capturing its output.
+func runPreviewCmd(ctx context.Context, args ...string) (*lockedBuffer, *lockedBuffer, <-chan error) {
+	root := newRoot()
+	out, errb := &lockedBuffer{}, &lockedBuffer{}
+	root.SetOut(out)
+	root.SetErr(errb)
+	root.SetArgs(append([]string{"web", "preview"}, args...))
+	done := make(chan error, 1)
+	go func() { done <- root.ExecuteContext(ctx) }()
+	return out, errb, done
+}
+
+// TestWebPreview runs `web preview` in a checkout without an instance, with
+// a stand-in for vite that writes the build where it is told to.
+func TestWebPreview(t *testing.T) {
+	top := fakeCheckout(t)
 	t.Chdir(top)
 	t.Setenv("BOTTOWN_INSTANCE", "")
-	run := func(ctx context.Context, args ...string) (*lockedBuffer, *lockedBuffer, <-chan error) {
-		root := newRoot()
-		out, errb := &lockedBuffer{}, &lockedBuffer{}
-		root.SetOut(out)
-		root.SetErr(errb)
-		root.SetArgs(append([]string{"web", "preview"}, args...))
-		done := make(chan error, 1)
-		go func() { done <- root.ExecuteContext(ctx) }()
-		return out, errb, done
-	}
 
 	// A fixture that is not there fails before the build.
-	_, _, done := run(context.Background(), "--fixture", "nope")
+	_, _, done := runPreviewCmd(context.Background(), "--fixture", "nope")
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "have: default") {
 		t.Errorf("missing fixture: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	out, errb, done := run(ctx)
+	out, errb, done := runPreviewCmd(ctx)
 	var base string
 	for deadline := time.Now().Add(10 * time.Second); base == ""; {
 		select {
@@ -137,5 +149,134 @@ printf '<!doctype html><title>built by the stand-in</title>' > "$out/index.html"
 				t.Errorf("build left behind: %s", p)
 			}
 		}
+	}
+}
+
+// TestWebPreviewDetachedChild runs the detached child in-process: it
+// records where it serves, and removes the record when it exits.
+func TestWebPreviewDetachedChild(t *testing.T) {
+	top := fakeCheckout(t)
+	t.Chdir(top)
+	t.Setenv("BOTTOWN_INSTANCE", "")
+	t.Setenv(previewChildEnv, "1")
+	state := filepath.Join(t.TempDir(), "state.json")
+	t.Setenv(previewStateEnv, state)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, errb, done := runPreviewCmd(ctx)
+
+	var st previewState
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if s, err := loadPreviewState(state); err == nil {
+			st = s
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("child exited: %v\n%s", err, errb.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no state file; stderr:\n%s", errb.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st.PID != os.Getpid() {
+		t.Errorf("state pid %d, want %d", st.PID, os.Getpid())
+	}
+	if st.URL == "" {
+		t.Errorf("state has no URL: %+v", st)
+	}
+	resp, err := http.Get(st.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("child: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("child did not stop")
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state file left behind: %v", err)
+	}
+}
+
+// TestStopPreview ends the process named by the state file, and removes it.
+func TestStopPreview(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	// Reap it as soon as it dies, so processAlive does not read the zombie.
+	go func() { _ = sleeper.Wait() }()
+	defer sleeper.Process.Kill()
+
+	state := filepath.Join(t.TempDir(), "state.json")
+	logPath := state + ".log"
+	writeFile(t, logPath, "log\n")
+	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1234", Log: logPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &lockedBuffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(out)
+	if err := stopPreview(cmd, state); err != nil {
+		t.Fatal(err)
+	}
+	if processAlive(sleeper.Process.Pid) {
+		t.Errorf("process %d still alive", sleeper.Process.Pid)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state file left behind: %v", err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("log left behind: %v", err)
+	}
+	if !strings.Contains(out.String(), "stopped preview") {
+		t.Errorf("output: %q", out.String())
+	}
+
+	// With no state file, there is nothing to stop.
+	if err := stopPreview(cmd, filepath.Join(t.TempDir(), "absent.json")); err == nil {
+		t.Errorf("expected an error for a missing state file")
+	}
+}
+
+// TestDetachPreviewRefusesWhenRunning leaves a live preview in place alone.
+func TestDetachPreviewRefusesWhenRunning(t *testing.T) {
+	sleeper := exec.Command("sleep", "30")
+	if err := sleeper.Start(); err != nil {
+		t.Skipf("cannot start a sleeper: %v", err)
+	}
+	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+
+	state := filepath.Join(t.TempDir(), "state.json")
+	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1234"}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&lockedBuffer{})
+	cmd.SetErr(&lockedBuffer{})
+	err := detachPreview(cmd, t.TempDir(), state, previewSettings{})
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Errorf("detach with a live preview: %v", err)
+	}
+}
+
+func TestPreviewStatePath(t *testing.T) {
+	if got := previewStatePath("/x/y", "/top"); got != "/x/y" {
+		t.Errorf("env path: %q", got)
+	}
+	a, b := previewStatePath("", "/top/a"), previewStatePath("", "/top/b")
+	if a == b || !strings.HasPrefix(filepath.Base(a), "bottown-preview-") {
+		t.Errorf("paths: %q %q", a, b)
 	}
 }
