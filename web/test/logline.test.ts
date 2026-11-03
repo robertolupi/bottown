@@ -22,16 +22,18 @@ async function loadLogLineView(): Promise<any> {
   return (await import(pathToFileURL(fileURLToPath(out)).href)).default;
 }
 
-// The rendered line's div: its classes, data-tool-class and inner HTML.
-function renderLine(View: any, line: LogLine): { classes: string[]; toolClass?: string; inner: string } {
+// The rendered line's element: its classes, data-tool-class and inner HTML.
+function renderLine(View: any, line: LogLine): { classes: string[]; toolClass?: string; inner: string; summary?: string } {
   const { body } = render(View, { props: { line } });
-  const m = body.match(/<div class="([^"]*)"(?: data-tool-class="([^"]*)")?[^>]*>(.*)<\/div>/s);
-  assert.ok(m, `no line div in ${body}`);
+  const clean = body.replace(/<!--.*?-->/g, '').replace(/ svelte-[a-z0-9]+/g, '');
+  const m = clean.match(/<(div|details) class="([^"]*)"(?: data-tool-class="([^"]*)")?[^>]*>(.*)<\/\1>/s);
+  assert.ok(m, `no line element in ${body}`);
+  const summary = m[4].match(/<summary[^>]*>(.*)<\/summary>/s)?.[1];
   return {
-    classes: m[1].split(/\s+/).filter((c) => c.startsWith('log-')),
-    toolClass: m[2],
-    // Without hydration markers and the scoped-CSS class.
-    inner: m[3].replace(/<!--.*?-->/g, '').replace(/ svelte-[a-z0-9]+/g, ''),
+    classes: m[2].split(/\s+/).filter((c) => c.startsWith('log-')),
+    toolClass: m[3],
+    inner: m[4],
+    summary,
   };
 }
 
@@ -45,7 +47,7 @@ test('LogLineView renders each kind with its class', async () => {
   }
 });
 
-test('LogLineView renders a tool line with its class and the tool name in its own span', async () => {
+test('LogLineView renders a readable tool summary with its class', async () => {
   const View = await loadLogLineView();
   const calls: Array<[string, string, LogLine['tool_class']]> = [
     ['Bash', 'Bash: make check', 'shell'],
@@ -60,13 +62,42 @@ test('LogLineView renders a tool line with its class and the tool name in its ow
     const r = renderLine(View, { kind: 'tool', tool, tool_class: toolClass, text });
     assert.deepEqual(r.classes, ['log-line', 'log-tool']);
     assert.equal(r.toolClass, toolClass);
-    const arg = text.slice(tool.length).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    assert.equal(r.inner, `<span class="log-tool">${tool}</span>${arg}`);
+    const arg = text.slice(tool.length).replace(/^:\s*/, '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    assert.equal(r.summary, `<span class="log-tool">${tool}</span>${arg ? `<span class="log-arg">${arg}</span>` : ''}`);
   }
 });
 
+test('LogLineView expands tool parameters and output without cluttering the summary', async () => {
+  const View = await loadLogLineView();
+  const r = renderLine(View, {
+    kind: 'tool',
+    tool: 'Read',
+    tool_class: 'read',
+    state: 'completed',
+    text: 'Read: web/test/state.test.ts',
+    parameters: '{\n  "path": "web/test/state.test.ts"\n}',
+    output: 'first line\nsecond line',
+  });
+  assert.match(r.summary || '', /^<span class="log-tool">Read<\/span><span class="log-arg">web\/test\/state\.test\.ts<\/span><span class="log-state log-state-completed">· completed<\/span>$/);
+  assert.doesNotMatch(r.summary || '', /first line|"path"/);
+  assert.match(r.inner, /<h4[^>]*>Parameters<\/h4>/);
+  assert.match(r.inner, /<h4[^>]*>Output<\/h4>/);
+  assert.match(r.inner, /first line\nsecond line/);
+});
+
+test('LogLineView marks failed calls and expands full assistant text', async () => {
+  const View = await loadLogLineView();
+  const failed = renderLine(View, { kind: 'tool', tool: 'Bash', state: 'failed', text: 'Bash: false', output: 'exit 1' });
+  assert.match(failed.summary || '', /log-state-failed/);
+  assert.match(failed.summary || '', /· failed/);
+
+  const text = renderLine(View, { kind: 'text', text: 'First line.', detail: 'First line.\n\nFull explanation.' });
+  assert.equal(text.summary, 'First line.');
+  assert.match(text.inner, /Full explanation\./);
+});
+
 test('splitToolLine splits only tool lines that start with their tool', () => {
-  assert.deepEqual(splitToolLine({ kind: 'tool', tool: 'Bash', text: 'Bash: ls' }), { tool: 'Bash', arg: ': ls' });
+  assert.deepEqual(splitToolLine({ kind: 'tool', tool: 'Bash', text: 'Bash: ls' }), { tool: 'Bash', arg: 'ls' });
   assert.equal(splitToolLine({ kind: 'tool', tool: 'Bash', text: 'ls' }), null);
   assert.equal(splitToolLine({ kind: 'text', text: 'Bash: ls' }), null);
 });

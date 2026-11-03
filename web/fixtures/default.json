@@ -837,27 +837,30 @@
     "r-1a2b3c4d": [
       {
         "kind": "status",
-        "text": "session started: claude-opus-5-5"
+        "text": "session started: claude-opus-5-5, acceptEdits"
       },
       {
         "kind": "text",
-        "text": "I'll start by reading the issue and the webhook delivery code."
+        "text": "I'll start by reading the issue and the webhook delivery code.",
+        "detail": "I'll start by reading the issue and the webhook delivery code.\n\nThen I'll add retries and cover timeouts with a test."
       },
       {
         "kind": "tool",
-        "text": "bottown issue show",
+        "text": "Bash: bottown issue show 42",
         "tool": "Bash",
-        "tool_class": "shell"
-      },
-      {
-        "kind": "output",
-        "text": "#42 Retry webhook deliveries with backoff [open] by owner"
+        "tool_class": "forge",
+        "state": "completed",
+        "parameters": "{\n  \"command\": \"bottown issue show 42\",\n  \"description\": \"Read the webhook retry issue\"\n}",
+        "output": "#42 Retry webhook deliveries with backoff [open] by owner"
       },
       {
         "kind": "tool",
-        "text": "internal/webhook/deliver.go",
+        "text": "Read: internal/webhook/deliver.go",
         "tool": "Read",
-        "tool_class": "read"
+        "tool_class": "read",
+        "state": "completed",
+        "parameters": "{\n  \"file_path\": \"internal/webhook/deliver.go\",\n  \"offset\": 1,\n  \"limit\": 180\n}",
+        "output": "func Deliver(ctx context.Context, event Event) error {\n    return client.Post(ctx, event.URL, event.Body)\n}"
       },
       {
         "kind": "text",
@@ -865,25 +868,25 @@
       },
       {
         "kind": "tool",
-        "text": "internal/webhook/retry.go",
-        "tool": "Write",
-        "tool_class": "edit"
-      },
-      {
-        "kind": "tool",
-        "text": "internal/webhook/deliver.go",
+        "text": "Edit: internal/webhook/deliver.go",
         "tool": "Edit",
-        "tool_class": "edit"
+        "tool_class": "edit",
+        "state": "completed",
+        "parameters": "{\n  \"file_path\": \"internal/webhook/deliver.go\",\n  \"old_string\": \"return client.Post(ctx, event.URL, event.Body)\",\n  \"new_string\": \"return retryQueue.Submit(ctx, event)\"\n}",
+        "output": "The file internal/webhook/deliver.go has been updated."
       },
       {
         "kind": "tool",
-        "text": "go test ./internal/webhook/",
+        "text": "Bash: go test ./internal/webhook/",
         "tool": "Bash",
-        "tool_class": "shell"
+        "tool_class": "shell",
+        "state": "failed",
+        "parameters": "{\n  \"command\": \"go test ./internal/webhook/\"\n}",
+        "output": "--- FAIL: TestDeliverRetries (0.02s)\n    deliver_test.go:88: attempts = 1, want 3"
       },
       {
-        "kind": "output",
-        "text": "--- FAIL: TestDeliverRetries (0.02s)\n    deliver_test.go:88: attempts = 1, want 3"
+        "kind": "error",
+        "text": "Exit code 1"
       },
       {
         "kind": "text",
@@ -891,31 +894,35 @@
       },
       {
         "kind": "tool",
-        "text": "internal/webhook/deliver.go",
+        "text": "Edit: internal/webhook/deliver.go",
         "tool": "Edit",
-        "tool_class": "edit"
+        "tool_class": "edit",
+        "state": "completed",
+        "parameters": "{\n  \"file_path\": \"internal/webhook/deliver.go\"\n}",
+        "output": "The file internal/webhook/deliver.go has been updated."
       },
       {
         "kind": "tool",
-        "text": "go test ./internal/webhook/",
+        "text": "Bash: go test ./internal/webhook/",
         "tool": "Bash",
-        "tool_class": "shell"
-      },
-      {
-        "kind": "output",
-        "text": "ok  \texample.com/demo/internal/webhook\t0.412s"
+        "tool_class": "shell",
+        "state": "completed",
+        "parameters": "{\n  \"command\": \"go test ./internal/webhook/\"\n}",
+        "output": "ok  \texample.com/demo/internal/webhook\t0.412s"
       },
       {
         "kind": "tool",
-        "text": "make check",
+        "text": "Bash: make check",
         "tool": "Bash",
-        "tool_class": "shell"
+        "tool_class": "shell",
+        "state": "running",
+        "parameters": "{\n  \"command\": \"make check\",\n  \"description\": \"Run repository checks\"\n}"
       }
     ],
     "r-9c8d7e6f": [
       {
         "kind": "status",
-        "text": "session started: kimi-k3"
+        "text": "system.version: 2.4.1"
       },
       {
         "kind": "text",
@@ -923,23 +930,33 @@
       },
       {
         "kind": "tool",
-        "text": "bottown pr show 57 --diff",
-        "tool": "Shell",
-        "tool_class": "shell"
-      },
-      {
-        "kind": "output",
-        "text": " internal/api/ratelimit.go      | 112 +++++++++\n internal/api/ratelimit_test.go |  64 +++++\n 2 files changed, 176 insertions(+)"
+        "text": "Bash: bottown pr show 57 --diff",
+        "tool": "Bash",
+        "tool_class": "forge",
+        "state": "completed",
+        "parameters": "{\n  \"command\": \"bottown pr show 57 --diff\"\n}",
+        "output": " internal/api/ratelimit.go      | 112 +++++++++\n internal/api/ratelimit_test.go |  64 +++++\n 2 files changed, 176 insertions(+)"
       },
       {
         "kind": "tool",
-        "text": "internal/api/ratelimit.go",
-        "tool": "ReadFile",
-        "tool_class": "read"
+        "text": "Read: internal/api/ratelimit.go",
+        "tool": "Read",
+        "tool_class": "read",
+        "state": "completed",
+        "parameters": "{\n  \"path\": \"internal/api/ratelimit.go\",\n  \"offset\": 1,\n  \"limit\": 180\n}",
+        "output": "func (l *Limiter) Allow(token string) bool {\n    return l.bucket(token).take(1)\n}"
       },
       {
         "kind": "text",
         "text": "The token bucket now refills per second. Checking the idle-burst test."
+      },
+      {
+        "kind": "tool",
+        "text": "Read: internal/api/ratelimit_test.go",
+        "tool": "Read",
+        "tool_class": "read",
+        "state": "running",
+        "parameters": "{\n  \"path\": \"internal/api/ratelimit_test.go\"\n}"
       },
       {
         "kind": "error",
@@ -1056,6 +1073,10 @@
         "text": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB."
       }
     ]
+  },
+  "raw_logs": {
+    "r-1a2b3c4d": "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-5-5\",\"permissionMode\":\"acceptEdits\"}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll start by reading the issue and the webhook delivery code.\\n\\nThen I'll add retries and cover timeouts with a test.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"bottown issue show 42\",\"description\":\"Read the webhook retry issue\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"#42 Retry webhook deliveries with backoff [open] by owner\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Read\",\"input\":{\"file_path\":\"internal/webhook/deliver.go\",\"offset\":1,\"limit\":180}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t2\",\"content\":\"func Deliver(ctx context.Context, event Event) error {\\n    return client.Post(ctx, event.URL, event.Body)\\n}\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Deliveries are attempted once; a 5xx or timeout drops the event. I'll add a retry queue with exponential backoff and jitter.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t3\",\"name\":\"Edit\",\"input\":{\"file_path\":\"internal/webhook/deliver.go\",\"old_string\":\"return client.Post(ctx, event.URL, event.Body)\",\"new_string\":\"return retryQueue.Submit(ctx, event)\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t3\",\"content\":\"The file internal/webhook/deliver.go has been updated.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t4\",\"name\":\"Bash\",\"input\":{\"command\":\"go test ./internal/webhook/\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t4\",\"is_error\":true,\"content\":\"--- FAIL: TestDeliverRetries (0.02s)\\n    deliver_test.go:88: attempts = 1, want 3\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"The test fails because the client's timeout is not treated as retryable. Fixing the classification.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t5\",\"name\":\"Edit\",\"input\":{\"file_path\":\"internal/webhook/deliver.go\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t5\",\"content\":\"The file internal/webhook/deliver.go has been updated.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t6\",\"name\":\"Bash\",\"input\":{\"command\":\"go test ./internal/webhook/\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t6\",\"content\":\"ok  \\texample.com/demo/internal/webhook\\t0.412s\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t7\",\"name\":\"Bash\",\"input\":{\"command\":\"make check\",\"description\":\"Run repository checks\"}}]}}\n",
+    "r-9c8d7e6f": "{\"role\":\"meta\",\"type\":\"system.version\",\"version\":\"2.4.1\"}\n{\"role\":\"assistant\",\"content\":\"Reviewing PR !57 at 8d3e1f0 for issue #51.\"}\n{\"role\":\"assistant\",\"tool_calls\":[{\"type\":\"function\",\"id\":\"t1\",\"function\":{\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"bottown pr show 57 --diff\\\"}\"}}]}\n{\"role\":\"tool\",\"tool_call_id\":\"t1\",\"content\":\" internal/api/ratelimit.go      | 112 +++++++++\\n internal/api/ratelimit_test.go |  64 +++++\\n 2 files changed, 176 insertions(+)\"}\n{\"role\":\"assistant\",\"tool_calls\":[{\"type\":\"function\",\"id\":\"t2\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"internal/api/ratelimit.go\\\",\\\"offset\\\":1,\\\"limit\\\":180}\"}}]}\n{\"role\":\"tool\",\"tool_call_id\":\"t2\",\"content\":\"func (l *Limiter) Allow(token string) bool {\\n    return l.bucket(token).take(1)\\n}\"}\n{\"role\":\"assistant\",\"content\":\"The token bucket now refills per second. Checking the idle-burst test.\"}\n{\"role\":\"assistant\",\"tool_calls\":[{\"type\":\"function\",\"id\":\"t3\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"internal/api/ratelimit_test.go\\\"}\"}}]}\n"
   },
   "issues": {
     "40": {

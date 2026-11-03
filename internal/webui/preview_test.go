@@ -190,6 +190,9 @@ func TestPreviewRoutes(t *testing.T) {
 	if log.ID != id || len(log.Lines) != 2 {
 		t.Errorf("log tail=2: %+v", log)
 	}
+	if code, body := c.do(http.MethodGet, "/api/runs/"+id+"/log?raw=1", ""); code != http.StatusOK || body != fx.RawLogs[id] {
+		t.Errorf("raw log: %d %q, want fixture's original records", code, body)
+	}
 	c.get("/api/runs/r-nolog/log", &log)
 	if log.Lines == nil || len(log.Lines) != 0 {
 		t.Errorf("a run without a log has no lines: %+v", log)

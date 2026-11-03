@@ -7,12 +7,13 @@
 
   interface Props {
     title: string;
+    runId: string;
     colspan: number;
     denials: Denial[] | undefined;
     logState: RunLogState;
   }
 
-  let { title, colspan, denials, logState }: Props = $props();
+  let { title, runId, colspan, denials, logState }: Props = $props();
 </script>
 
 <tr class="log-expand-row">
@@ -24,6 +25,13 @@
         {#if logState.lines}
           <span class="muted text-sm">{logState.lines.length} lines</span>
         {/if}
+        <a
+          class="log-raw-link"
+          href="/api/runs/{runId}/log?raw=1"
+          target="_blank"
+          rel="noreferrer"
+          title="Open the complete raw log with encoded payloads elided"
+        >Raw log</a>
       </div>
       <div class="log-tail-content">
         {#if logState.loading}
@@ -62,12 +70,18 @@
   }
 
   .log-tail-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     padding: 6px 12px;
     background: #111827;
     color: #94a3b8;
     font-size: 11px;
     border-bottom: 1px solid #1e293b;
   }
+
+  .log-tail-header > :first-child { flex: 1; }
+  .log-raw-link { color: #cbd5e1; white-space: nowrap; }
 
   .log-tail-content {
     max-height: 180px;

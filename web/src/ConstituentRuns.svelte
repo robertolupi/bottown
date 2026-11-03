@@ -72,6 +72,7 @@
         {#if expandedLogs[r.id]}
           <RunLogRow
             title={`Run Log (${r.id} · ${r.kind} · ${r.actor})`}
+            runId={r.id}
             colspan={11}
             denials={r.denials}
             logState={expandedLogs[r.id]}

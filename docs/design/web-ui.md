@@ -389,9 +389,16 @@ text and tool calls, one line each), refreshed while it runs; the UI is
 on the host, so it reads `.bottown/runs/<id>.log` directly. Each line
 carries a kind (`text`, `tool`, `output`, `error`, `status`, or `plain`
 for harnesses whose parts are not told apart yet) and, for a tool call,
-the tool's name and class (`shell`, `read`, `edit`, `search`, `forge`,
-`browser`, `other`). The tail and the history's log boxes color lines by
-kind and tool names by class, with a legend in the tail's header.
+the tool's name, class (`shell`, `read`, `edit`, `search`, `forge`,
+`browser`, `other`) and state (`running`, `completed` or `failed`). A call
+has a concise summary such as `Read web/test/state.test.ts · completed`;
+its full parameters and output expand in place, as does the full text of a
+multiline assistant message. Tool results update their call in place, so
+completion does not reorder the events. The tail and the history's log boxes
+color lines by kind and tool names by class, with a legend in the tail's
+header. Both also link to `GET /api/runs/{id}/log?raw=1`, which serves the
+complete original log as redacted plain text for diagnosis. Encoded
+attachment payloads are elided from both the rendered and raw views.
 
 Issue references in Live Runs, Run History and Owner Inbox show the issue
 title and Markdown description in a popup on hover or keyboard focus. The
@@ -589,9 +596,13 @@ log has, at run end, into the digest:
 | crush | the assistant text from stdout, else the transcript's last assistant text | cost, from the transcript's session; its token counts are the last step's, not the run's, and are left out |
 
 The live tail renders the same events, one line per assistant message or
-tool call, each with a kind and, for a tool call, a tool class (§4.2).
-One table in `internal/runs` classifies tools by the names the harnesses
-use; a shell command that runs `bottown` is `forge`. claude's stream-json
+tool call, each with a kind and, for a tool call, a tool class, state and
+expandable parameters and output (§4.2). Multiline assistant text keeps its
+full contents for expansion. Tool results complete their original calls in
+place. Incomplete streaming records remain visible as plain text, and a
+stream with no recognized events falls back to readable plain text rather
+than disappearing. One table in `internal/runs` classifies tools by the names
+the harnesses use; a shell command that runs `bottown` is `forge`. claude's stream-json
 names every part, so its lines are typed: assistant text, tool calls,
 denials and failed tool results as errors, and the session start,
 background tasks, rate limits other than `allowed` and the result

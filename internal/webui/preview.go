@@ -40,6 +40,8 @@ type Fixture struct {
 	// Logs are the rendered logs by run ID: GET /api/runs/{id}/log, and a
 	// live run's log_tail (its last lines) when the run has one here.
 	Logs map[string][]runs.LogLine `json:"logs"`
+	// RawLogs are the original records served by GET /api/runs/{id}/log?raw=1.
+	RawLogs map[string]string `json:"raw_logs,omitempty"`
 	// Issues are GET /api/issues/{number}, keyed by number.
 	Issues map[string]IssueDetails `json:"issues"`
 	// Timelines are GET /api/issues/{number}/timeline, keyed by issue
@@ -293,6 +295,12 @@ func (s *PreviewServer) handleRunLog(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !validRunID.MatchString(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid run ID"})
+		return
+	}
+	if r.URL.Query().Get("raw") == "1" {
+		raw := s.snapshot(func(fx *Fixture) any { return fx.RawLogs[id] }).(string)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(runs.RedactEncoded([]byte(raw)))
 		return
 	}
 	n, _ := strconv.Atoi(r.URL.Query().Get("tail"))

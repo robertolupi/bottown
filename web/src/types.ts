@@ -141,7 +141,11 @@ export interface LogLine {
   kind: LogLineKind;
   tool?: string; // tool name, for kind tool
   tool_class?: ToolClass;
+  state?: 'running' | 'completed' | 'failed';
   text: string;
+  detail?: string; // full assistant text when text is its first line
+  parameters?: string;
+  output?: string;
 }
 
 export interface LiveRunInfo {
