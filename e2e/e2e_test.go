@@ -2188,15 +2188,31 @@ fi`
 			}
 
 			out, err = withHarness(script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
-			if err != nil || !strings.Contains(out, "ready to merge") || !strings.Contains(out, "carried over: same patch rebased onto") {
+			if err != nil || !strings.Contains(out, "ready to merge") {
 				t.Fatalf("flow after the rebase: %v\n%s", err, out)
 			}
 			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
 				t.Error("the rebase cost another implement or verify run")
 			}
 			assertStopComment(issue, "ready to merge")
-			if pr := a.mustCmd(demo, "pr", "show", fmt.Sprint(prn)); !strings.Contains(pr, "approval at "+old[:7]+" carried over") {
-				t.Errorf("pr show does not say why:\n%s", pr)
+			var comments []struct{ Body string }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
+			if want := "approval at " + old[:7] + " carried over: same patch rebased onto"; len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, want) {
+				t.Errorf("stop comment does not say %q: %+v", want, comments)
+			}
+			// pr show and pr list say why.
+			for _, path := range []string{fmt.Sprintf("/v1/forge/pr?repo=demo&number=%d", prn), "/v1/forge/prs?repo=demo"} {
+				req, _ := http.NewRequest("GET", a.cfg.ServerURL()+path, nil)
+				req.Header.Set("Authorization", "Bearer "+owner)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if !strings.Contains(string(b), "approval at "+old[:7]+" carried over") {
+					t.Errorf("%s does not say why: %d %s", path, resp.StatusCode, b)
+				}
 			}
 			var rs []struct{ Dismissed bool }
 			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
