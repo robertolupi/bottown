@@ -650,9 +650,17 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
 - **`--detach` does not block the shell that starts it.** It builds and
   serves in a child of its own session, prints the URL and returns, so a
   script or an agent keeps its prompt. The child records itself in a temp
-  file named for the checkout; `--stop` reads that file, ends the child and
-  removes it. A detached preview also ends on its own after `--ttl`
-  (default one hour), so an orphan cannot serve forever.
+  file named for the checkout; `--stop` reads that file and ends the child.
+  A bad `--fixture` fails before the build, and one detach at a time is
+  allowed per checkout.
+- **A state file is trusted only while it is still the preview.** Both
+  `--stop` and the "already running" check confirm that the pid the file
+  names still answers `GET /api/preview` with that pid, so a pid left over
+  from a preview that crashed, was killed or outlived a reboot, and now
+  belongs to an unrelated process, is left alone. A detached preview ends
+  on its own after `--ttl` (default one hour), and a run stops one recorded
+  in its scratch directory when the run ends, so an orphan cannot serve
+  forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
   `default`): the status, inbox, live runs with their logs, active flows,
   history, milestones, issue details and timelines, in the API's own JSON.
@@ -666,7 +674,7 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   `POST /api/preview/logs/RUN` appends lines to a run's log and live tail,
   `PUT /api/preview/fixture/SECTION` replaces a section, `POST
   /api/preview/load` reloads the fixture or switches to another, and `GET
-  /api/preview` names the one in use.
+  /api/preview` names the one in use and the pid serving it.
 - **Same checks, no sign-in.** It binds `127.0.0.1`, checks `Host` and,
   on state-changing requests, `Origin`, and sets the same CSP as `bottown
   web ui`. There is no token: it serves only checked-in fixture data, and

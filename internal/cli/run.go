@@ -303,6 +303,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	defer func() {
+		// Stop a detached web preview recorded in the scratch directory
+		// before it goes, so the preview does not outlive the run.
+		stopRunPreviews(cmd.ErrOrStderr(), tmpDir)
 		if e := os.RemoveAll(tmpDir); e != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove tmp dir: %v\n", e)
 		}
@@ -1202,6 +1205,9 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer
 			keep = append(keep, r.ID)
 			continue
 		}
+		// A detached preview recorded in the run's scratch directory ends
+		// with the run, before RemoveFiles removes that directory.
+		stopRunPreviews(warn, r.TmpDir)
 		ws.RemoveFiles(r.ID)
 		removed++
 	}

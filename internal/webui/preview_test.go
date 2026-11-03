@@ -305,10 +305,14 @@ func TestPreviewControls(t *testing.T) {
 	var info struct {
 		Fixture  string   `json:"fixture"`
 		Fixtures []string `json:"fixtures"`
+		PID      int      `json:"pid"`
 	}
 	c.get("/api/preview", &info)
 	if info.Fixture != "default" || !contains(info.Fixtures, "empty") {
 		t.Errorf("info: %+v", info)
+	}
+	if info.PID != os.Getpid() {
+		t.Errorf("info pid %d, want %d", info.PID, os.Getpid())
 	}
 
 	var st UIStatusResponse

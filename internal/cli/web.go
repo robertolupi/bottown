@@ -214,15 +214,17 @@ func webPreview(cmd *cobra.Command, s previewSettings) error {
 		return stopPreview(cmd, state)
 	case os.Getenv(previewChildEnv) == "1":
 		return runPreview(cmd, webDir, fixtures, state, s)
-	case s.detach:
-		return detachPreview(cmd, top, state, s)
-	default:
-		// Fail on a bad fixture before the build.
-		if _, err := webui.LoadFixture(fixtures, s.fixture); err != nil {
-			return err
-		}
-		return runPreview(cmd, webDir, fixtures, "", s)
 	}
+	// Fail on a bad fixture before the build, and before starting a
+	// detached child that would otherwise report it only from the log,
+	// after the build.
+	if _, err := webui.LoadFixture(fixtures, s.fixture); err != nil {
+		return err
+	}
+	if s.detach {
+		return detachPreview(cmd, top, state, s)
+	}
+	return runPreview(cmd, webDir, fixtures, "", s)
 }
 
 // runPreview builds the checkout's web UI into a temporary directory and
@@ -341,7 +343,14 @@ func loadPreviewState(path string) (previewState, error) {
 // detachPreview starts the server as a child in its own session and waits
 // until it serves, then prints its URL and how to stop it.
 func detachPreview(cmd *cobra.Command, top, state string, s previewSettings) error {
-	if st, err := loadPreviewState(state); err == nil && processAlive(st.PID) {
+	// One detach at a time per checkout: without the lock, two started at
+	// once would both pass the "already running" check below.
+	unlock, err := lockPreview(state)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if st, err := loadPreviewState(state); err == nil && previewAlive(st) {
 		return fmt.Errorf("a preview is already running at %s: stop it with `%s web preview --stop`", st.URL, selfPath())
 	}
 	_ = os.Remove(state)
@@ -409,31 +418,115 @@ func stopPreview(cmd *cobra.Command, state string) error {
 	if err != nil {
 		return errors.New("no detached preview from this checkout")
 	}
+	stopped, err := endPreviewState(st, state)
+	if err != nil {
+		return err
+	}
+	if stopped {
+		fmt.Fprintf(cmd.OutOrStdout(), "stopped preview %d (%s)\n", st.PID, st.URL)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "preview %d was not running\n", st.PID)
+	}
+	return nil
+}
+
+// endPreviewState stops the preview the state file names, if it is still
+// the one serving st.URL, and removes the state and log files. It reports
+// whether a running preview was stopped. It signals only a pid that the
+// probe confirms is still the preview, so a reused pid is left alone.
+func endPreviewState(st previewState, state string) (bool, error) {
 	cleanup := func() {
 		_ = os.Remove(state)
 		if st.Log != "" {
 			_ = os.Remove(st.Log)
 		}
 	}
-	if !processAlive(st.PID) {
-		fmt.Fprintf(cmd.OutOrStdout(), "preview %d was not running\n", st.PID)
+	if !previewAlive(st) {
 		cleanup()
-		return nil
+		return false, nil
 	}
 	if err := syscall.Kill(st.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("stop preview %d: %w", st.PID, err)
+		return false, fmt.Errorf("stop preview %d: %w", st.PID, err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); processAlive(st.PID) && time.Now().Before(deadline); {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if processAlive(st.PID) {
-		return fmt.Errorf("preview %d did not stop; kill it with `kill %d`", st.PID, st.PID)
+		return false, fmt.Errorf("preview %d did not stop; kill it with `kill %d`", st.PID, st.PID)
 	}
 	// The child removes its own files on exit; remove them too, in case it
 	// crashed.
 	cleanup()
-	fmt.Fprintf(cmd.OutOrStdout(), "stopped preview %d (%s)\n", st.PID, st.URL)
-	return nil
+	return true, nil
+}
+
+// stopRunPreviews stops any detached preview a run recorded under dir, so
+// a run's preview does not outlive the run when its scratch directory goes.
+func stopRunPreviews(w io.Writer, dir string) {
+	if dir == "" {
+		return
+	}
+	states, _ := filepath.Glob(filepath.Join(dir, "bottown-preview-*.json"))
+	for _, state := range states {
+		st, err := loadPreviewState(state)
+		if err != nil {
+			continue
+		}
+		if _, err := endPreviewState(st, state); err != nil {
+			fmt.Fprintf(w, "warning: stop preview %d: %v\n", st.PID, err)
+		}
+	}
+}
+
+// previewAlive reports whether the state file still names a running
+// preview: the process it names is alive and still serves st.URL. A pid
+// alone is not enough, since the state file may outlive its preview and
+// the pid may now belong to an unrelated process.
+func previewAlive(st previewState) bool {
+	if !processAlive(st.PID) {
+		return false
+	}
+	pid, ok := probePreviewPID(st.URL)
+	return ok && pid == st.PID
+}
+
+// probePreviewPID asks the server at base for the pid it reports, which
+// identifies the preview answering there.
+func probePreviewPID(base string) (int, bool) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(strings.TrimSuffix(base, "/") + "/api/preview")
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, false
+	}
+	var info struct {
+		PID int `json:"pid"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&info); err != nil {
+		return 0, false
+	}
+	return info.PID, info.PID > 0
+}
+
+// lockPreview takes an exclusive lock for a checkout's preview, so two
+// --detach started at once cannot both pass the "already running" check.
+// It fails at once when another detach holds the lock.
+func lockPreview(state string) (func(), error) {
+	f, err := os.OpenFile(state+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, errors.New("another preview is starting from this checkout; try again")
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 // processAlive reports whether a process with pid exists.
