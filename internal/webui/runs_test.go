@@ -279,7 +279,7 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if !strings.Contains(r.Flow.Label, "#51 · round 2/3 · verifying with kimi") {
 		t.Fatalf("unexpected flow label: %q", r.Flow.Label)
 	}
-	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LineTool, Tool: "Bash", ToolClass: runs.ToolShell, Text: "Bash: make check"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LineText, Text: "Running checks now"}) {
+	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LineTool, Tool: "Bash", ToolClass: runs.ToolShell, State: "running", Text: "Bash: make check", Parameters: "{\n  \"command\": \"make check\"\n}"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LineText, Text: "Running checks now"}) {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
 	// The run's refusals outside its repository and with no repository
@@ -1095,6 +1095,11 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 	wantLines := []runs.LogLine{{Kind: runs.LinePlain, Text: "starting task"}, {Kind: runs.LinePlain, Text: "task done"}}
 	if fmt.Sprint(logResp.Lines) != fmt.Sprint(wantLines) {
 		t.Fatalf("GET /api/runs/r-live-api/log: lines %+v, want %+v", logResp.Lines, wantLines)
+	}
+
+	resp, body = doReq(http.MethodGet, "/api/runs/r-live-api/log?raw=1", "")
+	if resp.StatusCode != http.StatusOK || body != "starting task\ntask done\n" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("GET raw run log: status %d, content type %q, body %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 
 	// GET /api/status: the live run's tail is the same objects.

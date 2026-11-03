@@ -26,6 +26,19 @@ func dumpLines(lines []LogLine) string {
 	return s
 }
 
+// coreLines leaves the fields the original golden tests cover. Expandable
+// details and tool state have focused tests in log_details_test.go.
+func coreLines(lines []LogLine) []LogLine {
+	out := append([]LogLine(nil), lines...)
+	for i := range out {
+		out[i].State = ""
+		out[i].Detail = ""
+		out[i].Parameters = ""
+		out[i].Output = ""
+	}
+	return out
+}
+
 // Harnesses failing before their stream starts render plain lines;
 // a crush log without a transcript is only its final message.
 func TestRenderLog_Kinds(t *testing.T) {
@@ -75,7 +88,7 @@ func TestRenderLog_ClaudeGolden(t *testing.T) {
 		{Kind: LineText, Text: "hello"},
 		{Kind: LineStatus, Text: "done: 1 turn, $0.05, 3s"},
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -104,7 +117,7 @@ func TestRenderLog_ClaudeEvents(t *testing.T) {
 		{Kind: LineText, Text: "Stopped."},
 	}
 	got := RenderLog("claude", []byte(log))
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -148,7 +161,7 @@ func TestRenderLog_AgyGolden(t *testing.T) {
 		{Kind: LineText, Text: "I have implemented the resolution for issue #160 and opened pull request [!183](http://127.0.0.1:3030/bottown/bottown/pulls/183)."},
 		{Kind: LineStatus, Text: "result: SUCCESS, 1 turn, 533911 tokens, 16m43s"},
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -183,7 +196,7 @@ func TestRenderLog_AgyLive(t *testing.T) {
 		{"reply so far", 29, []LogLine{{Kind: LineStatus, Text: "system message"}, {Kind: LineText, Text: "I have implemented the resolution for issue #160 and opened pull request"}}},
 	} {
 		lines := RenderLog("agy", agyTestdata(t, tc.n))
-		if got := lines[len(lines)-len(tc.want):]; !reflect.DeepEqual(got, tc.want) {
+		if got := coreLines(lines[len(lines)-len(tc.want):]); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got\n%s\nwant\n%s", tc.name, dumpLines(got), dumpLines(tc.want))
 		}
 	}
@@ -211,7 +224,7 @@ func TestRenderLog_AgyTools(t *testing.T) {
 		{Kind: LineError, Text: "result: ERROR, 3 turns, 3s"},
 		{Kind: LineText, Text: "Stopped."},
 	}
-	if got := RenderLog("agy", []byte(log)); !reflect.DeepEqual(got, want) {
+	if got := RenderLog("agy", []byte(log)); !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -231,7 +244,7 @@ func TestRenderLog_CodexGolden(t *testing.T) {
 		{Kind: LineError, Text: "exit 128: fatal: bad revision 'bottown/main...HEAD'"},
 		{Kind: LineStatus, Text: "turn done: 17722 in, 5 out"},
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -256,7 +269,7 @@ func TestRenderLog_CodexEvents(t *testing.T) {
 		{Kind: LineText, Text: "All done."},
 		{Kind: LineStatus, Text: "turn done: 500 in, 40 out"},
 	}
-	if got := RenderLog("codex", []byte(log)); !reflect.DeepEqual(got, want) {
+	if got := RenderLog("codex", []byte(log)); !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -281,7 +294,7 @@ func TestRenderLog_KimiGolden(t *testing.T) {
 		{Kind: LineText, Text: "hello"},
 		{Kind: LineStatus, Text: "To resume this session: kimi -r session_6eb8c082-d72d-4405-969b-cae41b15d90e"},
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }
@@ -312,7 +325,7 @@ Waiting 15s / 1 background task still running
 		{Kind: LineText, Text: "Finished."},
 		{Kind: LineStatus, Text: "To resume this session: kimi -r s1"},
 	}
-	if got := RenderLog("kimi", []byte(log)); !reflect.DeepEqual(got, want) {
+	if got := RenderLog("kimi", []byte(log)); !reflect.DeepEqual(coreLines(got), want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 }

@@ -1446,11 +1446,11 @@ export function logLineTexts(lines: LogLine[] | undefined | null): string[] {
   return (lines || []).map((l) => l.text);
 }
 
-// A tool line's text split into the tool name and its argument, when the
-// text starts with the name; null for other lines.
+// A tool line's text split into the tool name and its concise argument,
+// without the renderer's separating colon; null for other lines.
 export function splitToolLine(line: LogLine): { tool: string; arg: string } | null {
   if (line.kind !== 'tool' || !line.tool || !line.text.startsWith(line.tool)) return null;
-  return { tool: line.tool, arg: line.text.slice(line.tool.length) };
+  return { tool: line.tool, arg: line.text.slice(line.tool.length).replace(/^:\s*/, '') };
 }
 
 // Detect how many lines were trimmed from the beginning of prevLines when nextLines arrived.

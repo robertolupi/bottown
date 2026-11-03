@@ -504,10 +504,20 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")
 	logBytes, err := runs.ReadLog(logPath)
 	if err != nil {
+		if r.URL.Query().Get("raw") == "1" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":    id,
 			"lines": []runs.LogLine{},
 		})
+		return
+	}
+	if r.URL.Query().Get("raw") == "1" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(runs.RedactEncoded(logBytes))
 		return
 	}
 

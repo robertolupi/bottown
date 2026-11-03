@@ -130,6 +130,13 @@
       <span class="lg-error" title="Denied or failed tool call">error</span>
       <span class="lg-status" title="Session, background task and result events">status</span>
     </span>
+    <a
+      class="log-raw-link"
+      href="/api/runs/{runId}/log?raw=1"
+      target="_blank"
+      rel="noreferrer"
+      title="Open the complete raw log with encoded payloads elided"
+    >Raw log</a>
     <button
       type="button"
       class="log-follow-btn"
@@ -182,6 +189,11 @@
     font-size: 11px;
     border-bottom: 1px solid #1e293b;
     gap: 8px;
+  }
+
+  .log-raw-link {
+    color: #cbd5e1;
+    white-space: nowrap;
   }
 
   .log-follow-btn {
@@ -279,6 +291,16 @@
   .lg-output { color: var(--log-output); }
   .lg-error { color: var(--log-error); }
   .lg-status { color: var(--log-status); font-style: italic; }
+
+  @media (max-width: 600px) {
+    .log-tail-header { flex-wrap: wrap; }
+    .log-tail-header > :first-child { flex: 1 1 100%; }
+    .log-legend {
+      order: 4;
+      flex-basis: 100%;
+      justify-content: flex-start;
+    }
+  }
 
   .muted {
     color: #64748b;

@@ -72,7 +72,7 @@
   </td>
 </tr>
 {#if logState}
-  <RunLogRow title={`Run Log (${h.id})`} colspan={10} denials={h.denials} {logState} />
+  <RunLogRow title={`Run Log (${h.id})`} runId={h.id} colspan={10} denials={h.denials} {logState} />
 {/if}
 
 <style>

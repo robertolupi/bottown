@@ -152,7 +152,7 @@ func TestRenderLog_CrushTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := RenderLog("crush", b)
+	got := coreLines(RenderLog("crush", b))
 	want := []LogLine{
 		{Kind: LineStatus, Text: "session started: Verify PR 153"},
 		{Kind: LineText, Text: "I'll check the run and the pull request first."},
@@ -187,7 +187,7 @@ Error: agent run failed: context deadline exceeded
 		{Kind: LineError, Text: "exit 1"},
 		{Kind: LinePlain, Text: "Error: agent run failed: context deadline exceeded"},
 	}
-	if got := RenderLog("crush", []byte(log)); !reflect.DeepEqual(got, want) {
+	if got := coreLines(RenderLog("crush", []byte(log))); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
 	}
 
