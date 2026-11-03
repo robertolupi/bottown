@@ -27,3 +27,9 @@ test('the grid columns can shrink below their content', () => {
     assert.match(body, /grid-template-columns:[^;]*minmax\(0,\s*1fr\)/);
   }
 });
+
+test('an outcome badge contains its screen-reader label', () => {
+  // The label is absolutely positioned; without a positioned badge its
+  // containing block is outside History's scrolling table.
+  assert.match(rule(src('global.css'), '.outcome-badge'), /position:\s*relative/);
+});
