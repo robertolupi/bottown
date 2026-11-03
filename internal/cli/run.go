@@ -256,18 +256,14 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// From here on, always end the run on the server, whatever happens.
 	status := runs.StatusFailed
 	var digest secrets.Digest
-	harnessStarted := false
+	phase := launchStarting
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if status != runs.StatusSucceeded && digest.Failure == nil && err != nil {
-			// What failed is the launcher's error: before the harness ran,
-			// startup; after, the launcher could not finish the run.
-			cause := secrets.FailureStartup
-			if harnessStarted {
-				cause = secrets.FailureInterrupted
+		if status != runs.StatusSucceeded {
+			if f := launcherFailure(phase, err); f != nil {
+				digest.Failure = f
 			}
-			digest.Failure = &secrets.Failure{Cause: cause, Detail: err.Error()}
 		}
 		end := server.EndRunRequest{Status: status, Digest: digest}
 		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil); e != nil && err == nil {
@@ -399,7 +395,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := c.Start(); err != nil {
 		return err
 	}
-	harnessStarted = true
+	phase = launchHarnessRan
 	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
 		current.HarnessPID = c.Process.Pid
 		return nil
@@ -474,6 +470,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if status != runs.StatusSucceeded {
 		digest.Failure = observedFailure(ctx.Err(), rec.StopRequested, code, time.Since(started))
 	}
+	// The digest now says what was observed, if anything: the error this
+	// returns for a failed run is its outcome, not a launcher failure.
+	phase = launchFinalized
 	if err := handover(ctx, rc, run, rec, created.Key, status, code, summary); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 	}
@@ -488,9 +487,39 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		fmt.Fprintf(out, "run %s %s (exit %d); worktree kept at %s\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status), code, dir)
 	}
 	if status != runs.StatusSucceeded {
-		return fmt.Errorf("run %s %s", run.ID, status)
+		return outcomeError(run.ID, status)
 	}
 	return nil
+}
+
+// outcomeError is what startRun returns for a run that did not succeed.
+func outcomeError(id, status string) error {
+	return fmt.Errorf("run %s %s", id, status)
+}
+
+// launchPhase is how far startRun got, for what its error means.
+type launchPhase int
+
+const (
+	launchStarting   launchPhase = iota // before the harness ran
+	launchHarnessRan                    // the harness ran; the digest is not final
+	launchFinalized                     // the digest records the outcome
+)
+
+// launcherFailure is the failure startRun's error records for a run that
+// did not succeed: before the harness ran, a startup failure; after, the
+// launcher could not finish the run. Once the digest is final, the error
+// only reports the outcome already recorded, or not observed (a clean exit
+// the owner marked failed), and records nothing.
+func launcherFailure(phase launchPhase, err error) *secrets.Failure {
+	if err == nil || phase == launchFinalized {
+		return nil
+	}
+	cause := secrets.FailureStartup
+	if phase == launchHarnessRan {
+		cause = secrets.FailureInterrupted
+	}
+	return &secrets.Failure{Cause: cause, Detail: err.Error()}
 }
 
 // observedFailure is what the launcher saw end a run that did not succeed:

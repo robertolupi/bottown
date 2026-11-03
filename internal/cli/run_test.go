@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,5 +370,30 @@ func TestObservedFailure(t *testing.T) {
 	}
 	if f := observedFailure(context.DeadlineExceeded, false, -1, 90*time.Second); !strings.Contains(f.Detail, "1m30s") {
 		t.Errorf("timeout detail %q lacks the elapsed time", f.Detail)
+	}
+}
+
+// The launcher's error is a failure only until the digest is final: after
+// it, the error returned for a failed run is its outcome, which must not
+// read as a launcher failure. A clean interactive exit the owner marks
+// failed observes nothing, and the digest records nothing (#132).
+func TestLauncherFailure(t *testing.T) {
+	boom := errors.New("git worktree add: exit status 128")
+	if f := launcherFailure(launchStarting, boom); f == nil || f.Cause != secrets.FailureStartup || f.Detail != boom.Error() {
+		t.Errorf("before the harness: %+v, want startup with the error", f)
+	}
+	if f := launcherFailure(launchHarnessRan, boom); f == nil || f.Cause != secrets.FailureInterrupted {
+		t.Errorf("after the harness ran: %+v, want interrupted", f)
+	}
+	for _, p := range []launchPhase{launchStarting, launchHarnessRan, launchFinalized} {
+		if f := launcherFailure(p, nil); f != nil {
+			t.Errorf("phase %d without an error: %+v", p, f)
+		}
+	}
+	// startRun's end for an interactive run that exited 0 and that the
+	// owner marked failed: nothing observed, then its outcome error.
+	observed := observedFailure(nil, false, 0, time.Second)
+	if f := launcherFailure(launchFinalized, outcomeError("r-1", runs.StatusFailed)); observed != nil || f != nil {
+		t.Errorf("clean exit marked failed: observed %+v, launcher %+v; want neither", observed, f)
 	}
 }

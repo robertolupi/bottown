@@ -441,7 +441,8 @@ ran, so with no log (the launcher's error), a non-zero harness exit (its
 code), the flow's time limit, an owner's stop, a cancelled or vanished
 launcher (`run gc` revokes its run), a key that expired while live, and
 an agent ending its run with `run end --failed` (why is its summary). A
-run with neither, such as one from before failures were recorded, says
+run with neither, such as one from before failures were recorded, or an
+interactive run that exited cleanly and the owner marked failed, says
 "Reason unavailable"; a cause is never guessed from the summary or log.
 A flow row shows its latest run's reason unless the flow is going again.
 Each reason links to the run: View log expands the flow, if needed, and
