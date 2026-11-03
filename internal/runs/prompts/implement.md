@@ -22,6 +22,13 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 - You cannot review or merge. A verifier from another model family will
   review your pull request, and the owner merges.
 - Run checks as plain commands; write scratch files under `$TMPDIR`.
+{{- if .WebPreview}}
+- To look at a web UI change, run `{{.Bottown}} web preview` in this
+  worktree, in the background: it builds `web/` and prints a localhost URL
+  that serves it with the fixture data in `web/fixtures` (`--fixture NAME`
+  picks a scenario). It needs no sign-in and touches no instance.
+  When your change shows something new, add it to the fixtures.
+{{- end}}
 
 ## Done means
 

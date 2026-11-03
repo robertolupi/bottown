@@ -273,6 +273,17 @@ func RepoSettingsAt(dir, ref string) (config.RepoSettings, error) {
 	return s, nil
 }
 
+// WebPreviewDir is where a repository keeps the fixtures that `bottown web
+// preview` serves its web UI with.
+const WebPreviewDir = "web/fixtures"
+
+// HasWebPreview reports whether ref in the repository at dir has
+// WebPreviewDir: whether `bottown web preview` works in its checkouts.
+func HasWebPreview(dir, ref string) bool {
+	out, err := Git(dir, nil, "ls-tree", "--name-only", ref, "--", WebPreviewDir)
+	return err == nil && out != ""
+}
+
 // Git runs git in dir with extra `-c` settings and returns trimmed stdout.
 func Git(dir string, cfg []string, args ...string) (string, error) {
 	return GitCtx(context.Background(), dir, cfg, args...)

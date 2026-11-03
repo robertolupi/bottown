@@ -164,6 +164,52 @@ func TestDiscussPrompt(t *testing.T) {
 	}
 }
 
+// TestWebPreviewPrompt checks that implement and verify prompts point at
+// `web preview` only in a repository that has its fixtures.
+func TestWebPreviewPrompt(t *testing.T) {
+	for _, kind := range []string{"implement", "verify"} {
+		for _, has := range []bool{false, true} {
+			p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 7, PR: 8, Title: "T", Base: "main", Bottown: "/b", WebPreview: has})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(p, "`/b web preview`"); got != has {
+				t.Errorf("%s prompt with WebPreview %v mentions web preview: %v\n%s", kind, has, got, p)
+			}
+		}
+	}
+}
+
+func TestHasWebPreview(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("commit", "-q", "--allow-empty", "-m", "empty")
+	if HasWebPreview(dir, "main") {
+		t.Error("an empty repository has a web preview")
+	}
+	if HasWebPreview(dir, "nope") {
+		t.Error("a missing ref has a web preview")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "web", "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "web", "fixtures", "default.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "web")
+	git("commit", "-q", "-m", "fixtures")
+	if !HasWebPreview(dir, "main") {
+		t.Error("web/fixtures not found")
+	}
+}
+
 func TestClaudeReadOnlyRun(t *testing.T) {
 	allowedOf := func(l Launch) (string, string) {
 		c, _ := (claudeHarness{}).Command(t.Context(), l)

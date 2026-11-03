@@ -238,41 +238,10 @@ func staticHandler(ui fs.FS) http.Handler {
 // 3. Origin header check on state-changing requests (CSRF protection)
 // 4. One-time token exchange for HttpOnly SameSite=Strict session cookie
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
-	allowedHost1 := fmt.Sprintf("127.0.0.1:%d", s.port)
-	allowedHost2 := fmt.Sprintf("localhost:%d", s.port)
-
-	allowedOrigin1 := fmt.Sprintf("http://127.0.0.1:%d", s.port)
-	allowedOrigin2 := fmt.Sprintf("http://localhost:%d", s.port)
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Host check
-		host := r.Host
-		if !strings.EqualFold(host, allowedHost1) && !strings.EqualFold(host, allowedHost2) {
-			http.Error(w, "forbidden: invalid host header", http.StatusForbidden)
+		// 1-3. Host check, CSP, Origin check
+		if !localRequestAllowed(w, r, s.port) {
 			return
-		}
-
-		// 2. Strict Content-Security-Policy header
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-
-		// 3. Origin check on state-changing methods (POST, PUT, DELETE, PATCH)
-		switch r.Method {
-		case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
-			origin := r.Header.Get("Origin")
-			if origin == "" {
-				// Also check Referer if Origin is omitted by some clients
-				if ref := r.Header.Get("Referer"); ref != "" {
-					if u, err := url.Parse(ref); err == nil {
-						origin = u.Scheme + "://" + u.Host
-					}
-				}
-			}
-			if origin != allowedOrigin1 && origin != allowedOrigin2 {
-				http.Error(w, "forbidden: invalid origin header", http.StatusForbidden)
-				return
-			}
 		}
 
 		// 4. One-time token exchange
@@ -316,6 +285,47 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// localRequestAllowed enforces, for a server on 127.0.0.1:port, the
+// checks that do not depend on a session: the Host header (against DNS
+// rebinding), a strict Content-Security-Policy (no inline scripts), and
+// the Origin header on state-changing requests (CSRF protection). It
+// writes the error and returns false when the request is refused.
+func localRequestAllowed(w http.ResponseWriter, r *http.Request, port int) bool {
+	allowedHost1 := fmt.Sprintf("127.0.0.1:%d", port)
+	allowedHost2 := fmt.Sprintf("localhost:%d", port)
+
+	allowedOrigin1 := fmt.Sprintf("http://127.0.0.1:%d", port)
+	allowedOrigin2 := fmt.Sprintf("http://localhost:%d", port)
+
+	host := r.Host
+	if !strings.EqualFold(host, allowedHost1) && !strings.EqualFold(host, allowedHost2) {
+		http.Error(w, "forbidden: invalid host header", http.StatusForbidden)
+		return false
+	}
+
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// Also check Referer if Origin is omitted by some clients
+			if ref := r.Header.Get("Referer"); ref != "" {
+				if u, err := url.Parse(ref); err == nil {
+					origin = u.Scheme + "://" + u.Host
+				}
+			}
+		}
+		if origin != allowedOrigin1 && origin != allowedOrigin2 {
+			http.Error(w, "forbidden: invalid origin header", http.StatusForbidden)
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {

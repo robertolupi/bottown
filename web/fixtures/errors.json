@@ -1,0 +1,158 @@
+{
+  "status": {
+    "instance": "prod",
+    "repo": "bottown/demo",
+    "upstream": {
+      "has_upstream": true,
+      "origin_url": "git@github.com:example/demo.git",
+      "ahead_count": 0,
+      "behind_count": 0,
+      "unpushed_commits": [],
+      "error": "git fetch origin: exit status 128: Permission denied (publickey)."
+    },
+    "forge": {
+      "remote": "bottown",
+      "repo": "bottown/demo",
+      "forge_url": "http://127.0.0.1:3030",
+      "default_branch": "main",
+      "checkout_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "forge_sha": "4f2a9c1e7b3d5a60918c2e4f7a1b3c5d7e9f0a12",
+      "behind_count": 0,
+      "ahead_count": 0
+    },
+    "health": {
+      "agent_instructions": {
+        "found": false
+      },
+      "protected_main": {
+        "checked": true,
+        "protected": false
+      },
+      "worktrees": [],
+      "harness_commands": [
+        {
+          "harness": "claude",
+          "installed": false,
+          "current": false,
+          "error": "~/.claude/commands: permission denied"
+        }
+      ],
+      "version": {
+        "cli_version": "87ad131",
+        "server_version": "5d487c7",
+        "matches": false
+      },
+      "repo_settings": {
+        "checked": true,
+        "found": true,
+        "file": ".bottown.toml",
+        "branch": "main",
+        "after_pull": [],
+        "error": ".bottown.toml: line 3: expected '=' after a key"
+      }
+    },
+    "links": {
+      "repo": "http://127.0.0.1:3030/bottown/demo",
+      "issues": "http://127.0.0.1:3030/bottown/demo/issues",
+      "pulls": "http://127.0.0.1:3030/bottown/demo/pulls",
+      "commits": "http://127.0.0.1:3030/bottown/demo/commits/branch/main"
+    },
+    "inbox": [],
+    "live_runs": [],
+    "active_flows": [],
+    "actors": [
+      {
+        "name": "claude",
+        "family": "anthropic",
+        "harness": "claude"
+      },
+      {
+        "name": "codex",
+        "family": "openai",
+        "harness": "codex"
+      },
+      {
+        "name": "kimi",
+        "family": "moonshot",
+        "harness": "kimi"
+      },
+      {
+        "name": "agy",
+        "family": "google",
+        "harness": "agy"
+      }
+    ],
+    "inbox_error": "forge: 502 Bad Gateway"
+  },
+  "inbox": [],
+  "live_runs": [],
+  "active_flows": [],
+  "history": [],
+  "milestones": [
+    {
+      "id": "milestone:3",
+      "milestone": {
+        "id": 3,
+        "title": "v0.3",
+        "state": "open",
+        "url": "http://127.0.0.1:3030/bottown/demo/milestone/3"
+      },
+      "base": "main",
+      "removed": [],
+      "counts": {
+        "total": 0,
+        "closed": 0,
+        "ready": 0,
+        "running": 0,
+        "in_review": 0,
+        "awaiting_merge": 0,
+        "blocked": 0,
+        "stopped": 0
+      },
+      "nodes": [],
+      "edges": [],
+      "layers": 0,
+      "error": "plan docs/milestones/v0.3.md: issue #54 depends on itself"
+    }
+  ],
+  "logs": {},
+  "issues": {},
+  "timelines": {},
+  "actions": {
+    "pull": {
+      "success": false,
+      "output": "",
+      "error": "preview: pull failed (the errors fixture)"
+    },
+    "push": {
+      "success": false,
+      "output": "",
+      "error": "preview: push failed (the errors fixture)"
+    },
+    "after-pull": {
+      "success": false,
+      "output": "",
+      "error": "preview: after-pull failed (the errors fixture)"
+    },
+    "flow": {
+      "success": false,
+      "output": "",
+      "error": "preview: flow failed (the errors fixture)"
+    },
+    "run": {
+      "success": false,
+      "output": "",
+      "error": "preview: run failed (the errors fixture)"
+    },
+    "stop": {
+      "success": false,
+      "output": "",
+      "error": "preview: stop failed (the errors fixture)"
+    },
+    "gc": {
+      "success": false,
+      "output": "",
+      "error": "preview: gc failed (the errors fixture)"
+    }
+  }
+}
