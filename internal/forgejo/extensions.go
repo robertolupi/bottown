@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -124,4 +125,48 @@ func (c *Client) DownloadAttachment(uuid string) (*http.Response, error) {
 
 func protectionPath(owner, repo, rule string) string {
 	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/branch_protections/" + url.PathEscape(rule)
+}
+
+// AutoDismissMessage is the timeline text Forgejo writes when it dismisses
+// an approval itself, for new commits under "dismiss stale approvals".
+const AutoDismissMessage = "New commits pushed, approval review dismissed automatically according to repository settings"
+
+// AutoDismissedReviews lists the reviews on pull request index that Forgejo
+// dismissed by itself, from the PR's timeline; a dismissal by a person
+// carries their own message.
+func (c *Client) AutoDismissedReviews(owner, repo string, index int64) (map[int64]bool, error) {
+	const limit = 50
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline", url.PathEscape(owner), url.PathEscape(repo), index)
+	out := map[int64]bool{}
+	seen := map[int64]bool{}
+	for page := 1; page <= 100; page++ {
+		var events []struct {
+			ID       int64  `json:"id"`
+			Type     string `json:"type"`
+			Body     string `json:"body"`
+			ReviewID int64  `json:"review_id"`
+		}
+		if err := c.do(http.MethodGet, fmt.Sprintf("%s?page=%d&limit=%d", path, page, limit), nil, &events); err != nil {
+			return nil, err
+		}
+		fresh := 0
+		for _, e := range events {
+			if seen[e.ID] {
+				continue
+			}
+			seen[e.ID], fresh = true, fresh+1
+			if e.Type == "dismiss_review" && e.ReviewID != 0 {
+				out[e.ReviewID] = strings.TrimSpace(e.Body) == AutoDismissMessage
+			}
+		}
+		if len(events) < limit || fresh == 0 {
+			break
+		}
+	}
+	for id, auto := range out {
+		if !auto {
+			delete(out, id)
+		}
+	}
+	return out, nil
 }

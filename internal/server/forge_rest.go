@@ -68,6 +68,10 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opPR(r.Context(), Who(r.Context()), targetFromQuery(r), r.URL.Query().Get("diff") != "")
 		writeOp(w, out, err)
 	})))
+	mux.Handle("GET /v1/forge/pr/carries", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opCarries(r.Context(), Who(r.Context()), targetFromQuery(r))
+		writeOp(w, out, err)
+	})))
 	mux.Handle("GET /v1/forge/prs", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opPRList(r.Context(), Who(r.Context()), PRListIn{
 			Repo:  r.URL.Query().Get("repo"),

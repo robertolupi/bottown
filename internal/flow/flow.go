@@ -182,7 +182,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		assessment := pr.Assessment
 		switch {
 		case assessment.Decision == review.Approved:
-			return s.stop(ctx, result, ReadyToMerge, fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA)))
+			detail := fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA))
+			if assessment.Reason != "" {
+				detail += ": " + assessment.Reason
+			}
+			return s.stop(ctx, result, ReadyToMerge, detail)
 		case assessment.Decision == review.ChangesRequested && !assessment.AtHead(pr.HeadSHA):
 			// A follow-up cannot clear an older head's request: only its
 			// reviewer, reviewing again, or the owner, dismissing it.
@@ -244,6 +248,12 @@ func (s *Supervisor) waitForPush(ctx context.Context, opts Options, pr server.PR
 func reviewsSettled(pr server.PROut) bool {
 	for _, r := range pr.Reviews {
 		if r.Dismissed || r.CommitID == "" {
+			continue
+		}
+		// Forgejo leaves an approval at an older head unstale when the push
+		// left the PR's diff alone; one that carries over is settled
+		// either way.
+		if c := pr.Assessment.Carried; c != nil && r.CommitID == c.From {
 			continue
 		}
 		if wantStale := r.CommitID != pr.HeadSHA; r.Stale != wantStale {

@@ -262,7 +262,9 @@ type PRItem struct {
 	HeadBranch  string `json:"head_branch,omitempty"`
 	HeadSHA     string `json:"head_sha,omitempty"`
 	ReviewState string `json:"review_state"`
-	URL         string `json:"url"`
+	// ReviewReason says why, when an approval carried over (internal/review).
+	ReviewReason string `json:"review_reason,omitempty"`
+	URL          string `json:"url"`
 }
 
 // CommentIn is the input of comment.
@@ -525,6 +527,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	if err != nil {
 		return PROut{}, err
 	}
+	carries := s.carryOver(ctx, p, org, repo, pr, rs)
 	for _, r := range rs {
 		out.Reviews = append(out.Reviews, ReviewOut{
 			ID: r.ID, Reviewer: login(r.Reviewer), State: string(r.State), CommitID: r.CommitID,
@@ -535,7 +538,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	if err != nil {
 		return PROut{}, err
 	}
-	out.Assessment = assessReviews(s.desired(), s.Owner, runs, repo, pr, rs)
+	out.Assessment = assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, carries)
 	if withDiff {
 		diff, _, err := c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
 		if err != nil {
@@ -547,6 +550,39 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 		out.Diff = string(diff)
 	}
 	return out, nil
+}
+
+// opCarries lists the older heads of an open PR whose approvals carry over
+// to its head (carry.go), for callers that assess reviews themselves (the
+// web UI). Like pr show, it undismisses carried approvals Forgejo dismissed.
+func (s *Server) opCarries(ctx context.Context, p secrets.Principal, in Target) ([]review.Carry, error) {
+	def := int64(0)
+	if p.Run != nil {
+		def = p.Run.PR
+	}
+	org, repo, n, err := s.resolve(p, in, def)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return nil, err
+	}
+	pr, resp, err := c.GetPullRequest(org, repo, n)
+	if forgejo.IsNotFound(resp, err) {
+		return nil, ferr(http.StatusNotFound, "pull request #%d not found in %s", n, repo)
+	} else if err != nil {
+		return nil, err
+	}
+	rs, _, err := c.AllReviews(org, repo, n, sdk.ListPullReviewsOptions{})
+	if err != nil {
+		return nil, err
+	}
+	carries := s.carryOver(ctx, p, org, repo, pr, rs)
+	if carries == nil {
+		carries = []review.Carry{}
+	}
+	return carries, nil
 }
 
 func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreateIn) (PRCreateOut, error) {
@@ -625,7 +661,8 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 			if err != nil {
 				item.ReviewState = "unknown"
 			} else {
-				item.ReviewState = string(assessReviews(s.desired(), s.Owner, runs, repo, pr, rs).Decision)
+				a := assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, s.carryOver(ctx, p, org, repo, pr, rs))
+				item.ReviewState, item.ReviewReason = string(a.Decision), a.Reason
 			}
 		}
 		out = append(out, item)
@@ -655,7 +692,7 @@ func (s *Server) runRecords() ([]secrets.Run, error) {
 
 // assessReviews applies the shared review assessment (internal/review) to
 // an open PR's reviews, with the owner overrides from runs.
-func assessReviews(d config.Desired, owner string, runs []secrets.Run, repo string, pr *sdk.PullRequest, rs []*sdk.PullReview) review.Assessment {
+func assessReviews(d config.Desired, owner string, runs []secrets.Run, repo string, pr *sdk.PullRequest, rs []*sdk.PullReview, carries []review.Carry) review.Assessment {
 	families := map[string]string{}
 	for _, a := range d.Actors {
 		families[a.Name] = a.Family
@@ -665,7 +702,7 @@ func assessReviews(d config.Desired, owner string, runs []secrets.Run, repo stri
 		head = pr.Head.Sha
 	}
 	return review.Assess(head, review.FromForge(rs), review.Policy{
-		Author: login(pr.Poster), Owner: owner, Families: families, Grants: review.Grants(runs, repo, pr.Index),
+		Author: login(pr.Poster), Owner: owner, Families: families, Grants: review.Grants(runs, repo, pr.Index), Carries: carries,
 	})
 }
 

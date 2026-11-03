@@ -1848,6 +1848,13 @@ func TestE2E(t *testing.T) {
 			implementCount := filepath.Join(dir, "implements")
 			verifyCount := filepath.Join(dir, "verifies")
 			verdict := "event=APPROVED"
+			change := `echo "change $n" > flow.txt
+  git add flow.txt`
+			if mode == "carry" {
+				// carry.txt is on main: the PR changes its last line.
+				change = `{ seq 1 19; echo "change $n"; } > carry.txt
+  git add carry.txt`
+			}
 			if mode == "follow" {
 				verdict = `if [ "$n" = 1 ]; then event=REQUEST_CHANGES; else event=APPROVED; fi`
 			} else if mode == "reject" {
@@ -1856,8 +1863,7 @@ func TestE2E(t *testing.T) {
 			return `set -e
 if grep -Fq 'working as the **implementer**' "$BOTTOWN_PROMPT_FILE"; then
   n=$(cat ` + implementCount + ` 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > ` + implementCount + `
-  echo "change $n" > flow.txt
-  git add flow.txt
+  ` + change + `
   git -c commit.gpgsign=false commit -qm "flow change $n"
   git push -q ` + "bottown-" + a.name + ` HEAD
   if [ "$n" = 1 ]; then
@@ -2095,6 +2101,123 @@ fi`
 			}
 
 			assertStopComment(issue, "ready to merge")
+		})
+
+		// A rebase that leaves the patch alone keeps the approval: the flow
+		// reaches ready to merge with no second verify run, and the
+		// server undismisses the approval Forgejo dismissed, so the forge
+		// lets the owner merge.
+		t.Run("rebase-only head move keeps the approval", func(t *testing.T) {
+			remote := "bottown-" + a.name
+			ownerGit := func(args ...string) {
+				t.Helper()
+				c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+				c.Env = a.env()
+				if out, err := c.CombinedOutput(); err != nil {
+					t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+				}
+			}
+			lines := func(first, last string) []byte {
+				var b strings.Builder
+				b.WriteString(first + "\n")
+				for i := 2; i <= 19; i++ {
+					fmt.Fprintf(&b, "%d\n", i)
+				}
+				b.WriteString(last + "\n")
+				return []byte(b.String())
+			}
+			defer git(t, demo, "switch", "-q", "main")
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, "carry.txt"), lines("1", "20"), 0o644)
+			git(t, demo, "add", "carry.txt")
+			git(t, demo, "commit", "-q", "-m", "carry.txt")
+			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+
+			issue := newIssue("flow carry-over")
+			dir := t.TempDir()
+			script := flowScript(dir, "carry")
+			out, err := withHarness(script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "ready to merge") {
+				t.Fatalf("flow: %v\n%s", err, out)
+			}
+			branch := fmt.Sprintf("issue/%d", issue)
+			var prs []struct {
+				Number int64
+				Head   struct{ Ref, Sha string }
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+			var prn int64
+			var old string
+			for _, pr := range prs {
+				if pr.Head.Ref == branch {
+					prn, old = pr.Number, pr.Head.Sha
+				}
+			}
+			if prn == 0 {
+				t.Fatalf("no open PR for %s: %+v", branch, prs)
+			}
+			prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
+
+			// main changes the first line of the same file, and the owner
+			// rebases the PR onto it: Forgejo sees a file both changed and
+			// dismisses the approval.
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, "carry.txt"), lines("main", "20"), 0o644)
+			git(t, demo, "commit", "-q", "-am", "main moves")
+			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+			mainTip := git(t, demo, "rev-parse", "HEAD")
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", old)
+			git(t, demo, "rebase", "-q", mainTip)
+			head := git(t, demo, "rev-parse", "HEAD")
+			ownerGit("push", "-q", "--force", remote, "HEAD:refs/heads/"+branch)
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+				var rs []struct {
+					State     string
+					Dismissed bool
+				}
+				a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+				if len(rs) == 1 && rs[0].Dismissed {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("Forgejo did not dismiss the approval after the rebase: %+v", rs)
+				}
+			}
+
+			out, err = withHarness(script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "ready to merge") || !strings.Contains(out, "carried over: same patch rebased onto") {
+				t.Fatalf("flow after the rebase: %v\n%s", err, out)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
+				t.Error("the rebase cost another implement or verify run")
+			}
+			assertStopComment(issue, "ready to merge")
+			if pr := a.mustCmd(demo, "pr", "show", fmt.Sprint(prn)); !strings.Contains(pr, "approval at "+old[:7]+" carried over") {
+				t.Errorf("pr show does not say why:\n%s", pr)
+			}
+			var rs []struct{ Dismissed bool }
+			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+			if len(rs) != 1 || rs[0].Dismissed {
+				t.Fatalf("carried approval still dismissed: %+v", rs)
+			}
+			var cur struct{ Head struct{ Sha string } }
+			a.mustAPI(owner, "GET", prPath, nil, &cur)
+			if cur.Head.Sha != head {
+				t.Fatalf("PR head %s, want the rebased %s", cur.Head.Sha, head)
+			}
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+				// Deleting the branch keeps the gc-branches test's count.
+				code, b := a.api(owner, "POST", prPath+"/merge", map[string]any{"Do": "merge", "delete_branch_after_merge": true})
+				if code == 200 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("owner merge with the carried approval: %d %s", code, b)
+				}
+			}
 		})
 	})
 

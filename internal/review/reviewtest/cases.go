@@ -18,6 +18,8 @@ const (
 	Owner  = "rlupi"
 	Head   = "h2"
 	Old    = "h1"
+	// Base is the head's merge base when Old is carried over.
+	Base = "b2"
 )
 
 // Families are the fixture actors' model families.
@@ -34,7 +36,9 @@ type Case struct {
 	Reviews []review.Review
 	// Runs are server run records for the PR (owner overrides).
 	Runs []secrets.Run
-	Want review.Decision
+	// Carries are older heads with the head's patch (SamePatch).
+	Carries []review.Carry
+	Want    review.Decision
 	// WantID is the deciding review's ID; 0 for NeedsReview.
 	WantID int64
 	// WantAtHead reports whether the deciding review is at the head.
@@ -43,7 +47,7 @@ type Case struct {
 
 // Policy is the fixtures' policy for c.
 func (c Case) Policy() review.Policy {
-	return review.Policy{Author: Author, Owner: Owner, Families: Families, Grants: review.Grants(c.Runs, Repo, PR)}
+	return review.Policy{Author: Author, Owner: Owner, Families: Families, Grants: review.Grants(c.Runs, Repo, PR), Carries: c.Carries}
 }
 
 func rv(id int64, reviewer, state, commit string, official bool) review.Review {
@@ -61,6 +65,9 @@ func sameFamily(actor, sha string) secrets.Run {
 		Author: Author, AllowSameFamily: true, Created: created, Expires: ended, Ended: &ended, Status: "succeeded",
 	}
 }
+
+// rebased carries Old over to Head: the same patch, rebased onto Base.
+var rebased = []review.Carry{{From: Old, Onto: Base}}
 
 const (
 	approved = review.StateApproved
@@ -136,4 +143,29 @@ var Cases = []Case{
 	{Name: "approval by a non-actor",
 		Reviews: []review.Review{rv(1, "manager", approved, Head, true)},
 		Want:    review.NeedsReview},
+	{Name: "approval carried over from a rebased head",
+		Reviews: []review.Review{rv(1, "agy", approved, Old, true)}, Carries: rebased,
+		Want: review.Approved, WantID: 1, WantAtHead: false},
+	{Name: "approval at an old head whose patch changed",
+		Reviews: []review.Review{rv(1, "agy", approved, Old, true)}, Carries: []review.Carry{{From: "h0", Onto: Base}},
+		Want: review.NeedsReview},
+	{Name: "dismissed approval is not carried over",
+		Reviews: []review.Review{dismissed(rv(1, "agy", approved, Old, true))}, Carries: rebased,
+		Want: review.NeedsReview},
+	{Name: "non-official approval is not carried over",
+		Reviews: []review.Review{rv(1, "agy", approved, Old, false)}, Carries: rebased,
+		Want: review.NeedsReview},
+	{Name: "same-family approval is not carried over without override",
+		Reviews: []review.Review{rv(1, "haiku", approved, Old, true)}, Carries: rebased,
+		Want: review.NeedsReview},
+	{Name: "owner-authorized same-family approval carried over",
+		Reviews: []review.Review{rv(1, "haiku", approved, Old, true)}, Carries: rebased,
+		Runs: []secrets.Run{sameFamily("haiku", Old)},
+		Want: review.Approved, WantID: 1, WantAtHead: false},
+	{Name: "approval at the head wins over a carried one",
+		Reviews: []review.Review{rv(1, "agy", approved, Old, true), rv(2, "kimi", approved, Head, true)}, Carries: rebased,
+		Want: review.Approved, WantID: 2, WantAtHead: true},
+	{Name: "stale request for changes holds back a carried approval",
+		Reviews: []review.Review{rv(1, "kimi", changes, "h0", true), rv(2, "agy", approved, Old, true)}, Carries: rebased,
+		Want: review.ChangesRequested, WantID: 1, WantAtHead: false},
 }

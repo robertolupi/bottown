@@ -208,7 +208,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				ID:          fmt.Sprintf("ready-to-merge-pr-%d", pr.Index),
 				Kind:        InboxReadyToMerge,
 				Title:       fmt.Sprintf("PR !%d is ready to merge", pr.Index),
-				Description: fmt.Sprintf("Approved at %s by %s (%s)", shortSHA(headSHA), approval.Reviewer, approver),
+				Description: approvedDescription(a, headSHA, approver),
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
 				Created:     created,
@@ -611,6 +611,9 @@ func (s *Server) assessPullRequest(ctx context.Context, repo string, pr *sdk.Pul
 	if pr == nil {
 		return review.Assessment{}, fmt.Errorf("nil pull request")
 	}
+	// Carries first: the server undismisses carried approvals Forgejo
+	// dismissed, and the reviews should show it.
+	carries := s.prCarries(ctx, repo, pr.Index)
 	org, _ := s.orgAndRepo()
 	revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
 	revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
@@ -626,6 +629,7 @@ func (s *Server) assessPullRequest(ctx context.Context, repo string, pr *sdk.Pul
 		Owner:    ownerLogin,
 		Families: families,
 		Grants:   review.Grants(allRuns, repo, pr.Index),
+		Carries:  carries,
 	}), nil
 }
 
@@ -642,4 +646,26 @@ func (s *Server) assessOpenPullRequests(ctx context.Context, repo string, prs []
 		assessments[pr.Index] = a
 	}
 	return assessments
+}
+
+// approvedDescription says who approved a ready PR, and why an approval at
+// an older head counts.
+func approvedDescription(a review.Assessment, head, approver string) string {
+	d := fmt.Sprintf("Approved at %s by %s (%s)", shortSHA(head), a.Review.Reviewer, approver)
+	if a.Reason != "" {
+		d += ": " + a.Reason
+	}
+	return d
+}
+
+// prCarries asks the server which older heads' approvals carry over to the
+// head of PR n (internal/review): the web UI has no git to compare
+// patches. An error leaves none, which only withholds the carry-over.
+func (s *Server) prCarries(ctx context.Context, repo string, n int64) []review.Carry {
+	var carries []review.Carry
+	path := fmt.Sprintf("/v1/forge/pr/carries?repo=%s&number=%d", url.QueryEscape(repo), n)
+	if err := s.callServer(ctx, http.MethodGet, path, nil, &carries); err != nil {
+		return nil
+	}
+	return carries
 }

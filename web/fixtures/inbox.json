@@ -204,7 +204,7 @@
       "id": "ready:106",
       "kind": "ready_to_merge",
       "title": "!106 is approved and ready to merge",
-      "description": "Review and merge it in Forgejo.",
+      "description": "Approved at 4b81f0a2c9 by agy (google): approval at 7d27b2e carried over: same patch rebased onto e50b14a",
       "target": "!106",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/106",
       "issue": 106,

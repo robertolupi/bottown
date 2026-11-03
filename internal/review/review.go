@@ -18,15 +18,21 @@
 //     only when it satisfies the cross-family rule: the reviewer is the
 //     owner, an actor of another family than the author's, or an actor whose
 //     verify run at that commit the owner allowed to be same-family.
+//   - An official approval at an older head also counts, stale or not, when
+//     the policy carries that head over: its patch is the current head's,
+//     only rebased onto, or merged with, a newer base (SamePatch). The
+//     cross-family rule applies to it as at its own commit.
 //   - COMMENT reviews are never official in Forgejo. An actor's COMMENT at
 //     the current head is an undecided verdict; the owner's is discussion.
 //
 // Precedence: a blocking request at the head, then a qualifying approval
-// (which a blocking request at an older head still holds back), then an
-// actor's comment at the head, then nothing.
+// at the head, then a carried-over one (either is held back by a blocking
+// request at an older head), then an actor's comment at the head, then
+// nothing.
 package review
 
 import (
+	"fmt"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
@@ -77,19 +83,32 @@ type Grant struct {
 	Commit   string
 }
 
+// Carry is an older head whose patch is the current head's: the same
+// change, rebased onto or merged with Onto, the head's merge base.
+type Carry struct {
+	From string `json:"from"`
+	Onto string `json:"onto"`
+}
+
 // Policy is who wrote the PR and who may approve it.
 type Policy struct {
 	Author   string
 	Owner    string
 	Families map[string]string // actor login -> model family
 	Grants   []Grant
+	// Carries are older heads whose approvals count at the head.
+	Carries []Carry
 }
 
 // Assessment is the decision and the review it rests on: the newest
 // blocking request, approval or comment behind it; nil for NeedsReview.
+// Carried is set when the approval is at an older head carried over, and
+// Reason then says so.
 type Assessment struct {
 	Decision Decision `json:"decision"`
 	Review   *Review  `json:"review,omitempty"`
+	Carried  *Carry   `json:"carried,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
 }
 
 // AtHead reports whether the deciding review is at head. A
@@ -101,7 +120,7 @@ func (a Assessment) AtHead(head string) bool {
 
 // Assess decides where reviews leave a PR whose current head is head.
 func Assess(head string, reviews []Review, p Policy) Assessment {
-	var blockingHead, blockingOld, approval, comment *Review
+	var blockingHead, blockingOld, approval, carried, comment *Review
 	newest := func(cur *Review, r *Review) *Review {
 		if cur == nil || r.ID > cur.ID {
 			return r
@@ -125,8 +144,13 @@ func Assess(head string, reviews []Review, p Policy) Assessment {
 				blockingOld = newest(blockingOld, r)
 			}
 		case StateApproved:
-			if r.Official && atHead && p.qualifies(*r) {
+			if !r.Official || !p.qualifies(*r) {
+				continue
+			}
+			if atHead {
 				approval = newest(approval, r)
+			} else if p.carry(r.CommitID) != nil {
+				carried = newest(carried, r)
 			}
 		case StateComment:
 			if _, actor := p.Families[r.Reviewer]; actor && atHead {
@@ -134,17 +158,42 @@ func Assess(head string, reviews []Review, p Policy) Assessment {
 			}
 		}
 	}
+	var carry *Carry
+	if approval == nil && carried != nil {
+		approval, carry = carried, p.carry(carried.CommitID)
+	}
 	switch {
 	case blockingHead != nil:
 		return Assessment{Decision: ChangesRequested, Review: copyOf(blockingHead)}
 	case approval != nil && blockingOld != nil:
 		return Assessment{Decision: ChangesRequested, Review: copyOf(blockingOld)}
+	case approval != nil && carry != nil:
+		c := *carry
+		return Assessment{Decision: Approved, Review: copyOf(approval), Carried: &c,
+			Reason: fmt.Sprintf("approval at %s carried over: same patch rebased onto %s", short(c.From), short(c.Onto))}
 	case approval != nil:
 		return Assessment{Decision: Approved, Review: copyOf(approval)}
 	case comment != nil:
 		return Assessment{Decision: Commented, Review: copyOf(comment)}
 	}
 	return Assessment{Decision: NeedsReview}
+}
+
+// carry returns the carry-over for commit, or nil.
+func (p Policy) carry(commit string) *Carry {
+	for i := range p.Carries {
+		if commit != "" && p.Carries[i].From == commit {
+			return &p.Carries[i]
+		}
+	}
+	return nil
+}
+
+func short(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // qualifies applies the cross-family rule to an approval.
