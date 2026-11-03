@@ -38,6 +38,7 @@ type Workspace struct {
 	Dir       string // Top/.bottown
 	Mirror    string // Dir/mirror.git
 	RunsDir   string // Dir/runs
+	Remote    string // the forge remote name shared with actor worktrees
 	RemoteURL string // the bottown git URL of the repo
 	// OwnerAuth are `git -c` settings that authenticate mirror fetches as
 	// the owner; they are passed per command, never stored in the mirror.
@@ -45,10 +46,11 @@ type Workspace struct {
 }
 
 // Open prepares top/.bottown and excludes it from the checkout's status.
-func Open(top, remoteURL string, ownerAuth []string) (*Workspace, error) {
+func Open(top, remote, remoteURL string, ownerAuth []string) (*Workspace, error) {
 	w := &Workspace{
 		Top:       top,
 		Dir:       filepath.Join(top, ".bottown"),
+		Remote:    remote,
 		RemoteURL: remoteURL,
 		OwnerAuth: ownerAuth,
 	}
@@ -127,8 +129,8 @@ func (w *Workspace) Sync(ctx context.Context) error {
 			return err
 		}
 		for _, kv := range [][]string{
-			{"remote.origin.url", w.RemoteURL},
-			{"remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"},
+			{"remote." + w.Remote + ".url", w.RemoteURL},
+			{"remote." + w.Remote + ".fetch", "+refs/heads/*:refs/remotes/" + w.Remote + "/*"},
 			// Each run worktree gets its own config (identity, credentials).
 			{"extensions.worktreeConfig", "true"},
 		} {
@@ -138,6 +140,16 @@ func (w *Workspace) Sync(ctx context.Context) error {
 		}
 	} else if err != nil {
 		return err
+	}
+	// Mirrors created before run worktrees used the instance remote had origin.
+	if w.Remote != "origin" {
+		if _, err := Git(w.Mirror, nil, "config", "--get", "remote."+w.Remote+".url"); err != nil {
+			if _, err := Git(w.Mirror, nil, "config", "--get", "remote.origin.url"); err == nil {
+				if _, err := Git(w.Mirror, nil, "remote", "rename", "origin", w.Remote); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	// With worktreeConfig, a shared core.bare=true would make every run
 	// worktree think it is bare; it belongs in the mirror's own
@@ -150,7 +162,7 @@ func (w *Workspace) Sync(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := Git(w.Mirror, nil, "config", "remote.origin.url", w.RemoteURL); err != nil {
+	if _, err := Git(w.Mirror, nil, "config", "remote."+w.Remote+".url", w.RemoteURL); err != nil {
 		return err
 	}
 	// Files bottown writes into run worktrees for harnesses (agy's workspace
@@ -163,13 +175,13 @@ func (w *Workspace) Sync(ctx context.Context) error {
 	if err := appendLine(filepath.Join(w.Mirror, "info", "exclude"), "/.crush/"); err != nil {
 		return err
 	}
-	_, err := GitCtx(ctx, w.Mirror, w.OwnerAuth, "fetch", "-q", "--prune", "origin")
+	_, err := GitCtx(ctx, w.Mirror, w.OwnerAuth, "fetch", "-q", "--prune", w.Remote)
 	return err
 }
 
 // DefaultBranch is the bottown repo's default branch.
 func (w *Workspace) DefaultBranch(ctx context.Context) (string, error) {
-	out, err := GitCtx(ctx, w.Mirror, w.OwnerAuth, "ls-remote", "--symref", "origin", "HEAD")
+	out, err := GitCtx(ctx, w.Mirror, w.OwnerAuth, "ls-remote", "--symref", w.Remote, "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -193,21 +205,22 @@ func (w *Workspace) TmpDir(id string) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("bottown-%x-%s", sum[:8], id))
 }
 
-// AddImplement adds a worktree on branch, resuming origin/<branch> if it
-// exists (a later run continues the same branch) or starting it from
-// origin/<base>.
+// AddImplement adds a worktree on branch, resuming the forge's branch if it
+// exists (a later run continues the same branch) or starting it from base.
 func (w *Workspace) AddImplement(id, branch, base string) (string, error) {
 	dir := w.WorktreeDir(id)
-	start := "origin/" + base
-	if _, err := Git(w.Mirror, nil, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+branch); err == nil {
-		start = "origin/" + branch
+	upstream := base
+	start := w.Remote + "/" + upstream
+	if _, err := Git(w.Mirror, nil, "rev-parse", "--verify", "-q", "refs/remotes/"+w.Remote+"/"+branch); err == nil {
+		upstream = branch
+		start = w.Remote + "/" + upstream
 	}
 	if _, err := Git(w.Mirror, nil, "worktree", "add", "-q", "-B", branch, dir, start); err != nil {
 		return "", err
 	}
 	for _, kv := range [][]string{
-		{"branch." + branch + ".remote", "origin"},
-		{"branch." + branch + ".merge", "refs/heads/" + branch},
+		{"branch." + branch + ".remote", w.Remote},
+		{"branch." + branch + ".merge", "refs/heads/" + upstream},
 	} {
 		if _, err := Git(dir, nil, "config", kv[0], kv[1]); err != nil {
 			return "", err

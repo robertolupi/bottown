@@ -822,10 +822,12 @@ func TestE2E(t *testing.T) {
 		if out, err := agent(demo, "", "whoami"); err == nil || !strings.Contains(out, "not an actor worktree") {
 			t.Errorf("agent CLI in main: %v %s", err, out)
 		}
-		if out := must(cw, "", "whoami"); !strings.Contains(out, "actor claude") || !strings.Contains(out, "no active run") ||
-			strings.Contains(out, "last run") || !strings.Contains(out, "(detached), ") || !strings.Contains(out, " bottown-"+a.name+"/main") {
+		if out := must(cw, "", "whoami"); !strings.Contains(out, "actor claude") || !strings.Contains(out, "forge remote bottown-"+a.name) ||
+			!strings.Contains(out, "no active run") || strings.Contains(out, "last run") || !strings.Contains(out, "(detached), ") ||
+			!strings.Contains(out, " bottown-"+a.name+"/main") {
 			t.Errorf("idle whoami: %s", out)
 		}
+		git(t, cw, "fetch", "-q", "bottown-"+a.name, "main")
 
 		// Filing issues works outside a run, in the worktree's repository.
 		out := must(cw, "found while talking", "issue", "create", "--title", "filed from chat", "--body-file", "-")
@@ -866,6 +868,10 @@ func TestE2E(t *testing.T) {
 		}
 		if got := git(t, cw, "rev-parse", "--abbrev-ref", "HEAD"); got != "issue/"+n {
 			t.Errorf("worktree branch %s", got)
+		}
+		git(t, cw, "fetch", "-q", "bottown-"+a.name, "main")
+		if st := git(t, cw, "status", "--short", "--branch"); strings.Contains(st, "upstream is gone") {
+			t.Errorf("fresh implement branch has a dangling upstream: %s", st)
 		}
 		attachDir := filepath.Join(git(t, cw, "rev-parse", "--absolute-git-dir"), "bottown", "attachments")
 		shotPath := filepath.Join(attachDir, fmt.Sprintf("%d-screen_shot.png", shotID))
@@ -1473,10 +1479,13 @@ func TestE2E(t *testing.T) {
 		want := filepath.Join(t.TempDir(), "diagram.png")
 		os.WriteFile(want, diagram, 0o600)
 		b64 := strings.Repeat("iVBORw0KGgo", 40)
+		remote := "bottown-" + a.name
 		implement := "set -e; test -n \"$BOTTOWN_RUN_KEY\"; grep -q 'scripted run' \"$BOTTOWN_PROMPT_FILE\"; " +
 			"grep -q '^## Attachments' \"$BOTTOWN_PROMPT_FILE\"; f=$(grep -o '/[^`]*-diagram.png' \"$BOTTOWN_PROMPT_FILE\" | head -1); " +
 			"cmp \"$f\" " + want + "; " + bin + " issue show | grep -qF \"$f\"; echo " + b64 + "; " +
-			"echo cli > cli.txt; git add cli.txt; git -c commit.gpgsign=false commit -qm 'cli change'; git push -q origin HEAD; " +
+			"git fetch -q " + remote + " main; if git status | grep -q 'upstream is gone'; then exit 9; fi; " +
+			bin + " whoami | grep -q 'forge remote " + remote + "'; " + bin + " whoami --json | grep -q '\"remote\": \"" + remote + "\"'; " +
+			"echo cli > cli.txt; git add cli.txt; git -c commit.gpgsign=false commit -qm 'cli change'; git push -q " + remote + " HEAD; " +
 			bin + ` mcp call pr_create '{"title":"cli PR","body":"scripted"}' > /dev/null; ` +
 			// The script harness reads usage from claude-style result events.
 			`echo '{"type":"result","num_turns":3,"total_cost_usd":0.25,"usage":{"input_tokens":100,"output_tokens":7}}'; ` +
@@ -1788,7 +1797,7 @@ func TestE2E(t *testing.T) {
 		// through stdin, the agent comments, and it cannot push.
 		discuss := "set -e; grep -q '## Question to discuss' \"$BOTTOWN_PROMPT_FILE\"; grep -q \"what's best: blah or foo?\" \"$BOTTOWN_PROMPT_FILE\"; " +
 			"echo 'foo, because' | " + bin + " comment --body-file -; " +
-			"if git push -q origin HEAD:refs/heads/discuss-push 2>/dev/null; then echo pushed; exit 9; fi; echo 'discussed by script'"
+			"if git push -q " + remote + " HEAD:refs/heads/discuss-push 2>/dev/null; then echo pushed; exit 9; fi; echo 'discussed by script'"
 		c := exec.Command(bin, "run", "discuss", "-a", "agy", "--question-file", "-", fmt.Sprint(issue.Number))
 		c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+discuss)
 		c.Dir, c.Stdin = demo, strings.NewReader("what's best: blah or foo?\n")
@@ -1850,7 +1859,7 @@ if grep -Fq 'working as the **implementer**' "$BOTTOWN_PROMPT_FILE"; then
   echo "change $n" > flow.txt
   git add flow.txt
   git -c commit.gpgsign=false commit -qm "flow change $n"
-  git push -q origin HEAD
+  git push -q ` + "bottown-" + a.name + ` HEAD
   if [ "$n" = 1 ]; then
     ` + bin + ` mcp call pr_create '{"title":"flow PR","body":"scripted"}' > /dev/null
   fi

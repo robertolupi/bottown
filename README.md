@@ -231,7 +231,7 @@ repository. They hold no token: the server enforces the policy.
 
 | Command | What it does |
 |---|---|
-| `whoami` | The actor, its run or last run, and HEAD against the default branch. |
+| `whoami` | The actor, forge remote, its run or last run, and HEAD against the default branch. |
 | `run start implement\|verify\|discuss\|plan N` | Start a run and print its goal prompt (what the slash commands call). |
 | `run end [--failed] --summary-file -` | End the run with a handover summary. |
 | `issue list`, `issue show [N]` | Read issues. |
