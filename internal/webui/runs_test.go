@@ -24,14 +24,16 @@ import (
 )
 
 type runsFixture struct {
-	mu       sync.Mutex
-	actors   []ActorDetail
-	runs     []secrets.Run
-	prs      []*sdk.PullRequest
-	reviews  map[int64][]*sdk.PullReview
-	issues   []*sdk.Issue
-	comments map[int64][]*sdk.Comment
-	denials  []Denial // what GET /v1/audit?decision=deny returns
+	mu         sync.Mutex
+	actors     []ActorDetail
+	runs       []secrets.Run
+	prs        []*sdk.PullRequest
+	reviews    map[int64][]*sdk.PullReview
+	issues     []*sdk.Issue
+	comments   map[int64][]*sdk.Comment
+	denials    []Denial // what GET /v1/audit?decision=deny returns
+	pullsErr   int
+	reviewsErr map[int64]int
 }
 
 func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int) {
@@ -92,10 +94,18 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 			}
 			http.NotFound(w, r)
 		case strings.HasSuffix(p, "/pulls"):
+			if fix.pullsErr > 0 {
+				http.Error(w, "pulls error", fix.pullsErr)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(fix.prs)
 		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
 			parts := strings.Split(p, "/")
 			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)
+			if fix.reviewsErr != nil && fix.reviewsErr[num] > 0 {
+				http.Error(w, "reviews error", fix.reviewsErr[num])
+				return
+			}
 			revs := fix.reviews[num]
 			if revs == nil {
 				revs = []*sdk.PullReview{}

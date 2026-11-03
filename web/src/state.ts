@@ -1,6 +1,8 @@
 import type {
   ActiveFlowInfo,
   ActorDetail,
+  FlowStateInfo,
+  FlowStateKind,
   FlowTimelineEntry,
   FlowTimelineRunBoundary,
   HistoryRunInfo,
@@ -305,6 +307,172 @@ export function runOutcome(run: { status?: string; outcome?: string; ended?: str
   }
   if (!run.ended || run.status === 'running') return null;
   return { label: 'None recorded', icon: '–', tone: 'neutral', title: 'Outcome: none recorded for this run' };
+}
+
+// deriveFlowState derives a concise flow-level state (Ready to merge, Needs changes,
+// In progress, Needs intervention, Needs review, Merged, Unknown) from authoritative
+// flow, PR, and review data. Stale approvals at an older head do not imply readiness.
+// Missing or read-failed data remains explicitly neutral/unknown, never inferred from summaries.
+export function deriveFlowState(input: {
+  active: boolean;
+  active_label?: string;
+  status: string;
+  runs: HistoryRunInfo[];
+  latestRun?: HistoryRunInfo;
+}): FlowStateInfo {
+  const { active, active_label, status, latestRun } = input;
+
+  if (active) {
+    return {
+      state: 'in_progress',
+      label: 'In progress',
+      tone: 'accent',
+      icon: '●',
+      title: active_label ? `Next action: In progress — ${active_label}` : 'Next action: In progress — flow is currently active',
+    };
+  }
+
+  // 1. Authoritative server-provided flow_state if present on latestRun
+  if (latestRun?.flow_state) {
+    switch (latestRun.flow_state) {
+      case 'ready_to_merge':
+        return {
+          state: 'ready_to_merge',
+          label: 'Ready to merge',
+          tone: 'success',
+          icon: '✓',
+          title: latestRun.pr ? `Next action: Ready to merge — PR !${latestRun.pr} is approved at current head` : 'Next action: Ready to merge — approved at current head',
+        };
+      case 'needs_changes':
+        return {
+          state: 'needs_changes',
+          label: 'Needs changes',
+          tone: 'warning',
+          icon: '⟲',
+          title: latestRun.pr ? `Next action: Needs changes — changes requested on PR !${latestRun.pr}` : 'Next action: Needs changes',
+        };
+      case 'needs_review':
+        return {
+          state: 'needs_review',
+          label: 'Needs review',
+          tone: 'warning',
+          icon: '👁',
+          title: latestRun.pr ? `Next action: Needs review — PR !${latestRun.pr} current head is not approved` : 'Next action: Needs review — current head is not approved',
+        };
+      case 'needs_intervention':
+        return {
+          state: 'needs_intervention',
+          label: 'Needs intervention',
+          tone: 'error',
+          icon: '!',
+          title: 'Next action: Needs intervention — flow stopped and requires owner intervention',
+        };
+      case 'merged':
+        return {
+          state: 'merged',
+          label: 'Merged',
+          tone: 'neutral',
+          icon: '⎇',
+          title: latestRun.pr ? `Next action: Merged — PR !${latestRun.pr} has merged into main` : 'Next action: Merged — PR merged into main',
+        };
+      case 'unknown':
+        return {
+          state: 'unknown',
+          label: 'Unknown',
+          tone: 'neutral',
+          icon: '?',
+          title: 'Next action: Unknown — current PR and review data unavailable',
+        };
+    }
+  }
+
+  // 2. Authoritative PR and review fields
+  if (latestRun?.pr_merged) {
+    return {
+      state: 'merged',
+      label: 'Merged',
+      tone: 'neutral',
+      icon: '⎇',
+      title: latestRun.pr ? `Next action: Merged — PR !${latestRun.pr} has merged into main` : 'Next action: Merged — PR merged into main',
+    };
+  }
+
+  if (latestRun?.pr_mergeable === false) {
+    return {
+      state: 'needs_intervention',
+      label: 'Needs intervention',
+      tone: 'error',
+      icon: '!',
+      title: latestRun.pr ? `Next action: Needs intervention — PR !${latestRun.pr} conflicts with main` : 'Next action: Needs intervention — conflicts with main',
+    };
+  }
+
+  if (latestRun?.review_decision) {
+    switch (latestRun.review_decision) {
+      case 'approved':
+        if (latestRun.review_at_head === true) {
+          return {
+            state: 'ready_to_merge',
+            label: 'Ready to merge',
+            tone: 'success',
+            icon: '✓',
+            title: latestRun.pr ? `Next action: Ready to merge — PR !${latestRun.pr} is approved at current head` : 'Next action: Ready to merge',
+          };
+        }
+        // Stale approval at an older head: must NOT imply readiness!
+        return {
+          state: 'needs_review',
+          label: 'Needs review',
+          tone: 'warning',
+          icon: '👁',
+          title: latestRun.pr ? `Next action: Needs review — PR !${latestRun.pr} approval is stale; current head is not approved` : 'Next action: Needs review — current head is not approved',
+        };
+      case 'changes_requested':
+        return {
+          state: 'needs_changes',
+          label: 'Needs changes',
+          tone: 'warning',
+          icon: '⟲',
+          title: latestRun.pr ? `Next action: Needs changes — changes requested on PR !${latestRun.pr}` : 'Next action: Needs changes',
+        };
+      case 'commented':
+        return {
+          state: 'needs_intervention',
+          label: 'Needs intervention',
+          tone: 'error',
+          icon: '!',
+          title: 'Next action: Needs intervention — verifier ended review with undecided COMMENT',
+        };
+      case 'needs_review':
+        return {
+          state: 'needs_review',
+          label: 'Needs review',
+          tone: 'warning',
+          icon: '👁',
+          title: latestRun.pr ? `Next action: Needs review — PR !${latestRun.pr} needs review` : 'Next action: Needs review',
+        };
+    }
+  }
+
+  // 3. Execution failure on latestRun or thread status
+  if (status === 'failed' || status === 'revoked' || latestRun?.status === 'failed' || latestRun?.status === 'revoked') {
+    return {
+      state: 'needs_intervention',
+      label: 'Needs intervention',
+      tone: 'error',
+      icon: '!',
+      title: 'Next action: Needs intervention — run failed and requires owner intervention',
+    };
+  }
+
+  // 4. Missing / read-failed data: explicitly neutral/unknown, never inferred from summaries
+  return {
+    state: 'unknown',
+    label: 'Unknown',
+    tone: 'neutral',
+    icon: '?',
+    title: 'Next action: Unknown — current PR and review data unavailable',
+  };
 }
 
 export function formatDurationMs(ms: number): string {
@@ -811,6 +979,17 @@ export function groupHistoryThreads(
       }
     }
 
+    let flowState: FlowStateInfo | undefined;
+    if (tb.kind === 'flow') {
+      flowState = deriveFlowState({
+        active,
+        active_label: activeLabel,
+        status,
+        runs,
+        latestRun,
+      });
+    }
+
     return {
       key: tb.key,
       kind: tb.kind,
@@ -824,6 +1003,7 @@ export function groupHistoryThreads(
       active,
       active_label: activeLabel,
       status,
+      flow_state: flowState,
       run_count: runs.length,
       last_activity: lastActivity,
       actors,

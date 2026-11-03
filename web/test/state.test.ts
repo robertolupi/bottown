@@ -12,6 +12,7 @@ import {
   buildKeyedLogLines,
   buildRunActionPayload,
   computePreservedScrollTop,
+  deriveFlowState,
   detectTrimmedLineCount,
   filterHistoryRuns,
   filterInboxItems,
@@ -1274,6 +1275,237 @@ test('simulated live log session: follows initially, pauses on scroll away, pres
   assert.equal(following, true);
   assert.equal(scrollTop, 60);
 });
+
+test('deriveFlowState derives concise flow state from authoritative data without guessing from summary', () => {
+  // 1. Active work -> In progress
+  const activeState = deriveFlowState({
+    active: true,
+    active_label: 'round 2/3 · verifying with kimi',
+    status: 'running',
+    runs: [],
+  });
+  assert.equal(activeState.state, 'in_progress');
+  assert.equal(activeState.label, 'In progress');
+  assert.equal(activeState.tone, 'accent');
+  assert.equal(activeState.icon, '●');
+  assert.match(activeState.title, /round 2\/3 · verifying with kimi/);
+
+  // 2. Ready to merge (open PR, mergeable, approved at current head)
+  const readyState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved all checks', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'approved', review_at_head: true,
+    },
+  });
+  assert.equal(readyState.state, 'ready_to_merge');
+  assert.equal(readyState.label, 'Ready to merge');
+  assert.equal(readyState.tone, 'success');
+  assert.equal(readyState.icon, '✓');
+
+  // 3. Stale approval at an older head: must NOT imply readiness!
+  const staleState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved previous commit', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'needs_review', review_at_head: false,
+    },
+  });
+  assert.equal(staleState.state, 'needs_review');
+  assert.equal(staleState.label, 'Needs review');
+  assert.equal(staleState.tone, 'warning');
+  assert.equal(staleState.icon, '👁');
+  assert.notEqual(staleState.state, 'ready_to_merge');
+
+  // 3b. Approval with missing/false review_at_head: must NOT imply readiness!
+  const missingAtHeadState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1b', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved without at_head confirmation', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'approved', review_at_head: false,
+    },
+  });
+  assert.equal(missingAtHeadState.state, 'needs_review');
+  assert.equal(missingAtHeadState.label, 'Needs review');
+  assert.notEqual(missingAtHeadState.state, 'ready_to_merge');
+
+  // 4. Changes requested
+  const changesState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-2', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'changes_requested', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Missing tests', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'changes_requested', review_at_head: true,
+    },
+  });
+  assert.equal(changesState.state, 'needs_changes');
+  assert.equal(changesState.label, 'Needs changes');
+  assert.equal(changesState.tone, 'warning');
+  assert.equal(changesState.icon, '⟲');
+
+  // 5. Conflicts with main -> Needs intervention
+  const conflictState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-3', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: false,
+    },
+  });
+  assert.equal(conflictState.state, 'needs_intervention');
+  assert.equal(conflictState.label, 'Needs intervention');
+  assert.equal(conflictState.tone, 'error');
+
+  // 6. Verifier undecided (COMMENT) -> Needs intervention
+  const undecidedState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-4', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'commented', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Unclear direction', purged: false, denials: [],
+      review_decision: 'commented',
+    },
+  });
+  assert.equal(undecidedState.state, 'needs_intervention');
+
+  // 7. Successful completion: PR merged -> Merged
+  const mergedState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-5', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Merged PR !10', purged: false, denials: [],
+      pr_merged: true,
+    },
+  });
+  assert.equal(mergedState.state, 'merged');
+  assert.equal(mergedState.label, 'Merged');
+  assert.equal(mergedState.tone, 'neutral');
+  assert.equal(mergedState.icon, '⎇');
+
+  // 8. Run failure -> Needs intervention
+  const failedState = deriveFlowState({
+    active: false,
+    status: 'failed',
+    runs: [],
+    latestRun: {
+      id: 'r-6', target: '#15', target_url: 'http://forge/issues/15', issue: 15,
+      kind: 'implement', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'failed', created: '2026-11-01T10:00:00Z', duration: '2m', summary: 'Crashed', purged: false, denials: [],
+    },
+  });
+  assert.equal(failedState.state, 'needs_intervention');
+  assert.equal(failedState.label, 'Needs intervention');
+  assert.equal(failedState.tone, 'error');
+
+  // 9. Missing / read-failed data remains explicitly neutral/unknown, NEVER inferred from summaries
+  const unknownState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-7', target: '#20', target_url: 'http://forge/issues/20', issue: 20,
+      kind: 'implement', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'succeeded', created: '2026-11-01T10:00:00Z', duration: '10m',
+      summary: 'Merged and approved PR !25 into main without issues', purged: false, denials: [],
+    },
+  });
+  assert.equal(unknownState.state, 'unknown');
+  assert.equal(unknownState.label, 'Unknown');
+  assert.equal(unknownState.tone, 'neutral');
+  assert.equal(unknownState.icon, '?');
+});
+
+test('groupHistoryThreads attaches flow_state to flow threads while keeping status and outcome separate', () => {
+  const threads = groupHistoryThreads([
+    // Flow 1: Stale approval on PR !12
+    {
+      id: 'r-fl-1', target: '!12', target_url: 'http://forge/pulls/12', issue: 11, pr: 12,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      ended: '2026-11-01T10:10:00Z', duration: '10m', summary: 'Approved old commit',
+      purged: false, denials: [], review_decision: 'needs_review', review_at_head: false,
+      flow_state: 'needs_review',
+    },
+    // Discuss run (not a flow)
+    {
+      id: 'r-disc-1', target: '#30', target_url: 'http://forge/issues/30', issue: 30,
+      kind: 'discuss', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'succeeded', outcome: 'commented', created: '2026-11-01T09:00:00Z',
+      ended: '2026-11-01T09:10:00Z', duration: '10m', summary: 'Discussed architecture',
+      purged: false, denials: [],
+    },
+  ] as any[]);
+
+  const flowThread = threads.find((t) => t.kind === 'flow');
+  assert.ok(flowThread);
+  // Flow state is Needs review (stale approval)
+  assert.equal(flowThread?.flow_state?.label, 'Needs review');
+  assert.equal(flowThread?.flow_state?.state, 'needs_review');
+  // Execution status is succeeded (separate from flow state)
+  assert.equal(flowThread?.status, 'succeeded');
+  // Recorded outcome is approved (separate from flow state)
+  assert.equal(flowThread?.runs[0]?.outcome, 'approved');
+
+  // Discuss thread has no flow_state
+  const discussThread = threads.find((t) => t.kind === 'discuss');
+  assert.ok(discussThread);
+  assert.equal(discussThread?.flow_state, undefined);
+
+  // Active flow thread preserves both active_label and flow_state (In progress)
+  const activeThreads = groupHistoryThreads(
+    [
+      {
+        id: 'r-act-1', target: '#51', target_url: 'http://forge/issues/51', issue: 51,
+        kind: 'implement', actor: 'codex', family: 'openai', harness: 'codex', mode: 'batch',
+        status: 'running', created: '2026-11-01T10:00:00Z', summary: '', purged: false, denials: [],
+      } as any,
+    ],
+    null,
+    [
+      {
+        issue: 51, implement: 'codex', verify: 'kimi', round: 2, max_rounds: 3,
+        step: 'verifying with kimi', label: '#51 · round 2/3 · verifying with kimi', waiting: false,
+      },
+    ],
+  );
+  const activeFlow = activeThreads.find((t) => t.issue === 51);
+  assert.ok(activeFlow);
+  assert.equal(activeFlow?.active, true);
+  assert.equal(activeFlow?.active_label, '#51 · round 2/3 · verifying with kimi');
+  assert.equal(activeFlow?.flow_state?.state, 'in_progress');
+  assert.equal(activeFlow?.flow_state?.label, 'In progress');
+});
+
 
 
 

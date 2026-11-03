@@ -6,6 +6,7 @@
   import { buildFlowConstituentRuns, buildFlowTimeline, formatThreadMainLine } from './state';
   import { formatTime, formatUsage } from './format';
   import ConstituentRuns from './ConstituentRuns.svelte';
+  import FlowStateBadge from './FlowStateBadge.svelte';
   import FlowTimeline from './FlowTimeline.svelte';
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
@@ -72,9 +73,12 @@
   </td>
   <td>
     <div class="thread-status-badges">
-      {#if thread.active}
+      {#if thread.flow_state}
+        <FlowStateBadge state={thread.flow_state} />
+      {/if}
+      {#if thread.active && thread.active_label}
         <span class="badge badge-accent flow-live-badge">
-          {thread.active_label ? `active · ${thread.active_label}` : 'active'}
+          {thread.active_label}
         </span>
       {/if}
       <StatusBadge status={thread.status} />

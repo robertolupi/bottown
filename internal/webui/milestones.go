@@ -143,23 +143,12 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	repoAPI := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s", org, repo)
 	repoWeb := fmt.Sprintf("%s/%s/%s", forgeURL, org, repo)
 
-	ownerLogin := s.cfg.Instance.OwnerLogin
-	if ownerLogin == "" {
-		var who struct {
-			Actor string `json:"actor"`
-		}
-		if err := s.callServer(ctx, http.MethodGet, "/v1/whoami", nil, &who); err == nil {
-			ownerLogin = who.Actor
-		}
-	}
+	ownerLogin := s.resolveOwnerLogin(ctx)
 	actorMap, err := s.fetchActorMap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch actors: %w", err)
 	}
-	families := make(map[string]string, len(actorMap))
-	for name, a := range actorMap {
-		families[name] = a.Family
-	}
+	families := actorFamilies(actorMap)
 
 	issues, err := listAll[*sdk.Issue](ctx, s, repoAPI+"/issues?state=all&type=issues")
 	if err != nil {
@@ -617,17 +606,11 @@ func (s *Server) lastFlowStop(ctx context.Context, repoAPI string, issue int64, 
 
 // assessPR assesses an open PR's reviews as the inbox does.
 func (s *Server) assessPR(ctx context.Context, repoAPI, repo string, pr *sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) review.Decision {
-	revs, err := listAll[*sdk.PullReview](ctx, s, fmt.Sprintf("%s/pulls/%d/reviews", repoAPI, pr.Index))
+	a, err := s.assessPullRequest(ctx, repo, pr, ownerLogin, families, allRuns)
 	if err != nil {
 		return review.NeedsReview
 	}
-	head := ""
-	if pr.Head != nil {
-		head = pr.Head.Sha
-	}
-	return review.Assess(head, review.FromForge(revs), review.Policy{
-		Author: userLogin(pr.Poster), Owner: ownerLogin, Families: families, Grants: review.Grants(allRuns, repo, pr.Index),
-	}).Decision
+	return a.Decision
 }
 
 // layerize assigns each node its longest distance from a root, following

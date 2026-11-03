@@ -228,6 +228,29 @@ export interface HistoryRunInfo {
   usage?: UsageInfo;
   purged: boolean;
   denials: Denial[];
+  pr_head?: string;
+  pr_merged?: boolean;
+  pr_mergeable?: boolean;
+  review_decision?: string;
+  review_at_head?: boolean;
+  flow_state?: FlowStateKind;
+}
+
+export type FlowStateKind =
+  | 'ready_to_merge'
+  | 'needs_changes'
+  | 'in_progress'
+  | 'needs_intervention'
+  | 'needs_review'
+  | 'merged'
+  | 'unknown';
+
+export interface FlowStateInfo {
+  state: FlowStateKind;
+  label: string;
+  tone: 'success' | 'warning' | 'error' | 'accent' | 'neutral';
+  icon: string;
+  title: string;
 }
 
 export interface TimelineEvent {
@@ -271,6 +294,7 @@ export interface HistoryThread {
   active: boolean;
   active_label?: string;
   status: string;
+  flow_state?: FlowStateInfo;
   run_count: number;
   last_activity: string;
   actors: string[];

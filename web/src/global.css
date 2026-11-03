@@ -87,6 +87,15 @@ body {
   border: 1px solid currentColor;
 }
 
+.flow-state-badge {
+  position: relative;
+  gap: 4px;
+  white-space: nowrap;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
