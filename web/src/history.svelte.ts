@@ -88,6 +88,17 @@ export class RunHistoryState {
     }
   }
 
+  // Show one run of a thread: expand its flow, if it is one, and open the
+  // run's log, leaving both as they are when already open.
+  showRun(thread: HistoryThread, runId: string) {
+    if (thread.kind === 'flow' && this.expandedThreadKey !== thread.key) {
+      this.selectFlow(thread);
+    }
+    if (!this.logs[runId]) {
+      this.toggleLog(runId);
+    }
+  }
+
   // Keep the expanded flow, and its loaded timeline, across a change of
   // threads (a run starting or ending can change a thread's key).
   reconcile(prevThreads: HistoryThread[], nextThreads: HistoryThread[]) {

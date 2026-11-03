@@ -1,7 +1,8 @@
 <script lang="ts">
-  // A table row, under an ended run's row, with the run's policy denials
-  // and its parsed log, as loaded by the history table.
-  import type { Denial, RunLogState } from './types';
+  // A table row, under an ended run's row, with a failed run's failure
+  // reason, the run's policy denials and its parsed log, as loaded by the
+  // history table.
+  import type { Denial, FailureDescription, RunLogState } from './types';
   import DenialList from './DenialList.svelte';
   import LogLineView from './LogLineView.svelte';
 
@@ -10,14 +11,31 @@
     runId: string;
     colspan: number;
     denials: Denial[] | undefined;
+    failure?: FailureDescription | null;
     logState: RunLogState;
   }
 
-  let { title, runId, colspan, denials, logState }: Props = $props();
+  let { title, runId, colspan, denials, failure, logState }: Props = $props();
 </script>
 
 <tr class="log-expand-row">
   <td {colspan}>
+    {#if failure}
+      <dl class="run-failure">
+        {#if failure.observed}
+          <dt>Observed</dt>
+          <dd class="run-failure-observed">{failure.observed}{#if failure.observedDetail}: {failure.observedDetail}{/if}</dd>
+        {/if}
+        {#if failure.reported}
+          <dt>Agent reported</dt>
+          <dd>{failure.reported}</dd>
+        {/if}
+        {#if failure.unavailable}
+          <dt>Reason</dt>
+          <dd class="muted">Reason unavailable: bottown recorded no cause and the agent no summary.</dd>
+        {/if}
+      </dl>
+    {/if}
     <DenialList {denials} />
     <div class="log-tail-box history-log-box">
       <div class="log-tail-header">
@@ -39,7 +57,9 @@
         {:else if logState.error}
           <div class="log-line error">{logState.error}</div>
         {:else if !logState.lines || logState.lines.length === 0}
-          <div class="log-line muted">No log lines recorded.</div>
+          <div class="log-line muted">
+            {failure && !failure.hasLog ? 'No log: the run failed before its harness started.' : 'No log lines recorded.'}
+          </div>
         {:else}
           {#each logState.lines as line}
             <LogLineView {line} />
@@ -55,6 +75,30 @@
      expanded flow (FlowThreadRow). */
   .log-expand-row td {
     background: rgba(125, 125, 125, 0.03);
+  }
+
+  .run-failure {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin: 0 0 6px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--error);
+    border-radius: 6px;
+    background: var(--card-bg);
+    font-size: 13px;
+  }
+
+  .run-failure dt {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .run-failure dd {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .history-log-box {

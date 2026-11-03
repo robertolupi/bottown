@@ -122,8 +122,11 @@ type HistoryRunInfo struct {
 	Duration string         `json:"duration"` // e.g. "2m 15s"
 	Summary  string         `json:"summary"`  // first line of handover
 	Usage    *secrets.Usage `json:"usage,omitempty"`
-	Purged   bool           `json:"purged"`
-	Denials  []Denial       `json:"denials"`
+	// Failure is the observed cause of a failed or revoked run, when its
+	// ender recorded one: the summary is the agent's own account.
+	Failure *secrets.Failure `json:"failure,omitempty"`
+	Purged  bool             `json:"purged"`
+	Denials []Denial         `json:"denials"`
 
 	// Flow-level state and authoritative PR/review data (§4.2, #155).
 	PRHead         string `json:"pr_head,omitempty"`
@@ -1021,6 +1024,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			Duration:       duration,
 			Summary:        summary,
 			Usage:          sr.Digest.Usage,
+			Failure:        sr.Digest.Failure,
 			Purged:         sr.Purged,
 			Denials:        orEmpty(denials[sr.ID]),
 			PRHead:         prHead,

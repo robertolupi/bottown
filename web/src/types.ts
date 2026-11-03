@@ -202,6 +202,37 @@ export interface UsageInfo {
   duration_ms?: number;
 }
 
+// An observed cause of a run's failure (secrets.Failure).
+export type FailureCause =
+  | 'startup'
+  | 'harness_exit'
+  | 'timeout'
+  | 'stopped'
+  | 'interrupted'
+  | 'expired'
+  | 'reported';
+
+export interface RunFailure {
+  cause: FailureCause | string;
+  detail?: string;
+  exit_code?: number;
+}
+
+// How a history row explains a failed or revoked run (describeRunFailure).
+export interface FailureDescription {
+  // What bottown observed, e.g. "Startup failed": undefined when nothing
+  // was recorded.
+  observed?: string;
+  observedDetail?: string;
+  // The agent's own account: its summary.
+  reported?: string;
+  // Neither was recorded: the row says so rather than guessing.
+  unavailable: boolean;
+  // Whether a log may exist: false when the run failed before its harness
+  // ran, so details say there is none.
+  hasLog: boolean;
+}
+
 export interface HistoryRunInfo {
   id: string;
   target: string;
@@ -230,6 +261,9 @@ export interface HistoryRunInfo {
   duration: string;
   summary: string;
   usage?: UsageInfo;
+  // What the run's ender observed of a failed or revoked run, apart from
+  // summary, the agent's own account. Absent when none was recorded.
+  failure?: RunFailure;
   purged: boolean;
   denials: Denial[];
   pr_head?: string;

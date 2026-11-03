@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -335,4 +336,38 @@ func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
 			t.Errorf("unexpected error message: %v", err)
 		}
 	})
+}
+
+func TestObservedFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		ctxErr  error
+		stopped bool
+		code    int
+		cause   string
+	}{
+		{"time limit", context.DeadlineExceeded, false, -1, secrets.FailureTimeout},
+		{"cancelled launcher", context.Canceled, false, -1, secrets.FailureInterrupted},
+		{"owner stop", nil, true, -1, secrets.FailureStopped},
+		{"harness exit", nil, false, 1, secrets.FailureHarnessExit},
+		{"clean exit", nil, false, 0, ""},
+	}
+	for _, c := range cases {
+		f := observedFailure(c.ctxErr, c.stopped, c.code, 90*time.Second)
+		if c.cause == "" {
+			if f != nil {
+				t.Errorf("%s: observed %+v, want none", c.name, f)
+			}
+			continue
+		}
+		if f == nil || f.Cause != c.cause || f.Detail == "" {
+			t.Errorf("%s: observed %+v, want cause %s", c.name, f, c.cause)
+		}
+	}
+	if f := observedFailure(nil, false, 3, time.Second); f.ExitCode == nil || *f.ExitCode != 3 {
+		t.Errorf("harness exit code not kept: %+v", f)
+	}
+	if f := observedFailure(context.DeadlineExceeded, false, -1, 90*time.Second); !strings.Contains(f.Detail, "1m30s") {
+		t.Errorf("timeout detail %q lacks the elapsed time", f.Detail)
+	}
 }

@@ -1,8 +1,11 @@
 <script lang="ts">
   // An expanded flow's runs, as a table whose rows expand to each run's
-  // log and policy denials.
+  // log and policy denials. A failed run's summary cell is its failure
+  // reason.
   import type { HistoryRunInfo, RunLogState } from './types';
   import { formatTime, formatUsage } from './format';
+  import { describeRunFailure } from './state';
+  import FailureReason from './FailureReason.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import RunLogRow from './RunLogRow.svelte';
   import StatusBadge from './StatusBadge.svelte';
@@ -39,6 +42,7 @@
     </thead>
     <tbody>
       {#each runs as r (r.id)}
+        {@const failure = describeRunFailure(r)}
         <tr>
           <td class="font-mono text-sm">{r.id}</td>
           <td>
@@ -57,7 +61,13 @@
           <td><OutcomeBadge run={r} /></td>
           <td class="muted">{r.duration || '—'}</td>
           <td class="muted text-sm">{formatUsage(r.usage)}</td>
-          <td class="summary-cell" title={r.summary}>{r.summary || '—'}</td>
+          {#if failure}
+            <td class="summary-cell">
+              <FailureReason {failure} onDetails={() => !expandedLogs[r.id] && onToggleLog(r.id)} />
+            </td>
+          {:else}
+            <td class="summary-cell" title={r.summary}>{r.summary || '—'}</td>
+          {/if}
           <td class="muted text-sm">{formatTime(r.created)}</td>
           <td>
             <button
@@ -75,6 +85,7 @@
             runId={r.id}
             colspan={11}
             denials={r.denials}
+            {failure}
             logState={expandedLogs[r.id]}
           />
         {/if}

@@ -93,7 +93,42 @@ type Run struct {
 type Digest struct {
 	Summary string `json:"summary,omitempty"`
 	Usage   *Usage `json:"usage,omitempty"`
+	// Failure is what the ender observed of a run that did not succeed,
+	// apart from Summary, which is the agent's own account. Nil when the
+	// run succeeded or nothing was observed.
+	Failure *Failure `json:"failure,omitempty"`
 }
+
+// Failure is an observed cause of a run's failure: never inferred from the
+// agent's summary.
+type Failure struct {
+	Cause    string `json:"cause"`               // one of the Failure* constants
+	Detail   string `json:"detail,omitempty"`    // the error or condition seen, e.g. a startup error
+	ExitCode *int   `json:"exit_code,omitempty"` // the harness's, for FailureHarnessExit
+}
+
+// Failure causes.
+const (
+	// FailureStartup: the run failed before its harness ran, so no log
+	// exists; Detail is the launcher's error.
+	FailureStartup = "startup"
+	// FailureHarnessExit: the harness exited non-zero.
+	FailureHarnessExit = "harness_exit"
+	// FailureTimeout: the launcher killed the harness at its time limit.
+	FailureTimeout = "timeout"
+	// FailureStopped: the owner stopped the run.
+	FailureStopped = "stopped"
+	// FailureInterrupted: the launcher was cancelled, or went away before
+	// ending the run, which something else then ended.
+	FailureInterrupted = "interrupted"
+	// FailureExpired: the run's key expired while it was live.
+	FailureExpired = "expired"
+	// FailureReported: the agent ended its run as failed; Summary says why.
+	FailureReported = "reported"
+)
+
+// MaxFailureDetail bounds a stored failure's detail, in bytes.
+const MaxFailureDetail = 1000
 
 // Run outcomes. A verify run's is its latest review verdict; an implement
 // or plan run's is the pull request it opened.
@@ -259,6 +294,11 @@ func (s *Store) EndRun(id, status string, at time.Time, d Digest) (Run, bool, er
 		}
 		if run.Ended == nil {
 			d.Summary = truncateUTF8(d.Summary, MaxSummary)
+			if d.Failure != nil {
+				f := *d.Failure
+				f.Detail = truncateUTF8(f.Detail, MaxFailureDetail)
+				d.Failure = &f
+			}
 			run.Ended, run.Status, run.Digest = &at, status, d
 			st.Runs[id] = run
 		}

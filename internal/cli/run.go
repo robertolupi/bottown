@@ -256,9 +256,19 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// From here on, always end the run on the server, whatever happens.
 	status := runs.StatusFailed
 	var digest secrets.Digest
+	harnessStarted := false
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if status != runs.StatusSucceeded && digest.Failure == nil && err != nil {
+			// What failed is the launcher's error: before the harness ran,
+			// startup; after, the launcher could not finish the run.
+			cause := secrets.FailureStartup
+			if harnessStarted {
+				cause = secrets.FailureInterrupted
+			}
+			digest.Failure = &secrets.Failure{Cause: cause, Detail: err.Error()}
+		}
 		end := server.EndRunRequest{Status: status, Digest: digest}
 		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil); e != nil && err == nil {
 			err = fmt.Errorf("end run %s: %w", run.ID, e)
@@ -389,6 +399,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := c.Start(); err != nil {
 		return err
 	}
+	harnessStarted = true
 	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
 		current.HarnessPID = c.Process.Pid
 		return nil
@@ -460,6 +471,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	digest = secrets.Digest{Summary: cleanSummary(rec, summary), Usage: h.Usage(logBytes)}
+	if status != runs.StatusSucceeded {
+		digest.Failure = observedFailure(ctx.Err(), rec.StopRequested, code, time.Since(started))
+	}
 	if err := handover(ctx, rc, run, rec, created.Key, status, code, summary); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 	}
@@ -475,6 +489,24 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 	if status != runs.StatusSucceeded {
 		return fmt.Errorf("run %s %s", run.ID, status)
+	}
+	return nil
+}
+
+// observedFailure is what the launcher saw end a run that did not succeed:
+// its context's error (a flow's time limit, or a cancelled launcher), an
+// owner's stop, or the harness's exit code. It is nil for a clean exit,
+// such as an interactive run the owner marked failed.
+func observedFailure(ctxErr error, stopped bool, code int, elapsed time.Duration) *secrets.Failure {
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		return &secrets.Failure{Cause: secrets.FailureTimeout, Detail: fmt.Sprintf("killed at the time limit, after %s", elapsed.Round(time.Second))}
+	case ctxErr != nil:
+		return &secrets.Failure{Cause: secrets.FailureInterrupted, Detail: "the launcher was cancelled"}
+	case stopped:
+		return &secrets.Failure{Cause: secrets.FailureStopped, Detail: "stopped by the owner"}
+	case code != 0:
+		return &secrets.Failure{Cause: secrets.FailureHarnessExit, Detail: fmt.Sprintf("the harness exited with code %d", code), ExitCode: &code}
 	}
 	return nil
 }
@@ -1149,7 +1181,9 @@ recently ended ones.`,
 				return err
 			}
 			removed, keep := gcLocal(rc.ws, recs, failed, cmd.ErrOrStderr(), func(id string) {
-				_ = callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, map[string]string{"status": "revoked"}, nil)
+				end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+					Cause: secrets.FailureInterrupted, Detail: "its launcher went away before ending it; revoked by run gc"}}}
+				_ = callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil)
 			})
 			// A run whose key expired while it was live cannot end itself:
 			// its key no longer authenticates. Revoke it with the owner key.
@@ -1159,7 +1193,9 @@ recently ended ones.`,
 			}
 			revoked := 0
 			for _, id := range expiredLive(live, recs, time.Now().UTC()) {
-				if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, map[string]string{"status": "revoked"}, nil); err != nil {
+				end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+					Cause: secrets.FailureExpired, Detail: "its key expired while it was live; revoked by run gc"}}}
+				if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
 					continue
 				}
