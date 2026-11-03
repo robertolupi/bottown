@@ -444,9 +444,9 @@
 {/if}
 
 <style>
+  /* The full viewport width, less an edge padding that grows with it:
+     wide displays give History and the logs the room. */
   .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 24px 16px;
+    padding: 24px clamp(16px, 3vw, 48px);
   }
 </style>

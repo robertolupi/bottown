@@ -150,13 +150,15 @@ body {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* minmax(0, …): a wide table or log line scrolls in its card instead
+     of widening the column, and the page, past the viewport. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
 }
 
 @media (max-width: 900px) {
   .grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
