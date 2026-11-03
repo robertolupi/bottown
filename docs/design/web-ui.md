@@ -636,7 +636,7 @@ changes the UI cannot use it. `bottown web preview` is for that run, and
 for its verifier:
 
 ```
-bottown web preview [--fixture NAME] [--port N] [--watch]
+bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
 ```
 
 - **It runs anywhere,** a run or actor worktree included, and needs no
@@ -645,6 +645,12 @@ bottown web preview [--fixture NAME] [--port N] [--watch]
   temporary directory (running `npm ci` first when `web/node_modules` is
   missing or stale), prints the URL and serves until interrupted.
   `--watch` rebuilds when `web/src` changes; reload the page to see it.
+- **`--detach` does not block the shell that starts it.** It builds and
+  serves in a child of its own session, prints the URL and returns, so a
+  script or an agent keeps its prompt. The child records itself in a temp
+  file named for the checkout; `--stop` reads that file, ends the child and
+  removes it. A detached preview also ends on its own after `--ttl`
+  (default one hour), so an orphan cannot serve forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
   `default`): the status, inbox, live runs with their logs, active flows,
   history, milestones, issue details and timelines, in the API's own JSON.

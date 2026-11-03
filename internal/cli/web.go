@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/hostctl"
@@ -127,10 +131,30 @@ func newWeb(g *globals) *cobra.Command {
 	return web
 }
 
+// The environment a detached preview's child runs with. The child marks
+// itself so it does not detach again, and carries the state path so parent
+// and child agree on where to record the server.
+const (
+	previewChildEnv = "BOTTOWN_PREVIEW_CHILD"
+	previewStateEnv = "BOTTOWN_PREVIEW_STATE"
+)
+
+// previewTTL is how long a detached preview lives before it exits on its
+// own, so an orphaned one cannot serve forever.
+const previewTTL = time.Hour
+
+// previewSettings holds web preview's flags.
+type previewSettings struct {
+	port    int
+	fixture string
+	watch   bool
+	detach  bool
+	stop    bool
+	ttl     time.Duration
+}
+
 func newWebPreview() *cobra.Command {
-	var port int
-	var fixture string
-	var watch bool
+	var s previewSettings
 	cmd := &cobra.Command{
 		Use:   "preview",
 		Short: "Serve this checkout's web UI with fixture data, without an instance (works in run worktrees)",
@@ -139,7 +163,12 @@ its API answered from web/fixtures/<fixture>.json instead of an instance.
 It needs no sign-in, never contacts prod or dev, and works in run and
 actor worktrees: it is how a run looks at the UI it changed.
 
-It prints the URL and serves until interrupted. While it runs:
+It prints the URL and, by default, serves until interrupted, which blocks
+the shell that started it. --detach instead serves it in the background:
+it prints the URL and returns, so a script or an agent keeps its prompt.
+Stop a detached one with --stop.
+
+While it runs:
 
   GET  /api/preview                     the fixture in use, and the others
   POST /api/preview/load                reload it from disk, or {"fixture": NAME}
@@ -152,19 +181,24 @@ The controls take the same Origin check as the UI's actions: send
 		Args:        cobra.NoArgs,
 		Annotations: map[string]string{"agent": "true"}, // needs no instance
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return webPreview(cmd, port, fixture, watch)
+			return webPreview(cmd, s)
 		},
 	}
-	cmd.Flags().IntVar(&port, "port", 0, "port to listen on (default: random free port)")
-	cmd.Flags().StringVar(&fixture, "fixture", "default", "the scenario in web/fixtures to serve")
-	cmd.Flags().BoolVar(&watch, "watch", false, "rebuild the UI when web/src changes (reload the page to see it)")
+	cmd.Flags().IntVar(&s.port, "port", 0, "port to listen on (default: random free port)")
+	cmd.Flags().StringVar(&s.fixture, "fixture", "default", "the scenario in web/fixtures to serve")
+	cmd.Flags().BoolVar(&s.watch, "watch", false, "rebuild the UI when web/src changes (reload the page to see it)")
+	cmd.Flags().BoolVar(&s.detach, "detach", false, "serve in the background and return, printing the URL and how to stop it")
+	cmd.Flags().BoolVar(&s.stop, "stop", false, "stop a detached preview started from this checkout")
+	cmd.Flags().DurationVar(&s.ttl, "ttl", previewTTL, "how long a detached preview lives before it exits (0: until stopped)")
 	return cmd
 }
 
-// webPreview builds the checkout's web UI into a temporary directory and
-// serves it with a webui.PreviewServer.
-func webPreview(cmd *cobra.Command, port int, fixture string, watch bool) error {
-	ctx, errOut := cmd.Context(), cmd.ErrOrStderr()
+// webPreview resolves the checkout and dispatches to stopping, the detached
+// child, detaching, or the foreground server.
+func webPreview(cmd *cobra.Command, s previewSettings) error {
+	if s.detach && s.stop {
+		return errors.New("--detach and --stop are mutually exclusive")
+	}
 	top, err := git(".", "rev-parse", "--show-toplevel")
 	if err != nil {
 		return errors.New("not inside a git checkout")
@@ -174,9 +208,40 @@ func webPreview(cmd *cobra.Command, port int, fixture string, watch bool) error 
 		return fmt.Errorf("no web UI in %s: web/package.json is missing", top)
 	}
 	fixtures := filepath.Join(webDir, "fixtures")
-	// Fail on a bad fixture before the build.
-	if _, err := webui.LoadFixture(fixtures, fixture); err != nil {
-		return err
+	state := previewStatePath(os.Getenv(previewStateEnv), top)
+	switch {
+	case s.stop:
+		return stopPreview(cmd, state)
+	case os.Getenv(previewChildEnv) == "1":
+		return runPreview(cmd, webDir, fixtures, state, s)
+	case s.detach:
+		return detachPreview(cmd, top, state, s)
+	default:
+		// Fail on a bad fixture before the build.
+		if _, err := webui.LoadFixture(fixtures, s.fixture); err != nil {
+			return err
+		}
+		return runPreview(cmd, webDir, fixtures, "", s)
+	}
+}
+
+// runPreview builds the checkout's web UI into a temporary directory and
+// serves it with a webui.PreviewServer. A non-empty state makes it a
+// detached child: it records where it serves, ends after the TTL, and
+// removes the record when it exits.
+func runPreview(cmd *cobra.Command, webDir, fixtures, state string, s previewSettings) error {
+	ctx, errOut := cmd.Context(), cmd.ErrOrStderr()
+	if state != "" {
+		// The child outlives the shell that started it: a TTL and signals
+		// are what end it, so cleanup always runs.
+		if s.ttl > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, s.ttl)
+			defer cancel()
+		}
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
 	}
 	if err := npmInstalled(ctx, webDir, errOut); err != nil {
 		return err
@@ -189,12 +254,12 @@ func webPreview(cmd *cobra.Command, port int, fixture string, watch bool) error 
 
 	// vite itself rather than npm run, so that cancelling ctx stops it.
 	args := []string{"build", "--outDir", out, "--emptyOutDir"}
-	if watch {
+	if s.watch {
 		args = append(args, "--watch")
 	}
 	vite := exec.CommandContext(ctx, filepath.Join(webDir, "node_modules", ".bin", "vite"), args...)
 	vite.Dir, vite.Stdout, vite.Stderr = webDir, errOut, errOut
-	if !watch {
+	if !s.watch {
 		if err := vite.Run(); err != nil {
 			return fmt.Errorf("build the web UI: %w", err)
 		}
@@ -214,18 +279,188 @@ func webPreview(cmd *cobra.Command, port int, fixture string, watch bool) error 
 	}
 
 	srv, err := webui.NewPreviewServer(webui.PreviewConfig{
-		Port:        port,
+		Port:        s.port,
 		UI:          os.DirFS(out),
 		FixturesDir: fixtures,
-		Fixture:     fixture,
+		Fixture:     s.fixture,
 	})
 	if err != nil {
 		return err
 	}
 	defer srv.Close()
-	fmt.Fprintf(errOut, "bottown web preview of %s, fixture %s (press Ctrl+C to stop):\n", webDir, fixture)
+	if state != "" {
+		st := previewState{PID: os.Getpid(), URL: srv.BaseURL(), Started: time.Now(), Log: state + ".log"}
+		if err := savePreviewState(state, st); err != nil {
+			return err
+		}
+		// A clean exit (TTL or --stop) leaves nothing behind; a crash keeps
+		// the log for a postmortem.
+		defer func() {
+			_ = os.Remove(state)
+			_ = os.Remove(st.Log)
+		}()
+	}
+	fmt.Fprintf(errOut, "bottown web preview of %s, fixture %s (press Ctrl+C to stop):\n", webDir, s.fixture)
 	fmt.Fprintln(cmd.OutOrStdout(), srv.BaseURL()+"/")
 	return srv.Serve(ctx)
+}
+
+// previewState is where a detached preview records where it serves, so
+// `--stop` can find it.
+type previewState struct {
+	PID     int       `json:"pid"`
+	URL     string    `json:"url"`
+	Started time.Time `json:"started"`
+	Log     string    `json:"log"`
+}
+
+// previewStatePath returns where a checkout's detached preview records
+// itself: the child's own path when it was handed one, else a temp file
+// named for the checkout so two worktrees do not collide.
+func previewStatePath(fromEnv, top string) string {
+	if fromEnv != "" {
+		return fromEnv
+	}
+	sum := sha256.Sum256([]byte(top))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("bottown-preview-%x.json", sum[:6]))
+}
+
+func savePreviewState(path string, st previewState) error {
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+func loadPreviewState(path string) (previewState, error) {
+	var st previewState
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return st, err
+	}
+	return st, json.Unmarshal(b, &st)
+}
+
+// detachPreview starts the server as a child in its own session and waits
+// until it serves, then prints its URL and how to stop it.
+func detachPreview(cmd *cobra.Command, top, state string, s previewSettings) error {
+	if st, err := loadPreviewState(state); err == nil && processAlive(st.PID) {
+		return fmt.Errorf("a preview is already running at %s: stop it with `%s web preview --stop`", st.URL, selfPath())
+	}
+	_ = os.Remove(state)
+	logPath := state + ".log"
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+
+	args := []string{"web", "preview",
+		"--port", strconv.Itoa(s.port),
+		"--fixture", s.fixture,
+		"--ttl", s.ttl.String(),
+	}
+	if s.watch {
+		args = append(args, "--watch")
+	}
+	child := exec.Command(selfPath(), args...)
+	child.Dir = top
+	child.Env = append(os.Environ(), previewChildEnv+"=1", previewStateEnv+"="+state)
+	child.Stdout, child.Stderr = logf, logf
+	// Its own session, so it outlives this shell and the terminal closing.
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		return err
+	}
+	pid := child.Process.Pid
+	_ = child.Process.Release()
+
+	fmt.Fprintf(cmd.ErrOrStderr(), "building the web UI in the background (log: %s)\n", logPath)
+	st, err := awaitPreview(cmd.Context(), state, pid, logPath)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), st.URL+"/")
+	fmt.Fprintf(cmd.ErrOrStderr(), "preview %d serving with fixture %s (ttl %s); stop it with `%s web preview --stop`\n", st.PID, s.fixture, s.ttl, selfPath())
+	return nil
+}
+
+// awaitPreview waits for a detached child to record itself, or to exit.
+func awaitPreview(ctx context.Context, state string, pid int, logPath string) (previewState, error) {
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		if st, err := loadPreviewState(state); err == nil {
+			return st, nil
+		}
+		if !processAlive(pid) {
+			return previewState{}, fmt.Errorf("the preview exited before it served:\n%s", tailFile(logPath, 20))
+		}
+		if time.Now().After(deadline) {
+			return previewState{}, errors.New("the preview did not start within 10 minutes")
+		}
+		select {
+		case <-ctx.Done():
+			return previewState{}, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// stopPreview ends a detached preview started from this checkout.
+func stopPreview(cmd *cobra.Command, state string) error {
+	st, err := loadPreviewState(state)
+	if err != nil {
+		return errors.New("no detached preview from this checkout")
+	}
+	cleanup := func() {
+		_ = os.Remove(state)
+		if st.Log != "" {
+			_ = os.Remove(st.Log)
+		}
+	}
+	if !processAlive(st.PID) {
+		fmt.Fprintf(cmd.OutOrStdout(), "preview %d was not running\n", st.PID)
+		cleanup()
+		return nil
+	}
+	if err := syscall.Kill(st.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("stop preview %d: %w", st.PID, err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); processAlive(st.PID) && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if processAlive(st.PID) {
+		return fmt.Errorf("preview %d did not stop; kill it with `kill %d`", st.PID, st.PID)
+	}
+	// The child removes its own files on exit; remove them too, in case it
+	// crashed.
+	cleanup()
+	fmt.Fprintf(cmd.OutOrStdout(), "stopped preview %d (%s)\n", st.PID, st.URL)
+	return nil
+}
+
+// processAlive reports whether a process with pid exists.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// tailFile returns the last n lines of a file, for reporting a failed
+// background start.
+func tailFile(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // npmInstalled runs npm ci in webDir when node_modules is missing or older
