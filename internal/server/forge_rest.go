@@ -17,6 +17,7 @@ import (
 //	POST /v1/forge/pr       {title, body}
 //	POST /v1/forge/comment  {repo, number, body}
 //	POST /v1/forge/review   {event, body, commit_id}
+//	POST /v1/forge/status   {sha, check, state, description}   (bottown check)
 //
 // repo and number default to the run's.
 
@@ -101,6 +102,14 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 			return
 		}
 		out, err := s.opReview(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	})))
+	mux.Handle("POST /v1/forge/status", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in CommitStatusIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opStatus(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	})))
 }

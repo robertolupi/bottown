@@ -58,8 +58,9 @@ model family approves it and the owner merges it, the owner's
    - Size each issue for one implement run, and order the dependencies so
      independent issues can run in parallel.
 3. Check the plan: `{{.Bottown}} milestone check <slug>`, then the
-   repository's checks: the ones its AGENTS.md (or README) names. Fix what
-   they report.
+   repository's checks with `{{.Bottown}} check`: the ones its
+   `.bottown.toml` names (by default `make check`, which its
+   AGENTS.md (or README) describes). Fix what they report.
 4. Commit only the plan file on `{{.Branch}}`, push with
    `git push {{.Remote}} HEAD`, and open a pull request into `{{.Base}}`:
    `{{.Bottown}} pr create --title "…" --body-file -`, saying what the plan

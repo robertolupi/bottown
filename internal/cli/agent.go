@@ -36,6 +36,7 @@ type agentCtx struct {
 	KeyDir    string // <gitdir>/bottown of the actor worktree, if any
 	Remote    string // the bottown remote name in this worktree
 	AttachDir string // the run's attachments directory; empty outside a run
+	RunFile   string // the run's local record; empty outside a run
 }
 
 // resolveAgent finds the run or actor worktree a command acts for:
@@ -54,7 +55,7 @@ func resolveAgent() (*agentCtx, error) {
 		if inst == "" {
 			inst = config.DefaultInstance
 		}
-		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: config.Instance{Name: inst}.Remote(), AttachDir: rec.Attachments}, nil
+		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: config.Instance{Name: inst}.Remote(), AttachDir: rec.Attachments, RunFile: f}, nil
 	}
 	top, err := git(".", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -71,6 +72,7 @@ func resolveAgent() (*agentCtx, error) {
 	a := &agentCtx{Actor: actor, Worktree: top, KeyDir: filepath.Join(gitDir, "bottown")}
 	if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json")); err == nil && rec.Key != "" {
 		a.ServerURL, a.Key, a.RunID, a.AttachDir = rec.ServerURL, rec.Key, rec.ID, rec.Attachments
+		a.RunFile = filepath.Join(a.KeyDir, "run.json")
 	} else if rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "actor.json")); err == nil && rec.Key != "" {
 		a.ServerURL, a.Key = rec.ServerURL, rec.Key
 	} else {
@@ -885,6 +887,7 @@ func printPRShow(out io.Writer, r *lipgloss.Renderer, p server.PROut, diff, stat
 		p.Mergeable,
 		strings.TrimSpace(p.Body),
 	)
+	printPRChecks(out, st, p)
 	if p.Assessment.Reason != "" {
 		fmt.Fprintf(out, "\n%s: %s\n", st.reviewVerdict(string(p.Assessment.Decision)), p.Assessment.Reason)
 	}
@@ -925,6 +928,35 @@ func printPRShow(out io.Writer, r *lipgloss.Renderer, p server.PROut, diff, stat
 			}
 		}
 	}
+}
+
+// printPRChecks lists the commit statuses at the head: what `bottown check`
+// recorded, by whom.
+func printPRChecks(out io.Writer, st *styles, p server.PROut) {
+	head := short(p.HeadSHA)
+	switch {
+	case p.ChecksError != "":
+		fmt.Fprintf(out, "\n%s\n", st.Warning.Render("checks at "+head+": could not be read: "+p.ChecksError))
+		return
+	case len(p.Checks) == 0:
+		fmt.Fprintf(out, "\nchecks at %s: none recorded\n", st.Dim.Render(head))
+		return
+	}
+	fmt.Fprintf(out, "\nchecks at %s:\n", st.Dim.Render(head))
+	tw := newTableWriter(out)
+	for _, c := range p.Checks {
+		state := c.State
+		switch c.State {
+		case "success":
+			state = st.Success.Render(state)
+		case "failure", "error":
+			state = st.Danger.Render(state)
+		default:
+			state = st.Warning.Render(state)
+		}
+		tw.Row("  "+st.Bold.Render(c.Context), state, "by "+c.Creator, c.Description)
+	}
+	_ = tw.Flush()
 }
 
 func printPRList(out io.Writer, r *lipgloss.Renderer, prs []server.PRItem) {

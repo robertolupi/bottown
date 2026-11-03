@@ -28,7 +28,21 @@ func TestParseRepoSettings(t *testing.T) {
 		t.Fatalf("custom milestones_dir: %+v, %v", s, err)
 	}
 
+	s, err = ParseRepoSettings(nil)
+	if err != nil || !slices.Equal(s.Check, []string{"make check"}) || !slices.Equal(s.E2E, []string{"make e2e"}) {
+		t.Fatalf("default checks: %+v, %v", s, err)
+	}
+	s, err = ParseRepoSettings([]byte("check = [\"go vet ./...\", \"go test ./...\"]\ne2e = []\n"))
+	if err != nil || !slices.Equal(s.Check, []string{"go vet ./...", "go test ./..."}) || len(s.E2E) != 0 {
+		t.Fatalf("custom checks: %+v, %v", s, err)
+	}
+	if !slices.Equal(DefaultRepoSettings().Check, []string{"make check"}) {
+		t.Fatalf("parsing changed the defaults: %q", DefaultCheck)
+	}
+
 	for _, bad := range []string{
+		"check = [\"\"]\n",
+		"e2e = \"make e2e\"\n",
 		"after-pull = [\"make install\"]\n", // unknown key
 		"after_pull = \"make install\"\n",   // not a list
 		"after_pull = [\"  \"]\n",           // empty command

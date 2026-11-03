@@ -170,3 +170,22 @@ func (c *Client) AutoDismissedReviews(owner, repo string, index int64) (map[int6
 	}
 	return out, nil
 }
+
+// BranchHead returns the commit branch points at. The SDK's GetRepoBranch
+// escapes the slash in names like issue/4; Forgejo's route takes the name as
+// path segments, so each segment is escaped on its own.
+func (c *Client) BranchHead(owner, repo, branch string) (string, error) {
+	segs := strings.Split(branch, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	var b struct {
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	if err := c.do("GET", fmt.Sprintf("/repos/%s/%s/branches/%s", url.PathEscape(owner), url.PathEscape(repo), strings.Join(segs, "/")), nil, &b); err != nil {
+		return "", err
+	}
+	return b.Commit.ID, nil
+}

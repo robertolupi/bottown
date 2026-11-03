@@ -19,6 +19,15 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   - `{{.Bottown}} pr create --title "…" --body-file -` opens the pull request
     once your branch is pushed.
   - `{{.Bottown}} api GET /repos/…` reaches any other Forgejo endpoint.
+  - `{{.Bottown}} check --e2e` runs the repository's checks (see below),
+    keeps their full output in a log, and prints a short summary: each
+    step, its result and duration, the first failing lines with their
+    line numbers in the log, and the dependency manifests your branch
+    changes. Read the log at those lines rather than re-running the
+    checks to see more. On a pushed, committed HEAD it records the result
+    on the commit, where the verifier sees it; after a push,
+    `{{.Bottown}} check --report` records the last result without
+    re-running.
 - You cannot review or merge. A verifier from another model family will
   review your pull request, and the owner merges.
 - Run checks as plain commands; write scratch files under `$TMPDIR`.
@@ -47,8 +56,10 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 ## Done means
 
 1. The change is implemented, with tests where the repository has them, and
-   the repository's checks pass locally: the ones its AGENTS.md (or README)
-   names.
+   the repository's checks pass on the head you push:
+   `{{.Bottown}} check --e2e` runs the ones its `.bottown.toml` names
+   (by default `make check` and `make e2e`, which its AGENTS.md (or README)
+   describes) and records them on that commit.
 2. The branch is pushed and a pull request is open (`pr create`), whose
    description says what changed and how you checked it.
 {{- if .SelfEnd}}

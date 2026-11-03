@@ -63,6 +63,7 @@ bottown pr create --title T --body-file -
 bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
 bottown api METHOD PATH [--data JSON]
+bottown check [--e2e | --report] [--json]
 bottown run end [--failed] --summary-file -
 ```
 
@@ -91,8 +92,13 @@ bottown run end [--failed] --summary-file -
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end
   the run with `--failed`. Do not guess, and do not work outside the issue.
-- **Checks:** "the repository's checks" in your prompt means `make check`.
-  Implementers also run `make e2e` before opening a PR.
+- **Checks:** "the repository's checks" in your prompt means `make check`,
+  and `make e2e` for implementers before opening a PR. Run them with
+  `bottown check --e2e`: it keeps the full output in a log, prints a short
+  summary with the first failing lines and their line numbers in the log
+  (read it there instead of re-running), flags changed dependencies, and
+  records the result on your committed, pushed HEAD, which `pr show`
+  lists. `bottown check --report` records the last result after a push.
 - **Review follow-ups** happen in a new implement run on the same issue: it
   resumes `issue/<n>`. Every new head needs a new verify run; if `review
   submit` says the PR has moved, stop.

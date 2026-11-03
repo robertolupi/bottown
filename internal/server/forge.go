@@ -189,9 +189,14 @@ type PROut struct {
 	Assessment review.Assessment `json:"assessment"`
 	// Carries are the older heads whose approvals carry over to the head,
 	// whether or not one of them decides the assessment.
-	Carries       []review.Carry `json:"carries,omitempty"`
-	Diff          string         `json:"diff,omitempty"`
-	DiffTruncated bool           `json:"diff_truncated,omitempty"`
+	Carries []review.Carry `json:"carries,omitempty"`
+	// Checks are the commit statuses at the head, the newest per context
+	// and creator (bottown check writes bottown/check and bottown/e2e).
+	Checks []CommitStatus `json:"checks"`
+	// ChecksError says why the statuses could not be read.
+	ChecksError   string `json:"checks_error,omitempty"`
+	Diff          string `json:"diff,omitempty"`
+	DiffTruncated bool   `json:"diff_truncated,omitempty"`
 }
 
 // ReviewOut is one review.
@@ -543,6 +548,14 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	}
 	out.Assessment = assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, carries)
 	out.Carries = carries
+	out.Checks = []CommitStatus{}
+	if out.HeadSHA != "" {
+		if sts, _, err := c.AllStatuses(org, repo, out.HeadSHA); err != nil {
+			out.ChecksError = err.Error()
+		} else {
+			out.Checks = latestStatuses(sts)
+		}
+	}
 	if withDiff {
 		diff, _, err := c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
 		if err != nil {

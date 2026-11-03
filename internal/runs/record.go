@@ -192,7 +192,7 @@ func (w *Workspace) RemoveFiles(id string) {
 	if r, err := w.Load(id); err == nil && r.TmpDir != "" {
 		_ = os.RemoveAll(r.TmpDir)
 	}
-	for _, s := range []string{".json", ".log", LiveTranscriptSuffix, ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md"} {
+	for _, s := range []string{".json", ".log", LiveTranscriptSuffix, ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md", ".check.log", ".check.json"} {
 		_ = os.Remove(w.Path(id, s))
 	}
 	_ = RemoveAttachments(w.AttachmentsDir(id))

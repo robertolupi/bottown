@@ -142,14 +142,15 @@ func TestClaudeDefaultAllowedTools(t *testing.T) {
 }
 
 // Implementer and verifier must mean the same checks: both prompts point at
-// where the repository defines them.
+// where the repository defines them, and both run them with bottown check.
 func TestPromptsNameWhereChecksAre(t *testing.T) {
 	for _, kind := range []string{"implement", "verify"} {
-		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc"})
+		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/bin/bottown"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(p, "repository's checks") || !strings.Contains(p, "AGENTS.md (or README)") {
+		if !strings.Contains(p, "repository's checks") || !strings.Contains(p, "AGENTS.md (or README)") ||
+			!strings.Contains(p, "`/bin/bottown check --e2e`") || !strings.Contains(p, "`.bottown.toml`") {
 			t.Errorf("%s prompt does not say where the checks are:\n%s", kind, p)
 		}
 	}

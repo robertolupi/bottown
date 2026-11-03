@@ -22,7 +22,7 @@ func TestPlanPrompt(t *testing.T) {
 	for _, want := range []string{
 		"**planner**", "kickoff issue #7 in `o/r`", "**Kickoff**", "Plan the thing.",
 		"`plans/<slug>.md`", "creates\nno issues", "/b issue show", "/b milestone check <slug>",
-		"repository's checks", "AGENTS.md (or README)", "Commit only the plan file on `issue/7`",
+		"repository's checks", "AGENTS.md (or README)", "`/b check`", "Commit only the plan file on `issue/7`",
 		"git push bottown HEAD", "pull request into `main`", "/b pr create", "kickoff = 7",
 		"/b run end --summary-file -",
 	} {
