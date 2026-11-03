@@ -38,6 +38,21 @@ func TestRenderLog_TestdataFiles(t *testing.T) {
 			"turn done: 17722 in, 5 out",
 		}},
 		{"crush", "crush-0.99.0.log", []string{"hello"}},
+		{"crush", "crush-0.99.0-session.log", []string{
+			"session started: Verify PR 153",
+			"I'll check the run and the pull request first.",
+			"bash: bottown whoami",
+			"mcp_bottown_pr_get: 153",
+			"view: internal/runs/harness.go",
+			"grep: func cleanSummary",
+			"error parsing regex: missing argument to repetition operator: `*`",
+			"bash: git diff --stat main...HEAD",
+			"exit 128: fatal: ambiguous argument 'main...HEAD': unknown revision or path not in the working tree.",
+			"The branch is `bottown/main` here. Running the checks.",
+			"bash: make check",
+			"bash: bottown review submit --event APPROVED --commit fbd7043 --body-file -",
+			"APPROVED !153 at `fbd7043`. Checks pass.",
+		}},
 	}
 
 	for _, tt := range tests {
@@ -126,6 +141,63 @@ All checks passed.
 	gotText := lineTexts(RenderLog("crush", []byte(textLog)))
 	if !reflect.DeepEqual(gotText, wantText) {
 		t.Fatalf("textLog got %v, want %v", gotText, wantText)
+	}
+}
+
+// The transcript's kinds and tool classes; output the transcript does not
+// repeat (crush's error) follows it, and a final message that is JSON, or
+// a meta line inside it, is output.
+func TestRenderLog_CrushTranscript(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "crush-0.99.0-session.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RenderLog("crush", b)
+	want := []LogLine{
+		{Kind: LineStatus, Text: "session started: Verify PR 153"},
+		{Kind: LineText, Text: "I'll check the run and the pull request first."},
+		{Kind: LineTool, Tool: "bash", ToolClass: ToolForge, Text: "bash: bottown whoami"},
+		{Kind: LineTool, Tool: "mcp_bottown_pr_get", ToolClass: ToolForge, Text: "mcp_bottown_pr_get: 153"},
+		{Kind: LineTool, Tool: "view", ToolClass: ToolRead, Text: "view: internal/runs/harness.go"},
+		{Kind: LineTool, Tool: "grep", ToolClass: ToolSearch, Text: "grep: func cleanSummary"},
+		{Kind: LineError, Text: "error parsing regex: missing argument to repetition operator: `*`"},
+		{Kind: LineTool, Tool: "bash", ToolClass: ToolShell, Text: "bash: git diff --stat main...HEAD"},
+		{Kind: LineError, Text: "exit 128: fatal: ambiguous argument 'main...HEAD': unknown revision or path not in the working tree."},
+		{Kind: LineText, Text: "The branch is `bottown/main` here. Running the checks."},
+		{Kind: LineTool, Tool: "bash", ToolClass: ToolShell, Text: "bash: make check"},
+		{Kind: LineTool, Tool: "bash", ToolClass: ToolForge, Text: "bash: bottown review submit --event APPROVED --commit fbd7043 --body-file -"},
+		{Kind: LineText, Text: "APPROVED !153 at `fbd7043`. Checks pass."},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+
+	log := `Working on it
+Error: agent run failed: context deadline exceeded
+
+{"meta":{"id":"s1","title":"","created":"2026-11-02T14:03:11Z"}}
+{"id":"m1","role":"assistant","parts":[{"type":"text","text":"Working on it"},{"type":"tool_call","name":"bash","input":"{\"command\":\"false\"}"},{"type":"finish","reason":"error"}]}
+{"id":"m2","role":"tool","parts":[{"type":"tool_result","name":"bash","content":"Exit code 1\n\n<cwd>/w</cwd>"}]}
+`
+	want = []LogLine{
+		{Kind: LineStatus, Text: "session started"},
+		{Kind: LineText, Text: "Working on it"},
+		{Kind: LineTool, Tool: "bash", ToolClass: ToolShell, Text: "bash: false"},
+		{Kind: LineError, Text: "finish: error"},
+		{Kind: LineError, Text: "exit 1"},
+		{Kind: LinePlain, Text: "Error: agent run failed: context deadline exceeded"},
+	}
+	if got := RenderLog("crush", []byte(log)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%s\nwant\n%s", dumpLines(got), dumpLines(want))
+	}
+
+	for _, log := range []string{
+		"{\"role\":\"assistant\",\"parts\":[]}\n",
+		"{\"meta\":\"not an object\"}\nhello\n",
+	} {
+		if got := RenderLog("crush", []byte(log)); len(got) == 0 || got[0].Kind != LineText {
+			t.Errorf("%q: got\n%s", log, dumpLines(got))
+		}
 	}
 }
 

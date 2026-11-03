@@ -27,7 +27,7 @@ func dumpLines(lines []LogLine) string {
 }
 
 // Harnesses failing before their stream starts render plain lines;
-// crush's log is only its final message.
+// a crush log without a transcript is only its final message.
 func TestRenderLog_Kinds(t *testing.T) {
 	for _, tt := range []struct {
 		harness, file string

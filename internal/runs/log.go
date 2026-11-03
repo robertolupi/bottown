@@ -52,8 +52,7 @@ func renderLog(harness string, log []byte) []LogLine {
 	case "codex":
 		return renderCodexLog(log)
 	case "crush":
-		// crush's log is only its final message.
-		return kindLines(LineText, renderScriptLog(log))
+		return renderCrushLog(log)
 	default:
 		return kindLines(LinePlain, renderScriptLog(log))
 	}
@@ -709,6 +708,159 @@ func renderCodexLog(log []byte) []LogLine {
 		return kindLines(LinePlain, renderScriptLog(log))
 	}
 	return lines
+}
+
+// crushMeta is the meta of crush's session export (crush session show
+// --json, 0.99.0).
+type crushMeta struct {
+	ID      string  `json:"id"`
+	Title   string  `json:"title"`
+	Created string  `json:"created"`
+	Cost    float64 `json:"cost"`
+}
+
+// crushMessage is one message of crush's session export: a user, assistant
+// or tool message, whose parts are text, reasoning, tool_call, tool_result
+// or finish (among others).
+type crushMessage struct {
+	Role  string `json:"role"`
+	Parts []struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Name    string `json:"name"`
+		Input   string `json:"input"`   // tool_call: JSON arguments
+		Content string `json:"content"` // tool_result
+		IsError bool   `json:"is_error"`
+		Reason  string `json:"reason"` // finish
+	} `json:"parts"`
+}
+
+// text is the message's text parts, as crush prints them.
+func (m crushMessage) text() string {
+	var b strings.Builder
+	for _, p := range m.Parts {
+		if p.Type == "text" {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
+}
+
+// crushLog is a crush run's log: what crush run printed, then, if the
+// launcher exported it, the transcript (crushHarness.Transcript).
+type crushLog struct {
+	output   []byte
+	meta     *crushMeta
+	messages []crushMessage
+}
+
+// parseCrushLog splits a crush log at the transcript's meta line, the last
+// line that starts {"meta": (the transcript's JSON lines hold no raw
+// newline, so none of them can hide one). Message lines count only after
+// it, so a final message that holds JSON stays output.
+func parseCrushLog(log []byte) crushLog {
+	cl := crushLog{output: log}
+	prefix := []byte(`{"meta":`)
+	start := bytes.LastIndex(log, append([]byte{'\n'}, prefix...)) + 1
+	if start == 0 && !bytes.HasPrefix(log, prefix) {
+		return cl
+	}
+	rest := log[start:]
+	first, _, _ := bytes.Cut(rest, []byte{'\n'})
+	var l struct {
+		Meta *crushMeta `json:"meta"`
+	}
+	if json.Unmarshal(first, &l) != nil || l.Meta == nil {
+		return cl
+	}
+	cl.output, cl.meta = log[:start], l.Meta
+	eachJSONLine(rest[len(first):], func(line []byte) {
+		var m crushMessage
+		if json.Unmarshal(line, &m) == nil && m.Role != "" {
+			cl.messages = append(cl.messages, m)
+		}
+	})
+	return cl
+}
+
+var crushExitRE = regexp.MustCompile(`^Exit code (\d+)$`)
+
+// renderCrushLog renders a crush log's transcript: assistant text, tool
+// calls, failed tool results, and finishes that are not a normal end. What
+// crush printed repeats its last message: only output lines that no
+// assistant text holds (an error crush reported, say) follow. A log
+// without a transcript (crush failed, or one written before the launcher
+// exported it) is its output, as assistant text.
+func renderCrushLog(log []byte) []LogLine {
+	cl := parseCrushLog(log)
+	if cl.meta == nil {
+		return kindLines(LineText, renderScriptLog(log))
+	}
+	var lines []LogLine
+	add := func(kind LineKind, text string) {
+		lines = append(lines, LogLine{Kind: kind, Text: text})
+	}
+	s := "session started"
+	if t := formatAssistantText(cl.meta.Title); t != "" {
+		s += ": " + t
+	}
+	add(LineStatus, s)
+	var said strings.Builder
+	for _, m := range cl.messages {
+		for _, p := range m.Parts {
+			switch {
+			case m.Role == "assistant" && p.Type == "text":
+				said.WriteString(p.Text + "\n")
+				if t := formatAssistantText(p.Text); t != "" {
+					add(LineText, t)
+				}
+			case m.Role == "assistant" && p.Type == "tool_call":
+				arg := toolArg(p.Input)
+				lines = append(lines, LogLine{
+					Kind:      LineTool,
+					Tool:      p.Name,
+					ToolClass: toolClass(p.Name, arg),
+					Text:      joinToolCall(p.Name, arg),
+				})
+			case m.Role == "assistant" && p.Type == "finish":
+				switch p.Reason {
+				case "error", "canceled", "permission_denied":
+					add(LineError, "finish: "+p.Reason)
+				}
+			case p.Type == "tool_result":
+				if t := crushToolError(p.Content, p.IsError); t != "" {
+					add(LineError, t)
+				}
+			}
+		}
+	}
+	for _, l := range renderScriptLog(cl.output) {
+		if !strings.Contains(said.String(), l) {
+			add(LinePlain, l)
+		}
+	}
+	return lines
+}
+
+// crushToolError is a failed tool result's line: its first line if crush
+// marked it an error, or, for a command that exited non-zero (crush's bash
+// tool ends its output with "Exit code N"), the exit code and first line.
+func crushToolError(content string, isError bool) string {
+	first := formatAssistantText(content)
+	if isError {
+		return first
+	}
+	for _, l := range strings.Split(content, "\n") {
+		m := crushExitRE.FindStringSubmatch(strings.TrimSpace(l))
+		if m == nil || m[1] == "0" {
+			continue
+		}
+		if strings.HasPrefix(first, "Exit code ") {
+			return "exit " + m[1]
+		}
+		return "exit " + m[1] + ": " + first
+	}
+	return ""
 }
 
 func renderScriptLog(log []byte) []string {

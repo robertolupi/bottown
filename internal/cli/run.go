@@ -380,6 +380,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
 	}
+	started := time.Now()
 	if err := c.Start(); err != nil {
 		return err
 	}
@@ -392,6 +393,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	runErr := c.Wait()
+	if t, ok := h.(runs.Transcriber); ok && !o.interactive {
+		// Also for a stopped run, whose transcript shows how far it got;
+		// bounded, so a stuck export cannot hold the run open.
+		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		if err := t.Transcript(tctx, l, started, logw); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: run transcript: %v\n", err)
+			fmt.Fprintf(logw, "\nbottown: no transcript: %v\n", err)
+		}
+		cancel()
+	}
 	if err := logw.Close(); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: write log: %v\n", err)
 	}
