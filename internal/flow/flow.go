@@ -252,8 +252,8 @@ func reviewsSettled(pr server.PROut) bool {
 		}
 		// Forgejo leaves an approval at an older head unstale when the push
 		// left the PR's diff alone; one that carries over is settled
-		// either way.
-		if c := pr.Assessment.Carried; c != nil && r.CommitID == c.From {
+		// either way, whichever approval decides the assessment.
+		if carried(pr, r.CommitID) {
 			continue
 		}
 		if wantStale := r.CommitID != pr.HeadSHA; r.Stale != wantStale {
@@ -261,6 +261,16 @@ func reviewsSettled(pr server.PROut) bool {
 		}
 	}
 	return true
+}
+
+// carried reports whether reviews at commit carry over to pr's head.
+func carried(pr server.PROut, commit string) bool {
+	for _, c := range pr.Carries {
+		if c.From == commit {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64, head string) (server.PROut, error) {

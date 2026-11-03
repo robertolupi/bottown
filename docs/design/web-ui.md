@@ -234,8 +234,11 @@ server runs it in the container, on Forgejo's copy of the repository
 approval at an older head of an open PR, and passes the matches to
 `review.Assess` as `Policy.Carries`. The web UI, which has no git, asks
 `GET /v1/forge/pr/carries?repo=R&number=N`. The flow's ready-to-merge
-comment, `pr show` and `pr list` and the inbox give the reason. An old head
-that Forgejo has garbage-collected no longer matches.
+comment, `pr show` and `pr list` and the inbox give the reason. `pr show`
+also lists every carried commit (`carries`), whichever approval decides:
+after a push the flow waits for Forgejo to mark reviews at older heads
+stale, except at those commits, which Forgejo may leave unstale. An old
+head that Forgejo has garbage-collected no longer matches.
 
 Forgejo's branch protection has its own view. On a push it compares the
 heads with a combined diff (`git diff --name-only NEW OLD BASE`); when no

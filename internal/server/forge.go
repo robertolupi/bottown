@@ -186,9 +186,12 @@ type PROut struct {
 	Mergeable  bool        `json:"mergeable"`
 	Reviews    []ReviewOut `json:"reviews"`
 	// Assessment is where the reviews leave the PR (internal/review).
-	Assessment    review.Assessment `json:"assessment"`
-	Diff          string            `json:"diff,omitempty"`
-	DiffTruncated bool              `json:"diff_truncated,omitempty"`
+	Assessment review.Assessment `json:"assessment"`
+	// Carries are the older heads whose approvals carry over to the head,
+	// whether or not one of them decides the assessment.
+	Carries       []review.Carry `json:"carries,omitempty"`
+	Diff          string         `json:"diff,omitempty"`
+	DiffTruncated bool           `json:"diff_truncated,omitempty"`
 }
 
 // ReviewOut is one review.
@@ -539,6 +542,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 		return PROut{}, err
 	}
 	out.Assessment = assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, carries)
+	out.Carries = carries
 	if withDiff {
 		diff, _, err := c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
 		if err != nil {

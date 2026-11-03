@@ -96,13 +96,16 @@ func TestCarryOver(t *testing.T) {
 			}
 			a := pr.Assessment
 			if !tc.Same {
-				if a.Decision != review.NeedsReview || len(undismissed) != 0 {
-					t.Fatalf("assessment = %+v, undismissed %v; want needs review and none", a, undismissed)
+				if a.Decision != review.NeedsReview || len(undismissed) != 0 || len(pr.Carries) != 0 {
+					t.Fatalf("assessment = %+v, carries %v, undismissed %v; want needs review and none", a, pr.Carries, undismissed)
 				}
 				return
 			}
 			if a.Decision != review.Approved || a.Review.ID != 1 || a.Carried == nil || a.Carried.From != tc.Old || !strings.Contains(a.Reason, "carried over") {
 				t.Fatalf("assessment = %+v, want agy's approval carried over", a)
+			}
+			if len(pr.Carries) != 1 || pr.Carries[0] != *a.Carried {
+				t.Fatalf("carries = %+v, want only %+v", pr.Carries, *a.Carried)
 			}
 			if !slices.Equal(undismissed, []string{"1"}) {
 				t.Fatalf("undismissed %v, want only Forgejo's own dismissal", undismissed)
