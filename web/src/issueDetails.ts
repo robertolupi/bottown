@@ -10,7 +10,10 @@ export class IssueDetailsCache {
   private requests = new Map<number, Promise<IssueDetails>>();
   private fetcher: typeof fetch;
 
-  constructor(fetcher: typeof fetch = fetch) {
+  // The default calls the global fetch as a plain function: stored and
+  // called as this.fetcher(…), fetch itself gets the cache as its `this`,
+  // which browsers reject with "Illegal invocation".
+  constructor(fetcher: typeof fetch = (input, init) => fetch(input, init)) {
     this.fetcher = fetcher;
   }
 

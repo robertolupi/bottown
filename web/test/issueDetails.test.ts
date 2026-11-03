@@ -39,6 +39,20 @@ test('IssueDetailsCache deduplicates concurrent loads and caches successful deta
   assert.equal(calls, 1);
 });
 
+test('IssueDetailsCache calls the global fetch by default without rebinding it', async (t) => {
+  // Browsers' fetch throws "Illegal invocation" unless this is the global
+  // object or undefined: the stub enforces the same.
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', function (this: unknown, input: RequestInfo | URL) {
+    if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+    calls.push(String(input));
+    return Promise.resolve(response(details));
+  });
+
+  assert.deepEqual(await new IssueDetailsCache().load(129), details);
+  assert.deepEqual(calls, ['/api/issues/129']);
+});
+
 test('IssueDetailsCache isolates issues and retries a failed load without caching the failure', async () => {
   let calls = 0;
   const cache = new IssueDetailsCache(async (input) => {
