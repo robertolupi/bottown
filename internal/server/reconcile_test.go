@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -95,11 +96,25 @@ func TestReconcileWithLongLivedRequests(t *testing.T) {
 	srv.health.Reconciled = true
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	// Release the open streams before closing ts, so its Close does not wait
-	// on them.
-	defer close(gitRelease)
-	defer close(apiRelease)
-	defer close(attachRelease)
+	// The open requests keep their response bodies until the assertions are
+	// done; release them and wait for their handlers to finish before ts
+	// closes (this defer is registered after ts.Close, so it runs first).
+	var (
+		bodyMu sync.Mutex
+		bodies []io.Closer
+		wg     sync.WaitGroup
+	)
+	defer func() {
+		close(gitRelease)
+		close(apiRelease)
+		close(attachRelease)
+		wg.Wait()
+		bodyMu.Lock()
+		for _, b := range bodies {
+			b.Close()
+		}
+		bodyMu.Unlock()
+	}()
 
 	// An MCP session: after initialize the client keeps a GET event stream
 	// open for as long as the session lives.
@@ -113,17 +128,26 @@ func TestReconcileWithLongLivedRequests(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// Requests that stay open until the test ends: a git transfer, an API
-	// call and an attachment stream, each through the authenticated surface
-	// a reconcile used to lock for the request's whole duration.
+	// Requests that stay open until the test releases them: a git transfer,
+	// an API call and an attachment stream, each through the authenticated
+	// surface a reconcile used to lock for the request's whole duration.
+	// Each keeps its response body open, so its handler stays inside the
+	// request for the whole reconcile: the reverse proxies flush headers, so
+	// a client that closed the body would cancel its proxy request.
 	open := func(name, path string, started chan struct{}) {
 		t.Helper()
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			req, _ := http.NewRequest("GET", ts.URL+path, nil)
 			req.Header.Set("Authorization", "Bearer "+actorKey)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
 			}
+			bodyMu.Lock()
+			bodies = append(bodies, resp.Body)
+			bodyMu.Unlock()
 		}()
 		select {
 		case <-started:
