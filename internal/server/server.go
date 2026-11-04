@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -47,10 +48,6 @@ type Server struct {
 
 	mu     sync.Mutex
 	health Health
-	// specMu guards the reconciler's desired state: request handlers hold
-	// it for reading, a reconcile pass (which may reload the file) for
-	// writing.
-	specMu sync.RWMutex
 }
 
 // Health is the /healthz document.
@@ -93,7 +90,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("GET /v1/whoami", s.authed(http.HandlerFunc(s.whoami)))
 	mux.Handle("GET /v1/actors", s.authed(http.HandlerFunc(s.listActors)))
-	mux.Handle("POST /v1/reconcile", s.authedNoSpec(s.ownerOnly(http.HandlerFunc(s.postReconcile))))
+	mux.Handle("POST /v1/reconcile", s.authed(s.ownerOnly(http.HandlerFunc(s.postReconcile))))
 	// Runs: the owner manages all; an actor may start runs for itself and
 	// end or read its own (runs.go).
 	mux.Handle("POST /v1/runs", s.authed(http.HandlerFunc(s.postRun)))
@@ -104,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/audit", s.authed(s.ownerOnly(http.HandlerFunc(s.listAudit))))
 	s.forgeRoutes(mux)
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
-	mcpH := s.ready(s.specRead(s.mcpHandler()))
+	mcpH := s.ready(s.mcpHandler())
 	mux.Handle("/mcp", mcpH)
 	// Fallback for harnesses that cannot send headers: the key in the path.
 	// Nothing logs request paths, and run keys are short-lived.
@@ -119,7 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/web/session", s.authed(s.ownerOnly(http.HandlerFunc(s.postWebSession))))
 	mux.Handle("GET /v1/web/login/{ticket}", s.ready(http.HandlerFunc(s.webLogin)))
 	mux.Handle("GET /web/forgejo", s.ready(s.uiAuthed(http.HandlerFunc(s.webForgejo))))
-	mux.Handle("GET /{$}", s.ready(s.specRead(s.uiAuthed(http.HandlerFunc(s.uiHome)))))
+	mux.Handle("GET /{$}", s.ready(s.uiAuthed(http.HandlerFunc(s.uiHome))))
 	return mux
 }
 
@@ -170,20 +167,13 @@ func (s *Server) ready(next http.Handler) http.Handler {
 	})
 }
 
-// desired is the current desired state; callers run under specRead.
-func (s *Server) desired() config.Desired { return s.Rec.Desired }
+// desired is a snapshot of the current desired state. Taking it never waits
+// for a reconcile pass, so no request, however long it stays open (an MCP
+// event stream, a large git push), holds up a reconcile, and a reconcile
+// holds up no request.
+func (s *Server) desired() config.Desired { return s.Rec.Spec() }
 
-func (s *Server) specRead(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.specMu.RLock()
-		defer s.specMu.RUnlock()
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) authed(next http.Handler) http.Handler { return s.authedNoSpec(s.specRead(next)) }
-
-func (s *Server) authedNoSpec(next http.Handler) http.Handler {
+func (s *Server) authed(next http.Handler) http.Handler {
 	return s.ready(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := s.Lookup(keyFromRequest(r))
 		if !ok {
@@ -226,11 +216,15 @@ func (s *Server) whoami(w http.ResponseWriter, r *http.Request) {
 }
 
 // postReconcile runs a reconcile pass now (what `bottown up` does when the
-// container was already running) and returns the changes it made.
+// container was already running) and returns the changes it made. It waits
+// for a pass already in progress only while the client does, and answers
+// 503 if the client gives up first.
 func (s *Server) postReconcile(w http.ResponseWriter, r *http.Request) {
-	s.specMu.Lock()
-	defer s.specMu.Unlock()
 	rep, err := s.Rec.Run(r.Context())
+	if errors.Is(err, provision.ErrBusy) {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	changes := rep.Changes
 	if changes == nil {
 		changes = []string{}
