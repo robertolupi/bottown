@@ -179,6 +179,36 @@ func TestRecordsSkipsNonRunFiles(t *testing.T) {
 	}
 }
 
+// A record file that cannot be parsed is listed as its run, unknown, with
+// the error; an unparsable file not named for a run is skipped with a
+// warning.
+func TestRecordsListsUnreadableRecord(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	if err := w.Save(Record{ID: "r-1234abcd", Status: StatusSucceeded, Started: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(w.Path("r-dead00", ".json"), []byte("{\"id\": \"r-dead00\", "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.RunsDir, "notes.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	recs, err := w.Records(&warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || recs[0].ID != "r-1234abcd" || recs[1].ID != "r-dead00" {
+		t.Fatalf("records: %+v", recs)
+	}
+	if u := recs[1]; u.Status != StatusUnknown || u.LoadError == "" {
+		t.Errorf("unreadable record: %+v", u)
+	}
+	if !strings.Contains(warn.String(), "notes.json") || strings.Contains(warn.String(), "r-dead00") {
+		t.Errorf("warnings: %q", warn.String())
+	}
+}
+
 func TestConcurrentRecordSaves(t *testing.T) {
 	w := &Workspace{RunsDir: t.TempDir()}
 	start := make(chan struct{})
