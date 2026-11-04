@@ -1311,8 +1311,9 @@ warning; run ls lists it as unknown.`,
 // gcLocal removes the worktrees and files of finished local runs: succeeded
 // and dead, and failed ones too with failed. A dead run, including one whose
 // launcher died while preparing, is revoked first. A run whose record is
-// unreadable is kept, with a warning. keep is the runs it left, whose
-// server records stay.
+// unreadable is kept, with a warning. The lock files of runs whose record
+// is gone are removed too. keep is the runs it left, whose server records
+// stay.
 func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string)) (removed int, keep []string) {
 	for _, r := range recs {
 		switch r.Status {
@@ -1345,6 +1346,8 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer
 		ws.RemoveFiles(r.ID)
 		removed++
 	}
+	// Lock files left by runs removed before RemoveFiles removed them.
+	ws.RemoveOrphanLocks()
 	_, _ = runs.Git(ws.Mirror, nil, "worktree", "prune")
 	return removed, keep
 }

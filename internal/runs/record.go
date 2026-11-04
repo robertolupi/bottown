@@ -140,17 +140,87 @@ func (w *Workspace) Update(id string, change func(*Record) error) error {
 }
 
 func (w *Workspace) withRecordLock(id string, fn func() error) error {
-	// Keep the lock file: unlinking it could give waiters different inodes.
-	f, err := os.OpenFile(w.Path(id, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := w.lockRecord(id, true)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
+}
+
+// lockRecord opens and exclusively locks a run's lock file, creating it
+// with create; without create, a missing lock file is (nil, nil). Removing
+// a run unlinks its lock file (see removeLock), so a lock taken on a file
+// since unlinked or replaced is dropped and taken again: every holder
+// locks the inode the path names.
+func (w *Workspace) lockRecord(id string, create bool) (*os.File, error) {
+	path := w.Path(id, ".lock")
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	for {
+		f, err := os.OpenFile(path, flags, 0o600)
+		if errors.Is(err, os.ErrNotExist) && !create {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+			f.Close()
+			return nil, err
+		}
+		held, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		named, err := os.Stat(path)
+		if err == nil && os.SameFile(held, named) {
+			return f, nil
+		}
+		f.Close() // releases the lock too
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+}
+
+// removeLock unlinks a run's lock file once its record is gone. It holds
+// the lock while it checks and unlinks, so no Save or Update is midway,
+// and once the record is gone none takes it again for long: Update fails
+// to load the record, and a run's id is never saved twice.
+func (w *Workspace) removeLock(id string) error {
+	f, err := w.lockRecord(id, false)
+	if err != nil || f == nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := os.Stat(w.Path(id, ".json")); !errors.Is(err, os.ErrNotExist) {
+		return err // nil while the record exists
+	}
+	return os.Remove(w.Path(id, ".lock"))
+}
+
+// RemoveOrphanLocks removes the lock files of runs whose record is gone:
+// those of runs removed before RemoveFiles removed locks, and any a late
+// Update recreated.
+func (w *Workspace) RemoveOrphanLocks() {
+	ents, err := os.ReadDir(w.RunsDir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".lock")
+		if !ok || e.IsDir() || !validRunID(id) {
+			continue
+		}
+		if _, err := os.Stat(w.Path(id, ".json")); errors.Is(err, os.ErrNotExist) {
+			_ = w.removeLock(id)
+		}
+	}
 }
 
 func (w *Workspace) writeRecord(r Record) error {
@@ -237,7 +307,7 @@ func (w *Workspace) Records(warn io.Writer) ([]Record, error) {
 	return out, nil
 }
 
-// RemoveFiles deletes a run's files (not its worktree).
+// RemoveFiles deletes a run's files (not its worktree), its lock file last.
 func (w *Workspace) RemoveFiles(id string) {
 	if !validRunID(id) {
 		return
@@ -251,6 +321,8 @@ func (w *Workspace) RemoveFiles(id string) {
 	_ = RemoveAttachments(w.AttachmentsDir(id))
 	// Clean up scratch directories from runs created before TmpDir was recorded.
 	_ = os.RemoveAll(w.Path(id, ".tmp"))
+	// Last, once the record is gone.
+	_ = w.removeLock(id)
 }
 
 // LauncherAlive reports whether the process that launched the run, and
