@@ -179,6 +179,15 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 		if err := d.Start(ctx, inst.Container()); err != nil {
 			return err
 		}
+	case !c.Exists && !ok:
+		// A new instance's ports were free when they were picked, but another
+		// process (a concurrent e2e suite, with its own BOTTOWN_HOME) may have
+		// bound them since: pick another pair rather than fail.
+		run := func(inst config.Instance) error { return runContainer(ctx, d, inst) }
+		discard := func() { _ = d.Remove(ctx, inst.Container()) }
+		if inst, err = runNewContainer(inst, run, discard, portFree); err != nil {
+			return err
+		}
 	case !c.Exists:
 		if err := runContainer(ctx, d, inst); err != nil {
 			return err
@@ -309,6 +318,37 @@ func containerSpec(inst config.Instance) hostctl.RunSpec {
 
 func runContainer(ctx context.Context, d hostctl.Docker, inst config.Instance) error {
 	return d.Run(ctx, containerSpec(inst))
+}
+
+// portRetries bounds how often runNewContainer re-picks a new instance's ports.
+const portRetries = 8
+
+// runNewContainer starts a new instance's container with run. Checking that a
+// port is free does not reserve it, so when Docker reports one of the
+// instance's ports already allocated, it discards the container docker run
+// left behind, picks another pair that skips every pair tried so far, saves
+// the instance with it and tries again. It returns the instance as started.
+func runNewContainer(inst config.Instance, run func(config.Instance) error, discard func(), free func(int) bool) (config.Instance, error) {
+	tried := map[int]bool{}
+	for i := 0; ; i++ {
+		err := run(inst)
+		if err == nil || !strings.Contains(err.Error(), "port is already allocated") || i == portRetries {
+			return inst, err
+		}
+		discard()
+		tried[inst.ForgejoPort], tried[inst.ServerPort] = true, true
+		fp, sp, aerr := config.AllocatePorts(inst.Name, func(p int) bool { return !tried[p] && free(p) })
+		if aerr != nil {
+			return inst, fmt.Errorf("%w (and no other pair: %v)", err, aerr)
+		}
+		if fp == inst.ForgejoPort {
+			return inst, err // a well-known pair: nothing else to try
+		}
+		inst.ForgejoPort, inst.ServerPort = fp, sp
+		if err := config.SaveInstance(inst); err != nil {
+			return inst, err
+		}
+	}
 }
 
 func fetchHealth(ctx context.Context, inst config.Instance) (server.Health, error) {

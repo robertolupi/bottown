@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
@@ -170,4 +172,48 @@ func TestUpDownRefuseInRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestRunNewContainerRepicksTakenPorts(t *testing.T) {
+	t.Setenv("BOTTOWN_HOME", t.TempDir())
+	all := func(int) bool { return true }
+	inst := config.Instance{Name: "e2e-a", ForgejoPort: 3050, ServerPort: 3051}
+	if err := config.SaveInstance(inst); err != nil {
+		t.Fatal(err)
+	}
+	// Another process bound 3050, then 3053, after they were picked here.
+	taken := map[int]bool{3050: true, 3053: true}
+	var ran []int
+	discarded := 0
+	run := func(i config.Instance) error {
+		ran = append(ran, i.ForgejoPort)
+		if taken[i.ForgejoPort] || taken[i.ServerPort] {
+			return errors.New("docker run: exit status 125: Bind for 127.0.0.1:3050 failed: port is already allocated")
+		}
+		return nil
+	}
+	got, err := runNewContainer(inst, run, func() { discarded++ }, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ForgejoPort != 3054 || got.ServerPort != 3055 || discarded != 2 || len(ran) != 3 {
+		t.Fatalf("got %d/%d after runs %v, %d discarded", got.ForgejoPort, got.ServerPort, ran, discarded)
+	}
+	if saved, _, _ := config.LoadInstance("e2e-a"); saved.ForgejoPort != 3054 || saved.ServerPort != 3055 {
+		t.Fatalf("saved ports %d/%d, want 3054/3055", saved.ForgejoPort, saved.ServerPort)
+	}
+
+	// Other errors are returned as they are, without a retry.
+	n := 0
+	fail := func(config.Instance) error { n++; return errors.New("docker run: no such image") }
+	if _, err := runNewContainer(inst, fail, func() {}, all); err == nil || n != 1 {
+		t.Fatalf("err %v after %d runs", err, n)
+	}
+
+	// The retries are bounded.
+	n = 0
+	busy := func(config.Instance) error { n++; return errors.New("port is already allocated") }
+	if _, err := runNewContainer(inst, busy, func() {}, all); err == nil || n != portRetries+1 {
+		t.Fatalf("err %v after %d runs", err, n)
+	}
 }
