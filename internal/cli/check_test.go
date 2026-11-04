@@ -63,7 +63,7 @@ func TestRunChecks(t *testing.T) {
 		{"check", "echo hello; echo to-stderr >&2; touch made"},
 		{"check", "echo 'main.go:3:1: undefined: x'; exit 3"},
 		{"e2e", "echo never"},
-	}, l, now)
+	}, l, now, false)
 	if len(steps) != 3 {
 		t.Fatalf("steps = %+v", steps)
 	}

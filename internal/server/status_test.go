@@ -158,3 +158,66 @@ func TestOpPRChecks(t *testing.T) {
 		t.Errorf("unreadable statuses: %+v, %q, %v", pr.Checks, pr.ChecksError, err)
 	}
 }
+
+// The owner, outside a run, records the flow's gate in a named repository,
+// and reads the PR's commits where it failed.
+func TestOpGate(t *testing.T) {
+	const c1, c2 = "1111111111111111111111111111111111111111", "3333333333333333333333333333333333333333"
+	var posted []map[string]string
+	statuses := map[string]string{
+		c1: `[{"id":2,"status":"failure","context":"bottown/e2e","creator":{"login":"rlupi"},"created_at":"2026-11-03T10:00:00Z"},
+		      {"id":1,"status":"success","context":"bottown/e2e","creator":{"login":"claude"},"created_at":"2026-11-03T10:00:00Z"}]`,
+		c2: `[{"id":3,"status":"failure","context":"bottown/e2e","creator":{"login":"claude"},"created_at":"2026-11-03T11:00:00Z"}]`,
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/v1/repos/bottown/other/statuses/"):
+			var in map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			posted = append(posted, in)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "status": in["state"], "context": in["context"], "description": in["description"], "creator": map[string]string{"login": "rlupi"}})
+		case r.URL.Path == "/api/v1/repos/bottown/demo/pulls/9/commits":
+			_, _ = w.Write([]byte(`[{"sha":"` + c1 + `"},{"sha":"` + c2 + `"}]`))
+		case strings.HasSuffix(r.URL.Path, "/statuses"):
+			sha := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/repos/bottown/demo/commits/"), "/statuses")
+			_, _ = w.Write([]byte(statuses[sha]))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *secrets.State) error {
+		st.Tokens = map[string]secrets.ActorToken{"rlupi": {Token: "t0"}, "claude": {Token: "t1"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store, Log: slog.Default(), Owner: "rlupi", Rec: &provision.Reconciler{BaseURL: upstream.URL, Desired: config.Desired{Org: "bottown"}}}
+	owner, ctx := secrets.Principal{Actor: "rlupi"}, context.Background()
+
+	if _, err := s.opStatus(ctx, owner, CommitStatusIn{SHA: c1, Check: "e2e", State: "success"}); errStatus(err) != 400 || !strings.Contains(err.Error(), "repo is required") {
+		t.Errorf("gate without a repo: %v", err)
+	}
+	out, err := s.opStatus(ctx, owner, CommitStatusIn{Repo: "other", SHA: c1, Check: "e2e", State: "failure", Description: "failed: make e2e (exit 2) after 3m"})
+	if err != nil || !out.Gate || out.Context != "bottown/e2e" || len(posted) != 1 || posted[0]["description"] != "failed: make e2e (exit 2) after 3m (flow)" {
+		t.Fatalf("gate status: %+v, %v, posted %v", out, err, posted)
+	}
+	if _, err := s.opStatus(ctx, secrets.Principal{Actor: "claude"}, CommitStatusIn{Repo: "other", SHA: c1, Check: "e2e", State: "success"}); errStatus(err) != 403 {
+		t.Errorf("an actor outside a run wrote a status: %v", err)
+	}
+
+	// Only the owner's failures count: claude's own report on c2 does not.
+	gate, err := s.opGate(ctx, owner, Target{Repo: "demo", Number: 9})
+	if err != nil || strings.Join(gate.Failed, ",") != c1 {
+		t.Fatalf("gate = %+v, %v", gate, err)
+	}
+	if _, err := s.opGate(ctx, secrets.Principal{Actor: "claude"}, Target{Repo: "demo", Number: 9}); errStatus(err) != 403 {
+		t.Errorf("an actor read the gate: %v", err)
+	}
+}

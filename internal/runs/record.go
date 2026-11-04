@@ -53,6 +53,12 @@ type Record struct {
 	Attachments string `json:"attachments,omitempty"`
 	// TmpDir records the launcher's scratch path so gc need not share its TMPDIR.
 	TmpDir string `json:"tmp_dir,omitempty"`
+	// FlowNote is bottown flow's note for the prompt: the failed checks an
+	// implement round fixes, or the passed checks a verifier relies on.
+	FlowNote string `json:"flow_note,omitempty"`
+	// ChecksPassed: the flow ran the post-implement checks at the verify
+	// run's SHA, and they passed.
+	ChecksPassed bool `json:"checks_passed,omitempty"`
 }
 
 // Target is "#<issue>" or "!<pr>".

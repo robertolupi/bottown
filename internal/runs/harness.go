@@ -39,6 +39,8 @@ type PromptData struct {
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 	Question                   string // discuss: the owner's question, if given to the command
 	Message                    string // implement, verify, plan: the owner's note, if given to the command
+	FlowNote                   string // implement, verify: bottown flow's note on the post-implement checks
+	ChecksPassed               bool   // verify: the flow's post-implement checks passed at SHA
 	MilestonesDir              string // plan: where the repository keeps milestone plans
 	WebPreview                 bool   // implement, verify: the repository has fixtures for `bottown web preview`
 	Reviewed                   bool   // verify: the PR already has reviews, so `pr show --since-review` applies

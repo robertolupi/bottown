@@ -30,23 +30,40 @@ const (
 	// ChangesRequested: the head is approved, but a request for changes at
 	// an older head still blocks the merge.
 	ChangesRequested StopReason = "changes requested"
+	// ChecksFailed: the post-implement checks failed at the head and no
+	// check rounds remain.
+	ChecksFailed StopReason = "checks failed"
 )
 
 // ErrActorLimit marks a run creation refused by the per-actor batch limit.
 var ErrActorLimit = errors.New("actor at live batch run limit")
 
+// ErrHeadMoved marks a verify run creation refused because the PR's head is
+// no longer the SHA the flow asked for: what the flow gated is not what the
+// verifier would review.
+var ErrHeadMoved = errors.New("pull request head moved")
+
 // Options selects the issue, actors, and budgets for one flow. Implement
 // and Verify are ACTOR[:SPEC] (runs.SplitActorSpec): the spec, a model
 // choice, goes to the run unchanged and never changes the actor's family.
+//
+// Rounds bounds the review rounds: the flow stops at the Rounds-th request
+// for changes. CheckRounds bounds the implement runs that answer failed
+// post-implement checks, which do not use up Rounds. CheckTimeout limits
+// each post-implement check, apart from Timeout, which limits each run.
 type Options struct {
-	Issue      int64
-	Repo       string
-	Implement  string
-	Verify     string
-	Rounds     int
-	Timeout    time.Duration
-	WaitActors bool
-	Attended   bool
+	Issue        int64
+	Repo         string
+	Implement    string
+	Verify       string
+	Rounds       int
+	CheckRounds  int
+	Timeout      time.Duration
+	CheckTimeout time.Duration
+	WaitActors   bool
+	// Attended flows ask on In before merging a clean, behind base; the
+	// others leave that to the owner inbox.
+	Attended bool
 }
 
 // Result is the flow's final position.
@@ -76,6 +93,44 @@ type RunRequest struct {
 	Issue            int64
 	PR               int64
 	BypassActorLimit bool
+	// Note is the flow's own note for the run's prompt: the failed checks
+	// an implement round fixes, or the passed checks a verifier relies on.
+	Note string
+	// ChecksPassed tells a verify run the post-implement checks passed at
+	// SHA, so it need not run them again.
+	ChecksPassed bool
+	// SHA, for a verify run, is the head the flow read and gated. The run
+	// must be pinned there: the Runner fails with ErrHeadMoved if the PR's
+	// head is another commit when the server creates the run.
+	SHA string
+}
+
+// CheckRequest is the post-implement checks at one PR head.
+type CheckRequest struct {
+	Repo  string
+	Issue int64
+	PR    int64
+	SHA   string
+}
+
+// CheckOutcome is how the post-implement checks went.
+type CheckOutcome struct {
+	// Skipped: the repository names no post-implement checks.
+	Skipped bool
+	Passed  bool
+	// Description is the commit status's: the commands and how long they
+	// took, or which one failed. Summary adds the first failing lines.
+	Description string
+	Summary     string
+	Log         string // the full log's path
+}
+
+// Checker runs the post-implement checks (the repository's e2e commands)
+// in a clean worktree at a PR head, with no agent involved.
+type Checker interface {
+	Check(context.Context, CheckRequest) (CheckOutcome, error)
+	// LogPath is where Check keeps req's log, for a resumed flow.
+	LogPath(CheckRequest) string
 }
 
 // Runner executes a batch run and waits for it to finish.
@@ -95,18 +150,30 @@ type API interface {
 	PR(context.Context, string, int64) (server.PROut, error)
 	LiveRuns(context.Context, string) ([]secrets.Run, error)
 	Comment(context.Context, string, int64, string) error
+	// RecordGate writes the post-implement checks' result at sha as the
+	// flow's bottown/e2e commit status.
+	RecordGate(ctx context.Context, repo, sha, state, description string) error
+	// GateFailures lists the PR's commits where they failed.
+	GateFailures(ctx context.Context, repo string, pr int64) ([]string, error)
+	// PRMergeStatus trial-merges the PR's base into its head; MergeBase
+	// pushes that merge when the head is still the one given.
 	PRMergeStatus(context.Context, string, int64) (server.PRMergeStatus, error)
 	MergeBase(context.Context, string, int64, string) (server.PRMergeOut, error)
 }
 
 // Supervisor drives one issue. RetryDelay is how long to wait before trying
 // an actor-limited run again; zero uses a short default suitable for tests.
+// Checker, if set, gates each new head on the post-implement checks before
+// a verifier sees it.
 type Supervisor struct {
 	API        API
 	Runner     Runner
-	In         io.Reader
+	Checker    Checker
+	In         io.Reader // the owner's answers, for an attended flow
 	Out        io.Writer
 	RetryDelay time.Duration
+
+	answers *bufio.Reader
 }
 
 // Run executes or resumes a flow. It returns nil only at ready to merge;
@@ -122,6 +189,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.Timeout <= 0 {
 		return result, errors.New("timeout must be positive")
 	}
+	if s.Checker != nil && (opts.CheckRounds < 0 || opts.CheckTimeout <= 0) {
+		return result, errors.New("check rounds must not be negative, and the check timeout must be positive")
+	}
 	if s.API == nil || s.Runner == nil {
 		return result, errors.New("flow API and runner are required")
 	}
@@ -129,6 +199,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		return result, err
 	}
 	resuming := true
+	// fixing is the head whose failed checks the last implement round was
+	// asked to fix: if it pushed nothing, the flow stops.
+	fixing := ""
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -237,7 +310,50 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			return s.stop(ctx, result, VerifierUndecided, fmt.Sprintf("%s left a comment on !%d", assessment.Review.Reviewer, pr.Number))
 		default:
 			head := pr.HeadSHA
-			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number}); err != nil {
+			verify := RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number, SHA: head}
+			if s.Checker != nil {
+				outcome, err := s.gate(ctx, opts, pr)
+				if err != nil {
+					return s.runFailure(ctx, result, err)
+				}
+				switch {
+				case outcome.Skipped:
+				case outcome.Passed:
+					verify.ChecksPassed = true
+					verify.Note = passedNote(head, outcome)
+				default:
+					if fixing == head {
+						return s.stop(ctx, result, RunFailed, fmt.Sprintf("the implement round to fix the failed checks at %s pushed no new commit", shortSHA(head)))
+					}
+					failed, err := s.API.GateFailures(ctx, opts.Repo, pr.Number)
+					if err != nil {
+						return result, err
+					}
+					if len(failed) > opts.CheckRounds {
+						return s.stop(ctx, result, ChecksFailed, fmt.Sprintf("the post-implement checks failed at %s, and %d check rounds are used: %s; log: %s",
+							shortSHA(head), opts.CheckRounds, outcome.Description, outcome.Log))
+					}
+					if err := s.API.Comment(ctx, opts.Repo, opts.Issue, fmt.Sprintf("**bottown flow: checks failed** at %s on !%d; starting implement round %d of %d to fix them.\n\n%s\n\nLog: `%s`",
+						shortSHA(head), pr.Number, len(failed), opts.CheckRounds, outcome.Description, outcome.Log)); err != nil {
+						return result, err
+					}
+					fixing = head
+					if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue, Note: failedNote(head, outcome)}); err != nil {
+						return s.runFailure(ctx, result, err)
+					}
+					resuming = false
+					continue
+				}
+			}
+			if err := s.runStep(ctx, opts, verify); errors.Is(err, ErrHeadMoved) {
+				// A push during the checks, or while waiting for the
+				// verifier's slot: the new head is gated first.
+				if s.Out != nil {
+					fmt.Fprintf(s.Out, "flow #%d: !%d moved past %s before the verify run started\n", opts.Issue, pr.Number, shortSHA(head))
+				}
+				resuming = false
+				continue
+			} else if err != nil {
 				return s.runFailure(ctx, result, err)
 			}
 			resuming = false
@@ -254,6 +370,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 }
 
+// confirmMerge asks the owner whether to merge the base into pr's branch.
+// Anything but y or yes, end of input included, is no.
 func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 	if s.In == nil {
 		return false, nil
@@ -261,7 +379,10 @@ func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [y/N] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
 	}
-	answer, err := bufio.NewReader(s.In).ReadString('\n')
+	if s.answers == nil {
+		s.answers = bufio.NewReader(s.In)
+	}
+	answer, err := s.answers.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
@@ -271,6 +392,73 @@ func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// gate is the post-implement checks at pr's head: the flow's recorded
+// status there, else a new check, which it records. The status, not this
+// process, is the flow's memory, so a resumed flow does not check a head
+// twice.
+func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (CheckOutcome, error) {
+	req := CheckRequest{Repo: opts.Repo, Issue: opts.Issue, PR: pr.Number, SHA: pr.HeadSHA}
+	if st, ok := gateStatus(pr); ok {
+		return CheckOutcome{Passed: st.State == "success", Description: st.Description, Log: s.Checker.LogPath(req)}, nil
+	}
+	if s.Out != nil {
+		fmt.Fprintf(s.Out, "flow #%d: post-implement checks at %s\n", opts.Issue, shortSHA(pr.HeadSHA))
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, opts.CheckTimeout)
+	outcome, err := s.Checker.Check(checkCtx, req)
+	timedOut := errors.Is(checkCtx.Err(), context.DeadlineExceeded)
+	cancel()
+	if ctx.Err() != nil {
+		return outcome, ctx.Err()
+	}
+	if err != nil && !timedOut {
+		return outcome, fmt.Errorf("the post-implement checks could not run at %s: %w", shortSHA(pr.HeadSHA), err)
+	}
+	if timedOut {
+		outcome.Passed, outcome.Skipped = false, false
+		outcome.Description = fmt.Sprintf("timed out after %s; %s", opts.CheckTimeout, outcome.Description)
+		outcome.Summary = outcome.Description + "\n" + outcome.Summary
+	}
+	if outcome.Skipped {
+		return outcome, nil
+	}
+	state := "failure"
+	if outcome.Passed {
+		state = "success"
+	}
+	if err := s.API.RecordGate(ctx, opts.Repo, pr.HeadSHA, state, outcome.Description); err != nil {
+		return outcome, fmt.Errorf("recording the post-implement checks at %s: %w", shortSHA(pr.HeadSHA), err)
+	}
+	if s.Out != nil {
+		fmt.Fprintf(s.Out, "flow #%d: post-implement checks %s at %s; log: %s\n", opts.Issue, state, shortSHA(pr.HeadSHA), outcome.Log)
+	}
+	return outcome, nil
+}
+
+// gateStatus is the flow's own bottown/e2e status at the PR's head.
+func gateStatus(pr server.PROut) (server.CommitStatus, bool) {
+	for _, st := range pr.Checks {
+		if st.Gate && st.Context == "bottown/e2e" {
+			return st, true
+		}
+	}
+	return server.CommitStatus{}, false
+}
+
+func passedNote(head string, o CheckOutcome) string {
+	return fmt.Sprintf("bottown flow ran the post-implement checks (the repository's e2e commands) at `%s` itself, in a clean worktree, and they passed: %s\n\nLog: `%s`",
+		head, o.Description, o.Log)
+}
+
+func failedNote(head string, o CheckOutcome) string {
+	summary := strings.TrimSpace(o.Summary)
+	if summary == "" {
+		summary = o.Description
+	}
+	return fmt.Sprintf("This is an implement round to fix failed checks. bottown flow ran the post-implement checks (the repository's e2e commands) at `%s`, the pull request's head, in a clean worktree, and they failed:\n\n```\n%s\n```\n\nThe full log is `%s`: read it at the lines above. Fix the failure, push, and comment on the pull request with what changed; the flow runs the checks again at your new head before a verifier sees it.",
+		head, summary, o.Log)
 }
 
 // waitForPush lets Forgejo finish updating mergeability and reviews after a

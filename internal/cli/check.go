@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -217,8 +218,10 @@ func (l *checkLog) endStep() []logLine {
 type checkSpec struct{ Group, Command string }
 
 // runChecks runs specs in order with sh -c in dir, writing all output to
-// log. After a failure the remaining steps are skipped.
-func runChecks(ctx context.Context, dir string, specs []checkSpec, log *checkLog, now func() time.Time) []checkStep {
+// log. After a failure the remaining steps are skipped. With ownGroup each
+// step runs in its own process group, killed whole when ctx ends (the
+// flow's time limit), so a suite's children do not outlive it.
+func runChecks(ctx context.Context, dir string, specs []checkSpec, log *checkLog, now func() time.Time, ownGroup bool) []checkStep {
 	steps := make([]checkStep, 0, len(specs))
 	failed := false
 	for _, sp := range specs {
@@ -233,6 +236,11 @@ func runChecks(ctx context.Context, dir string, specs []checkSpec, log *checkLog
 		cmd := exec.CommandContext(ctx, "sh", "-c", sp.Command)
 		cmd.Dir = dir
 		cmd.Stdout, cmd.Stderr = log, log
+		if ownGroup {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+			cmd.WaitDelay = 10 * time.Second
+		}
 		start := now()
 		err := cmd.Run()
 		st.Duration = now().Sub(start)
@@ -494,7 +502,7 @@ func (a *agentCtx) runCheck(ctx context.Context, progress io.Writer, top, logPat
 	l := &checkLog{w: bw}
 	l.line(fmt.Sprintf("bottown check at %s in %s, %s", res.SHA, top, res.Started.Format(time.RFC3339)))
 	fmt.Fprintf(progress, "bottown check: running %d step(s), log: %s\n", len(specs), logPath)
-	res.Steps = runChecks(ctx, top, specs, l, time.Now)
+	res.Steps = runChecks(ctx, top, specs, l, time.Now, false)
 	return res, nil
 }
 

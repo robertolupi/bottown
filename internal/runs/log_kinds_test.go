@@ -251,7 +251,7 @@ func TestRenderLog_CodexGolden(t *testing.T) {
 
 func TestRenderLog_CodexEvents(t *testing.T) {
 	log := `{"type":"thread.started","thread_id":"t1"}
-{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"bottown issue show 12","exit_code":0}}
+{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"/bin/zsh -lc 'bottown issue show 12'","exit_code":0}}
 {"type":"item.completed","item":{"id":"i2","type":"command_execution","command":"make test","exit_code":2,"aggregated_output":"FAIL: test\nmore"}}
 {"type":"item.completed","item":{"id":"i3","type":"file_change","changes":[{"path":"a.go","kind":"add"},{"path":"b.go","kind":"delete"}]}}
 {"type":"item.completed","item":{"id":"i4","type":"mcp_tool_call","server":"bottown","tool":"issue_create","arguments":{"title":"Bug"}}}
@@ -260,7 +260,7 @@ func TestRenderLog_CodexEvents(t *testing.T) {
 `
 	want := []LogLine{
 		{Kind: LineStatus, Text: "thread.started"},
-		{Kind: LineTool, Tool: "Bash", ToolClass: ToolForge, Text: "Bash: bottown issue show 12"},
+		{Kind: LineTool, Tool: "Bash", ToolClass: ToolForge, Text: "Bash: /bin/zsh -lc 'bottown issue show 12'"},
 		{Kind: LineTool, Tool: "Bash", ToolClass: ToolShell, Text: "Bash: make test"},
 		{Kind: LineError, Text: "exit 2: FAIL: test"},
 		{Kind: LineTool, Tool: "Edit", ToolClass: ToolEdit, Text: "Edit: a.go (add)"},

@@ -354,6 +354,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   prURL,
 				Created:     a.Review.Submitted,
 			})
+		} else if st, ok := s.flowChecksFailed(ctx, org, repo, pr, ownerLogin); ok && !activeByIssue[parseIssueRef(pr.Head.Ref)] {
+			items = append(items, InboxItem{
+				ID:          fmt.Sprintf("stopped-flow-checks-pr-%d", pr.Index),
+				Kind:        InboxStoppedFlow,
+				Title:       fmt.Sprintf("Flow stopped on !%d: checks failed", pr.Index),
+				Description: fmt.Sprintf("Post-implement checks failed at %s: %s", shortSHA(pr.Head.Sha), st.Description),
+				Target:      fmt.Sprintf("!%d", pr.Index),
+				TargetURL:   prURL,
+				Created:     st.Created,
+			})
 		}
 	}
 
@@ -610,6 +620,26 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	})
 
 	return items, nil
+}
+
+// flowChecksFailed returns the flow's latest post-implement check at the
+// PR's head (the owner's bottown/e2e status) if it failed. Statuses that
+// cannot be read show nothing.
+func (s *Server) flowChecksFailed(ctx context.Context, org, repo string, pr *sdk.PullRequest, ownerLogin string) (*sdk.Status, bool) {
+	if pr.Head == nil || pr.Head.Sha == "" || ownerLogin == "" {
+		return nil, false
+	}
+	sts, err := listAll[*sdk.Status](ctx, s, fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/commits/%s/statuses?sort=newest", org, repo, pr.Head.Sha))
+	if err != nil {
+		return nil, false
+	}
+	var latest *sdk.Status
+	for _, st := range sts {
+		if st.Context == "bottown/e2e" && userLogin(st.Creator) == ownerLogin && (latest == nil || st.Created.After(latest.Created) || st.Created.Equal(latest.Created) && st.ID > latest.ID) {
+			latest = st
+		}
+	}
+	return latest, latest != nil && latest.State == sdk.StatusFailure
 }
 
 func userLogin(u *sdk.User) string {

@@ -118,6 +118,18 @@ func (c *Client) LiveRuns(ctx context.Context, repo string) ([]secrets.Run, erro
 	return runs, err
 }
 
+func (c *Client) RecordGate(ctx context.Context, repo, sha, state, description string) error {
+	in := server.CommitStatusIn{Repo: repo, SHA: sha, Check: "e2e", State: state, Description: description}
+	return c.call(ctx, "POST", "/v1/forge/status", in, nil)
+}
+
+func (c *Client) GateFailures(ctx context.Context, repo string, pr int64) ([]string, error) {
+	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(pr)}}
+	var out server.GateOut
+	err := c.call(ctx, "GET", "/v1/forge/pr/gate?"+q.Encode(), nil, &out)
+	return out.Failed, err
+}
+
 func (c *Client) Comment(ctx context.Context, repo string, number int64, body string) error {
 	in := server.CommentIn{Target: server.Target{Repo: repo, Number: number}, Body: body}
 	return c.call(ctx, "POST", "/v1/forge/comment", in, nil)
