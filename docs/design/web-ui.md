@@ -422,6 +422,11 @@ constituent runs and their individual logs and policy denials. Live activity
 updates statuses, highlighting, and the selected active flow's timeline
 without changing the selected flow.
 
+The table's header stays at the top of its scroll box as the rows scroll.
+A summary cell, and each line of a failure reason, shows one line, cut
+with an ellipsis; when that hides text, **more** shows all of it in the
+cell, wrapped, and **less** cuts it again (#133). Neither expands the flow.
+
 **Status and outcome.** A run's status says whether it executed
 (succeeded, failed, revoked); its **outcome** says what work it produced,
 as the server recorded it from the run's tools: a verify run's latest

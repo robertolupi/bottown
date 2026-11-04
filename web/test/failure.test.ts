@@ -106,8 +106,8 @@ test('the flow timeline and search carry the failure reason', () => {
 async function loadFailureReason(): Promise<any> {
   const src = fileURLToPath(new URL('../src/FailureReason.svelte', import.meta.url));
   const { js } = compile(readFileSync(src, 'utf8'), { filename: src, generate: 'server' });
-  const state = pathToFileURL(fileURLToPath(new URL('../src/state.ts', import.meta.url))).href;
-  const code = js.code.replace(/from ['"]\.\/state['"]/g, `from '${state}'`);
+  const code = js.code.replace(/from ['"]\.\/(state|truncation)['"]/g, (_, m) =>
+    `from '${pathToFileURL(fileURLToPath(new URL(`../src/${m}.ts`, import.meta.url))).href}'`);
   // Inside node_modules so that the compiled module resolves svelte.
   const dir = new URL('../node_modules/.cache/bottown-test/', import.meta.url);
   mkdirSync(dir, { recursive: true });

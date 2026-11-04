@@ -8,6 +8,7 @@
   import FailureReason from './FailureReason.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import RunLogRow from './RunLogRow.svelte';
+  import SummaryText from './SummaryText.svelte';
   import StatusBadge from './StatusBadge.svelte';
   import TargetLink from './TargetLink.svelte';
 
@@ -66,7 +67,7 @@
               <FailureReason {failure} onDetails={() => !expandedLogs[r.id] && onToggleLog(r.id)} />
             </td>
           {:else}
-            <td class="summary-cell" title={r.summary}>{r.summary || '—'}</td>
+            <td class="summary-cell"><SummaryText text={r.summary} /></td>
           {/if}
           <td class="muted text-sm">{formatTime(r.created)}</td>
           <td>
@@ -110,9 +111,6 @@
 
   .summary-cell {
     max-width: max(280px, 25vw);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   /* Its cells are styled by the history table around it (RunHistory). */
