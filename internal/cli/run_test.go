@@ -476,3 +476,28 @@ func TestLauncherFailure(t *testing.T) {
 		t.Errorf("clean exit marked failed: observed %+v, launcher %+v; want neither", observed, f)
 	}
 }
+
+// gc leaves no lock files for the runs it removes, nor for runs removed
+// before it removed them (#233), and keeps those of runs it keeps.
+func TestGCRemovesLocks(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	for _, r := range []runs.Record{{ID: "r-d1", Status: runs.StatusSucceeded}, {ID: "r-f1", Status: runs.StatusFailed}} {
+		if err := ws.Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(ws.Path("r-01d", ".lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ws.Records(io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, _ := gcLocal(ws, recs, false, io.Discard, func(string) {}); removed != 1 {
+		t.Fatalf("removed %d runs, want 1", removed)
+	}
+	locks, _ := filepath.Glob(filepath.Join(ws.RunsDir, "*.lock"))
+	if want := []string{ws.Path("r-f1", ".lock")}; !slices.Equal(locks, want) {
+		t.Fatalf("lock files %v, want %v", locks, want)
+	}
+}

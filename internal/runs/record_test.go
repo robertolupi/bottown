@@ -264,3 +264,81 @@ func TestRecordUpdateFailure(t *testing.T) {
 		t.Fatalf("legacy temporary file changed: %q, %v", b, err)
 	}
 }
+
+// Removing a run's files removes its lock file too (#233), and an Update
+// after that fails without leaving one behind for good: the sweep takes it.
+func TestRemoveFilesRemovesLock(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	if err := w.Save(Record{ID: "r-1", Status: StatusSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.Path("r-1", ".lock")); err != nil {
+		t.Fatalf("no lock after Save: %v", err)
+	}
+	w.RemoveFiles("r-1")
+	if _, err := os.Stat(w.Path("r-1", ".lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock survives RemoveFiles: %v", err)
+	}
+	if err := w.Update("r-1", func(*Record) error { return nil }); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Update of a removed run: %v", err)
+	}
+	w.RemoveOrphanLocks()
+	if ents, _ := os.ReadDir(w.RunsDir); len(ents) != 0 {
+		t.Fatalf("runs directory not empty: %v", ents)
+	}
+}
+
+// The sweep removes lock files whose record is gone, and keeps those of
+// existing runs and files that are not run locks.
+func TestRemoveOrphanLocks(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	if err := w.Save(Record{ID: "r-a1", Status: StatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"r-b1.lock", "r-b2.lock", "other.lock"} {
+		if err := os.WriteFile(filepath.Join(w.RunsDir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.RemoveOrphanLocks()
+	for name, kept := range map[string]bool{"r-a1.lock": true, "r-a1.json": true, "other.lock": true, "r-b1.lock": false, "r-b2.lock": false} {
+		_, err := os.Stat(filepath.Join(w.RunsDir, name))
+		if kept && err != nil {
+			t.Errorf("%s removed: %v", name, err)
+		}
+		if !kept && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s kept: %v", name, err)
+		}
+	}
+}
+
+// A waiter whose lock file is unlinked while it waits takes the lock again
+// on the file the path names, so it never holds a lock beside another
+// holder of the new file.
+func TestLockRecordRetakesUnlinkedLock(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	first, err := w.lockRecord("r-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan *os.File)
+	go func() {
+		f, err := w.lockRecord("r-1", true)
+		if err != nil {
+			t.Error(err)
+		}
+		got <- f
+	}()
+	time.Sleep(50 * time.Millisecond) // let the waiter open the old file
+	if err := os.Remove(w.Path("r-1", ".lock")); err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	f := <-got
+	defer f.Close()
+	held, _ := f.Stat()
+	named, err := os.Stat(w.Path("r-1", ".lock"))
+	if err != nil || !os.SameFile(held, named) {
+		t.Fatalf("waiter holds an unlinked lock file: %v", err)
+	}
+}
