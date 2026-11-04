@@ -92,9 +92,14 @@ bottown run end [--failed] --summary-file -
   the author. Only the owner can waive it.
 - **If an issue is unclear or you are blocked,** comment on the issue and end
   the run with `--failed`. Do not guess, and do not work outside the issue.
-- **Checks:** "the repository's checks" in your prompt means `make check`,
-  and `make e2e` for implementers before opening a PR. Run them with
-  `bottown check --e2e`: it keeps the full output in a log, prints a short
+- **Checks:** "the repository's checks" in your prompt means `make check`.
+  Implementers need not run `make e2e` before opening a PR (they may run
+  the e2e tests their change touches): `bottown flow` runs it itself at
+  each new PR head, in a clean worktree, before it starts a verifier, and
+  sends a failure back as another implement round. A verifier whose prompt
+  says the flow's checks passed at its SHA does not run `make e2e`; one
+  started by hand runs it. Run them with `bottown check` (`--e2e` adds
+  `make e2e`): it keeps the full output in a log, prints a short
   summary with the first failing lines and their line numbers in the log
   (read it there instead of re-running), flags changed dependencies, and
   records the result on your committed, pushed HEAD, which `pr show`
@@ -151,8 +156,8 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   `gofmt -l` clean, `go mod tidy -diff` clean, `make vet` (including
   `-tags e2e`), `make test` (Go and frontend tests) and `cd web && npm run
   check` (`svelte-check`).
-- **Before a PR:** `make check` and `make e2e` pass. New behaviour gets a
-  test. Keep the docs in `docs/` true to the code; `docs/history/` is a
+- **Before a PR:** `make check` passes, and `make e2e` should (the flow
+  runs it before a verifier sees the PR). New behaviour gets a test. Keep the docs in `docs/` true to the code; `docs/history/` is a
   record and is not kept current.
 - **Style:** match the surrounding code, comment density included. Commit
   messages say what changed and why.

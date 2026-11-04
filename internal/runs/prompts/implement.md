@@ -22,8 +22,9 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
     PR with what changed. `pr create` reports that PR and succeeds; it does not
     change its title or description.
   - `{{.Bottown}} api GET /repos/…` reaches any other Forgejo endpoint.
-  - `{{.Bottown}} check --e2e` runs the repository's checks (see below),
-    keeps their full output in a log, and prints a short summary: each
+  - `{{.Bottown}} check` runs the repository's checks (see below), and
+    `check --e2e` its e2e commands too. It keeps their full output in a
+    log, and prints a short summary: each
     step, its result and duration, the first failing lines with their
     line numbers in the log, and the dependency manifests your branch
     changes. Read the log at those lines rather than re-running the
@@ -60,9 +61,14 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 
 1. The change is implemented, with tests where the repository has them, and
    the repository's checks pass on the head you push:
-   `{{.Bottown}} check --e2e` runs the ones its `.bottown.toml` names
-   (by default `make check` and `make e2e`, which its AGENTS.md (or README)
-   describes) and records them on that commit.
+   `{{.Bottown}} check` runs the ones its `.bottown.toml` names in `check`
+   (by default `make check`, which its AGENTS.md (or README) describes)
+   and records them on that commit. You need not run its e2e commands
+   (`check --e2e`, by default `make e2e`) before opening the pull
+   request: when `bottown flow` drives the issue, it runs them itself at
+   your pushed head before a verifier starts, and a failure comes back to
+   you as another implement round. Run the e2e tests your change touches
+   when that helps you.
 2. The branch is pushed and a pull request is open (`pr create`), whose
    description says what changed and how you checked it.
 {{- if .SelfEnd}}

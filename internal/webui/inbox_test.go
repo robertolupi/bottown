@@ -31,6 +31,7 @@ type fixtureForge struct {
 	carries  map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
 	issues   []*sdk.Issue
 	comments map[int64][]*sdk.Comment
+	statuses map[string][]*sdk.Status // by commit
 }
 
 func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
@@ -64,6 +65,13 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			_ = json.NewEncoder(w).Encode(carries)
 		case strings.HasSuffix(p, "/pulls"):
 			_ = json.NewEncoder(w).Encode(paginate(r, fix.prs))
+		case strings.Contains(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
+			parts := strings.Split(p, "/")
+			sts := fix.statuses[parts[len(parts)-2]]
+			if sts == nil {
+				sts = []*sdk.Status{}
+			}
+			_ = json.NewEncoder(w).Encode(paginate(r, sts))
 		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
 			// /forgejo/api/v1/repos/{org}/{repo}/pulls/{number}/reviews
 			parts := strings.Split(p, "/")
@@ -508,6 +516,33 @@ func TestInbox_StoppedFlow(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 1 || items[0].Kind != InboxStoppedFlow || items[0].Target != "!31" || !strings.Contains(items[0].Description, "Changes requested") {
 		t.Fatalf("expected stopped_flow for !31 (out of rounds), got: %+v", items)
+	}
+
+	// Case 4: the flow's post-implement checks failed at the head (the
+	// owner's bottown/e2e status); an implementer's own report does not count.
+	fix.mu.Lock()
+	fix.reviews[31] = nil
+	fix.statuses = map[string][]*sdk.Status{shaHead: {
+		{ID: 2, Context: "bottown/e2e", State: sdk.StatusSuccess, Creator: &sdk.User{UserName: "agy"}, Created: now},
+	}}
+	fix.mu.Unlock()
+	if items, _ = s.ComputeInbox(ctx); len(items) != 0 {
+		t.Fatalf("an agent's e2e report made a stopped flow: %+v", items)
+	}
+	fix.mu.Lock()
+	fix.statuses[shaHead] = append(fix.statuses[shaHead],
+		&sdk.Status{ID: 1, Context: "bottown/e2e", State: sdk.StatusFailure, Description: "failed: make e2e (exit 2) after 3m (flow)", Creator: &sdk.User{UserName: "rlupi"}, Created: now.Add(-time.Minute)})
+	fix.mu.Unlock()
+	items, _ = s.ComputeInbox(ctx)
+	if len(items) != 1 || items[0].Kind != InboxStoppedFlow || items[0].Target != "!31" || !strings.Contains(items[0].Title, "checks failed") || !strings.Contains(items[0].Description, "make e2e (exit 2)") {
+		t.Fatalf("expected stopped_flow for !31 (checks failed), got: %+v", items)
+	}
+	// Go-away: the flow's fix round is running on the issue.
+	fix.mu.Lock()
+	fix.runs = []secrets.Run{{ID: "r-fix", Issue: 31, Repo: "bottown", Kind: "implement", Actor: "agy", Created: now, Expires: now.Add(time.Hour)}}
+	fix.mu.Unlock()
+	if items, _ = s.ComputeInbox(ctx); len(items) != 0 {
+		t.Fatalf("expected the checks-failed item to go away during the fix round, got: %+v", items)
 	}
 }
 

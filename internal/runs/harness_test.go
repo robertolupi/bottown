@@ -143,16 +143,36 @@ func TestClaudeDefaultAllowedTools(t *testing.T) {
 
 // Implementer and verifier must mean the same checks: both prompts point at
 // where the repository defines them, and both run them with bottown check.
+// The implementer may leave the e2e commands to the flow; the verifier runs
+// them unless the flow says they passed at its SHA.
 func TestPromptsNameWhereChecksAre(t *testing.T) {
-	for _, kind := range []string{"implement", "verify"} {
-		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/bin/bottown"})
+	for _, tc := range []struct {
+		kind, done string
+		passed     bool
+	}{
+		{"implement", "`/bin/bottown check` runs the ones", false},
+		{"verify", "with `/bin/bottown check --e2e`", false},
+		{"verify", "with `/bin/bottown check`: the ones", true},
+	} {
+		p, err := Prompt(tc.kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/bin/bottown",
+			ChecksPassed: tc.passed, FlowNote: map[bool]string{true: "checks passed at `abc`; log: `/runs/x.e2e.log`"}[tc.passed]})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(p, "repository's checks") || !strings.Contains(p, "AGENTS.md (or README)") ||
-			!strings.Contains(p, "`/bin/bottown check --e2e`") || !strings.Contains(p, "`.bottown.toml`") {
-			t.Errorf("%s prompt does not say where the checks are:\n%s", kind, p)
+			!strings.Contains(p, tc.done) || !strings.Contains(p, "`.bottown.toml`") {
+			t.Errorf("%s prompt (checks passed %v) does not say where the checks are:\n%s", tc.kind, tc.passed, p)
 		}
+		if tc.passed && (!strings.Contains(p, "## Note from bottown flow") || !strings.Contains(p, "/runs/x.e2e.log") || !strings.Contains(p, "Do not run its e2e commands")) {
+			t.Errorf("verify prompt lacks the flow's passed checks:\n%s", p)
+		}
+		if !tc.passed && strings.Contains(p, "Note from bottown flow") {
+			t.Errorf("%s prompt has a flow note without one:\n%s", tc.kind, p)
+		}
+	}
+	p, err := Prompt("implement", PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, Bottown: "/bin/bottown", FlowNote: "the checks failed at `abc`"})
+	if err != nil || !strings.Contains(p, "## Note from bottown flow\n\nthe checks failed at `abc`") || !strings.Contains(p, "You need not run its e2e commands") {
+		t.Errorf("implement prompt with a flow note (%v):\n%s", err, p)
 	}
 }
 

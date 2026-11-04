@@ -18,6 +18,8 @@ import (
 //	POST /v1/forge/comment  {repo, number, body}
 //	POST /v1/forge/review   {event, body, commit_id}
 //	POST /v1/forge/status   {sha, check, state, description}   (bottown check)
+//	                        {repo, sha, ...} as the owner: the flow's gate
+//	GET  /v1/forge/pr/gate?repo=&number=   (the owner: the flow's gate failures)
 //
 // repo and number default to the run's.
 
@@ -71,6 +73,10 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	})))
 	mux.Handle("GET /v1/forge/pr/carries", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opCarries(r.Context(), Who(r.Context()), targetFromQuery(r))
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opGate(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	})))
 	mux.Handle("GET /v1/forge/prs", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

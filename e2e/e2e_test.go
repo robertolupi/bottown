@@ -660,6 +660,10 @@ func TestE2E(t *testing.T) {
 		if code, m := runs(owner, "DELETE", "/v1/runs/"+sameFamily["id"].(string), map[string]string{"status": "revoked"}); code != 200 {
 			t.Fatalf("end same-family run: %d %v", code, m)
 		}
+		// A verify run that names another head than the PR's is refused.
+		if code, m := runs(owner, "POST", "/v1/runs", map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": pr.Number, "sha": strings.Repeat("0", 40)}); code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "head moved") {
+			t.Errorf("verify run at a moved head: %d %v", code, m)
+		}
 		code, ver := verify("codex", false)
 		if code != 201 || ver["sha"] != pr.Head.Sha {
 			t.Fatalf("verify run: %d %v (head %s)", code, ver, pr.Head.Sha)
@@ -1971,6 +1975,26 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("flow with a scripted harness", func(t *testing.T) {
+		// The post-implement checks the flow runs before each verify: a
+		// fake e2e command that fails while the head has e2e-broken.txt.
+		remote := "bottown-" + a.name
+		c := exec.Command("git", "-C", demo, "fetch", "-q", remote)
+		c.Env = a.env()
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("fetch: %v %s", err, out)
+		}
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, ".bottown.toml"), []byte("e2e = [\"echo e2e start\", \"if test -e e2e-broken.txt; then echo 'e2e_test.go:7: broken'; exit 3; fi\"]\n"), 0o644)
+		git(t, demo, "add", ".bottown.toml")
+		git(t, demo, "commit", "-q", "-m", "fake post-implement checks")
+		c = exec.Command("git", "-C", demo, "push", "-q", remote, "HEAD:refs/heads/main")
+		c.Env = a.env()
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("push main: %v %s", err, out)
+		}
+		git(t, demo, "switch", "-q", "main")
+		git(t, demo, "reset", "-q", "--hard", remote+"/main")
+
 		withHarness := func(script string, args ...string) (string, error) {
 			c := exec.Command(bin, args...)
 			c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+script)
@@ -2003,6 +2027,13 @@ func TestE2E(t *testing.T) {
 				change = `{ seq 1 19; echo "change $n"; } > carry.txt
   git add carry.txt`
 			}
+			if mode == "checks" {
+				// The first head breaks the post-implement checks; the
+				// round the flow starts for them fixes them.
+				change = `if [ "$n" = 1 ]; then echo broken > e2e-broken.txt; git add e2e-broken.txt; else git rm -q e2e-broken.txt; fi
+  echo "change $n" > flow.txt
+  git add flow.txt`
+			}
 			if mode == "follow" {
 				verdict = `if [ "$n" = 1 ]; then event=REQUEST_CHANGES; else event=APPROVED; fi`
 			} else if mode == "reject" {
@@ -2011,6 +2042,7 @@ func TestE2E(t *testing.T) {
 			return `set -e
 if grep -Fq 'working as the **implementer**' "$BOTTOWN_PROMPT_FILE"; then
   n=$(cat ` + implementCount + ` 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > ` + implementCount + `
+  cp "$BOTTOWN_PROMPT_FILE" ` + filepath.Join(dir, "implement-") + `$n.md
   ` + change + `
   git -c commit.gpgsign=false commit -qm "flow change $n"
   git push -q ` + "bottown-" + a.name + ` HEAD
@@ -2020,6 +2052,7 @@ if grep -Fq 'working as the **implementer**' "$BOTTOWN_PROMPT_FILE"; then
   echo implemented
 else
   n=$(cat ` + verifyCount + ` 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > ` + verifyCount + `
+  cp "$BOTTOWN_PROMPT_FILE" ` + filepath.Join(dir, "verify-") + `$n.md
   ` + verdict + `
   ` + bin + ` mcp call review_submit "{\"event\":\"$event\",\"body\":\"flow verdict\",\"commit_id\":\"$(git rev-parse HEAD)\"}" > /dev/null
   echo "$event"
@@ -2068,6 +2101,68 @@ fi`
 			}
 			if readCount(filepath.Join(dir, "implements")) != "2" || readCount(filepath.Join(dir, "verifies")) != "2" {
 				t.Error("follow-up did not use exactly two implement and verify runs")
+			}
+			assertStopComment(issue, "ready to merge")
+		})
+
+		t.Run("failed post-implement checks start an implement round", func(t *testing.T) {
+			issue := newIssue("flow checks")
+			dir := t.TempDir()
+			out, err := withHarness(flowScript(dir, "checks"), "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--rounds", "1", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "post-implement checks failure at") || !strings.Contains(out, "post-implement checks success at") || !strings.Contains(out, "ready to merge") {
+				t.Fatalf("flow checks: %v\n%s", err, out)
+			}
+			if readCount(filepath.Join(dir, "implements")) != "2" || readCount(filepath.Join(dir, "verifies")) != "1" {
+				t.Error("a failed check did not lead to exactly one more implement run before one verify")
+			}
+			logs, _ := filepath.Glob(filepath.Join(demo, ".bottown", "runs", fmt.Sprintf("flow-%d-*.e2e.log", issue)))
+			if len(logs) != 2 {
+				t.Fatalf("check logs: %v", logs)
+			}
+			for _, l := range logs {
+				if b, err := os.ReadFile(l); err != nil || !strings.Contains(string(b), "==> [e2e] echo e2e start\ne2e start\n") {
+					t.Errorf("check log %s: %v\n%s", l, err, b)
+				}
+			}
+			// The fix round's prompt has the failure and the log, and the
+			// verifier's says the checks passed and need not run again.
+			fix, _ := os.ReadFile(filepath.Join(dir, "implement-2.md"))
+			if !strings.Contains(string(fix), "## Note from bottown flow") || !strings.Contains(string(fix), "e2e_test.go:7: broken") || !strings.Contains(string(fix), ".e2e.log") {
+				t.Errorf("fix round prompt:\n%s", fix)
+			}
+			verify, _ := os.ReadFile(filepath.Join(dir, "verify-1.md"))
+			if !strings.Contains(string(verify), "they passed: passed: echo e2e start;") || !strings.Contains(string(verify), "Do not run its e2e commands") {
+				t.Errorf("verify prompt:\n%s", verify)
+			}
+			// The failure is on the issue, and the gate is the owner's
+			// bottown/e2e status on the head.
+			var comments []struct{ Body string }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
+			failed := false
+			for _, c := range comments {
+				failed = failed || strings.Contains(c.Body, "bottown flow: checks failed")
+			}
+			if !failed {
+				t.Errorf("no checks-failed comment on #%d: %+v", issue, comments)
+			}
+			var prs []struct {
+				Number int64
+				Head   struct{ Ref, Sha string }
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+			for _, pr := range prs {
+				if pr.Head.Ref != fmt.Sprintf("issue/%d", issue) {
+					continue
+				}
+				var sts []struct {
+					Context, Status, Description string
+					Creator                      struct{ Login string }
+				}
+				a.mustAPI(owner, "GET", "/repos/bottown/demo/commits/"+pr.Head.Sha+"/statuses", nil, &sts)
+				if len(sts) != 1 || sts[0].Context != "bottown/e2e" || sts[0].Status != "success" || sts[0].Creator.Login != "owner" || !strings.HasSuffix(sts[0].Description, "(flow)") {
+					t.Errorf("gate status at the head: %+v", sts)
+				}
+				a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number), map[string]string{"state": "closed"}, nil)
 			}
 			assertStopComment(issue, "ready to merge")
 		})
