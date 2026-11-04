@@ -33,27 +33,45 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // A reconcile must not wait for requests that stay open (an MCP session's
-// event stream, a slow git transfer), and requests must not wait for a
-// reconcile: issue #229, where one queued reconcile froze every
-// authenticated request.
+// event stream, a slow git transfer, an API call, an attachment stream),
+// and requests must not wait for a reconcile: issues #229 and #242, where
+// one queued reconcile froze every authenticated request.
 func TestReconcileWithLongLivedRequests(t *testing.T) {
 	gitStarted, gitRelease := make(chan struct{}), make(chan struct{})
+	apiStarted, apiRelease := make(chan struct{}), make(chan struct{})
+	attachStarted, attachRelease := make(chan struct{}), make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/user":
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id":1,"login":"bottown-admin"}`))
+		case r.URL.Path == "/api/v1/version":
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			close(apiStarted)
+			<-apiRelease
 		case strings.HasSuffix(r.URL.Path, "/info/refs"):
 			w.WriteHeader(http.StatusOK)
 			w.(http.Flusher).Flush()
 			close(gitStarted)
 			<-gitRelease
+		case strings.HasSuffix(r.URL.Path, "/issues/7/assets"):
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":42,"uuid":"u42","name":"shot.png","type":"attachment"}]`))
+		case strings.HasSuffix(r.URL.Path, "/issues/7/comments"):
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[]`))
+		case r.URL.Path == "/attachments/u42":
+			w.Header().Set("Content-Type", "image/png")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			close(attachStarted)
+			<-attachRelease
 		default:
 			http.Error(w, "fake forgejo", http.StatusInternalServerError)
 		}
 	}))
 	defer upstream.Close()
-	defer close(gitRelease)
 	fu, _ := url.Parse(upstream.URL)
 
 	store, err := secrets.Open(t.TempDir())
@@ -77,6 +95,11 @@ func TestReconcileWithLongLivedRequests(t *testing.T) {
 	srv.health.Reconciled = true
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+	// Release the open streams before closing ts, so its Close does not wait
+	// on them.
+	defer close(gitRelease)
+	defer close(apiRelease)
+	defer close(attachRelease)
 
 	// An MCP session: after initialize the client keeps a GET event stream
 	// open for as long as the session lives.
@@ -90,19 +113,27 @@ func TestReconcileWithLongLivedRequests(t *testing.T) {
 	}
 	defer sess.Close()
 
-	// A git request that stays open until the test ends.
-	go func() {
-		req, _ := http.NewRequest("GET", ts.URL+"/git/bottown/demo.git/info/refs?service=git-upload-pack", nil)
-		req.Header.Set("Authorization", "Bearer "+actorKey)
-		if resp, err := http.DefaultClient.Do(req); err == nil {
-			resp.Body.Close()
+	// Requests that stay open until the test ends: a git transfer, an API
+	// call and an attachment stream, each through the authenticated surface
+	// a reconcile used to lock for the request's whole duration.
+	open := func(name, path string, started chan struct{}) {
+		t.Helper()
+		go func() {
+			req, _ := http.NewRequest("GET", ts.URL+path, nil)
+			req.Header.Set("Authorization", "Bearer "+actorKey)
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				resp.Body.Close()
+			}
+		}()
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatalf("%s request never reached upstream", name)
 		}
-	}()
-	select {
-	case <-gitStarted:
-	case <-ctx.Done():
-		t.Fatal("git request never reached upstream")
 	}
+	open("git", "/git/bottown/demo.git/info/refs?service=git-upload-pack", gitStarted)
+	open("api", "/forgejo/api/v1/version", apiStarted)
+	open("attachment", "/v1/forge/issue/attachment?repo=bottown/demo&number=7&id=42", attachStarted)
 
 	do := func(method, path, key string) int {
 		t.Helper()
