@@ -768,11 +768,41 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 		st.Header.Render("SIZE"),
 	)
 	seen := map[string]bool{}
+	var unreadable []runs.Record
 	for _, rec := range local {
 		seen[rec.ID] = true
 		keySt := "gone"
-		if sr, ok := byID[rec.ID]; ok {
+		sr, onServer := byID[rec.ID]
+		if onServer {
 			keySt = serverKeyState(sr)
+		}
+		if rec.Status == runs.StatusUnknown {
+			unreadable = append(unreadable, rec)
+			// The record says nothing: show what the server knows.
+			kind, target, actor, family, spec, branch, started := "-", "-", "-", "-", "-", "-", "-"
+			if onServer {
+				kind, actor, family, spec, branch = sr.Kind, sr.Actor, sr.Family, orDash(sr.Spec), branchOrSHA(sr.Branch, sr.SHA)
+				target = fmt.Sprintf("#%d", sr.Issue)
+				if sr.PR > 0 {
+					target = fmt.Sprintf("!%d", sr.PR)
+				}
+				started = age(sr.Created)
+			}
+			tw.Row(
+				st.Info.Bold(true).Render(rec.ID),
+				st.Purple.Render(kind),
+				st.Bold.Render(target),
+				st.Info.Render(actor),
+				family,
+				spec,
+				"-",
+				st.runStatus(rec.Status),
+				st.keyState(keySt),
+				branch,
+				st.Dim.Render(started),
+				"-",
+			)
+			continue
 		}
 		size := "-"
 		if _, err := os.Stat(rec.Worktree); err == nil {
@@ -831,7 +861,15 @@ func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote
 			"-",
 		)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	for _, rec := range unreadable {
+		if _, err := fmt.Fprintf(out, "%s: unreadable run record (status unknown): %s\n", rec.ID+".json", rec.LoadError); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func lsAll(cmd *cobra.Command, g *globals) error {
@@ -1217,7 +1255,8 @@ whose local files are kept keeps its server record too.
 A run whose key expired while it was live cannot end itself, since its key
 no longer authenticates: gc ends it as revoked, unless its launcher in this
 checkout is still running. Live runs are never purged; --older-than keeps
-recently ended ones.`,
+recently ended ones. A run whose local record cannot be read is kept, with a
+warning; run ls lists it as unknown.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rc, err := openRunContext(g)
@@ -1271,12 +1310,19 @@ recently ended ones.`,
 
 // gcLocal removes the worktrees and files of finished local runs: succeeded
 // and dead, and failed ones too with failed. A dead run, including one whose
-// launcher died while preparing, is revoked first. keep is the runs it left,
-// whose server records stay.
+// launcher died while preparing, is revoked first. A run whose record is
+// unreadable is kept, with a warning. keep is the runs it left, whose
+// server records stay.
 func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string)) (removed int, keep []string) {
 	for _, r := range recs {
 		switch r.Status {
 		case runs.StatusPreparing, runs.StatusRunning:
+			keep = append(keep, r.ID)
+			continue
+		case runs.StatusUnknown:
+			// Its record could not be read, so whether it is finished is
+			// unknown: leave it, and its server record, for the owner.
+			fmt.Fprintf(warn, "warning: %s.json: unreadable run record (%s); kept\n", r.ID, r.LoadError)
 			keep = append(keep, r.ID)
 			continue
 		case runs.StatusFailed:

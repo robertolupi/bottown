@@ -292,6 +292,50 @@ func TestGCSkipsRecordWithoutID(t *testing.T) {
 	}
 }
 
+// A corrupt run record (#244) is not dropped: run ls lists the run as
+// unknown, with the file and the parse error, and gc warns and keeps it,
+// its worktree and its server record.
+func TestUnreadableRecordListedAndKept(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	corrupt := ws.Path("r-bad1", ".json")
+	if err := os.WriteFile(corrupt, []byte("{\"id\": \"r-bad1\", \"status\": "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wt := ws.WorktreeDir("r-bad1")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ws.Records(io.Discard)
+	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusUnknown {
+		t.Fatalf("records %+v, %v", recs, err)
+	}
+
+	var b strings.Builder
+	remote := []secrets.Run{{ID: "r-bad1", Kind: policy.Implement, Issue: 7, Actor: "claude", Expires: time.Now().Add(time.Hour)}}
+	if err := printRunLs(&b, lipgloss.NewRenderer(&b), recs, remote); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"r-bad1", "unknown", "live", "#7", "claude", "r-bad1.json: unreadable run record", recs[0].LoadError} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("run ls lacks %q:\n%s", want, b.String())
+		}
+	}
+
+	var warn bytes.Buffer
+	removed, keep := gcLocal(ws, recs, true, &warn, func(id string) { t.Errorf("gc revoked %s", id) })
+	if removed != 0 || !slices.Equal(keep, []string{"r-bad1"}) {
+		t.Errorf("gc removed %d, kept %v", removed, keep)
+	}
+	if !strings.Contains(warn.String(), "r-bad1.json") || !strings.Contains(warn.String(), "kept") {
+		t.Errorf("gc warning: %q", warn.String())
+	}
+	for _, p := range []string{corrupt, wt} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("gc removed %s: %v", p, err)
+		}
+	}
+}
+
 func TestExpiredLive(t *testing.T) {
 	now := time.Now().UTC()
 	ended := now.Add(-time.Hour)

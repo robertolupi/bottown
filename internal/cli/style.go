@@ -100,6 +100,8 @@ func (s *styles) runStatus(status string) string {
 		return s.Danger.Bold(true).Render(status)
 	case runs.StatusRunning:
 		return s.Success.Bold(true).Render(status)
+	case runs.StatusUnknown:
+		return s.Warning.Bold(true).Render(status)
 	default:
 		return status
 	}

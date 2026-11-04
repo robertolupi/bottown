@@ -20,6 +20,10 @@ const (
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
 	StatusDead      = "dead" // recorded as preparing or running, but its process is gone
+	// StatusUnknown marks a record file named for a run that could not be
+	// read or parsed (see Records). Nothing about the run is known, so gc
+	// keeps it.
+	StatusUnknown = "unknown"
 )
 
 // Record is the host-side record of a run, written next to its worktree.
@@ -61,6 +65,9 @@ type Record struct {
 	// ChecksPassed: the flow ran the post-implement checks at the verify
 	// run's SHA, and they passed.
 	ChecksPassed bool `json:"checks_passed,omitempty"`
+	// LoadError is why Records could not read the record file of a run it
+	// lists as StatusUnknown; never saved.
+	LoadError string `json:"-"`
 }
 
 // Target is "#<issue>" or "!<pr>".
@@ -188,6 +195,10 @@ func LoadFile(path string) (Record, error) {
 // (a check result, say) unmarshals into a record with no id, or one naming a
 // different run; both are skipped, with one warning naming the file, so no
 // caller treats it as a run and removes paths derived from its empty id.
+// A file named for a run that cannot be read or parsed is listed as that
+// run with StatusUnknown and the error in LoadError, rather than dropped:
+// its worktree and key may still exist. Any other unreadable file is
+// skipped with a warning.
 func (w *Workspace) Records(warn io.Writer) ([]Record, error) {
 	ents, err := os.ReadDir(w.RunsDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -204,6 +215,11 @@ func (w *Workspace) Records(warn io.Writer) ([]Record, error) {
 		}
 		r, err := LoadFile(filepath.Join(w.RunsDir, name))
 		if err != nil {
+			if id := strings.TrimSuffix(name, ".json"); validRunID(id) {
+				out = append(out, Record{ID: id, Status: StatusUnknown, LoadError: err.Error()})
+			} else if warn != nil {
+				fmt.Fprintf(warn, "warning: %s: not a run record (%v); skipped\n", name, err)
+			}
 			continue
 		}
 		if !validRunID(r.ID) || name != r.ID+".json" {
