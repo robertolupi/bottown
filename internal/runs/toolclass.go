@@ -1,6 +1,9 @@
 package runs
 
-import "strings"
+import (
+	"path"
+	"strings"
+)
 
 // Tool classes color tool lines in the live tail by what the tool does.
 const (
@@ -75,5 +78,13 @@ func isBottownCommand(cmd string) bool {
 		return false
 	}
 	w := strings.Trim(f[0], `"'`)
+	// Codex wraps commands in a shell invocation, including the script's
+	// outer quotes. Apply the same first-word heuristic to that script.
+	if len(f) >= 3 && (f[1] == "-c" || f[1] == "-lc") {
+		switch path.Base(w) {
+		case "sh", "bash", "zsh":
+			w = strings.Trim(f[2], `"'`)
+		}
+	}
 	return w == "bottown" || strings.HasSuffix(w, "/bottown")
 }
