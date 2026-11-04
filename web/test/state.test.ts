@@ -892,6 +892,64 @@ test('buildFlowTimeline consumes backend type:"run" events by run_id, deduplicat
   assert.equal(filtered[0].runs.length, 3);
 });
 
+test('buildFlowTimeline shows run summaries only at completion without dropping matching events', () => {
+  const thread = {
+    key: 'flow:issue:10',
+    kind: 'flow',
+    issue: 10,
+    active: true,
+    runs: [
+      {
+        id: 'r-done', kind: 'implement', actor: 'claude', status: 'succeeded',
+        created: '2026-11-01T10:00:00Z', ended: '2026-11-01T10:05:00Z',
+        duration: '5m', summary: 'Implemented the change',
+      },
+      {
+        id: 'r-failed', kind: 'implement', actor: 'claude', status: 'failed',
+        created: '2026-11-01T10:10:00Z', ended: '2026-11-01T10:15:00Z',
+        duration: '5m', summary: 'Blocked by failing checks',
+        failure: { cause: 'reported', detail: 'the agent ended the run as failed' },
+      },
+      {
+        id: 'r-active', kind: 'verify', actor: 'agy', status: 'running',
+        created: '2026-11-01T10:20:00Z', duration: '', summary: '',
+      },
+    ],
+  } as any;
+  const issueTimeline = {
+    issue: 10,
+    events: [
+      { type: 'run', time: '2026-11-01T10:00:00Z', ended: '2026-11-01T10:05:00Z', run_id: 'r-done', detail: 'Implemented the change' },
+      { type: 'comment', time: '2026-11-01T10:02:00Z', title: 'Comment by owner', detail: 'Implemented the change' },
+      { type: 'run', time: '2026-11-01T10:10:00Z', ended: '2026-11-01T10:15:00Z', run_id: 'r-failed', detail: 'Blocked by failing checks' },
+      { type: 'run', time: '2026-11-01T10:20:00Z', run_id: 'r-active', status: 'live', detail: 'Run r-active (verify)' },
+    ],
+  } as any;
+
+  const entries = buildFlowTimeline(thread, issueTimeline);
+  const eventsFor = (id: string) => {
+    const entry = entries.find((e) => e.entry_type === 'run_boundary' && e.run.id === id);
+    if (!entry || entry.entry_type !== 'run_boundary') assert.fail(`missing run boundary ${id}`);
+    return entry.events;
+  };
+
+  const done = eventsFor('r-done');
+  assert.deepEqual(done.map((e) => e.type), ['run_started', 'comment', 'run_ended']);
+  assert.equal(done[0].detail, undefined);
+  assert.equal(done[1].detail, 'Implemented the change', 'an unrelated matching comment stays distinct');
+  assert.equal(done[2].detail, 'Implemented the change');
+
+  const failed = eventsFor('r-failed');
+  assert.equal(failed[0].detail, undefined);
+  assert.match(failed[1].detail || '', /Agent reported: Blocked by failing checks/);
+
+  const active = eventsFor('r-active');
+  assert.deepEqual(active.map((e) => e.type), ['run_started']);
+  assert.equal(active[0].detail, undefined);
+
+  assert.deepEqual(buildFlowTimeline(thread, issueTimeline), entries, 'a refresh does not add summary events');
+});
+
 test('first-ever live flow preserves issue milestone and issue/PR titles when historyRuns is empty', () => {
   // Pre-PR live-only run on an issue with an issue-assigned milestone
   const prePRLiveOnly = [

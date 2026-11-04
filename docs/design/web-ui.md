@@ -418,7 +418,9 @@ highlighting, run count, actors, duration, usage, summary, and last activity.
 Clicking a flow expands it (at most one flow is expanded at a time) to show a
 combined flow **timeline** at the top — covering all runs in the flow with
 clear run boundaries, reviews, comments, and merge events — followed by the
-constituent runs and their individual logs and policy denials. Live activity
+constituent runs and their individual logs and policy denials. A run's start
+stays compact; its summary appears once, on its completion event, including
+for a failed run when one was recorded. Live activity
 updates statuses, highlighting, and the selected active flow's timeline
 without changing the selected flow.
 

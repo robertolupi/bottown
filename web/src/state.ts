@@ -1366,7 +1366,6 @@ export function buildFlowTimeline(
       duration: r.duration,
       kind: r.kind,
       title: `${r.kind} run started (${r.actor})`,
-      detail: r.summary,
       actor: r.actor,
       status: r.status,
       run_id: r.id,
