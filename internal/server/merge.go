@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/forgejo"
@@ -123,6 +125,15 @@ func (s *Server) opPRMerge(ctx context.Context, p secrets.Principal, in PRMergeI
 	if !state.Clean {
 		return PRMergeOut{}, ferr(http.StatusConflict, "merge conflicts in %s", strings.Join(state.Conflicts, ", "))
 	}
+	// The offer may predate a run that started since: never move a branch
+	// a live run works on.
+	st, err := s.Store.Read()
+	if err != nil {
+		return PRMergeOut{}, err
+	}
+	if run, ok := liveRunOnPR(st.Runs, state.org, state.repo, in.Number, state.headBranch, time.Now()); ok {
+		return PRMergeOut{}, ferr(http.StatusConflict, "run %s (%s by %s) is live on !%d; merge after it ends", run.ID, run.Kind, run.Actor, in.Number)
+	}
 	message := fmt.Sprintf("Merge %s into %s for !%d\n\nAutomatic clean merge by bottown at the owner's request.\n", state.baseBranch, state.headBranch, in.Number)
 	commit, err := mergeGit(ctx, state.gitDir, strings.NewReader(message), []string{
 		"GIT_AUTHOR_NAME=bottown", "GIT_AUTHOR_EMAIL=bottown@localhost",
@@ -137,6 +148,28 @@ func (s *Server) opPRMerge(ctx context.Context, p secrets.Principal, in PRMergeI
 	}
 	s.toolAudit(p, state.org+"/"+state.repo, "merge_base", "allow", fmt.Sprintf("!%d %s merged into %s at %s", in.Number, state.baseBranch, state.headBranch, shortCommit(commit)))
 	return PRMergeOut{HeadSHA: commit, BaseSHA: state.BaseSHA}, nil
+}
+
+// liveRunOnPR finds a live run on PR n of org/repo or its head branch:
+// verify runs record the PR, implement and plan runs the branch and its
+// issue.
+func liveRunOnPR(all map[string]secrets.Run, org, repo string, n int64, branch string, now time.Time) (secrets.Run, bool) {
+	var issue int64
+	if v, ok := strings.CutPrefix(branch, "issue/"); ok {
+		issue, _ = strconv.ParseInt(v, 10, 64)
+	}
+	for _, run := range all {
+		if run.Ended != nil || (!run.Expires.IsZero() && now.After(run.Expires)) {
+			continue
+		}
+		if !strings.EqualFold(run.Org, org) || !strings.EqualFold(run.Repo, repo) {
+			continue
+		}
+		if run.PR == n || (branch != "" && run.Branch == branch) || (issue > 0 && run.Issue == issue) {
+			return run, true
+		}
+	}
+	return secrets.Run{}, false
 }
 
 func (s *Server) pushMerge(ctx context.Context, state mergeState, commit string) error {

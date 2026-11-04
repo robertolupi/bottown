@@ -415,7 +415,7 @@ be recomputed.
 | Item | Shown when | Goes away when |
 |---|---|---|
 | Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), it merges cleanly, and it is not behind | merged or closed, the head moves, a request for changes, or it starts to conflict |
-| Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR | the owner clicks **Merge main**, the head or base moves, or a run starts |
+| Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR or its issue | the owner clicks **Merge main**, the head or base moves, or a run starts |
 | Conflicts with main | an open PR no longer merges cleanly; the description names conflicting files when the trial merge found them | an implement run resolves them, or the PR is closed |
 | Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided), or the flow's post-implement checks failed at the head (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
@@ -726,7 +726,8 @@ The UI uses the server's existing API where it can. What changes:
   whether the PR is behind, whether `merge-tree` was clean, and any
   conflicting files. `POST` takes the offered head SHA, repeats the check,
   creates the automatic merge commit and pushes it without force. A moved
-  head or a conflict is refused.
+  head, a conflict, or a live run on the PR, its issue or its branch is
+  refused.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when

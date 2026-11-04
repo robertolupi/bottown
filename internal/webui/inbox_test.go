@@ -364,6 +364,26 @@ func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
 	if len(fix.mergeCalls) != 1 || fix.mergeCalls[0].Repo != "bottown" || fix.mergeCalls[0].Number != 15 || fix.mergeCalls[0].HeadSHA != sha {
 		t.Fatalf("merge calls = %+v", fix.mergeCalls)
 	}
+
+	// A live run on the PR hides the offer: a verifier records the PR, a
+	// follow-up implement run only its issue and branch.
+	for _, run := range []secrets.Run{
+		{ID: "r-verify", Kind: "verify", PR: 15, Issue: 15, Created: now},
+		{ID: "r-implement", Kind: "implement", Issue: 15, Branch: "issue/15", Created: now},
+	} {
+		fix.mu.Lock()
+		fix.runs = []secrets.Run{run}
+		fix.mu.Unlock()
+		items, err := s.ComputeInbox(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Kind == InboxMergeBase {
+				t.Fatalf("live %s run: inbox still offers %+v", run.Kind, item)
+			}
+		}
+	}
 }
 
 func TestInbox_ConflictsWithMain(t *testing.T) {

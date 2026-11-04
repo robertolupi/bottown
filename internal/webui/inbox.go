@@ -258,7 +258,10 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			head = pr.Head.Ref
 		}
 		if merge.Clean {
-			if activeByPR[pr.Index] {
+			// An implement run on the PR's issue records the issue and
+			// branch, not the PR: merging under it would move the branch
+			// its checkout pushes to.
+			if issueNum, _ := issueForPR(pr); activeByPR[pr.Index] || activeByIssue[issueNum] {
 				continue
 			}
 			items = append(items, InboxItem{
