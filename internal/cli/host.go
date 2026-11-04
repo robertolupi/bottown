@@ -109,7 +109,7 @@ building and switching to a new one. make install uses it.`,
 	cmd.Flags().StringVar(&ref, "ref", "", "build the image from this git commit and run it")
 	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "with --ref: keep the current image if the commits differ only in docs")
 	cmd.Flags().StringVar(&src, "src", "", "bottown source checkout (default: the git checkout containing the current directory)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "how long to wait for the instance to become healthy")
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "how long to wait for the instance to become healthy, and for the steps that follow")
 	return cmd
 }
 
@@ -201,15 +201,17 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 		_ = d.Logs(ctx, inst.Container(), false, "40", os.Stderr)
 		return err
 	}
-	pwStored, err := handOff(ctx, g, d, inst)
-	if err != nil {
-		return err
-	}
+	// The health wait bounds only /healthz. The steps that follow talk to the
+	// same server, which can accept a connection and then never answer, so
+	// bound them by the same timeout and name the step that stalled.
+	var reconcile *server.Health
 	if !started {
 		// The boot-time reconcile is old news; converge now and report that.
-		if h.Changes, err = reconcileNow(ctx, g, inst); err != nil {
-			return err
-		}
+		reconcile = &h
+	}
+	pwStored, err := postHealth(ctx, g, d, inst, reconcile, timeout)
+	if err != nil {
+		return err
 	}
 
 	fmt.Fprintf(out, "bottown %s is up (bottown %s, Forgejo %s)\n", inst.Name, h.Version, h.ForgejoVersion)
@@ -227,6 +229,40 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 		}
 	}
 	return nil
+}
+
+// postHealth runs the steps up takes once the instance reports healthy: hand
+// off the owner key, then, when h is non-nil, reconcile provisioning now and
+// record the changes on h. It bounds them with the same timeout that bounded
+// the wait for health: these calls have no deadline of their own, so a server
+// that accepted the connection but never answered would otherwise hang up for
+// minutes. A failure names the step; a deadline error says where to look.
+func postHealth(ctx context.Context, g *globals, d hostctl.Docker, inst config.Instance, h *server.Health, timeout time.Duration) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	pwStored, err := handOff(ctx, g, d, inst)
+	if err != nil {
+		return false, postHealthErr(ctx, timeout, "checking the owner key", inst, err)
+	}
+	if h != nil {
+		changes, err := reconcileNow(ctx, g, inst)
+		if err != nil {
+			return pwStored, postHealthErr(ctx, timeout, "reconciling provisioning", inst, err)
+		}
+		h.Changes = changes
+	}
+	return pwStored, nil
+}
+
+// postHealthErr explains a failed step after the health wait. When the step ran
+// out the post-health deadline it says up gave up, which step it was on and
+// where to look; otherwise it names the step and passes the cause through.
+func postHealthErr(ctx context.Context, timeout time.Duration, step string, inst config.Instance, err error) error {
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("up gave up after %s while %s: %w; check %s/healthz and `docker logs %s`",
+			timeout, step, err, inst.ServerURL(), inst.Container())
+	}
+	return fmt.Errorf("up failed while %s: %w", step, err)
 }
 
 var loginRE = regexp.MustCompile(`[^a-z0-9_.-]`)
@@ -406,8 +442,15 @@ func handOff(ctx context.Context, g *globals, d hostctl.Docker, inst config.Inst
 	if key, ok, err := sec.Get(hostctl.AccountAPIKey); err != nil {
 		return false, err
 	} else if ok {
-		if actor, err := whoami(ctx, inst, key); err == nil && actor == inst.OwnerLogin {
+		actor, err := whoami(ctx, inst, key)
+		var status errHTTPStatus
+		switch {
+		case err == nil && actor == inst.OwnerLogin:
 			return false, nil
+		case err != nil && !errors.As(err, &status):
+			// The server is unreachable or hung, not rejecting a stale key:
+			// return so up can say which step it was waiting on.
+			return false, err
 		}
 	}
 	raw, err := d.Exec(ctx, inst.Container(), "git", "bottown", "admin", "owner-credentials")
@@ -458,19 +501,40 @@ func reconcileNow(ctx context.Context, g *globals, inst config.Instance) ([]stri
 	return v.Changes, nil
 }
 
+// serverCallTimeout bounds a host-side call to an instance's server. Calls that
+// used http.DefaultClient had no timeout at all, so a server that accepted the
+// connection but never answered could hang `up` and the other host commands
+// indefinitely.
+const serverCallTimeout = 30 * time.Second
+
+// hostClient is the HTTP client for host-side calls to an instance's server. It
+// has a timeout, unlike http.DefaultClient, so a hung server fails the command
+// instead of hanging it.
+func hostClient() *http.Client { return &http.Client{Timeout: serverCallTimeout} }
+
+// errHTTPStatus is a non-200 answer from an instance's server. The caller can
+// tell it from a transport error (the server was unreachable or hung), which
+// says the server itself is in trouble rather than the request being rejected.
+type errHTTPStatus struct {
+	op     string
+	status string
+}
+
+func (e errHTTPStatus) Error() string { return e.op + ": " + e.status }
+
 func whoami(ctx context.Context, inst config.Instance, key string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inst.ServerURL()+"/v1/whoami", nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hostClient().Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("whoami: %s", resp.Status)
+		return "", errHTTPStatus{"whoami", resp.Status}
 	}
 	var v struct{ Actor string }
 	err = json.NewDecoder(resp.Body).Decode(&v)

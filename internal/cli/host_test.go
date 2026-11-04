@@ -5,15 +5,93 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/server"
 )
+
+func TestPostHealthFailsWhenServerNeverAnswers(t *testing.T) {
+	// A server that accepts the connection but never answers: paths in answer
+	// reply at once, everything else blocks until the client gives up.
+	serve := func(answer map[string]string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if body, ok := answer[r.URL.Path]; ok {
+				_, _ = io.WriteString(w, body)
+				return
+			}
+			<-r.Context().Done()
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	instance := func(t *testing.T, srv *httptest.Server) config.Instance {
+		t.Helper()
+		u, err := url.Parse(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		port, err := strconv.Atoi(u.Port())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BOTTOWN_HOME", t.TempDir())
+		t.Setenv("BOTTOWN_SECRET_STORE", "file")
+		inst := config.Instance{Name: "e2e-stall", ServerPort: port, OwnerLogin: "owner"}
+		dir, err := config.InstanceDir(inst.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A stored key makes handOff check it with whoami first, as up does.
+		if err := hostctl.OpenSecrets(inst.Name, dir).Set(hostctl.AccountAPIKey, "k"); err != nil {
+			t.Fatal(err)
+		}
+		return inst
+	}
+
+	for _, c := range []struct {
+		name      string
+		answer    map[string]string
+		reconcile bool
+		want      string
+	}{
+		{"whoami hangs", nil, false, "checking the owner key"},
+		{"reconcile hangs", map[string]string{"/v1/whoami": `{"Actor":"owner"}`}, true, "reconciling provisioning"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			inst := instance(t, serve(c.answer))
+			g := &globals{instance: inst.Name}
+			var h *server.Health
+			if c.reconcile {
+				h = &server.Health{}
+			}
+			start := time.Now()
+			_, err := postHealth(context.Background(), g, hostctl.Docker{}, inst, h, 200*time.Millisecond)
+			if err == nil {
+				t.Fatal("postHealth returned no error on a server that never answers")
+			}
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Fatalf("postHealth took %s, want it to give up near the 200ms timeout", elapsed)
+			}
+			for _, want := range []string{"gave up after", c.want, "/healthz", "docker logs"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not mention %q", err, want)
+				}
+			}
+		})
+	}
+}
 
 func TestOwnerEmail(t *testing.T) {
 	for _, c := range []struct{ env, git, want string }{

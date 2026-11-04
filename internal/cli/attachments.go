@@ -43,7 +43,7 @@ func (a *agentCtx) openAttachment(ctx context.Context, repo string, n, id int64)
 		return nil, "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.Key)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hostClient().Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("bottown server unreachable: %w", err)
 	}
