@@ -49,6 +49,11 @@ func TestPreviewFixturesLoad(t *testing.T) {
 		t.Errorf("the default fixture should exercise every view: %d live, %d history, %d inbox, %d issues, %d milestones",
 			len(fx.LiveRuns), len(fx.History), len(fx.Inbox), len(fx.Issues), len(fx.Milestones))
 	}
+	for _, flow := range fx.ActiveFlows {
+		if _, ok := fx.Issues[fmt.Sprint(flow.Issue)]; !ok {
+			t.Errorf("default: active flow issue #%d has no details", flow.Issue)
+		}
+	}
 }
 
 func contains(s []string, v string) bool {

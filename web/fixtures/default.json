@@ -1206,6 +1206,13 @@
       "state": "open",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/52"
     },
+    "53": {
+      "issue": 53,
+      "title": "Usage dashboard endpoint",
+      "body": "Expose per-client API usage for the dashboard.",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/53"
+    },
     "54": {
       "issue": 54,
       "title": "Support S3 storage backend",
