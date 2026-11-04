@@ -126,14 +126,16 @@ If the PR's head moves during a verify run, bottown refuses the verdict, as
 it does today. The supervisor then starts a new verify run at the new head
 and does not count it as a round.
 
-The PR's base can move too: the owner merges another PR into `main`, and
-this one stops merging cleanly. An approval is bound to the head, so it
-still stands, but the PR cannot be merged. The supervisor checks Forgejo's
-mergeable flag at its stops. A conflicting PR stops as "conflicts with
-main", and re-running the flow starts an implement run that brings `main`
-into `issue/<n>` and resolves the conflict. That is a new head, so a new
-verify run follows. This happens as soon as two flows run in parallel, and
-always in a milestone.
+The PR's base can move too. The supervisor tests the merge with `git
+merge-tree --write-tree` on the forge's refs, without a worktree. When the
+branch is behind and the merge is clean, an attended CLI flow asks `Merge
+main into issue/<n> for !N? [y/N]`; the default is no. An unattended flow
+leaves the choice to an owner-inbox action. On yes, bottown creates a
+two-parent commit saying the merge was automatic and pushes it as the owner.
+The unchanged-patch approval rule below then carries its approval over, and
+the flow continues at the new head. When the merge would conflict, the flow
+stops as "conflicts with main" and reports the conflicting files; the owner
+starts an implement run to resolve them.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
 action (the UI offers it); a flow never starts one.
@@ -148,7 +150,7 @@ the owner sees it in Forgejo and in the UI:
 | run failed | a run failed, crashed or timed out | read its handover; fix the issue text or the environment, then re-run the flow |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
-| conflicts with main | the PR no longer merges cleanly, because `main` moved | re-run the flow: its implement run brings `main` in and resolves the conflict |
+| conflicts with main | merging `main` into the PR would conflict | read the named files; start an implement run to resolve them |
 
 ### 3.3 State and restart
 
@@ -162,8 +164,8 @@ again:
    once).
 2. No open PR from `issue/<n>` → implement.
 3. An open PR at head H, by its review assessment (below):
-   - the PR conflicts with `main` → an implement run to resolve it, if
-     rounds are left (a conflict fix counts as a round);
+   - the PR is behind and a trial merge is clean → offer to merge the base;
+   - the trial merge conflicts → stop with the conflicting files;
    - approved → stop: ready to merge;
    - changes requested at H → a follow-up implement run, if rounds are
      left;
@@ -362,8 +364,9 @@ be recomputed.
 
 | Item | Shown when | Goes away when |
 |---|---|---|
-| Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), and it merges cleanly | merged or closed, the head moves, a request for changes, or it starts to conflict |
-| Conflicts with main | an open PR no longer merges cleanly | the flow is re-run and resolves it, or the PR is closed |
+| Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), it merges cleanly, and it is not behind | merged or closed, the head moves, a request for changes, or it starts to conflict |
+| Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR | the owner clicks **Merge main**, the head or base moves, or a run starts |
+| Conflicts with main | an open PR no longer merges cleanly; the description names conflicting files when the trial merge found them | an implement run resolves them, or the PR is closed |
 | Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided) (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
@@ -587,6 +590,7 @@ ask first.
 | Pull the checkout | `git pull --ff-only bottown main` | no |
 | Run the after-pull steps | the commands in `.bottown.toml` | confirm |
 | Push `main` to origin | `git push origin main` | confirm |
+| Merge the base into a clean, behind PR | answer `y` to the attended flow's prompt | confirm |
 | Queue or unqueue an issue (later, §3.6) | sets or clears the bottown-managed labels | no |
 
 Starting a flow or a run picks actors from lists of the instance's actors,
@@ -595,8 +599,9 @@ each with an optional model field: a model given starts the actor as
 which the field shows as its placeholder, to apply. The UI refuses a same-family verifier before anything starts, as the CLI
 does.
 
-Merging, editing issues and PRs, reviewing, and milestones are not
-actions here: the UI links to Forgejo for them.
+Merging pull requests, editing issues and PRs, reviewing, and milestones are
+not actions here: the UI links to Forgejo for them. The clean base-merge
+action only updates the PR's own branch.
 
 ## 6. Data sources
 
@@ -669,6 +674,11 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
+- **PR base merges.** Owner-only `GET /v1/forge/pr/merge-base` reports
+  whether the PR is behind, whether `merge-tree` was clean, and any
+  conflicting files. `POST` takes the offered head SHA, repeats the check,
+  creates the automatic merge commit and pushes it without force. A moved
+  head or a conflict is refused.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when

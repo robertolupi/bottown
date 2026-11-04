@@ -15,7 +15,7 @@ func newFlow(g *globals) *cobra.Command {
 	var implement, verify, repo, message string
 	var rounds int
 	var timeout time.Duration
-	var waitActors bool
+	var waitActors, unattended bool
 	cmd := &cobra.Command{
 		Use:   "flow N --implement ACTOR[:MODEL] --verify ACTOR[:MODEL]",
 		Short: "Drive one issue through implement and cross-family verify",
@@ -34,6 +34,7 @@ func newFlow(g *globals) *cobra.Command {
 			}
 			supervisor := &flow.Supervisor{
 				API: flow.NewClient(rc.inst, rc.key),
+				In:  cmd.InOrStdin(),
 				Out: cmd.OutOrStdout(),
 			}
 			supervisor.Runner = flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {
@@ -52,7 +53,7 @@ func newFlow(g *globals) *cobra.Command {
 			})
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
 				Issue: issue, Repo: repo, Implement: implement, Verify: verify,
-				Rounds: rounds, Timeout: timeout, WaitActors: waitActors,
+				Rounds: rounds, Timeout: timeout, WaitActors: waitActors, Attended: !unattended,
 			})
 			if err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "flow #%d stopped: %s\n", result.Issue, result.Reason)
@@ -66,6 +67,8 @@ func newFlow(g *globals) *cobra.Command {
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "maximum implement runs, including the first")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
 	cmd.Flags().BoolVar(&waitActors, "wait-actors", false, "wait for each actor's live batch run slot instead of bypassing the limit")
+	cmd.Flags().BoolVar(&unattended, "unattended", false, "leave clean base merges to the owner inbox")
+	_ = cmd.Flags().MarkHidden("unattended")
 	cmd.Flags().StringVarP(&message, "message", "m", "", `a note added to the goal prompt of every run the flow starts, implement and verify, e.g. "also read the epic #123"`)
 	_ = cmd.MarkFlagRequired("implement")
 	_ = cmd.MarkFlagRequired("verify")

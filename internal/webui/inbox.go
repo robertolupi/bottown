@@ -15,6 +15,7 @@ import (
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 // InboxItemKind identifies the type of an owner inbox item (§4.1).
@@ -22,6 +23,7 @@ type InboxItemKind string
 
 const (
 	InboxReadyToMerge      InboxItemKind = "ready_to_merge"
+	InboxMergeBase         InboxItemKind = "merge_base"
 	InboxConflictsWithMain InboxItemKind = "conflicts_with_main"
 	InboxStoppedFlow       InboxItemKind = "stopped_flow"
 	InboxBrokenRun         InboxItemKind = "broken_run"
@@ -39,6 +41,7 @@ type InboxItem struct {
 	TargetURL   string        `json:"target_url"`
 	Issue       int64         `json:"issue,omitempty"`
 	IssueTitle  string        `json:"issue_title,omitempty"`
+	HeadSHA     string        `json:"head_sha,omitempty"`
 	Action      *InboxAction  `json:"action,omitempty"`
 	Created     time.Time     `json:"created"`
 }
@@ -147,6 +150,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		return nil, fmt.Errorf("fetch run history: %w", err)
 	}
 	assessments := s.assessOpenPullRequests(ctx, repo, prs, ownerLogin, actors, allRuns)
+	mergeStates := make(map[int64]serverapi.PRMergeStatus)
+	for _, pr := range prs {
+		if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
+			continue
+		}
+		status, err := s.prMergeStatus(ctx, repo, pr.Index)
+		if err == nil {
+			mergeStates[pr.Index] = status
+		}
+	}
 
 	// 6. Open Issues from Forgejo
 	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues", org, repo)
@@ -180,7 +193,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		if pr.State != sdk.StateOpen || pr.HasMerged {
 			continue
 		}
-		if !pr.Mergeable {
+		if !pr.Mergeable || mergeStates[pr.Index].Behind {
 			continue
 		}
 		if a := assessments[pr.Index]; a.Decision == review.Approved {
@@ -217,34 +230,66 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// ----------------------------------------------------
-	// Item 2: Conflicts with main (§4.1)
-	// Open PR that no longer merges cleanly
+	// Item 2: Merge base, or report conflicts (§4.1)
 	// ----------------------------------------------------
 	for _, pr := range prs {
 		if pr.State != sdk.StateOpen || pr.HasMerged {
 			continue
 		}
-		if !pr.Mergeable {
-			prURL := pr.HTMLURL
-			if prURL == "" {
-				prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
-			}
-			created := time.Now()
-			if pr.Updated != nil {
-				created = *pr.Updated
-			} else if pr.Created != nil {
-				created = *pr.Created
+		merge := mergeStates[pr.Index]
+		if !merge.Behind && pr.Mergeable {
+			continue
+		}
+		prURL := pr.HTMLURL
+		if prURL == "" {
+			prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
+		}
+		created := time.Now()
+		if pr.Updated != nil {
+			created = *pr.Updated
+		} else if pr.Created != nil {
+			created = *pr.Created
+		}
+		base, head := "main", ""
+		if pr.Base != nil {
+			base = pr.Base.Ref
+		}
+		if pr.Head != nil {
+			head = pr.Head.Ref
+		}
+		if merge.Clean {
+			if activeByPR[pr.Index] {
+				continue
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("conflicts-pr-%d", pr.Index),
-				Kind:        InboxConflictsWithMain,
-				Title:       fmt.Sprintf("PR !%d conflicts with main", pr.Index),
-				Description: "PR no longer merges cleanly with main",
+				ID:          fmt.Sprintf("merge-base-pr-%d", pr.Index),
+				Kind:        InboxMergeBase,
+				Title:       fmt.Sprintf("Merge %s into %s for !%d", base, head, pr.Index),
+				Description: "The branch is behind and the merge is clean",
 				Target:      fmt.Sprintf("!%d", pr.Index),
 				TargetURL:   prURL,
-				Created:     created,
+				HeadSHA:     merge.HeadSHA,
+				Action: &InboxAction{
+					Label:   "Merge " + base,
+					Command: fmt.Sprintf("bottown flow merge-base !%d", pr.Index),
+				},
+				Created: created,
 			})
+			continue
 		}
+		description := "PR no longer merges cleanly with " + base
+		if len(merge.Conflicts) > 0 {
+			description = "Conflicting files: " + strings.Join(merge.Conflicts, ", ")
+		}
+		items = append(items, InboxItem{
+			ID:          fmt.Sprintf("conflicts-pr-%d", pr.Index),
+			Kind:        InboxConflictsWithMain,
+			Title:       fmt.Sprintf("PR !%d conflicts with %s", pr.Index, base),
+			Description: description,
+			Target:      fmt.Sprintf("!%d", pr.Index),
+			TargetURL:   prURL,
+			Created:     created,
+		})
 	}
 
 	// ----------------------------------------------------
@@ -668,4 +713,11 @@ func (s *Server) prCarries(ctx context.Context, repo string, n int64) []review.C
 		return nil
 	}
 	return carries
+}
+
+func (s *Server) prMergeStatus(ctx context.Context, repo string, n int64) (serverapi.PRMergeStatus, error) {
+	var status serverapi.PRMergeStatus
+	path := fmt.Sprintf("/v1/forge/pr/merge-base?repo=%s&number=%d", url.QueryEscape(repo), n)
+	err := s.callServer(ctx, http.MethodGet, path, nil, &status)
+	return status, err
 }

@@ -135,6 +135,22 @@
   },
   "inbox": [
     {
+      "id": "merge-base:99",
+      "kind": "merge_base",
+      "title": "Merge main into issue/99 for !99",
+      "description": "The branch is behind and the merge is clean",
+      "target": "!99",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/99",
+      "issue": 99,
+      "issue_title": "Bring the export branch up to date",
+      "head_sha": "9e1d2c3456789012345678901234567890abcdef",
+      "action": {
+        "label": "Merge main",
+        "command": "bottown flow merge-base !99"
+      },
+      "created": "2026-11-02T08:12:00Z"
+    },
+    {
       "id": "ready:100",
       "kind": "ready_to_merge",
       "title": "!100 is approved and ready to merge",
