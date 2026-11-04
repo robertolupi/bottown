@@ -142,7 +142,12 @@ status `bottown/e2e` on H, written by the owner (description ending
 
 - **Passed:** the verify run starts, and its prompt says the checks passed
   at H, with the log. The verifier still runs `bottown check` (`make
-  check`), but not the e2e commands.
+  check`), but not the e2e commands. The flow asks the server for a
+  verify run at H (`POST /v1/runs` with `sha`), and the server pins the
+  run at the head it reads only if that is H, else refuses it ("the head
+  moved"). So a push during the checks, or while the flow waits for the
+  verifier's actor slot, never gives a verifier a head the checks did not
+  pass at: the flow goes round the loop and checks the new head first.
 - **Failed:** no verifier starts. The flow comments on the issue ("checks
   failed", with the description and the log) and starts an implement run
   whose prompt has the failure: the failed command, its first failing

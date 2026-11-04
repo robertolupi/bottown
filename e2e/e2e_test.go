@@ -660,6 +660,10 @@ func TestE2E(t *testing.T) {
 		if code, m := runs(owner, "DELETE", "/v1/runs/"+sameFamily["id"].(string), map[string]string{"status": "revoked"}); code != 200 {
 			t.Fatalf("end same-family run: %d %v", code, m)
 		}
+		// A verify run that names another head than the PR's is refused.
+		if code, m := runs(owner, "POST", "/v1/runs", map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": pr.Number, "sha": strings.Repeat("0", 40)}); code != 409 || !strings.Contains(fmt.Sprint(m["error"]), "head moved") {
+			t.Errorf("verify run at a moved head: %d %v", code, m)
+		}
 		code, ver := verify("codex", false)
 		if code != 201 || ver["sha"] != pr.Head.Sha {
 			t.Fatalf("verify run: %d %v (head %s)", code, ver, pr.Head.Sha)

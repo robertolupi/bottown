@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -61,10 +62,13 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
 				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, bypassActorLimit: req.BypassActorLimit,
-					flowNote: req.Note, checksPassed: req.ChecksPassed})
+					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA})
 				cmd.SetContext(previous)
 				if err != nil && strings.Contains(err.Error(), "live batch run") {
 					return fmt.Errorf("%w: %v", flow.ErrActorLimit, err)
+				}
+				if errors.Is(err, errHeadMoved) {
+					return fmt.Errorf("%w: %v", flow.ErrHeadMoved, err)
 				}
 				return err
 			})

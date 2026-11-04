@@ -25,17 +25,25 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind             string `json:"kind"` // implement | verify | discuss | plan
-	Actor            string `json:"actor"`
-	Spec             string `json:"spec,omitempty"` // the harness's model, recorded as given
-	Repo             string `json:"repo"`           // name within the org
-	Issue            int64  `json:"issue,omitempty"`
-	PR               int64  `json:"pr,omitempty"`
+	Kind  string `json:"kind"` // implement | verify | discuss | plan
+	Actor string `json:"actor"`
+	Spec  string `json:"spec,omitempty"` // the harness's model, recorded as given
+	Repo  string `json:"repo"`           // name within the org
+	Issue int64  `json:"issue,omitempty"`
+	PR    int64  `json:"pr,omitempty"`
+	// SHA, for a verify run, is the head the caller expects: the run is
+	// refused (409, HeadMovedMessage) if the PR's head is another commit,
+	// so the run is pinned exactly at it.
+	SHA              string `json:"sha,omitempty"`
 	AllowSameFamily  bool   `json:"allow_same_family,omitempty"`
 	BypassActorLimit bool   `json:"bypass_actor_limit,omitempty"`
 	Interactive      bool   `json:"interactive,omitempty"`
 	TTLSeconds       int64  `json:"ttl_seconds,omitempty"`
 }
+
+// HeadMovedMessage is in the error for a verify run whose expected SHA is
+// no longer the PR's head.
+const HeadMovedMessage = "the head moved"
 
 // RunResponse is a created run and its key. The key is returned once.
 type RunResponse struct {
@@ -180,6 +188,10 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			return run, runErr(http.StatusConflict, "pull request #%d is not open", req.PR)
 		case pr.Head == nil || pr.Head.Sha == "":
 			return run, fmt.Errorf("pull request #%d has no head commit", req.PR)
+		case req.SHA != "" && req.SHA != pr.Head.Sha:
+			// The run is pinned at the head read here, so this comparison
+			// leaves no window between what the caller checked and the pin.
+			return run, runErr(http.StatusConflict, "pull request #%d: %s: it is at %s, not %s", req.PR, HeadMovedMessage, pr.Head.Sha, req.SHA)
 		}
 		if pr.Poster != nil {
 			run.Author = pr.Poster.UserName

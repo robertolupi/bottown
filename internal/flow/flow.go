@@ -37,6 +37,11 @@ const (
 // ErrActorLimit marks a run creation refused by the per-actor batch limit.
 var ErrActorLimit = errors.New("actor at live batch run limit")
 
+// ErrHeadMoved marks a verify run creation refused because the PR's head is
+// no longer the SHA the flow asked for: what the flow gated is not what the
+// verifier would review.
+var ErrHeadMoved = errors.New("pull request head moved")
+
 // Options selects the issue, actors, and budgets for one flow. Implement
 // and Verify are ACTOR[:SPEC] (runs.SplitActorSpec): the spec, a model
 // choice, goes to the run unchanged and never changes the actor's family.
@@ -88,8 +93,12 @@ type RunRequest struct {
 	// an implement round fixes, or the passed checks a verifier relies on.
 	Note string
 	// ChecksPassed tells a verify run the post-implement checks passed at
-	// the PR's head, so it need not run them again.
+	// SHA, so it need not run them again.
 	ChecksPassed bool
+	// SHA, for a verify run, is the head the flow read and gated. The run
+	// must be pinned there: the Runner fails with ErrHeadMoved if the PR's
+	// head is another commit when the server creates the run.
+	SHA string
 }
 
 // CheckRequest is the post-implement checks at one PR head.
@@ -263,7 +272,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			return s.stop(ctx, result, VerifierUndecided, fmt.Sprintf("%s left a comment on !%d", assessment.Review.Reviewer, pr.Number))
 		default:
 			head := pr.HeadSHA
-			verify := RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number}
+			verify := RunRequest{Kind: policy.Verify, Repo: opts.Repo, Actor: opts.Verify, PR: pr.Number, SHA: head}
 			if s.Checker != nil {
 				outcome, err := s.gate(ctx, opts, pr)
 				if err != nil {
@@ -298,7 +307,15 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 					continue
 				}
 			}
-			if err := s.runStep(ctx, opts, verify); err != nil {
+			if err := s.runStep(ctx, opts, verify); errors.Is(err, ErrHeadMoved) {
+				// A push during the checks, or while waiting for the
+				// verifier's slot: the new head is gated first.
+				if s.Out != nil {
+					fmt.Fprintf(s.Out, "flow #%d: !%d moved past %s before the verify run started\n", opts.Issue, pr.Number, shortSHA(head))
+				}
+				resuming = false
+				continue
+			} else if err != nil {
 				return s.runFailure(ctx, result, err)
 			}
 			resuming = false

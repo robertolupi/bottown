@@ -33,8 +33,12 @@ type runOpts struct {
 	question         string // discuss: the owner's question for the prompt
 	message          string // implement, verify, plan: the owner's note for the prompt
 	flowNote         string // implement, verify: bottown flow's note (the post-implement checks)
-	checksPassed     bool   // verify: the flow's post-implement checks passed at the head
+	checksPassed     bool   // verify: the flow's post-implement checks passed at sha
+	sha              string // verify: the head the run must be pinned at (bottown flow)
 }
+
+// errHeadMoved is a verify run refused because the PR's head is not runOpts.sha.
+var errHeadMoved = errors.New(server.HeadMovedMessage)
 
 func newRun(g *globals) *cobra.Command {
 	run := &cobra.Command{
@@ -246,12 +250,15 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 
 	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, BypassActorLimit: o.bypassActorLimit, Interactive: o.interactive}
 	if kind == policy.Verify {
-		req.PR = n
+		req.PR, req.SHA = n, o.sha
 	} else {
 		req.Issue = n
 	}
 	var created server.RunResponse
 	if err := callServer(ctx, rc.inst, rc.key, "POST", "/v1/runs", req, &created); err != nil {
+		if req.SHA != "" && strings.Contains(err.Error(), server.HeadMovedMessage) {
+			return fmt.Errorf("%w: %v", errHeadMoved, err)
+		}
 		return err
 	}
 	run := created.Run
@@ -281,6 +288,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			return nil
 		})
 	}()
+
+	// A server that predates RunRequest.SHA pins whatever the head is.
+	if req.SHA != "" && run.SHA != req.SHA {
+		return fmt.Errorf("%w: pull request #%d is at %s, not %s", errHeadMoved, run.PR, run.SHA, req.SHA)
+	}
 
 	harnessName := run.Harness
 	if harnessName == "" {
