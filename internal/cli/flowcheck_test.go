@@ -2,15 +2,30 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/flow"
 	"github.com/robertolupi/bottown/internal/runs"
 )
+
+// The flow's time limit ends a step's whole process group: a child that
+// keeps the output open does not hold the check past it.
+func TestRunChecksOwnGroupTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	l := &checkLog{w: io.Discard}
+	start := time.Now()
+	steps := runChecks(ctx, t.TempDir(), []checkSpec{{"e2e", "sleep 30 & sleep 30"}}, l, time.Now, true)
+	if took := time.Since(start); took > 5*time.Second || len(steps) != 1 || steps[0].Status != stepFailed {
+		t.Fatalf("steps = %+v after %s", steps, took)
+	}
+}
 
 // The flow's checker runs the e2e commands of the default branch's
 // .bottown.toml in a clean worktree at the PR head, keeps the log in the

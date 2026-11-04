@@ -75,7 +75,7 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	for i, cmd := range settings.E2E {
 		specs[i] = checkSpec{"e2e", cmd}
 	}
-	res := checkResult{SHA: req.SHA, Log: out.Log, Steps: runChecks(ctx, dir, specs, l, time.Now)}
+	res := checkResult{SHA: req.SHA, Log: out.Log, Steps: runChecks(ctx, dir, specs, l, time.Now, true)}
 	out.Passed = !res.failed()
 	out.Description = res.groupDescription("e2e")
 	out.Summary = checkSummary(res)
