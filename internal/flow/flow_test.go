@@ -20,6 +20,10 @@ type fakeAPI struct {
 	runs     []secrets.Run
 	carries  []review.Carry
 	comments []string
+	// gate is the flow's bottown/e2e status per commit, and gated the
+	// order it recorded them in.
+	gate  map[string]server.CommitStatus
+	gated []string
 }
 
 func (f *fakeAPI) Actors(context.Context) ([]server.ActorInfo, error) {
@@ -38,6 +42,10 @@ func (f *fakeAPI) OpenPR(context.Context, string, string) (server.PRItem, bool, 
 func (f *fakeAPI) PR(context.Context, string, int64) (server.PROut, error) {
 	pr := f.pr
 	pr.Carries = f.carries
+	pr.Checks = nil
+	if st, ok := f.gate[pr.HeadSHA]; ok {
+		pr.Checks = []server.CommitStatus{st}
+	}
 	reviews := make([]review.Review, 0, len(pr.Reviews))
 	for _, r := range pr.Reviews {
 		reviews = append(reviews, review.Review{ID: r.ID, Reviewer: r.Reviewer, State: r.State, CommitID: r.CommitID, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official})
@@ -58,6 +66,28 @@ func (f *fakeAPI) Comment(_ context.Context, repo string, _ int64, body string) 
 	}
 	f.comments = append(f.comments, body)
 	return nil
+}
+
+func (f *fakeAPI) RecordGate(_ context.Context, repo, sha, state, description string) error {
+	if repo != "demo" {
+		return errors.New("wrong repo")
+	}
+	if f.gate == nil {
+		f.gate = map[string]server.CommitStatus{}
+	}
+	f.gate[sha] = server.CommitStatus{Context: "bottown/e2e", State: state, Description: description + " (flow)", Creator: "rlupi", Gate: true}
+	f.gated = append(f.gated, sha)
+	return nil
+}
+
+func (f *fakeAPI) GateFailures(context.Context, string, int64) ([]string, error) {
+	failed := []string{}
+	for sha, st := range f.gate {
+		if st.State == "failure" {
+			failed = append(failed, sha)
+		}
+	}
+	return failed, nil
 }
 
 func testOptions() Options {

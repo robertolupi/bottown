@@ -32,6 +32,8 @@ type runOpts struct {
 	keep             bool
 	question         string // discuss: the owner's question for the prompt
 	message          string // implement, verify, plan: the owner's note for the prompt
+	flowNote         string // implement, verify: bottown flow's note (the post-implement checks)
+	checksPassed     bool   // verify: the flow's post-implement checks passed at the head
 }
 
 func newRun(g *globals) *cobra.Command {
@@ -297,6 +299,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
+		FlowNote: strings.TrimSpace(o.flowNote), ChecksPassed: o.checksPassed,
 	}
 	if err := rc.ws.Save(rec); err != nil {
 		return err
@@ -565,6 +568,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
 		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
 		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message, AttachmentsOf: n,
+		FlowNote: rec.FlowNote, ChecksPassed: rec.ChecksPassed,
 	}
 	// Attachments never stop a run: a failure is in the prompt instead.
 	var is server.IssueOut
@@ -682,6 +686,9 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 	}
 	if rec.Message != "" {
 		fmt.Fprintf(&b, "Owner's note:%s\n\n", quoteLines(rec.Message))
+	}
+	if rec.FlowNote != "" {
+		fmt.Fprintf(&b, "Flow's note:%s\n\n", quoteLines(rec.FlowNote))
 	}
 	if rec.Interactive {
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")

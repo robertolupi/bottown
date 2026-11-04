@@ -556,6 +556,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 			out.ChecksError = err.Error()
 		} else {
 			out.Checks = latestStatuses(sts)
+			s.markGate(out.Checks)
 		}
 	}
 	if withDiff {

@@ -8,4 +8,10 @@ within the issue and this run's limits:
 
 {{.Message}}
 {{- end}}
+{{- if .FlowNote}}
+
+## Note from bottown flow
+
+{{.FlowNote}}
+{{- end}}
 {{- end}}

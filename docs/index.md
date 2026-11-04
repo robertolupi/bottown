@@ -139,6 +139,15 @@ a branch cannot change what its own checks are.
   per context and creator, so the implementer's and the verifier's
   results show side by side (`checks` in `--json`, and in the MCP
   `pr_get`).
+- **The flow's own run.** `bottown flow` runs the `e2e` commands itself
+  at each new PR head before it starts a verifier, in a clean worktree
+  with no agent, and records them as the owner's `bottown/e2e` status
+  (marked `gate` in `--json`); the log is
+  `.bottown/runs/flow-<issue>-<sha>.e2e.log`. A pass goes into the verify
+  prompt, which then asks for `bottown check` without `--e2e`; a failure
+  starts another implement round with the failure in its prompt
+  ([web-ui.md §3.2](design/web-ui.md#32-the-loop)). So implementers need
+  not run `--e2e` before opening a PR.
 
 Launched runs get a private scratch directory under the launcher's temporary
 directory, named `bottown-<workspace hash>-<run id>`. The harness receives it

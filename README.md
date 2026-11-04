@@ -207,7 +207,7 @@ has the details.
 
 | Command | What it does |
 |---|---|
-| `flow N --implement ACTOR --verify ACTOR [--rounds N] [--timeout D] [--wait-actors] [-m NOTE]` | Drive one issue through batch implement and cross-family verify runs, stopping at the owner action. `--message` adds a note to every run's goal prompt. |
+| `flow N --implement ACTOR --verify ACTOR [--rounds N] [--check-rounds N] [--timeout D] [--check-timeout D] [--wait-actors] [-m NOTE]` | Drive one issue through batch implement and cross-family verify runs, stopping at the owner action. Before each verify it runs the repository's e2e commands itself at the PR head (the post-implement checks); a failure starts another implement round, counted against `--check-rounds`. `--message` adds a note to every run's goal prompt. |
 | `run implement -a ACTOR [-I] [-m NOTE] ISSUE` | An agent implements the issue: pushes `issue/N`, opens a PR. `--message` adds a note to the goal prompt, e.g. "the branch is out of date, rebase it"; `run verify` and `run plan` take it too. |
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |

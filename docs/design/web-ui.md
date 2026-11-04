@@ -89,10 +89,16 @@ Decided with the owner:
 bottown flow 51 --implement claude --verify kimi
 ```
 
-- `--rounds N` (default 3): the most implement runs one flow starts, the
+- `--rounds N` (default 3): review rounds. The flow stops at the Nth
+  request for changes, so at most N implement runs answer reviews, the
   first included. Three rounds means up to two follow-ups after requested
   changes, which matches the problem statement's escalation after two
   rejections.
+- `--check-rounds N` (default 2): the implement runs the flow starts to fix
+  failed post-implement checks (§3.2). They do not use up `--rounds`: a
+  failed check is a mechanical fix, not a reviewer's judgement.
+- `--check-timeout D` (default 60m): per post-implement check, apart from
+  the runs' `--timeout`. Running out is a failure.
 - `--repo R`: as for `run`; defaults to the checkout's repository.
 - `--timeout D` (default 60m): per run (§3.5).
 - `--wait-actors`: enforce each actor's live batch run limit and wait for a
@@ -111,12 +117,46 @@ bottown flow 51 --implement claude --verify kimi
           │                                               │
      PR at head H                                         │
           ▼                                               │
+  post-implement checks at H ──failed── check rounds left? ┤
+          │                             └──no──▶ stop: checks failed
+       passed                                             │
+          ▼                                               │
   verify run (B) at H ──failed / COMMENT──▶ stop          │
           │                                               │
           ├── APPROVED ──▶ stop: ready to merge           │
           └── REQUEST_CHANGES ── rounds left? ──yes───────┘
                                      └──no──▶ stop: out of rounds
 ```
+
+**Post-implement checks.** Before a verifier sees a new head, the flow
+runs the e2e commands `.bottown.toml` names on `main` (§4.4; default `make
+e2e`) itself, with no agent involved: in a clean worktree of the
+workspace's mirror detached at H (`.bottown/runs/flow-<issue>-<sha>`,
+removed afterwards), one command after another with `sh -c`, stopping at
+the first failure, within `--check-timeout`. When the e2e suite takes a
+host-wide lock (#158), it does so in the suite, so the flow's checks wait
+for other suites like any other. The log goes next to the run records,
+`.bottown/runs/flow-<issue>-<sha>.e2e.log`, and the result is the commit
+status `bottown/e2e` on H, written by the owner (description ending
+"(flow)"), which `pr show` lists next to the agents' own reports.
+
+- **Passed:** the verify run starts, and its prompt says the checks passed
+  at H, with the log. The verifier still runs `bottown check` (`make
+  check`), but not the e2e commands.
+- **Failed:** no verifier starts. The flow comments on the issue ("checks
+  failed", with the description and the log) and starts an implement run
+  whose prompt has the failure: the failed command, its first failing
+  lines with their line numbers in the log, and the log's path. It counts
+  against `--check-rounds`; once those are used up the flow stops as
+  "checks failed". There is no automatic retry: a flaky check is fixed,
+  not hidden, and the note's log makes one easy to recognise.
+- If that implement run pushes no new commit, the flow stops as "run
+  failed".
+- A repository whose `.bottown.toml` sets `e2e = []` has no
+  post-implement checks: the flow goes straight to verify.
+
+Implementers need not run the e2e commands before opening a PR, though
+they may run the ones their change touches; the prompts say so.
 
 A follow-up round is a new implement run on the same issue: it resumes
 `issue/<n>` and the open PR, as today. Every new head gets a new verify
@@ -149,6 +189,7 @@ the owner sees it in Forgejo and in the UI:
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | the PR no longer merges cleanly, because `main` moved | re-run the flow: its implement run brings `main` in and resolves the conflict |
+| checks failed | the post-implement checks failed at the head and no check rounds remain | read the log the stop names; fix the cause (a flake gets its own issue), then re-run, maybe with more check rounds |
 
 ### 3.3 State and restart
 
@@ -170,9 +211,13 @@ again:
    - changes requested at an older head, while H is approved → stop:
      changes requested;
    - commented → stop: verifier undecided;
-   - needs review → verify.
-4. Rounds are counted from the PR's `REQUEST_CHANGES` reviews, so a resumed
-   flow does not get fresh rounds.
+   - needs review → by the flow's `bottown/e2e` status at H: none → run
+     the post-implement checks; success → verify; failure → an implement
+     run to fix them, if check rounds are left, else stop: checks failed.
+4. Rounds are counted from the PR's `REQUEST_CHANGES` reviews, and check
+   rounds from the PR's commits whose flow `bottown/e2e` status is a
+   failure (`GET /v1/forge/pr/gate`), so a resumed flow gets fresh rounds
+   of neither. (Commits a force push drops from the PR no longer count.)
 
 **Review assessment.** One function, `review.Assess` (`internal/review`),
 decides where a PR's reviews leave it, and the flow, the PR list's review
@@ -364,7 +409,7 @@ be recomputed.
 |---|---|---|
 | Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), and it merges cleanly | merged or closed, the head moves, a request for changes, or it starts to conflict |
 | Conflicts with main | an open PR no longer merges cleanly | the flow is re-run and resolves it, or the PR is closed |
-| Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided) (§3.2, §3.3) | the flow is re-run, or the issue is closed |
+| Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided), or the flow's post-implement checks failed at the head (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
@@ -560,17 +605,15 @@ Implementers and verifiers run the checks `check` and `e2e` in
 `.bottown.toml` name with `bottown check [--e2e]` (docs/index.md), which
 records each run's result as the commit statuses `bottown/check` and
 `bottown/e2e` on the commit it ran on, and `pr show` lists them by actor.
-A status is what the run's actor reports it ran, not a verification:
-bottown does not run the checks itself. Later, bottown can:
+A status is what the run's actor reports it ran, not a verification.
 
-- on the host, in a fresh worktree at the PR's head, after the implement
-  run and before the verify run;
-- with the result posted as a commit status on that head, shown in the
-  verify prompt and in the inbox ("ready to merge" would then also need
-  passing checks).
-
-This needs its own design (isolation, time limits, what a failure does to
-the flow) and gets its own issue.
+`bottown flow` runs the `e2e` commands itself, as the post-implement
+checks (§3.2): on the host, in a fresh worktree at the PR's head, after
+the implement run and before the verify run, with the result as the
+owner's `bottown/e2e` status on that head. A passing result is in the
+verify prompt; a failing one sends the PR back to the implementer, and
+shows in the inbox when the flow stops on it. Outside a flow (runs started
+by hand) nothing runs the checks but the agents.
 
 ## 5. Actions
 
