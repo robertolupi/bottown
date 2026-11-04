@@ -632,14 +632,14 @@ func TestInbox_BrokenRun(t *testing.T) {
 
 	// Subtest 1: Dead run (local status == dead)
 	deadRec := runs.Record{
-		ID:       "r-dead-1",
+		ID:       "r-dead01",
 		Status:   runs.StatusDead,
 		PID:      999999,
 		Started:  now.Add(-10 * time.Minute),
-		Worktree: filepath.Join(runsDir, "r-dead-1"),
+		Worktree: filepath.Join(runsDir, "r-dead01"),
 	}
 	b, _ := json.MarshalIndent(deadRec, "", "  ")
-	if err := os.WriteFile(filepath.Join(runsDir, "r-dead-1.json"), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "r-dead01.json"), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -664,15 +664,15 @@ func TestInbox_BrokenRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-dead-1" {
-		t.Fatalf("expected broken_run for r-dead-1, got: %+v", items)
+	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-dead01" {
+		t.Fatalf("expected broken_run for r-dead01, got: %+v", items)
 	}
 	if items[0].Action == nil || items[0].Action.Command != "bottown run gc" {
 		t.Fatalf("expected dead run action 'bottown run gc', got: %+v", items[0].Action)
 	}
 
 	// Go-away condition for dead run: file removed or run cleaned up
-	_ = os.Remove(filepath.Join(runsDir, "r-dead-1.json"))
+	_ = os.Remove(filepath.Join(runsDir, "r-dead01.json"))
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 0 {
 		t.Fatalf("expected broken run to go away after removing dead run file, got: %+v", items)
@@ -719,23 +719,23 @@ func TestInbox_BrokenRun(t *testing.T) {
 	}
 
 	// Subtest 3: Failed run left its worktree behind
-	failedDir := filepath.Join(runsDir, "r-failed-wt")
+	failedDir := filepath.Join(runsDir, "r-fa11ed")
 	if err := os.MkdirAll(failedDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	failedRec := runs.Record{
-		ID:       "r-failed-wt",
+		ID:       "r-fa11ed",
 		Status:   runs.StatusFailed,
 		Started:  now.Add(-10 * time.Minute),
 		Worktree: failedDir,
 	}
 	b2, _ := json.MarshalIndent(failedRec, "", "  ")
-	if err := os.WriteFile(filepath.Join(runsDir, "r-failed-wt.json"), b2, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(runsDir, "r-fa11ed.json"), b2, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	items, _ = s.ComputeInbox(ctx)
-	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-failed-wt" {
+	if len(items) != 1 || items[0].Kind != InboxBrokenRun || items[0].Target != "r-fa11ed" {
 		t.Fatalf("expected broken_run for failed run with worktree, got: %+v", items)
 	}
 	if items[0].Action == nil || items[0].Action.Command != "bottown run gc --failed" {

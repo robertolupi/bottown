@@ -95,7 +95,7 @@ func TestImplementWorktreeRemoteAndUpstream(t *testing.T) {
 	if _, err := Git(w.Mirror, nil, "rev-parse", "--verify", "refs/remotes/bottown/main"); err != nil {
 		t.Fatalf("old mirror's refs were not migrated: %v", err)
 	}
-	dir, err := w.AddImplement("r-fresh", "issue/7", "main")
+	dir, err := w.AddImplement("r-add1", "issue/7", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +117,10 @@ func TestImplementWorktreeRemoteAndUpstream(t *testing.T) {
 	if err := w.Sync(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Remove("r-fresh"); err != nil {
+	if err := w.Remove("r-add1"); err != nil {
 		t.Fatal(err)
 	}
-	dir, err = w.AddImplement("r-resume", "issue/7", "main")
+	dir, err = w.AddImplement("r-beef", "issue/7", "main")
 	if err != nil {
 		t.Fatal(err)
 	}

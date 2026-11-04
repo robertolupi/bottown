@@ -193,8 +193,14 @@ func (w *Workspace) DefaultBranch(ctx context.Context) (string, error) {
 	return "", errors.New("cannot determine the default branch of the bottown remote")
 }
 
-// WorktreeDir is where run id's worktree lives.
-func (w *Workspace) WorktreeDir(id string) string { return filepath.Join(w.RunsDir, id) }
+// WorktreeDir is where run id's worktree lives. An invalid id (empty, say)
+// has no directory rather than the runs directory itself.
+func (w *Workspace) WorktreeDir(id string) string {
+	if !validRunID(id) {
+		return ""
+	}
+	return filepath.Join(w.RunsDir, id)
+}
 
 // TmpDir is where launched run id keeps its scratch directory. Use the
 // launcher's temporary directory rather than nesting it in the owner's checkout:
@@ -256,8 +262,12 @@ func Configure(dir, actor, credentialHelper string) error {
 	return err
 }
 
-// Remove deletes a run's worktree.
+// Remove deletes a run's worktree. It refuses an invalid id so a caller
+// cannot ask git to remove the runs directory itself.
 func (w *Workspace) Remove(id string) error {
+	if !validRunID(id) {
+		return fmt.Errorf("invalid run id %q", id)
+	}
 	dir := w.WorktreeDir(id)
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		_, err := Git(w.Mirror, nil, "worktree", "prune")

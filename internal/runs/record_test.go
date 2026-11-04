@@ -2,12 +2,14 @@ package runs
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,6 +129,53 @@ func TestRecordUpdateProcess(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("permissions: %v", info.Mode())
+	}
+}
+
+func TestInvalidRunIDRefused(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	for _, id := range []string{"", "runs", ".", "..", "r-", "r-nothex", "r-2ecab347.check"} {
+		if got := w.WorktreeDir(id); got != "" {
+			t.Errorf("WorktreeDir(%q) = %q; want empty", id, got)
+		}
+		if err := w.Remove(id); err == nil {
+			t.Errorf("Remove(%q) succeeded", id)
+		}
+		w.RemoveFiles(id)
+		if _, err := os.Stat(w.RunsDir); err != nil {
+			t.Fatalf("RemoveFiles(%q) removed the runs directory: %v", id, err)
+		}
+	}
+	if got, want := w.WorktreeDir("r-2ecab347"), filepath.Join(w.RunsDir, "r-2ecab347"); got != want {
+		t.Errorf("WorktreeDir(valid) = %q; want %q", got, want)
+	}
+}
+
+func TestRecordsSkipsNonRunFiles(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	if err := w.Save(Record{ID: "r-1234abcd", Status: StatusSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	// A check result has no id, so it unmarshals into an empty record.
+	if err := os.WriteFile(w.Path("r-1234abcd", ".check.json"), []byte("{\n  \"sha\": \"deadbeef\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A record whose id does not match its filename.
+	if err := os.WriteFile(filepath.Join(w.RunsDir, "r-9999.json"), []byte("{\n  \"id\": \"r-8888\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	recs, err := w.Records(&warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].ID != "r-1234abcd" {
+		t.Fatalf("records: %+v", recs)
+	}
+	for _, name := range []string{"r-1234abcd.check.json", "r-9999.json"} {
+		if !strings.Contains(warn.String(), name) {
+			t.Errorf("no warning naming %s: %q", name, warn.String())
+		}
 	}
 }
 

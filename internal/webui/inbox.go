@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -130,7 +131,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			Dir:     filepath.Join(s.cfg.RepoTop, ".bottown"),
 			RunsDir: runsDir,
 		}
-		if recs, err := ws.Records(); err == nil {
+		if recs, err := ws.Records(io.Discard); err == nil {
 			localRuns = recs
 		}
 	}

@@ -2,8 +2,10 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -192,8 +194,8 @@ func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
 	if dir := os.Getenv("BOTTOWN_GC_TEST_DIR"); dir != "" {
 		// The launcher: the same steps as startRun up to the download.
 		ws := &runs.Workspace{RunsDir: dir}
-		attach := ws.AttachmentsDir("r-prep")
-		rec := runs.Record{ID: "r-prep", Kind: policy.Implement, Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(), Key: "k", Attachments: attach}
+		attach := ws.AttachmentsDir("r-cafe")
+		rec := runs.Record{ID: "r-cafe", Kind: policy.Implement, Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(), Key: "k", Attachments: attach}
 		if err := ws.Save(rec); err != nil {
 			t.Fatal(err)
 		}
@@ -225,15 +227,15 @@ func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
 		_ = c.Wait()
 		t.Fatalf("launcher: %q, %v", line, err)
 	}
-	attach := ws.AttachmentsDir("r-prep")
+	attach := ws.AttachmentsDir("r-cafe")
 
 	var revoked []string
 	revoke := func(id string) { revoked = append(revoked, id) }
-	recs, err := ws.Records()
+	recs, err := ws.Records(io.Discard)
 	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusPreparing {
 		t.Fatalf("live launcher: records %+v, %v", recs, err)
 	}
-	if removed, keep := gcLocal(ws, recs, true, os.Stderr, revoke); removed != 0 || !slices.Equal(keep, []string{"r-prep"}) || revoked != nil {
+	if removed, keep := gcLocal(ws, recs, true, os.Stderr, revoke); removed != 0 || !slices.Equal(keep, []string{"r-cafe"}) || revoked != nil {
 		t.Errorf("live launcher: gc removed %d, kept %v, revoked %v", removed, keep, revoked)
 	}
 	if _, err := os.Stat(filepath.Join(attach, ".download-1")); err != nil {
@@ -242,18 +244,51 @@ func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
 
 	_ = c.Process.Kill()
 	_ = c.Wait()
-	recs, err = ws.Records()
+	recs, err = ws.Records(io.Discard)
 	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusDead {
 		t.Fatalf("killed launcher: records %+v, %v", recs, err)
 	}
-	if removed, keep := gcLocal(ws, recs, false, os.Stderr, revoke); removed != 1 || keep != nil || !slices.Equal(revoked, []string{"r-prep"}) {
+	if removed, keep := gcLocal(ws, recs, false, os.Stderr, revoke); removed != 1 || keep != nil || !slices.Equal(revoked, []string{"r-cafe"}) {
 		t.Errorf("killed launcher: gc removed %d, kept %v, revoked %v", removed, keep, revoked)
 	}
 	if _, err := os.Stat(attach); !os.IsNotExist(err) {
 		t.Errorf("attachments survive gc: %v", err)
 	}
-	if _, err := os.Stat(ws.Path("r-prep", ".json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(ws.Path("r-cafe", ".json")); !os.IsNotExist(err) {
 		t.Errorf("record survives gc: %v", err)
+	}
+}
+
+// A file in the runs directory that is not a run record, such as a check
+// result (<id>.check.json), unmarshals into a record with no id. gc must
+// skip it and warn once naming the file, rather than treat it as a finished
+// run whose empty id is the runs directory itself.
+func TestGCSkipsRecordWithoutID(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	stray := filepath.Join(ws.RunsDir, "r-2ecab347.check.json")
+	if err := os.WriteFile(stray, []byte("{\n  \"sha\": \"abc\",\n  \"steps\": []\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	recs, err := ws.Records(&warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 0 {
+		t.Fatalf("records include a non-run file: %+v", recs)
+	}
+	if got := strings.Count(warn.String(), "r-2ecab347.check.json"); got != 1 {
+		t.Fatalf("warnings naming the file = %d, want 1: %q", got, warn.String())
+	}
+	removed, keep := gcLocal(ws, recs, true, io.Discard, func(string) {})
+	if removed != 0 || keep != nil {
+		t.Fatalf("gc removed %d, kept %v", removed, keep)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Fatalf("gc removed a file it does not own: %v", err)
+	}
+	if _, err := os.Stat(ws.RunsDir); err != nil {
+		t.Fatalf("gc removed the runs directory: %v", err)
 	}
 }
 

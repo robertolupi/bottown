@@ -254,7 +254,7 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 				{"id": "r-98765", "actor": "claude"},
 				// An ephemeral run of the same actor: it must not be shown
 				// as the permanent worktree's run.
-				{"id": "r-live-1234", "actor": "claude"},
+				{"id": "r-11fe1234", "actor": "claude"},
 			})
 			return
 		}
@@ -322,13 +322,13 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	// like the runs mirror, is listed as ephemeral; one whose worktree is
 	// gone, or that belongs to another repository, is not.
 	runsDir := filepath.Join(mainCheckout, ".bottown", "runs")
-	ephDir := filepath.Join(runsDir, "r-live-1234")
+	ephDir := filepath.Join(runsDir, "r-11fe1234")
 	runGit(t, filepath.Dir(mainCheckout), "clone", "-q", mainCheckout, ephDir)
 	runGit(t, ephDir, "checkout", "-q", "-b", "issue/71")
 	for _, r := range []runs.Record{
-		{ID: "r-live-1234", Kind: "implement", Actor: "claude", Repo: "bottown/bottown", Issue: 71, Status: runs.StatusSucceeded, Worktree: ephDir},
-		{ID: "r-gone", Kind: "verify", Actor: "kimi", Repo: "bottown/bottown", PR: 3, Status: runs.StatusSucceeded, Worktree: filepath.Join(runsDir, "r-gone")},
-		{ID: "r-other", Kind: "implement", Actor: "agy", Repo: "bottown/other", Issue: 1, Status: runs.StatusSucceeded, Worktree: ephDir},
+		{ID: "r-11fe1234", Kind: "implement", Actor: "claude", Repo: "bottown/bottown", Issue: 71, Status: runs.StatusSucceeded, Worktree: ephDir},
+		{ID: "r-90ee", Kind: "verify", Actor: "kimi", Repo: "bottown/bottown", PR: 3, Status: runs.StatusSucceeded, Worktree: filepath.Join(runsDir, "r-90ee")},
+		{ID: "r-07ae", Kind: "implement", Actor: "agy", Repo: "bottown/other", Issue: 1, Status: runs.StatusSucceeded, Worktree: ephDir},
 	} {
 		if err := (&runs.Workspace{RunsDir: runsDir}).Save(r); err != nil {
 			t.Fatal(err)
@@ -343,7 +343,7 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	}
 	eph := wts[1]
 	if !eph.Ephemeral || eph.Actor != "claude" || eph.Path != ephDir || eph.Head != "issue/71" ||
-		eph.Kind != "implement" || eph.Target != "#71" || eph.ActiveRun != "r-live-1234" || eph.LastRun != "r-live-1234" {
+		eph.Kind != "implement" || eph.Target != "#71" || eph.ActiveRun != "r-11fe1234" || eph.LastRun != "r-11fe1234" {
 		t.Errorf("unexpected ephemeral worktree: %+v", eph)
 	}
 }

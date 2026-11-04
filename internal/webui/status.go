@@ -431,7 +431,7 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 func (s *Server) ephemeralWorktrees(liveRuns map[string]bool) []ActorWorktreeInfo {
 	runsDir := filepath.Join(s.cfg.RepoTop, ".bottown", "runs")
 	ws := &runs.Workspace{RunsDir: runsDir}
-	recs, err := ws.Records()
+	recs, err := ws.Records(io.Discard)
 	if err != nil {
 		return nil
 	}

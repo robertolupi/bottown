@@ -730,7 +730,7 @@ func newRunLs(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			local, err := rc.ws.Records()
+			local, err := rc.ws.Records(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -1224,7 +1224,7 @@ recently ended ones.`,
 			if err != nil {
 				return err
 			}
-			recs, err := rc.ws.Records()
+			recs, err := rc.ws.Records(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
