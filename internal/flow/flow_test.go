@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -24,6 +25,10 @@ type fakeAPI struct {
 	// order it recorded them in.
 	gate  map[string]server.CommitStatus
 	gated []string
+	// merge is the trial merge PRMergeStatus reports; mergeCalls the heads
+	// MergeBase was asked to merge into.
+	merge      server.PRMergeStatus
+	mergeCalls []string
 }
 
 func (f *fakeAPI) Actors(context.Context) ([]server.ActorInfo, error) {
@@ -68,6 +73,19 @@ func (f *fakeAPI) Comment(_ context.Context, repo string, _ int64, body string) 
 	return nil
 }
 
+func (f *fakeAPI) PRMergeStatus(context.Context, string, int64) (server.PRMergeStatus, error) {
+	return f.merge, nil
+}
+
+func (f *fakeAPI) MergeBase(_ context.Context, _ string, _ int64, head string) (server.PRMergeOut, error) {
+	f.mergeCalls = append(f.mergeCalls, head)
+	old := f.pr.HeadSHA
+	f.pr.HeadSHA = "h2"
+	f.carries = append(f.carries, review.Carry{From: old, Onto: "b2"})
+	f.merge.Behind = false
+	return server.PRMergeOut{HeadSHA: f.pr.HeadSHA, BaseSHA: f.merge.BaseSHA}, nil
+}
+
 func (f *fakeAPI) RecordGate(_ context.Context, repo, sha, state, description string) error {
 	if repo != "demo" {
 		return errors.New("wrong repo")
@@ -95,7 +113,7 @@ func testOptions() Options {
 }
 
 func openPR() server.PROut {
-	return server.PROut{Number: 12, HeadSHA: "h1", Mergeable: true}
+	return server.PROut{Number: 12, HeadSHA: "h1", HeadBranch: "issue/9", BaseBranch: "main", Mergeable: true}
 }
 
 func approve(api *fakeAPI) {
@@ -420,5 +438,80 @@ func TestFlowRefusesLiveRun(t *testing.T) {
 	_, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
 	if err == nil || !strings.Contains(err.Error(), "r-live") || called {
 		t.Fatalf("error = %v, runner called = %v", err, called)
+	}
+}
+
+func TestFlowMergeBaseCleanApproved(t *testing.T) {
+	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
+	approve(api)
+	opts := testOptions()
+	opts.Attended = true
+	var out bytes.Buffer
+	runner := RunnerFunc(func(context.Context, RunRequest) error {
+		t.Fatal("an unchanged approval should not cost another run")
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader("y\n"), Out: &out}).Run(context.Background(), opts)
+	if err != nil || result.Reason != ReadyToMerge {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if len(api.mergeCalls) != 1 || api.mergeCalls[0] != "h1" {
+		t.Fatalf("merge calls = %v, want the offered head", api.mergeCalls)
+	}
+	if got := out.String(); !strings.Contains(got, "Merge main into issue/9 for !12? [y/N]") || !strings.Contains(got, "merged main into issue/9") {
+		t.Fatalf("output = %q", got)
+	}
+	if len(api.comments) != 1 || !strings.Contains(api.comments[0], "carried over") {
+		t.Fatalf("comments = %v, want the approval to carry over", api.comments)
+	}
+}
+
+func TestFlowMergeBaseDefaultNoAndUnattended(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attended bool
+		input    string
+	}{
+		{name: "default no", attended: true, input: "\n"},
+		{name: "unattended"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1"}}
+			opts := testOptions()
+			opts.Attended = tc.attended
+			verifies := 0
+			runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+				if req.Kind != policy.Verify {
+					t.Fatalf("run = %s, want verify", req.Kind)
+				}
+				verifies++
+				approve(api)
+				return nil
+			})
+			var out bytes.Buffer
+			result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader(tc.input), Out: &out}).Run(context.Background(), opts)
+			if err != nil || result.Reason != ReadyToMerge || verifies != 1 || len(api.mergeCalls) != 0 {
+				t.Fatalf("result = %+v, err = %v, verifies = %d, merges = %v", result, err, verifies, api.mergeCalls)
+			}
+			if got, want := strings.Contains(out.String(), "[y/N]"), tc.attended; got != want {
+				t.Fatalf("prompt present = %v, want %v; output %q", got, want, out.String())
+			}
+		})
+	}
+}
+
+func TestFlowMergeBaseConflictReportsFiles(t *testing.T) {
+	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt", "b.txt"}}}
+	runner := RunnerFunc(func(context.Context, RunRequest) error {
+		t.Fatal("a conflict must not start an automatic run")
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	var stop *StopError
+	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if !strings.Contains(result.Detail, "a.txt, b.txt") || len(api.mergeCalls) != 0 {
+		t.Fatalf("detail = %q, merges = %v", result.Detail, api.mergeCalls)
 	}
 }

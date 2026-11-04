@@ -97,6 +97,20 @@ func (c *Client) PR(ctx context.Context, repo string, number int64) (server.PROu
 	return pr, err
 }
 
+func (c *Client) PRMergeStatus(ctx context.Context, repo string, number int64) (server.PRMergeStatus, error) {
+	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(number)}}
+	var status server.PRMergeStatus
+	err := c.call(ctx, "GET", "/v1/forge/pr/merge-base?"+q.Encode(), nil, &status)
+	return status, err
+}
+
+func (c *Client) MergeBase(ctx context.Context, repo string, number int64, head string) (server.PRMergeOut, error) {
+	in := server.PRMergeIn{Target: server.Target{Repo: repo, Number: number}, HeadSHA: head}
+	var out server.PRMergeOut
+	err := c.call(ctx, "POST", "/v1/forge/pr/merge-base", in, &out)
+	return out, err
+}
+
 func (c *Client) LiveRuns(ctx context.Context, repo string) ([]secrets.Run, error) {
 	q := url.Values{"repo": {repo}, "state": {"live"}}
 	var runs []secrets.Run

@@ -75,6 +75,18 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opCarries(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	})))
+	mux.Handle("GET /v1/forge/pr/merge-base", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opPRMergeStatus(r.Context(), Who(r.Context()), targetFromQuery(r))
+		writeOp(w, out, err)
+	}))))
+	mux.Handle("POST /v1/forge/pr/merge-base", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in PRMergeIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opPRMerge(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
 	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opGate(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)

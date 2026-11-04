@@ -136,6 +136,22 @@
   },
   "inbox": [
     {
+      "id": "merge-base:56",
+      "kind": "merge_base",
+      "title": "Merge main into issue/41 for !56",
+      "description": "The branch is behind and the merge is clean",
+      "target": "!56",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/56",
+      "issue": 41,
+      "issue_title": "Refresh export caches",
+      "head_sha": "9e1d2c3456789012345678901234567890abcdef",
+      "action": {
+        "label": "Merge main",
+        "command": "bottown flow merge-base !56"
+      },
+      "created": "2026-11-02T09:45:00Z"
+    },
+    {
       "id": "ready:55",
       "kind": "ready_to_merge",
       "title": "!55 is approved and ready to merge",

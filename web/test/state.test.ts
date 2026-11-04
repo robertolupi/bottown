@@ -273,6 +273,18 @@ test('resolveInboxAction and parseIssueNumber route inbox and timeline actions',
     resolveInboxAction({ target: 'r-456', action: { label: 'Stop', command: 'bottown run stop r-456' } }),
     { modal: 'stop', stopRunId: 'r-456' },
   );
+  assert.deepEqual(
+    resolveInboxAction({
+      target: '!19',
+      head_sha: 'abc123',
+      action: { label: 'Merge main', command: 'bottown flow merge-base !19' },
+    }),
+    { action: 'merge-base', number: 19, headSHA: 'abc123' },
+  );
+  assert.equal(
+    resolveInboxAction({ target: '!19', action: { label: 'Merge main', command: 'bottown flow merge-base !19' } }),
+    null,
+  );
   assert.equal(resolveInboxAction({ target: '#10', action: undefined }), null);
 
   assert.equal(parseIssueNumber('#42'), 42);

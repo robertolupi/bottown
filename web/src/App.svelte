@@ -193,6 +193,14 @@
     showAfterPullModal = true;
   }
 
+  const handleMergeBase = (number: number, headSHA: string) =>
+    act(async () => {
+      const data = await postAction('/api/actions/merge-base', { number, head_sha: headSHA }, 'Merge failed');
+      actionMessage = { type: 'success', text: data.output };
+      await loadStatus(true);
+      await loadHistory();
+    });
+
   function handleStartFlow() {
     if (flowSameFamily) return;
     return act(async () => {
@@ -364,7 +372,13 @@
         onStop={openStop}
       />
 
-      <OwnerInbox inbox={status.inbox} inboxError={status.inbox_error} onGC={openGC} onStop={openStop} />
+      <OwnerInbox
+        inbox={status.inbox}
+        inboxError={status.inbox_error}
+        onGC={openGC}
+        onStop={openStop}
+        onMergeBase={handleMergeBase}
+      />
 
       <RunHistory
         history={runHistory}

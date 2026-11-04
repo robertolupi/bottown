@@ -33,8 +33,8 @@ type Server struct {
 	Log        *slog.Logger
 	// Audit stores policy decisions (audit.go); nil only logs them.
 	Audit *AuditLog
-	// GitRoot is where Forgejo keeps its repositories, which the review
-	// carry-over reads (carry.go); "" turns carry-over off.
+	// GitRoot is where Forgejo keeps its repositories, which review
+	// carry-over and clean base merges use; "" turns those operations off.
 	GitRoot string
 
 	// Browser sign-in (web.go). PublicForgejoURL is what the owner's

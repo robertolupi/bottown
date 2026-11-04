@@ -3,6 +3,7 @@
 package flow
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -60,6 +61,9 @@ type Options struct {
 	Timeout      time.Duration
 	CheckTimeout time.Duration
 	WaitActors   bool
+	// Attended flows ask on In before merging a clean, behind base; the
+	// others leave that to the owner inbox.
+	Attended bool
 }
 
 // Result is the flow's final position.
@@ -151,6 +155,10 @@ type API interface {
 	RecordGate(ctx context.Context, repo, sha, state, description string) error
 	// GateFailures lists the PR's commits where they failed.
 	GateFailures(ctx context.Context, repo string, pr int64) ([]string, error)
+	// PRMergeStatus trial-merges the PR's base into its head; MergeBase
+	// pushes that merge when the head is still the one given.
+	PRMergeStatus(context.Context, string, int64) (server.PRMergeStatus, error)
+	MergeBase(context.Context, string, int64, string) (server.PRMergeOut, error)
 }
 
 // Supervisor drives one issue. RetryDelay is how long to wait before trying
@@ -161,8 +169,11 @@ type Supervisor struct {
 	API        API
 	Runner     Runner
 	Checker    Checker
+	In         io.Reader // the owner's answers, for an attended flow
 	Out        io.Writer
 	RetryDelay time.Duration
+
+	answers *bufio.Reader
 }
 
 // Run executes or resumes a flow. It returns nil only at ready to merge;
@@ -230,7 +241,34 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		if !pr.Mergeable {
+		merge, err := s.API.PRMergeStatus(ctx, opts.Repo, pr.Number)
+		if err != nil {
+			return result, err
+		}
+		if merge.Behind && !merge.Clean {
+			files := strings.Join(merge.Conflicts, ", ")
+			if files == "" {
+				files = "unknown files"
+			}
+			return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("merging %s into %s for !%d would conflict in %s; start an implement run to resolve it", pr.BaseBranch, pr.HeadBranch, pr.Number, files))
+		}
+		if merge.Behind && merge.Clean && opts.Attended {
+			yes, err := s.confirmMerge(pr)
+			if err != nil {
+				return result, err
+			}
+			if yes {
+				merged, err := s.API.MergeBase(ctx, opts.Repo, pr.Number, merge.HeadSHA)
+				if err != nil {
+					return result, err
+				}
+				if s.Out != nil {
+					fmt.Fprintf(s.Out, "flow #%d: merged %s into %s for !%d at %s\n", opts.Issue, pr.BaseBranch, pr.HeadBranch, pr.Number, shortSHA(merged.HeadSHA))
+				}
+				continue
+			}
+		}
+		if !pr.Mergeable && !(merge.Behind && merge.Clean) {
 			if !resuming {
 				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("!%d no longer merges cleanly; rerun the flow to resolve it", pr.Number))
 			}
@@ -329,6 +367,30 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				}
 			}
 		}
+	}
+}
+
+// confirmMerge asks the owner whether to merge the base into pr's branch.
+// Anything but y or yes, end of input included, is no.
+func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
+	if s.In == nil {
+		return false, nil
+	}
+	if s.Out != nil {
+		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [y/N] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
+	}
+	if s.answers == nil {
+		s.answers = bufio.NewReader(s.In)
+	}
+	answer, err := s.answers.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 

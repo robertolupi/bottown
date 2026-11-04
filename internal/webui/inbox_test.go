@@ -19,19 +19,22 @@ import (
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 type fixtureForge struct {
-	mu       sync.Mutex
-	actors   []map[string]any
-	whoami   map[string]any
-	runs     []secrets.Run
-	prs      []*sdk.PullRequest
-	reviews  map[int64][]*sdk.PullReview
-	carries  map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
-	issues   []*sdk.Issue
-	comments map[int64][]*sdk.Comment
-	statuses map[string][]*sdk.Status // by commit
+	mu         sync.Mutex
+	actors     []map[string]any
+	whoami     map[string]any
+	runs       []secrets.Run
+	prs        []*sdk.PullRequest
+	reviews    map[int64][]*sdk.PullReview
+	carries    map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
+	merges     map[int64]serverapi.PRMergeStatus
+	mergeCalls []serverapi.PRMergeIn
+	issues     []*sdk.Issue
+	comments   map[int64][]*sdk.Comment
+	statuses   map[string][]*sdk.Status // by commit
 }
 
 func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
@@ -63,6 +66,14 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 				carries = []review.Carry{}
 			}
 			_ = json.NewEncoder(w).Encode(carries)
+		case p == "/v1/forge/pr/merge-base" && r.Method == http.MethodPost:
+			var in serverapi.PRMergeIn
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			fix.mergeCalls = append(fix.mergeCalls, in)
+			_ = json.NewEncoder(w).Encode(serverapi.PRMergeOut{HeadSHA: "2222333344445555666677778888999900001111"})
+		case p == "/v1/forge/pr/merge-base":
+			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
+			_ = json.NewEncoder(w).Encode(fix.merges[num])
 		case strings.HasSuffix(p, "/pulls"):
 			_ = json.NewEncoder(w).Encode(paginate(r, fix.prs))
 		case strings.Contains(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
@@ -311,6 +322,67 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 	items, _ = s.ComputeInbox(ctx)
 	if len(items) != 0 {
 		t.Fatalf("expected same-family approval to be refused, got: %+v", items)
+	}
+}
+
+func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
+	fix := defaultFixture()
+	_, port := newFixtureServer(t, fix)
+	sha := "1111222233334444555566667777888899990000"
+	now := time.Now()
+	fix.prs = []*sdk.PullRequest{{
+		Index: 15, State: sdk.StateOpen, Mergeable: true,
+		Poster: &sdk.User{UserName: "claude"},
+		Head:   &sdk.PRBranchInfo{Ref: "issue/15", Sha: sha},
+		Base:   &sdk.PRBranchInfo{Ref: "main"}, Created: &now,
+	}}
+	fix.issues = []*sdk.Issue{{Index: 15, Title: "Behind but clean", State: sdk.StateOpen}}
+	fix.reviews[15] = []*sdk.PullReview{{
+		ID: 1, Reviewer: &sdk.User{UserName: "agy"}, State: sdk.ReviewStateApproved,
+		CommitID: sha, Official: true, Submitted: now,
+	}}
+	fix.merges = map[int64]serverapi.PRMergeStatus{15: {Behind: true, Clean: true, HeadSHA: sha}}
+	s, err := NewServer(Config{Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"}, RepoTop: t.TempDir(), FullRepo: "bottown/bottown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	items, err := s.ComputeInbox(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != InboxMergeBase || items[0].HeadSHA != sha {
+		t.Fatalf("items = %+v, want one clean merge action", items)
+	}
+	if items[0].Action == nil || items[0].Action.Label != "Merge main" || items[0].Title != "Merge main into issue/15 for !15" {
+		t.Fatalf("merge action = %+v, title = %q", items[0].Action, items[0].Title)
+	}
+	out, err := s.ExecuteMergeBase(context.Background(), MergeBaseRequest{Number: 15, HeadSHA: items[0].HeadSHA})
+	if err != nil || !strings.Contains(out, "Merged the base into !15") {
+		t.Fatalf("ExecuteMergeBase = %q, %v", out, err)
+	}
+	if len(fix.mergeCalls) != 1 || fix.mergeCalls[0].Repo != "bottown" || fix.mergeCalls[0].Number != 15 || fix.mergeCalls[0].HeadSHA != sha {
+		t.Fatalf("merge calls = %+v", fix.mergeCalls)
+	}
+
+	// A live run on the PR hides the offer: a verifier records the PR, a
+	// follow-up implement run only its issue and branch.
+	for _, run := range []secrets.Run{
+		{ID: "r-verify", Kind: "verify", PR: 15, Issue: 15, Created: now},
+		{ID: "r-implement", Kind: "implement", Issue: 15, Branch: "issue/15", Created: now},
+	} {
+		fix.mu.Lock()
+		fix.runs = []secrets.Run{run}
+		fix.mu.Unlock()
+		items, err := s.ComputeInbox(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Kind == InboxMergeBase {
+				t.Fatalf("live %s run: inbox still offers %+v", run.Kind, item)
+			}
+		}
 	}
 }
 

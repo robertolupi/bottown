@@ -184,6 +184,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/actions/after-pull", s.handleActionAfterPull)
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
 	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
+	mux.HandleFunc("POST /api/actions/merge-base", s.handleActionMergeBase)
 	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
 	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
 	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
@@ -365,6 +366,22 @@ func (s *Server) handleActionRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleActionMergeBase(w http.ResponseWriter, r *http.Request) {
+	var req MergeBaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
+		return
+	}
+	out, err := s.ExecuteMergeBase(r.Context(), req)
+	res := ActionResult{Success: err == nil, Output: out}
+	if err != nil {
+		res.Error = err.Error()
+		writeJSON(w, http.StatusInternalServerError, res)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleActionPull(w http.ResponseWriter, r *http.Request) {
