@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
@@ -48,10 +49,17 @@ func (r *Report) add(format string, args ...any) {
 }
 
 // Reconciler converges Forgejo to Desired.
+//
+// Run and EnsureRepo are serialized: one pass at a time, waiting for the
+// slot only as long as their context allows. Desired and the admin token
+// change only inside a pass, under a brief write lock, so other goroutines
+// read them with Spec and API at any time without waiting for a pass to
+// finish.
 type Reconciler struct {
 	BaseURL string // Forgejo API base, e.g. http://127.0.0.1:3000
 	Admin   Admin
 	Store   *secrets.Store
+	// Desired is set before the first pass; afterwards read it with Spec.
 	Desired config.Desired
 	// DesiredPath, if set, is re-read at the start of every Run, so edits
 	// apply on the next reconcile without a restart.
@@ -59,7 +67,44 @@ type Reconciler struct {
 	Owner       Owner
 	Log         *slog.Logger
 
+	mu         sync.RWMutex // guards Desired and adminToken
 	adminToken string
+	slotOnce   sync.Once
+	slot       chan struct{} // holds one token while a pass runs
+}
+
+// ErrBusy is returned by Run and EnsureRepo when their context ends while
+// another pass still holds the slot.
+var ErrBusy = errors.New("another reconcile is in progress")
+
+// acquire waits for the pass slot until ctx ends.
+func (r *Reconciler) acquire(ctx context.Context) (release func(), err error) {
+	r.slotOnce.Do(func() { r.slot = make(chan struct{}, 1) })
+	select {
+	case r.slot <- struct{}{}:
+		return func() { <-r.slot }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", ErrBusy, ctx.Err())
+	}
+}
+
+// Spec returns the current desired state. It never waits for a pass.
+func (r *Reconciler) Spec() config.Desired {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Desired
+}
+
+func (r *Reconciler) setDesired(d config.Desired) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Desired = d
+}
+
+func (r *Reconciler) setAdminToken(t string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.adminToken = t
 }
 
 // WaitReady blocks until Forgejo's /api/healthz passes.
@@ -79,7 +124,10 @@ func (r *Reconciler) WaitReady(ctx context.Context) error {
 
 // API returns an admin client bound to ctx; Bootstrap must have succeeded.
 func (r *Reconciler) API(ctx context.Context) *forgejo.Client {
-	return forgejo.New(ctx, r.BaseURL, r.adminToken)
+	r.mu.RLock()
+	t := r.adminToken
+	r.mu.RUnlock()
+	return forgejo.New(ctx, r.BaseURL, t)
 }
 
 // Bootstrap ensures bottown holds a working site-admin token. The first user
@@ -91,7 +139,7 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 	}
 	if st.AdminToken != "" {
 		if _, _, err := forgejo.New(ctx, r.BaseURL, st.AdminToken).GetMyUserInfo(); err == nil {
-			r.adminToken = st.AdminToken
+			r.setAdminToken(st.AdminToken)
 			return nil
 		}
 	}
@@ -110,7 +158,7 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 	if err := r.Store.Update(func(s *secrets.State) error { s.AdminToken = token; return nil }); err != nil {
 		return err
 	}
-	r.adminToken = token
+	r.setAdminToken(token)
 	rep.add("minted admin token for %s", AdminLogin)
 	return nil
 }
@@ -119,12 +167,17 @@ func (r *Reconciler) Bootstrap(ctx context.Context, rep *Report) error {
 // non-empty org repository.
 func (r *Reconciler) Run(ctx context.Context) (Report, error) {
 	var rep Report
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return rep, err
+	}
+	defer release()
 	if r.DesiredPath != "" {
 		d, err := config.LoadDesired(r.DesiredPath)
 		if err != nil {
 			return rep, err
 		}
-		r.Desired = d
+		r.setDesired(d)
 	}
 	if err := r.Bootstrap(ctx, &rep); err != nil {
 		return rep, err
@@ -525,6 +578,11 @@ type Repo struct {
 // sets the default branch and applies protection to it.
 func (r *Reconciler) EnsureRepo(ctx context.Context, name, branch string) (Repo, Report, error) {
 	var rep Report
+	release, err := r.acquire(ctx)
+	if err != nil {
+		return Repo{}, rep, err
+	}
+	defer release()
 	api := r.API(ctx)
 	org := r.Desired.Org
 	repo, resp, err := api.GetRepo(org, name)
