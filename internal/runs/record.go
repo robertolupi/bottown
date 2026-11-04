@@ -3,6 +3,8 @@ package runs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,6 +82,23 @@ func (r Record) Mode() string {
 func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+// validRunID reports whether id names a run: "r-" and one or more hex
+// digits, the form the server's run IDs take. A record or caller with
+// anything else (an empty id, say) must not be turned into a path under the
+// runs directory: WorktreeDir("") is that directory itself.
+func validRunID(id string) bool {
+	rest, ok := strings.CutPrefix(id, "r-")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, c := range rest {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // Path of a run's file with the given suffix (".json", ".log", ...).
@@ -165,8 +184,11 @@ func LoadFile(path string) (Record, error) {
 }
 
 // Records lists local runs, newest first, marking preparing and running
-// records whose launcher is gone as dead.
-func (w *Workspace) Records() ([]Record, error) {
+// records whose launcher is gone as dead. A file that is not a run record
+// (a check result, say) unmarshals into a record with no id, or one naming a
+// different run; both are skipped, with one warning naming the file, so no
+// caller treats it as a run and removes paths derived from its empty id.
+func (w *Workspace) Records(warn io.Writer) ([]Record, error) {
 	ents, err := os.ReadDir(w.RunsDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -184,6 +206,12 @@ func (w *Workspace) Records() ([]Record, error) {
 		if err != nil {
 			continue
 		}
+		if !validRunID(r.ID) || name != r.ID+".json" {
+			if warn != nil {
+				fmt.Fprintf(warn, "warning: %s: not a run record; skipped\n", name)
+			}
+			continue
+		}
 		if (r.Status == StatusPreparing || r.Status == StatusRunning) && !r.LauncherAlive() {
 			r.Status = StatusDead
 		}
@@ -195,6 +223,9 @@ func (w *Workspace) Records() ([]Record, error) {
 
 // RemoveFiles deletes a run's files (not its worktree).
 func (w *Workspace) RemoveFiles(id string) {
+	if !validRunID(id) {
+		return
+	}
 	if r, err := w.Load(id); err == nil && r.TmpDir != "" {
 		_ = os.RemoveAll(r.TmpDir)
 	}

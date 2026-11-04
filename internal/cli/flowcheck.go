@@ -49,7 +49,9 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	if _, err := runs.Git(c.ws.Mirror, nil, "cat-file", "-e", req.SHA+"^{commit}"); err != nil {
 		return out, fmt.Errorf("the PR head %s is not in the mirror: %w", short(req.SHA), err)
 	}
-	dir := c.ws.WorktreeDir(c.name(req))
+	// The check worktree is not a run's: it is named for the issue and SHA,
+	// not a run id, so it does not go through Workspace.WorktreeDir.
+	dir := filepath.Join(c.ws.RunsDir, c.name(req))
 	_ = os.RemoveAll(dir) // what an interrupted check left behind
 	_, _ = runs.Git(c.ws.Mirror, nil, "worktree", "prune")
 	if _, err := runs.Git(c.ws.Mirror, nil, "worktree", "add", "-q", "--detach", dir, req.SHA); err != nil {
