@@ -640,7 +640,7 @@
       "created": "2026-11-02T08:00:00Z",
       "ended": "2026-11-02T08:11:00Z",
       "duration": "11m 0s",
-      "summary": "Approved: pagination is stable under concurrent inserts; tests cover the cursor edge cases.",
+      "summary": "Approved: pagination is stable under concurrent inserts; tests cover the cursor edge cases, including an empty page, a cursor past the last row, and rows inserted between two page requests. Checks and e2e pass on the pinned head; the docs describe the cursor format.",
       "usage": {
         "input_tokens": 25400,
         "output_tokens": 3800,

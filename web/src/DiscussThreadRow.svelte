@@ -8,6 +8,7 @@
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import RunLogRow from './RunLogRow.svelte';
+  import SummaryText from './SummaryText.svelte';
   import TargetLink from './TargetLink.svelte';
 
   interface Props {
@@ -64,7 +65,7 @@
       <FailureReason {failure} onDetails={() => !logState && onToggleLog(h.id)} />
     </td>
   {:else}
-    <td class="summary-cell" title={h.summary}>{h.summary || '—'}</td>
+    <td class="summary-cell"><SummaryText text={h.summary} /></td>
   {/if}
   <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
   <td>
@@ -111,9 +112,6 @@
 
   .summary-cell {
     max-width: max(280px, 25vw);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .row-actions {
