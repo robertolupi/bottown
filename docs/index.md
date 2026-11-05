@@ -143,9 +143,10 @@ a branch cannot change what its own checks are.
   at each new PR head before it starts a verifier, in a clean worktree
   with no agent, and records them as the owner's `bottown/e2e` status
   (marked `gate` in `--json`); the log is
-  `.bottown/runs/flow-<issue>-<sha>.e2e.log`, which `run gc` removes once
-  the issue has no open PR (or, with `--older-than`, once it is that old).
-  A pass goes into the verify
+  `.bottown/runs/flow-<issue>-<sha>.e2e.log`, which the web UI's Live
+  Runs and the flow's terminal tail follow while the commands run, as
+  they do a run's, and which `run gc` removes once the issue has no open
+  PR (or, with `--older-than`, once it is that old). A pass goes into the verify
   prompt, which then asks for `bottown check` without `--e2e`; a failure
   starts another implement round with the failure in its prompt
   ([web-ui.md §3.2](design/web-ui.md#32-the-loop)). So implementers need

@@ -474,6 +474,7 @@ func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
 		flows := s.ComputeActiveFlows(r.Context(), live)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"live_runs":    live,
+			"live_checks":  s.ComputeLiveChecks(r.Context()),
 			"active_flows": flows,
 		})
 		return
@@ -514,7 +515,12 @@ func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-var validRunID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// validRunID matches the ids GET /api/runs/{id}/log serves: runs', and
+// a flow's post-implement checks', flow-<issue>-<sha>.e2e (validCheckID).
+var (
+	validRunID   = regexp.MustCompile(`^(?:[a-zA-Z0-9_-]+|flow-[0-9]+-[0-9a-f]+\.e2e)$`)
+	validCheckID = regexp.MustCompile(`^flow-[0-9]+-[0-9a-f]+\.e2e$`)
+)
 
 func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -558,6 +564,9 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 
 // renderRunLog renders run id's log, read as logBytes, for its harness.
 func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) []runs.LogLine {
+	if validCheckID.MatchString(id) {
+		return runs.RenderLog("", logBytes) // the checks' commands' output: plain lines
+	}
 	actorMap, _ := s.fetchActorMap(ctx)
 	harness := ""
 	var serverRun secrets.Run

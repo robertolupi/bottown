@@ -10,6 +10,7 @@ import type {
   HistoryThread,
   InboxItem,
   IssueTimeline,
+  LiveCheckInfo,
   LiveRunInfo,
   LogLine,
   RunFailure,
@@ -57,20 +58,24 @@ export function isSameFamilyPair(
 export interface FlowGroup {
   flow: ActiveFlowInfo;
   runs: LiveRunInfo[];
+  checks: LiveCheckInfo[]; // the flow's post-implement checks, while they run
 }
 
-// Group live runs under their active flows, or synthesize flow groups from run
-// flow metadata when active_flows is absent.
+// Group live runs and checks under their active flows, or synthesize flow
+// groups from run flow metadata when active_flows is absent.
 export function groupLiveFlows(
   activeFlows: ActiveFlowInfo[] | undefined | null,
   liveRuns: LiveRunInfo[] | undefined | null,
+  liveChecks?: LiveCheckInfo[] | undefined | null,
 ): FlowGroup[] {
   const flows = activeFlows || [];
   const runs = liveRuns || [];
+  const checks = liveChecks || [];
   if (flows.length > 0) {
     return flows.map((f) => ({
       flow: f,
       runs: runs.filter((r) => r.flow && r.flow.issue === f.issue),
+      checks: checks.filter((c) => c.issue === f.issue),
     }));
   }
   const groups: FlowGroup[] = [];
@@ -91,6 +96,7 @@ export function groupLiveFlows(
             waiting: false,
           },
           runs: [],
+          checks: [],
         };
         map.set(r.flow.issue, g);
         groups.push(g);
@@ -98,12 +104,25 @@ export function groupLiveFlows(
       g.runs.push(r);
     }
   }
+  for (const c of checks) {
+    if (c.issue) map.get(c.issue)?.checks.push(c);
+  }
   return groups;
 }
 
 export function standaloneLiveRuns(liveRuns: LiveRunInfo[] | undefined | null): LiveRunInfo[] {
   if (!liveRuns) return [];
   return liveRuns.filter((r) => !r.flow);
+}
+
+// The live checks no flow group shows: those of a flow the UI did not start
+// (`bottown flow` in a terminal), whose runs are standalone too.
+export function standaloneLiveChecks(
+  liveChecks: LiveCheckInfo[] | undefined | null,
+  groups: FlowGroup[],
+): LiveCheckInfo[] {
+  if (!liveChecks) return [];
+  return liveChecks.filter((c) => !groups.some((g) => g.checks.includes(c)));
 }
 
 export interface HistoryFilters {
@@ -150,17 +169,20 @@ export function filterHistoryRuns(
 
 export function parseLivePollSnapshot(data: unknown): {
   liveRuns: LiveRunInfo[];
+  liveChecks: LiveCheckInfo[];
   activeFlows: ActiveFlowInfo[];
 } {
   if (Array.isArray(data)) {
-    return { liveRuns: data as LiveRunInfo[], activeFlows: [] };
+    return { liveRuns: data as LiveRunInfo[], liveChecks: [], activeFlows: [] };
   }
   const obj = (data && typeof data === 'object' ? data : {}) as {
     live_runs?: LiveRunInfo[];
+    live_checks?: LiveCheckInfo[];
     active_flows?: ActiveFlowInfo[];
   };
   return {
     liveRuns: obj.live_runs || [],
+    liveChecks: obj.live_checks || [],
     activeFlows: obj.active_flows || [],
   };
 }
@@ -168,10 +190,12 @@ export function parseLivePollSnapshot(data: unknown): {
 export function nextPollDelayMs(
   liveRuns: LiveRunInfo[] | undefined | null,
   activeFlows: ActiveFlowInfo[] | undefined | null,
+  liveChecks?: LiveCheckInfo[] | undefined | null,
 ): number {
   const hasActive =
     Boolean(liveRuns && liveRuns.length > 0) ||
-    Boolean(activeFlows && activeFlows.length > 0);
+    Boolean(activeFlows && activeFlows.length > 0) ||
+    Boolean(liveChecks && liveChecks.length > 0);
   return hasActive ? 2500 : 10000;
 }
 

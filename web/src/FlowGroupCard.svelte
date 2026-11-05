@@ -1,8 +1,10 @@
 <script lang="ts">
   // An active flow: its issue, round and step, a stop button, and its live
-  // runs, or a note while the supervisor is between rounds.
+  // runs and post-implement checks, or a note while the supervisor is
+  // between rounds.
   import type { FlowGroup } from './state';
   import IssueReference from './IssueReference.svelte';
+  import LiveCheckCard from './LiveCheckCard.svelte';
   import LiveRunCard from './LiveRunCard.svelte';
 
   interface Props {
@@ -39,13 +41,16 @@
   </div>
 
   <div class="flow-group-runs">
-    {#if fg.runs.length === 0}
+    {#if fg.runs.length === 0 && fg.checks.length === 0}
       <div class="flow-waiting-state">
         <span class="muted text-sm">Waiting between rounds… supervisor will start the next actor.</span>
       </div>
     {:else}
       {#each fg.runs as run (run.id)}
         <LiveRunCard {run} {now} stopLabel="Stop Run" {onStop} />
+      {/each}
+      {#each fg.checks as check (check.id)}
+        <LiveCheckCard {check} {now} />
       {/each}
     {/if}
   </div>

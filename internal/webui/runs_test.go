@@ -244,6 +244,83 @@ func deadPID(t *testing.T) int {
 	return cmd.Process.Pid
 }
 
+// A flow's post-implement checks show in Live Runs while they run, with
+// the tail of their log as plain lines, and as the step of their flow
+// between runs; the run-log endpoint serves their log. A check of another
+// repository's flow, or one whose flow died, does not show.
+func TestRuns_LiveChecks(t *testing.T) {
+	fix := defaultRunsFixture()
+	fix.issues = []*sdk.Issue{{Index: 60, Title: "Add the thing", State: sdk.StateOpen}}
+	_, port := newRunsFixtureServer(t, fix)
+
+	top := t.TempDir()
+	runsDir := filepath.Join(top, ".bottown", "runs")
+	if err := os.MkdirAll(runsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	flowRec := fmt.Sprintf(`{"issue":60,"implement":"agy","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-60.json"), []byte(flowRec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-2 * time.Minute)
+	hold := func(rec runs.CheckRecord, log string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(runsDir, rec.ID+".log"), []byte(log), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		release, err := runs.HoldCheck(runsDir, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(release)
+	}
+	id := "flow-60-1a2b3c4d5e.e2e"
+	hold(runs.CheckRecord{ID: id, Repo: "bottown", Issue: 60, PR: 61, SHA: "1a2b3c4d5e6f", Commands: []string{"make e2e"},
+		Started: started, Expires: started.Add(time.Hour)}, "==> [e2e] make e2e\n=== RUN   TestE2E\n")
+	hold(runs.CheckRecord{ID: "flow-7-ffffffffff.e2e", Repo: "other", Issue: 7, Started: started}, "elsewhere\n")
+	if err := os.WriteFile(filepath.Join(runsDir, "flow-8-eeeeeeeeee.e2e"+runs.CheckRecordSuffix), []byte(`{"id":"flow-8-eeeeeeeeee.e2e"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServer(Config{
+		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
+		RepoTop:  top,
+		FullRepo: "bottown/bottown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	checks := s.ComputeLiveChecks(ctx)
+	if len(checks) != 1 {
+		t.Fatalf("live checks = %+v", checks)
+	}
+	c := checks[0]
+	want := []runs.LogLine{{Kind: runs.LinePlain, Text: "==> [e2e] make e2e"}, {Kind: runs.LinePlain, Text: "=== RUN   TestE2E"}}
+	if c.ID != id || c.Issue != 60 || c.IssueTitle != "Add the thing" || c.PR != 61 || !strings.HasSuffix(c.PRURL, "/bottown/bottown/pulls/61") ||
+		c.Timeout != formatDuration(time.Hour) || len(c.Commands) != 1 || fmt.Sprint(c.LogTail) != fmt.Sprint(want) {
+		t.Fatalf("live check = %+v", c)
+	}
+
+	flows := s.ComputeActiveFlows(ctx, nil)
+	if len(flows) != 1 || flows[0].Waiting || flows[0].Step != "post-implement checks at 1a2b3c4d5e" ||
+		flows[0].Label != "#60 · round 1/3 · post-implement checks at 1a2b3c4d5e" {
+		t.Fatalf("flow while checking = %+v", flows)
+	}
+
+	lines, ok, err := s.ComputeRunLog(ctx, id)
+	if err != nil || !ok || fmt.Sprint(lines) != fmt.Sprint(want) {
+		t.Fatalf("check log: %+v, %v, %v", lines, ok, err)
+	}
+	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e"} {
+		if _, _, err := s.ComputeRunLog(ctx, bad); err == nil {
+			t.Errorf("log id %q accepted", bad)
+		}
+	}
+}
+
 func TestRuns_ActiveFlows(t *testing.T) {
 	fix := defaultRunsFixture()
 	now := time.Now().UTC()

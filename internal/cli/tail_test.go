@@ -89,6 +89,23 @@ func TestTailPrintsFinalLinesAndKeepsRunningCallsLive(t *testing.T) {
 	}
 }
 
+// A flow's post-implement checks show like a run, with their commands in
+// the header and their output as plain lines.
+func TestTailFollowsChecks(t *testing.T) {
+	m, printed := testTail()
+	start := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	m.Update(attachMsg{ID: "flow-12-1a2b3c4d5e.e2e", Target: "!30 at 1a2b3c4d5e", Check: "make e2e", Started: start, Limit: time.Hour})
+	plain := func(s string) runs.LogLine { return runs.LogLine{Kind: runs.LinePlain, Text: s} }
+	update(m, linesMsg{lines: []runs.LogLine{plain("==> [e2e] make e2e"), plain("=== RUN   TestE2E")}})
+	if want := []string{"  ==> [e2e] make e2e"}; strings.Join(*printed, "|") != strings.Join(want, "|") {
+		t.Fatalf("scrollback = %q, want %q", *printed, want)
+	}
+	view := tailView(m)
+	if !strings.Contains(view, "checks flow-12-1a2b3c4d5e.e2e · !30 at 1a2b3c4d5e · make e2e · 3m12s of 1h00m") || !strings.Contains(view, "=== RUN   TestE2E") {
+		t.Fatalf("view:\n%s", view)
+	}
+}
+
 func TestTailPrintsInOrderOneAtATime(t *testing.T) {
 	m, printed := testTail()
 	m.Update(printMsg{lines: []string{"run r-1: implement #12"}, note: true})

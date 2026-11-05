@@ -140,9 +140,15 @@ removed afterwards), one command after another with `sh -c`, stopping at
 the first failure, within `--check-timeout`. When the e2e suite takes a
 host-wide lock (#158), it does so in the suite, so the flow's checks wait
 for other suites like any other. The log goes next to the run records,
-`.bottown/runs/flow-<issue>-<sha>.e2e.log`, and the result is the commit
-status `bottown/e2e` on H, written by the owner (description ending
-"(flow)"), which `pr show` lists next to the agents' own reports.
+`.bottown/runs/flow-<issue>-<sha>.e2e.log`, written as the commands write
+it, and the result is the commit status `bottown/e2e` on H, written by the
+owner (description ending "(flow)"), which `pr show` lists next to the
+agents' own reports. While the checks run, the flow holds a flock on
+`.bottown/runs/flow-<issue>-<sha>.e2e.check`, a record of the issue, PR,
+head, commands and time limit, and removes it after; the lock, not a pid,
+marks them live, so a record a killed flow left is stale. Live Runs and
+the terminal tail show the checks with a live tail of their log, like a
+run (§4.2).
 
 - **Passed:** the verify run starts, and its prompt says the checks passed
   at H, with the log. The verifier still runs `bottown check` (`make
@@ -471,13 +477,24 @@ header. Both also link to `GET /api/runs/{id}/log?raw=1`, which serves the
 complete original log as redacted plain text for diagnosis. Encoded
 attachment payloads are elided from both the rendered and raw views.
 
+A flow's **post-implement checks** (§3.2) are not a run, but Live Runs
+shows them while they run, as `live_checks` in `GET /api/status` and `GET
+/api/runs?state=live`: the issue and PR, the head, the commands, elapsed
+time against the flow's `--check-timeout`, and the live tail of their log
+in plain lines. A check sits under its flow when the UI started that flow,
+whose step then reads "post-implement checks at <sha>", and on its own
+otherwise. Its id, `flow-<issue>-<sha>.e2e`, names its log for `GET
+/api/runs/{id}/log` and the raw link.
+
 **Terminal tail.** `bottown flow`, and a batch `bottown run implement`,
 `verify`, `discuss` or `plan`, show the same tail in the terminal when
 their output is one. A bubbletea program in the normal screen keeps a view
 at the bottom: the flow's state ("flow #51 · round 2/3 · verifying with
 kimi"), the run's header (id, kind and target, actor and family, elapsed
 time against its limit: the flow's `--timeout`, else the run key's
-lifetime), and the lines still live, a running call with a spinner. Every
+lifetime), and the lines still live, a running call with a spinner. A
+flow's post-implement checks are followed the same way, their header
+naming the check, the PR and head, and the commands. Every
 other line goes to the terminal's scrollback, once, as it becomes final:
 `runs.LogFollower` re-reads the log and the live transcript about once a
 second, re-rendering only when either file changed, and
@@ -905,7 +922,7 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   in its scratch directory when the run ends, so an orphan cannot serve
   forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
-  `default`): the status, inbox, live runs with their logs, active flows,
+  `default`): the status, inbox, live runs and checks with their logs, active flows,
   history, milestones, issue details and timelines, in the API's own JSON.
   A fixture is decoded strictly into the Go types the API uses, and a test
   loads every one, so a renamed field fails the tests instead of showing
@@ -937,7 +954,7 @@ bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
   needs the owner's key.
 - **It writes what the UI shows now** as `web/fixtures/NAME.json`,
   computed by the same code as `bottown web ui`'s API: the status, inbox,
-  live runs, active flows, history and milestones. The file loads back
+  live runs and checks, active flows, history and milestones. The file loads back
   strictly, as every fixture does, before it is written. It does not
   serve.
 - **`--issue N` adds an issue's details and timeline, `--log RUN` a run's
