@@ -71,7 +71,7 @@ func TestIssueShowAttachmentsInRun(t *testing.T) {
 		"attachments (3)",
 		"- `" + filepath.Join(attach, "1-screen_shot.png") + "`: \"screen shot.png\" (image/png, 18 bytes, on the description)",
 		"- `" + filepath.Join(attach, "2-screen_shot.png") + "`: \"screen shot.png\" (image/png, 18 bytes, on comment 5)",
-		"- \"trace.txt\" (4 bytes, on comment 5): download failed: downloading attachment 3: forgejo GET: 500",
+		"- \"trace.txt\" (4 bytes, on comment 5): download failed: GET /v1/forge/issue/attachment?id=3&number=12: downloading attachment 3: forgejo GET: 500",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("issue show lacks %q:\n%s", want, text)
