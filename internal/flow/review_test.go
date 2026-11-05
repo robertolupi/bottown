@@ -102,6 +102,62 @@ func TestFlowReconcilesDismissedCarriedApproval(t *testing.T) {
 	}
 }
 
+// TestFlowReconcilesVerdictDismissedByLatePush: Forgejo processed the push
+// to the head after the verifier approved it, and dismissed the approval with
+// the older reviews. The flow reconciles, which undismisses it, and stops
+// ready to merge instead of undecided.
+func TestFlowReconcilesVerdictDismissedByLatePush(t *testing.T) {
+	base := &fakeAPI{open: true, pr: openPR()}
+	api := &reconcilingAPI{fakeAPI: base}
+	verifies := 0
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if req.Kind != policy.Verify {
+			t.Fatalf("unexpected %s run", req.Kind)
+		}
+		verifies++
+		approve(base)
+		base.pr.Reviews[len(base.pr.Reviews)-1].Dismissed = true
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge || verifies != 1 || api.reconciled == 0 {
+		t.Fatalf("result = %+v, verifies = %d, reconciled = %d, err = %v; want ready to merge after one verify", result, verifies, api.reconciled, err)
+	}
+}
+
+// TestFlowWaitsForForgejoToSyncPush: until Forgejo has processed the push of
+// the head, its mergeability and review state are from an older head, so
+// the flow waits before it starts a verify run.
+func TestFlowWaitsForForgejoToSyncPush(t *testing.T) {
+	base := &fakeAPI{open: true, pr: openPR()}
+	base.pr.Syncing = true
+	api := &syncingAPI{fakeAPI: base}
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if base.pr.Syncing {
+			t.Errorf("%s run started while Forgejo was processing the push", req.Kind)
+		}
+		approve(base)
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge || api.reads < 3 {
+		t.Fatalf("result = %+v, reads = %d, err = %v", result, api.reads, err)
+	}
+}
+
+type syncingAPI struct {
+	*fakeAPI
+	reads int
+}
+
+func (a *syncingAPI) PR(ctx context.Context, repo string, number int64) (server.PROut, error) {
+	a.reads++
+	if a.reads == 3 {
+		a.pr.Syncing = false
+	}
+	return a.fakeAPI.PR(ctx, repo, number)
+}
+
 // TestFlowCarriedApprovalBesideHeadApproval: an unstale approval that carries
 // over is settled even when a head approval decides the assessment, so the
 // flow does not wait for Forgejo to mark it stale.

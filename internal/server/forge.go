@@ -179,18 +179,22 @@ type CommentOut struct {
 
 // PROut is a pull request with what a reviewer needs.
 type PROut struct {
-	Number     int64       `json:"number"`
-	Title      string      `json:"title"`
-	Body       string      `json:"body"`
-	State      string      `json:"state"`
-	Merged     bool        `json:"merged"`
-	Author     string      `json:"author"`
-	HeadBranch string      `json:"head_branch"`
-	HeadSHA    string      `json:"head_sha"`
-	BaseBranch string      `json:"base_branch"`
-	MergeBase  string      `json:"merge_base,omitempty"` // where the head branched from the base
-	Mergeable  bool        `json:"mergeable"`
-	Reviews    []ReviewOut `json:"reviews"`
+	Number     int64  `json:"number"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	State      string `json:"state"`
+	Merged     bool   `json:"merged"`
+	Author     string `json:"author"`
+	HeadBranch string `json:"head_branch"`
+	HeadSHA    string `json:"head_sha"`
+	BaseBranch string `json:"base_branch"`
+	MergeBase  string `json:"merge_base,omitempty"` // where the head branched from the base
+	Mergeable  bool   `json:"mergeable"`
+	// Syncing says Forgejo has not yet processed the push of HeadSHA:
+	// its PR ref is behind, so its mergeability and review state are from
+	// an older head (pushsync.go).
+	Syncing bool        `json:"syncing,omitempty"`
+	Reviews []ReviewOut `json:"reviews"`
 	// Assessment is where the reviews leave the PR (internal/review).
 	Assessment review.Assessment `json:"assessment"`
 	// Carries are the older heads whose approvals carry over to the head,
@@ -677,8 +681,25 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 			s.markGate(out.Checks)
 		}
 	}
+	// Forgejo refreshes an open PR's ref, merge base and diff in the
+	// background after a push, so they can lag its head; the diff and merge
+	// base of an open PR come from its git repository at HeadSHA instead.
+	var local *prGit
+	if pr.State == sdk.StateOpen && !pr.HasMerged && out.HeadSHA != "" && out.BaseBranch != "" {
+		if g, err := s.openPRGit(ctx, org, repo, n, out.BaseBranch, out.HeadSHA); err != nil {
+			s.Log.Debug("pr git state", "repo", repo, "pr", n, "err", err)
+		} else if g != nil {
+			local = g
+			out.MergeBase, out.Syncing = g.mergeBase, !g.synced
+		}
+	}
 	if withDiff {
-		diff, _, err := c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
+		var diff []byte
+		if local != nil {
+			diff, err = local.diff(ctx)
+		} else {
+			diff, _, err = c.GetPullRequestDiff(org, repo, n, sdk.PullRequestDiffOptions{})
+		}
 		if err != nil {
 			return PROut{}, err
 		}
@@ -948,6 +969,11 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 		}
 		s.toolAudit(p, "", "review_submit", "deny", "head moved to "+head)
 		return ReviewOut{}, ferr(http.StatusConflict, "pull request #%d moved to %s since this run started at %s; start a new verify run", run.PR, head, run.SHA)
+	}
+	// An approval Forgejo records before it has processed the push of its
+	// commit is dismissed with the older reviews (pushsync.go).
+	if err := s.waitPushSynced(ctx, run.Org, run.Repo, run.PR, run.SHA, "review"); err != nil {
+		return ReviewOut{}, err
 	}
 	body := strings.TrimSpace(in.Body)
 	if run.AllowSameFamily {

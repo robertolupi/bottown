@@ -122,6 +122,12 @@ func (s *Server) undismissCarried(ctx context.Context, p secrets.Principal, org,
 	for _, c := range carries {
 		carried[c.From] = true
 	}
+	// An approval at the head itself covers it: Forgejo dismisses one only
+	// when it was recorded before Forgejo processed the push of its commit
+	// (pushsync.go).
+	if head != "" {
+		carried[head] = true
+	}
 	var auto map[int64]bool
 	var c *forgejo.Client
 	for _, r := range rs {
@@ -147,7 +153,11 @@ func (s *Server) undismissCarried(ctx context.Context, p secrets.Principal, org,
 			continue
 		}
 		r.Dismissed = false
-		s.toolAudit(p, repo, "review_carry_over", "allow", fmt.Sprintf("!%d review %d at %s undismissed: same patch at %s", index, r.ID, shortCommit(r.CommitID), shortCommit(head)))
+		why := "same patch at " + shortCommit(head)
+		if r.CommitID == head {
+			why = "it is at the head"
+		}
+		s.toolAudit(p, repo, "review_carry_over", "allow", fmt.Sprintf("!%d review %d at %s undismissed: %s", index, r.ID, shortCommit(r.CommitID), why))
 	}
 }
 
