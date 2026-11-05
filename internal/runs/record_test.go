@@ -30,6 +30,43 @@ func TestLauncherAlive(t *testing.T) {
 	}
 }
 
+// A run that records its launcher's lock is alive exactly while the lock is
+// held, even when its pid names a live process (a reused one, say).
+func TestLauncherAliveByLock(t *testing.T) {
+	w := &Workspace{RunsDir: t.TempDir()}
+	path, release, err := w.HoldLauncher("r-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := Record{ID: "r-1", PID: os.Getpid(), LauncherLock: path}
+	if !rec.LauncherAlive() {
+		t.Error("run whose launcher holds its lock reported dead")
+	}
+	if _, _, err := w.HoldLauncher("r-1"); err == nil {
+		t.Error("second HoldLauncher took a held lock")
+	}
+	release()
+	if rec.LauncherAlive() {
+		t.Error("run whose launcher lock is free reported alive (reused pid)")
+	}
+	w.RemoveFiles("r-1")
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("RemoveFiles left %s: %v", path, err)
+	}
+	if rec.LauncherAlive() {
+		t.Error("run whose launcher lock is gone reported alive")
+	}
+}
+
+func TestProcessAliveEPERM(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root may signal pid 1")
+	}
+	if !ProcessAlive(1) {
+		t.Error("pid 1, another user's process, reported dead")
+	}
+}
+
 // The child holds the OS lock while the parent attempts another update.
 func TestRecordUpdateProcess(t *testing.T) {
 	if dir := os.Getenv("BOTTOWN_RECORD_TEST_DIR"); dir != "" {

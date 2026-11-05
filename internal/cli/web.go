@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/hostctl"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 	"github.com/robertolupi/bottown/internal/webui"
 	"github.com/spf13/cobra"
@@ -398,7 +399,7 @@ func awaitPreview(ctx context.Context, state string, pid int, logPath string) (p
 		if st, err := loadPreviewState(state); err == nil {
 			return st, nil
 		}
-		if !processAlive(pid) {
+		if !runs.ProcessAlive(pid) {
 			return previewState{}, fmt.Errorf("the preview exited before it served:\n%s", tailFile(logPath, 20))
 		}
 		if time.Now().After(deadline) {
@@ -414,11 +415,15 @@ func awaitPreview(ctx context.Context, state string, pid int, logPath string) (p
 
 // stopPreview ends a detached preview started from this checkout.
 func stopPreview(cmd *cobra.Command, state string) error {
+	ctx := cmd.Context()
+	if ctx == nil { // a command not run through Execute
+		ctx = context.Background()
+	}
 	st, err := loadPreviewState(state)
 	if err != nil {
 		return errors.New("no detached preview from this checkout")
 	}
-	stopped, err := endPreviewState(st, state)
+	stopped, err := endPreviewState(ctx, st, state)
 	if err != nil {
 		return err
 	}
@@ -434,7 +439,7 @@ func stopPreview(cmd *cobra.Command, state string) error {
 // the one serving st.URL, and removes the state and log files. It reports
 // whether a running preview was stopped. It signals only a pid that the
 // probe confirms is still the preview, so a reused pid is left alone.
-func endPreviewState(st previewState, state string) (bool, error) {
+func endPreviewState(ctx context.Context, st previewState, state string) (bool, error) {
 	cleanup := func() {
 		_ = os.Remove(state)
 		if st.Log != "" {
@@ -448,10 +453,21 @@ func endPreviewState(st previewState, state string) (bool, error) {
 	if err := syscall.Kill(st.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return false, fmt.Errorf("stop preview %d: %w", st.PID, err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); processAlive(st.PID) && time.Now().Before(deadline); {
-		time.Sleep(50 * time.Millisecond)
+	wait := time.NewTimer(5 * time.Second)
+	defer wait.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+waiting:
+	for runs.ProcessAlive(st.PID) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-wait.C:
+			break waiting
+		case <-tick.C:
+		}
 	}
-	if processAlive(st.PID) {
+	if runs.ProcessAlive(st.PID) {
 		return false, fmt.Errorf("preview %d did not stop; kill it with `kill %d`", st.PID, st.PID)
 	}
 	// The child removes its own files on exit; remove them too, in case it
@@ -462,7 +478,7 @@ func endPreviewState(st previewState, state string) (bool, error) {
 
 // stopRunPreviews stops any detached preview a run recorded under dir, so
 // a run's preview does not outlive the run when its scratch directory goes.
-func stopRunPreviews(w io.Writer, dir string) {
+func stopRunPreviews(ctx context.Context, w io.Writer, dir string) {
 	if dir == "" {
 		return
 	}
@@ -472,7 +488,7 @@ func stopRunPreviews(w io.Writer, dir string) {
 		if err != nil {
 			continue
 		}
-		if _, err := endPreviewState(st, state); err != nil {
+		if _, err := endPreviewState(ctx, st, state); err != nil {
 			fmt.Fprintf(w, "warning: stop preview %d: %v\n", st.PID, err)
 		}
 	}
@@ -483,7 +499,7 @@ func stopRunPreviews(w io.Writer, dir string) {
 // alone is not enough, since the state file may outlive its preview and
 // the pid may now belong to an unrelated process.
 func previewAlive(st previewState) bool {
-	if !processAlive(st.PID) {
+	if !runs.ProcessAlive(st.PID) {
 		return false
 	}
 	pid, ok := probePreviewPID(st.URL)
@@ -527,15 +543,6 @@ func lockPreview(state string) (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil
-}
-
-// processAlive reports whether a process with pid exists.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // tailFile returns the last n lines of a file, for reporting a failed

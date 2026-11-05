@@ -98,6 +98,25 @@ func TestPurgeRuns(t *testing.T) {
 	}
 }
 
+func TestTruncateUTF8(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"abcdefgh", 6, "abc…"},
+		{"ééééé", 6, "é…"},              // "é" is 2 bytes: 3 bytes left, cut back to 2
+		{"aéééé", 7, "aé…"},             // cut inside the second é
+		{"\xffabcdefgh", 7, "\xffabc…"}, // invalid bytes earlier do not empty it
+	} {
+		got := TruncateUTF8(c.s, c.n)
+		if got != c.want || len(got) > max(c.n, len(c.want)) {
+			t.Errorf("TruncateUTF8(%q, %d) = %q, want %q", c.s, c.n, got, c.want)
+		}
+	}
+}
+
 func TestEndRunDigest(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {

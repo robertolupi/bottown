@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/spf13/cobra"
 )
 
@@ -254,7 +255,7 @@ func TestStopPreviewStopsPreview(t *testing.T) {
 	if err := stopPreview(cmd, state); err != nil {
 		t.Fatal(err)
 	}
-	if processAlive(sleeper.Process.Pid) {
+	if runs.ProcessAlive(sleeper.Process.Pid) {
 		t.Errorf("process %d still alive", sleeper.Process.Pid)
 	}
 	if _, err := os.Stat(state); !os.IsNotExist(err) {
@@ -297,7 +298,7 @@ func TestStopPreviewLeavesReusedPID(t *testing.T) {
 	if err := stopPreview(cmd, state); err != nil {
 		t.Fatal(err)
 	}
-	if !processAlive(sleeper.Process.Pid) {
+	if !runs.ProcessAlive(sleeper.Process.Pid) {
 		t.Errorf("process %d was signalled", sleeper.Process.Pid)
 	}
 	if !strings.Contains(out.String(), "was not running") {
@@ -328,7 +329,7 @@ func TestStopPreviewLeavesUnrelatedPID(t *testing.T) {
 	if err := stopPreview(cmd, state); err != nil {
 		t.Fatal(err)
 	}
-	if !processAlive(sleeper.Process.Pid) {
+	if !runs.ProcessAlive(sleeper.Process.Pid) {
 		t.Errorf("process %d was signalled", sleeper.Process.Pid)
 	}
 }
@@ -421,8 +422,8 @@ func TestStopRunPreviews(t *testing.T) {
 	}
 
 	warn := &lockedBuffer{}
-	stopRunPreviews(warn, dir)
-	if processAlive(sleeper.Process.Pid) {
+	stopRunPreviews(context.Background(), warn, dir)
+	if runs.ProcessAlive(sleeper.Process.Pid) {
 		t.Errorf("preview %d still alive; warnings:\n%s", sleeper.Process.Pid, warn.String())
 	}
 	if _, err := os.Stat(state); !os.IsNotExist(err) {

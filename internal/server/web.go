@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -68,7 +69,10 @@ func (w *webState) newUISession() (string, time.Time) {
 	if w.uiSessions == nil {
 		w.uiSessions = map[string]time.Time{}
 	}
-	id, exp := secrets.RandomString(24), time.Now().Add(uiSessionTTL)
+	// Sessions nobody checks again would otherwise stay for good.
+	now := time.Now()
+	maps.DeleteFunc(w.uiSessions, func(_ string, exp time.Time) bool { return now.After(exp) })
+	id, exp := secrets.RandomString(24), now.Add(uiSessionTTL)
 	w.uiSessions[id] = exp
 	return id, exp
 }

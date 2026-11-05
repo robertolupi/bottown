@@ -293,10 +293,10 @@ func (s *Store) EndRun(id, status string, at time.Time, d Digest) (Run, bool, er
 			return nil
 		}
 		if run.Ended == nil {
-			d.Summary = truncateUTF8(d.Summary, MaxSummary)
+			d.Summary = TruncateUTF8(d.Summary, MaxSummary)
 			if d.Failure != nil {
 				f := *d.Failure
-				f.Detail = truncateUTF8(f.Detail, MaxFailureDetail)
+				f.Detail = TruncateUTF8(f.Detail, MaxFailureDetail)
 				d.Failure = &f
 			}
 			run.Ended, run.Status, run.Digest = &at, status, d
@@ -390,17 +390,17 @@ func (s *Store) Lookup(key string, now time.Time) (Principal, bool, error) {
 	return Principal{Actor: k.Actor, Run: &run}, true, nil
 }
 
-// truncateUTF8 cuts s to at most n bytes, on a rune boundary, marking the
+// TruncateUTF8 cuts s to at most n bytes, on a rune boundary, marking the
 // cut with an ellipsis.
-func truncateUTF8(s string, n int) string {
+func TruncateUTF8(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	s = s[:n-len("…")]
-	for len(s) > 0 && !utf8.ValidString(s) {
-		s = s[:len(s)-1]
+	cut := max(n-len("…"), 0)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
 	}
-	return s + "…"
+	return s[:cut] + "…"
 }
 
 // HashKey is the storage form of an API key.

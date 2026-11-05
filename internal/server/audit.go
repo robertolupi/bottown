@@ -70,6 +70,10 @@ type AuditLog struct {
 	mu        sync.Mutex
 	entries   []AuditEntry // oldest first
 	fileLines int
+	// compacting is set while one Record rewrites the file outside mu;
+	// pending holds the lines appended meanwhile, for the new file.
+	compacting bool
+	pending    [][]byte
 }
 
 // OpenAudit loads dir/audit.jsonl, dropping expired entries.
@@ -95,13 +99,26 @@ func OpenAudit(dir string) (*AuditLog, error) {
 		return nil, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.prune()
-	return a, a.compactIfNeeded()
+	snap := a.compaction()
+	a.mu.Unlock()
+	return a, a.compact(snap)
 }
 
-// Record stores e, stamping its time if unset.
+// Record stores e, stamping its time if unset. It appends to the file under
+// mu; a compaction it triggers rewrites the file after releasing mu, so
+// other requests wait only on their own append.
 func (a *AuditLog) Record(e AuditEntry) error {
+	snap, err := a.append(e)
+	if err != nil {
+		return err
+	}
+	return a.compact(snap)
+}
+
+// append stores e and appends it to the file, returning the entries to
+// compact the file to if that is due (see compaction).
+func (a *AuditLog) append(e AuditEntry) ([]AuditEntry, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if e.Time.IsZero() {
@@ -111,21 +128,25 @@ func (a *AuditLog) Record(e AuditEntry) error {
 	a.prune()
 	line, err := json.Marshal(e)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	line = append(line, '\n')
 	f, err := os.OpenFile(a.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, werr := f.Write(append(line, '\n'))
+	_, werr := f.Write(line)
 	if err := f.Close(); werr == nil {
 		werr = err
 	}
 	if werr != nil {
-		return werr
+		return nil, werr
 	}
 	a.fileLines++
-	return a.compactIfNeeded()
+	if a.compacting {
+		a.pending = append(a.pending, line)
+	}
+	return a.compaction(), nil
 }
 
 // Query returns the entries matching f, oldest first.
@@ -157,36 +178,62 @@ func (a *AuditLog) prune() {
 	}
 }
 
-// compactIfNeeded rewrites the file from memory once it holds enough
-// dropped lines; callers hold mu.
-func (a *AuditLog) compactIfNeeded() error {
-	if a.fileLines <= len(a.entries)+auditSlack {
+// compaction returns a copy of the entries to rewrite the file from, and
+// marks a compaction under way, once the file holds enough dropped lines
+// and none is; otherwise nil. Callers hold mu.
+func (a *AuditLog) compaction() []AuditEntry {
+	if a.compacting || a.fileLines <= len(a.entries)+auditSlack {
+		return nil
+	}
+	a.compacting = true
+	return slices.Clone(a.entries)
+}
+
+// compact rewrites the file from snap, which compaction returned, without
+// holding mu; then, under mu, it adds the lines appended meanwhile and
+// replaces the file. A nil snap is a no-op.
+func (a *AuditLog) compact(snap []AuditEntry) error {
+	if snap == nil {
 		return nil
 	}
 	tmp := a.path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	w := bufio.NewWriter(f)
-	enc := json.NewEncoder(w)
-	for _, e := range a.entries {
-		if err := enc.Encode(e); err != nil {
-			f.Close()
-			return err
+	if err == nil {
+		w := bufio.NewWriter(f)
+		enc := json.NewEncoder(w)
+		for _, e := range snap {
+			if err = enc.Encode(e); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = w.Flush()
 		}
 	}
-	if err := w.Flush(); err != nil {
-		f.Close()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pending := a.pending
+	a.compacting, a.pending = false, nil
+	if f == nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
+	for _, line := range pending {
+		if err != nil {
+			break
+		}
+		_, err = f.Write(line)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, a.path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, a.path); err != nil {
-		return err
-	}
-	a.fileLines = len(a.entries)
+	a.fileLines = len(snap) + len(pending)
 	return nil
 }
 

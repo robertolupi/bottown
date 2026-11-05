@@ -118,7 +118,9 @@ func serve(ctx context.Context) error {
 		ForgejoCookie:    config.ForgejoCookie(e.Instance),
 		UICookie:         config.UICookie(e.Instance),
 	}
-	hs := &http.Server{Addr: e.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	// No Read or Write timeout: MCP and git responses stream. IdleTimeout
+	// closes keep-alive connections left idle between requests.
+	hs := &http.Server{Addr: e.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.ListenAndServe() }()
 	log.Info("listening", "addr", e.Listen, "instance", e.Instance, "version", Version)
