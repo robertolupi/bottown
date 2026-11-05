@@ -12,6 +12,7 @@ import (
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/review/reviewtest"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -512,6 +513,35 @@ func TestFlowRunFailureAndTimeout(t *testing.T) {
 			}
 			if len(api.comments) != 1 || !strings.Contains(api.comments[0], "run failed") {
 				t.Fatalf("comments = %v", api.comments)
+			}
+		})
+	}
+}
+
+func TestFlowRunFailureShowsLastError(t *testing.T) {
+	const line = "error: failed to run prompt: provider.api_error: 429 You've reached your 5-hour usage limit."
+	const hint = "the run ended before the agent did anything"
+	for _, tc := range []struct {
+		name      string
+		toolCalls bool
+	}{{"before any tool call", false}, {"after tool calls", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeAPI{}
+			runner := RunnerFunc(func(context.Context, RunRequest) error {
+				return &runs.FailedRunError{ID: "r-1", Status: runs.StatusFailed, Log: "/runs/r-1.log", LastError: line, ToolCalls: tc.toolCalls}
+			})
+			result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+			var stop *StopError
+			if !errors.As(err, &stop) || result.Reason != RunFailed || len(api.comments) != 1 {
+				t.Fatalf("result = %+v, error = %v, comments = %q", result, err, api.comments)
+			}
+			for _, want := range []string{"run r-1 failed", "log: /runs/r-1.log", "last error: " + line} {
+				if !strings.Contains(api.comments[0], want) {
+					t.Errorf("stop comment lacks %q:\n%s", want, api.comments[0])
+				}
+			}
+			if got := strings.Contains(api.comments[0], hint); got == tc.toolCalls {
+				t.Errorf("stop comment has the hint: %v, want %v:\n%s", got, !tc.toolCalls, api.comments[0])
 			}
 		})
 	}

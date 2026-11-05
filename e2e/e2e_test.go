@@ -2217,11 +2217,26 @@ fi`
 
 		t.Run("failed run", func(t *testing.T) {
 			issue := newIssue("flow failure")
-			out, err := withHarness("exit 3", "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			// kimi out of quota: the harness fails before any tool call,
+			// and only its own error says why.
+			const quota = "error: failed to run prompt: provider.api_error: 429 You've reached your 5-hour usage limit."
+			out, err := withHarness("echo \""+quota+"\"; exit 1", "flow", fmt.Sprint(issue), "--implement", "kimi", "--verify", "claude", "--timeout", "10s")
 			if err == nil || !strings.Contains(out, "run failed") {
 				t.Fatalf("flow failure: %v\n%s", err, out)
 			}
+			logLine := regexp.MustCompile(`(?m)^  log: (\S+\.log)$`).FindStringSubmatch(out)
+			if logLine == nil || !strings.Contains(out, "failed (exit 1)") || !strings.Contains(out, "  last error: "+quota) {
+				t.Fatalf("launcher's output lacks the log or the last error:\n%s", out)
+			}
 			assertStopComment(issue, "run failed")
+			var comments []struct{ Body string }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
+			stop := comments[len(comments)-1].Body
+			for _, want := range []string{"log: " + logLine[1], "last error: " + quota, "the run ended before the agent did anything", "`--implement`/`--verify`"} {
+				if !strings.Contains(stop, want) {
+					t.Errorf("stop comment lacks %q:\n%s", want, stop)
+				}
+			}
 		})
 
 		t.Run("resume killed flow while waiting for an actor", func(t *testing.T) {

@@ -35,6 +35,7 @@ func coreLines(lines []LogLine) []LogLine {
 		out[i].Detail = ""
 		out[i].Parameters = ""
 		out[i].Output = ""
+		out[i].toolError = false
 	}
 	return out
 }
@@ -110,7 +111,7 @@ func TestRenderLog_ClaudeEvents(t *testing.T) {
 		{Kind: LineTool, Tool: "mcp__bottown__whoami", ToolClass: ToolForge, Text: "mcp__bottown__whoami"},
 		{Kind: LineTool, Tool: "Grep", ToolClass: ToolSearch, Text: "Grep: LogLine"},
 		{Kind: LineError, Text: "file not found"},
-		{Kind: LineStatus, Text: "rate limit: rejected (five_hour), resets 2026-11-08 18:00 UTC"},
+		{Kind: LineError, Text: "rate limit: rejected (five_hour), resets 2026-11-08 18:00 UTC"},
 		{Kind: LineStatus, Text: "background: Run e2e — failed"},
 		{Kind: LineText, Text: "Checks pass."},
 		{Kind: LineError, Text: "failed (error_max_turns): 40 turns, $1.23, 2m5s"},

@@ -707,7 +707,7 @@ func TestLauncherFailure(t *testing.T) {
 	// startRun's end for an interactive run that exited 0 and that the
 	// owner marked failed: nothing observed, then its outcome error.
 	observed := observedFailure(nil, false, 0, time.Second)
-	if f := launcherFailure(launchFinalized, outcomeError("r-1", runs.StatusFailed)); observed != nil || f != nil {
+	if f := launcherFailure(launchFinalized, &runs.FailedRunError{ID: "r-1", Status: runs.StatusFailed}); observed != nil || f != nil {
 		t.Errorf("clean exit marked failed: observed %+v, launcher %+v; want neither", observed, f)
 	}
 }

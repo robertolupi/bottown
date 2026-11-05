@@ -34,6 +34,8 @@ type LogLine struct {
 	Detail     string   `json:"detail,omitempty"`
 	Parameters string   `json:"parameters,omitempty"`
 	Output     string   `json:"output,omitempty"`
+
+	toolError bool // for kind error: a failed or denied tool call, not the harness's own error
 }
 
 // RenderLog parses a batch log into readable lines (one line per assistant
@@ -48,6 +50,48 @@ func RenderLog(harness string, log []byte) []LogLine {
 		lines[i].Output = string(RedactEncoded([]byte(lines[i].Output)))
 	}
 	return lines
+}
+
+// FailedRunError is a launcher's error for a run that did not succeed.
+// Log and LastError are set for a batch run: its log's path, and what
+// LastError found there.
+type FailedRunError struct {
+	ID, Status string
+	Log        string
+	LastError  string
+	ToolCalls  bool
+}
+
+func (e *FailedRunError) Error() string {
+	return fmt.Sprintf("run %s %s", e.ID, e.Status)
+}
+
+// maxErrorLine bounds LastError's line.
+const maxErrorLine = 300
+
+// LastError is what a batch log says about how the run ended, for a run
+// that failed: the harness's last error line, and whether the agent made
+// any tool call. The line is the last of the harness's own error and
+// result events, or of the output that is none of its events (a plain-text
+// harness, or one that failed before its stream started), trimmed to one
+// line; never the agent's text, its tool calls or their output, nor what
+// the launcher itself appended. It is "" when there is none.
+func LastError(harness string, log []byte) (line string, toolCalls bool) {
+	lines := RenderLog(harness, log)
+	for _, l := range lines {
+		toolCalls = toolCalls || l.Kind == LineTool
+	}
+	for i := len(lines) - 1; i >= 0 && line == ""; i-- {
+		switch l := lines[i]; {
+		case l.Kind == LineError && !l.toolError,
+			l.Kind == LinePlain && !strings.HasPrefix(l.Text, "bottown: "):
+			line = formatAssistantText(l.Text)
+		}
+	}
+	if r := []rune(line); len(r) > maxErrorLine {
+		line = string(r[:maxErrorLine-1]) + "…"
+	}
+	return line, toolCalls
 }
 
 func renderLog(harness string, log []byte) []LogLine {
@@ -186,7 +230,7 @@ func renderClaudeLog(log []byte) []LogLine {
 					continue
 				}
 				if t := formatAssistantText(out); t != "" {
-					add(LineError, t)
+					lines = append(lines, LogLine{Kind: LineError, Text: t, toolError: true})
 				}
 			}
 		case "system":
@@ -201,7 +245,7 @@ func renderClaudeLog(log []byte) []LogLine {
 					lines[i].State = "failed"
 					lines[i].Output = msg
 				}
-				add(LineError, fmt.Sprintf("denied: %s: %s", ev.ToolName, formatAssistantText(msg)))
+				lines = append(lines, LogLine{Kind: LineError, Text: fmt.Sprintf("denied: %s: %s", ev.ToolName, formatAssistantText(msg)), toolError: true})
 			case "task_started", "task_notification":
 				desc := ev.Description
 				if desc == "" {
@@ -226,7 +270,11 @@ func renderClaudeLog(log []byte) []LogLine {
 				if rl.ResetsAt > 0 {
 					s += ", resets " + time.Unix(rl.ResetsAt, 0).UTC().Format("2006-01-02 15:04 UTC")
 				}
-				add(LineStatus, s)
+				kind := LineStatus
+				if rl.Status == "rejected" {
+					kind = LineError
+				}
+				add(kind, s)
 			}
 		case "result":
 			if ev.Subtype != "" {
@@ -240,9 +288,14 @@ func renderClaudeLog(log []byte) []LogLine {
 				}
 				add(kind, fmt.Sprintf("%s: %d %s, $%.2f, %s", s, ev.NumTurns, turns, ev.Cost, formatLogDuration(ev.DurationMS)))
 			}
-			// The result is usually the last assistant text again.
+			// The result is usually the last assistant text again; that
+			// of a turn that ended in error, claude's error (an API
+			// error, a usage limit).
 			full := strings.TrimSpace(ev.Result)
 			if l, ok := assistantLine(full); ok && full != lastText {
+				if ev.IsError && ev.Subtype == "success" {
+					l.Kind = LineError
+				}
 				lines = append(lines, l)
 				lastText = full
 			}
@@ -422,7 +475,7 @@ func renderAgyLog(log []byte) []LogLine {
 				if st.ToolInfo != nil && st.State == "DONE" {
 					if out := formatAssistantText(st.ToolInfo.Output); agyFailedCommand(out) {
 						lines[len(lines)-1].State = "failed"
-						add(LineError, out)
+						lines = append(lines, LogLine{Kind: LineError, Text: out, toolError: true})
 					}
 				}
 			case "system_message":
@@ -441,7 +494,7 @@ func renderAgyLog(log []byte) []LogLine {
 						msg = m
 					}
 				}
-				add(LineError, msg)
+				lines = append(lines, LogLine{Kind: LineError, Text: msg, toolError: st.Type == "tool"})
 			}
 		case ev.Event == "result" && ev.Result != nil:
 			r := ev.Result
@@ -641,6 +694,11 @@ func renderKimiLog(log []byte) []LogLine {
 			} else if kimiWaitingRE.MatchString(s) {
 				flushRawOutput()
 				waitingLine = s
+			} else if strings.HasPrefix(s, "error: failed to run prompt: ") {
+				// kimi's own error, such as a provider's 429.
+				flushRawOutput()
+				flushWaiting()
+				lines = append(lines, LogLine{Kind: LineError, Text: s})
 			} else {
 				flushWaiting()
 				rawOutputRun = append(rawOutputRun, s)
@@ -704,7 +762,7 @@ func renderKimiLog(log []byte) []LogLine {
 				lines[i].Output = t
 			}
 			if failed && first != "" {
-				lines = append(lines, LogLine{Kind: LineError, Text: first})
+				lines = append(lines, LogLine{Kind: LineError, Text: first, toolError: true})
 			}
 		}
 	})
@@ -813,7 +871,7 @@ func renderCodexLog(log []byte) []LogLine {
 					if first != "" {
 						text = fmt.Sprintf("exit %d: %s", *ev.Item.ExitCode, first)
 					}
-					lines = append(lines, LogLine{Kind: LineError, Text: text})
+					lines = append(lines, LogLine{Kind: LineError, Text: text, toolError: true})
 				}
 			case "file_change":
 				for _, ch := range item.Changes {
@@ -985,7 +1043,7 @@ func renderCrushLog(log []byte) []LogLine {
 					lines[i].Output = p.Content
 				}
 				if errText != "" {
-					add(LineError, errText)
+					lines = append(lines, LogLine{Kind: LineError, Text: errText, toolError: true})
 				}
 			}
 		}
