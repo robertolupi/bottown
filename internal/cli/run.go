@@ -584,7 +584,6 @@ func launchedLifecycle(rc *runContext, run secrets.Run) *runs.Lifecycle {
 	return lc
 }
 
-
 // launchPhase is how far startRun got, for what its error means.
 type launchPhase int
 
