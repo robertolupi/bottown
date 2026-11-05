@@ -279,6 +279,12 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 
+	if kind == policy.Implement || kind == policy.Plan {
+		if err := rc.ws.PrepareImplement(fmt.Sprintf("issue/%d", n)); err != nil {
+			return err
+		}
+	}
+
 	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, BypassActorLimit: o.bypassActorLimit, Interactive: o.interactive}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha

@@ -211,9 +211,49 @@ func (w *Workspace) TmpDir(id string) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("bottown-%x-%s", sum[:8], id))
 }
 
+// PrepareImplement frees branch from a kept run worktree before a new server
+// run is created. Detaching preserves the old HEAD and all working files.
+func (w *Workspace) PrepareImplement(branch string) error {
+	out, err := Git(w.Mirror, nil, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return err
+	}
+	runsDir, err := filepath.EvalSymlinks(w.RunsDir)
+	if err != nil {
+		return err
+	}
+	var dir string
+	for _, field := range strings.Split(out, "\x00") {
+		if path, ok := strings.CutPrefix(field, "worktree "); ok {
+			dir = path
+		}
+		if field != "branch refs/heads/"+branch {
+			continue
+		}
+		id := filepath.Base(dir)
+		if filepath.Clean(filepath.Dir(dir)) != filepath.Clean(runsDir) || !validRunID(id) {
+			return fmt.Errorf("branch %s is held by worktree %s outside managed runs", branch, dir)
+		}
+		rec, err := w.Load(id)
+		if err != nil {
+			return fmt.Errorf("branch %s is held by run %s: cannot read its record: %w", branch, id, err)
+		}
+		if rec.LauncherAlive() {
+			return fmt.Errorf("branch %s is held by live run %s (%s); wait for its launcher to exit", branch, id, dir)
+		}
+		if _, err := Git(dir, nil, "checkout", "--detach"); err != nil {
+			return fmt.Errorf("detach kept worktree of run %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // AddImplement adds a worktree on branch, resuming the forge's branch if it
 // exists (a later run continues the same branch) or starting it from base.
 func (w *Workspace) AddImplement(id, branch, base string) (string, error) {
+	if err := w.PrepareImplement(branch); err != nil {
+		return "", err
+	}
 	dir := w.WorktreeDir(id)
 	upstream := base
 	start := w.Remote + "/" + upstream
