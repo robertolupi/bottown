@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -88,17 +87,16 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 		return err
 	}
 	url := inst.ServerURL() + res.GitPath
-	r := lipgloss.NewRenderer(out)
 	if have, err := runs.Git(top, nil, "remote", "get-url", remote); err != nil {
 		if _, err := runs.Git(top, nil, "remote", "add", remote, url); err != nil {
 			return err
 		}
-		printRepoRemoteAdded(out, r, remote, url)
+		printRepoRemoteAdded(colorOut(out), remote, url)
 	} else if have != url {
 		if _, err := runs.Git(top, nil, "remote", "set-url", remote, url); err != nil {
 			return err
 		}
-		printRepoRemoteUpdated(out, r, remote, url)
+		printRepoRemoteUpdated(colorOut(out), remote, url)
 	}
 	if err := configureCredentialHelper(top, inst); err != nil {
 		return err
@@ -139,22 +137,22 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	for _, c := range append(res.Changes, res2.Changes...) {
 		fmt.Fprintf(out, "  - %s\n", c)
 	}
-	printRepoAdded(out, r, name, inst.Name, inst.ForgejoURL()+"/"+res2.FullName)
+	printRepoAdded(colorOut(out), name, inst.Name, inst.ForgejoURL()+"/"+res2.FullName)
 	return nil
 }
 
-func printRepoRemoteAdded(out io.Writer, r *lipgloss.Renderer, remote, url string) {
-	st := newStyles(r)
+func printRepoRemoteAdded(out io.Writer, remote, url string) {
+	st := newStyles()
 	fmt.Fprintf(out, "added remote %s -> %s\n", st.Bold.Render(remote), st.Info.Render(url))
 }
 
-func printRepoRemoteUpdated(out io.Writer, r *lipgloss.Renderer, remote, url string) {
-	st := newStyles(r)
+func printRepoRemoteUpdated(out io.Writer, remote, url string) {
+	st := newStyles()
 	fmt.Fprintf(out, "updated remote %s -> %s\n", st.Bold.Render(remote), st.Info.Render(url))
 }
 
-func printRepoAdded(out io.Writer, r *lipgloss.Renderer, name, instName, url string) {
-	st := newStyles(r)
+func printRepoAdded(out io.Writer, name, instName, url string) {
+	st := newStyles()
 	fmt.Fprintf(out, "%s is hosted on bottown %s: %s\n", st.Bold.Render(name), st.Bold.Render(instName), st.Info.Render(url))
 }
 

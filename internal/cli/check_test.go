@@ -15,9 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
-
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -204,8 +201,6 @@ func TestCheckPaths(t *testing.T) {
 }
 
 func TestPrintCheck(t *testing.T) {
-	r := lipgloss.NewRenderer(&bytes.Buffer{})
-	r.SetColorProfile(termenv.Ascii)
 	res := checkResult{
 		SHA: "0123456789abcdef0123456789abcdef01234567", Branch: "issue/7", Log: "/runs/r-1.check.log", Base: "origin/main",
 		Steps: []checkStep{
@@ -217,7 +212,7 @@ func TestPrintCheck(t *testing.T) {
 		Deps: []depChange{{File: "go.mod", Added: []string{"b.example/b v2.0.0"}, NAdded: 3, Removed: []string{}}},
 	}
 	var out bytes.Buffer
-	printCheck(&out, r, res, []server.CommitStatus{{Context: "bottown/check", State: "success"}, {Context: "bottown/e2e", State: "failure"}}, nil)
+	printCheck(colorOut(&out), res, []server.CommitStatus{{Context: "bottown/check", State: "success"}, {Context: "bottown/e2e", State: "failure"}}, nil)
 	got := out.String()
 	for _, want := range []string{
 		"bottown check at 0123456789 on issue/7\nlog: /runs/r-1.check.log\n",
@@ -236,7 +231,7 @@ func TestPrintCheck(t *testing.T) {
 
 	out.Reset()
 	res.Steps = res.Steps[:1]
-	printCheck(&out, r, res, nil, errors.New("issue/7 on the forge is at abc, not 012: push HEAD first"))
+	printCheck(colorOut(&out), res, nil, errors.New("issue/7 on the forge is at abc, not 012: push HEAD first"))
 	if got := out.String(); !strings.Contains(got, "not recorded: issue/7 on the forge is at abc, not 012: push HEAD first; then `bottown check --report` records this result") ||
 		!strings.HasSuffix(got, "PASSED\n") {
 		t.Errorf("unpushed summary:\n%s", got)
