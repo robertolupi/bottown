@@ -354,13 +354,13 @@ func TestRemoveOrphanLocks(t *testing.T) {
 // holder of the new file.
 func TestLockRecordRetakesUnlinkedLock(t *testing.T) {
 	w := &Workspace{RunsDir: t.TempDir()}
-	first, err := w.lockRecord("r-1", true)
+	first, err := lockFile(w.Path("r-1", ".lock"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := make(chan *os.File)
 	go func() {
-		f, err := w.lockRecord("r-1", true)
+		f, err := lockFile(w.Path("r-1", ".lock"), true)
 		if err != nil {
 			t.Error(err)
 		}

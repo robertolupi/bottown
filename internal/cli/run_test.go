@@ -429,11 +429,11 @@ func TestGCKeepsDeadRunWhenRevokeFails(t *testing.T) {
 }
 
 // A launcher retries its end-run until the server answers.
-func TestRetryEndRun(t *testing.T) {
-	defer func(b []time.Duration) { endRunBackoff = b }(endRunBackoff)
-	endRunBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+func TestRetryEnd(t *testing.T) {
+	defer func(b []time.Duration) { runs.EndBackoff = b }(runs.EndBackoff)
+	runs.EndBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	calls := 0
-	err := retryEndRun(context.Background(), func(context.Context) error {
+	err := runs.RetryEnd(context.Background(), func(context.Context) error {
 		if calls++; calls < 3 {
 			return errors.New("connection refused")
 		}
@@ -443,9 +443,9 @@ func TestRetryEndRun(t *testing.T) {
 		t.Errorf("retryEndRun: %v after %d calls, want success after 3", err, calls)
 	}
 	calls = 0
-	err = retryEndRun(context.Background(), func(context.Context) error { calls++; return errors.New("connection refused") })
-	if err == nil || calls != len(endRunBackoff)+1 {
-		t.Errorf("retryEndRun: %v after %d calls, want failure after %d", err, calls, len(endRunBackoff)+1)
+	err = runs.RetryEnd(context.Background(), func(context.Context) error { calls++; return errors.New("connection refused") })
+	if err == nil || calls != len(runs.EndBackoff)+1 {
+		t.Errorf("retryEndRun: %v after %d calls, want failure after %d", err, calls, len(runs.EndBackoff)+1)
 	}
 }
 
@@ -454,8 +454,8 @@ func TestRetryEndRun(t *testing.T) {
 // whatever its expiry, a failed one too without --failed, and removes only
 // what it may.
 func TestGCRevokesRunItsLauncherCouldNotEnd(t *testing.T) {
-	defer func(b []time.Duration) { endRunBackoff = b }(endRunBackoff)
-	endRunBackoff = []time.Duration{time.Millisecond}
+	defer func(b []time.Duration) { runs.EndBackoff = b }(runs.EndBackoff)
+	runs.EndBackoff = []time.Duration{time.Millisecond}
 
 	var mu sync.Mutex
 	up := false
@@ -505,7 +505,7 @@ func TestGCRevokesRunItsLauncherCouldNotEnd(t *testing.T) {
 	expires := time.Now().Add(12 * time.Hour)
 	for id, status := range map[string]string{"r-d0e": runs.StatusSucceeded, "r-fa1": runs.StatusFailed} {
 		live[id] = secrets.Run{ID: id, Expires: expires}
-		err := retryEndRun(context.Background(), func(ctx context.Context) error {
+		err := runs.RetryEnd(context.Background(), func(ctx context.Context) error {
 			return callServer(ctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+id, server.EndRunRequest{Status: status}, nil)
 		})
 		if err == nil {
