@@ -149,6 +149,12 @@ a branch cannot change what its own checks are.
   ([web-ui.md §3.2](design/web-ui.md#32-the-loop)). So implementers need
   not run `--e2e` before opening a PR.
 
+A retry on the same issue can reuse `issue/<n>` even when an earlier run
+kept its worktree. Before creating the server run, the launcher detaches
+that old worktree, preserving its commits and working files for inspection.
+If its launcher is still alive, the start refuses with the holding run's
+ID instead.
+
 Launched runs get a private scratch directory under the launcher's temporary
 directory, named `bottown-<workspace hash>-<run id>`. The harness receives it
 as `TMPDIR` (and Claude receives it through `--add-dir`), so tests that need

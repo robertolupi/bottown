@@ -1863,9 +1863,13 @@ func TestE2E(t *testing.T) {
 		childFile := filepath.Join(t.TempDir(), "child-pid")
 		longRun := `sleep 300 & trap 'exit 0' TERM; echo $! > ` + childFile + `; echo "$BOTTOWN_RUN_ID" > "$ID_FILE"; while :; do sleep 1; done`
 		stopCmd, runOut, stopID := startLong(longRun)
+		beforeRefusal := a.mustCmd(demo, "run", "ls")
 		out, err = withHarness("exit 99", "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number))
-		if err == nil || !strings.Contains(out, "actor claude") || !strings.Contains(out, stopID) {
-			t.Fatalf("second batch run at limit: %v\n%s", err, out)
+		if err == nil || !strings.Contains(out, "held by live run "+stopID) {
+			t.Fatalf("second run on a live branch: %v\n%s", err, out)
+		}
+		if after := a.mustCmd(demo, "run", "ls"); len(strings.Split(after, "\n")) != len(strings.Split(beforeRefusal, "\n")) {
+			t.Errorf("refused start changed local runs:\nbefore: %s\nafter: %s", beforeRefusal, after)
 		}
 		if out, err := withHarness("echo interactive", "run", "discuss", "-a", "claude", "-I", fmt.Sprint(stopIssue.Number)); err != nil || !strings.Contains(out, "succeeded") {
 			t.Fatalf("interactive run at batch limit: %v\n%s", err, out)
@@ -1895,7 +1899,16 @@ func TestE2E(t *testing.T) {
 		if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "Stopped by the owner.") || !strings.Contains(comments[len(comments)-1].Body, "**failed**") {
 			t.Errorf("stopped handover: %+v", comments)
 		}
-		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 2 runs, purged 2 ended runs") {
+		// Retrying a failed run keeps its old worktree for inspection while
+		// freeing the issue branch for the new launcher.
+		if out, err := withHarness("echo retried", "run", "implement", "-a", "claude", fmt.Sprint(stopIssue.Number)); err != nil || !strings.Contains(out, "succeeded") {
+			t.Fatalf("retry stopped run: %v\n%s", err, out)
+		}
+		oldWorktree := filepath.Join(demo, ".bottown", "runs", stopID)
+		if out := git(t, oldWorktree, "rev-parse", "--abbrev-ref", "HEAD"); out != "HEAD" {
+			t.Errorf("stopped worktree was not kept detached: %s", out)
+		}
+		if out := a.mustCmd(demo, "run", "gc", "--failed"); !strings.Contains(out, "removed 3 runs, purged 3 ended runs") {
 			t.Errorf("gc stopped run: %s", out)
 		}
 
