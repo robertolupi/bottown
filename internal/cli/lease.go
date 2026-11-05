@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -92,7 +93,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		return err
 	}
 	if a.Worktree != "" {
-		if _, err := recoverLease(a); err != nil {
+		if _, err := recoverLease(cmd.Context(), a); err != nil {
 			return err
 		}
 	}
@@ -119,7 +120,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		req.Issue = n
 	}
 	var created server.RunResponse
-	if err := a.call("POST", "/v1/runs", req, &created); err != nil {
+	if err := a.call(cmd.Context(), "POST", "/v1/runs", req, &created); err != nil {
 		return err
 	}
 	run := created.Run
@@ -133,7 +134,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	if inst, _ := git(a.Worktree, "config", "--get", gitInstanceKey); inst != "" {
 		rec.Instance = inst
 	}
-	return prepareLease(a, rec, func() (err error) {
+	return prepareLease(cmd.Context(), a, rec, func() (err error) {
 		if _, err := runs.GitCtx(cmd.Context(), a.Worktree, nil, "fetch", "-q", "--prune", a.Remote); err != nil {
 			return err
 		}
@@ -174,7 +175,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		rk := *a
 		rk.Key = created.Key
 		var item server.IssueOut
-		if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &item); err != nil {
+		if err := rk.call(cmd.Context(), "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &item); err != nil {
 			return err
 		}
 		// A previous run's files, if its cleanup was interrupted, go first.
@@ -194,7 +195,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		}
 		d.WebPreview = runs.HasWebPreview(a.Worktree, a.Remote+"/"+base)
 		if kind == policy.Verify {
-			d.Reviewed = rk.prReviewed(run.PR)
+			d.Reviewed = rk.prReviewed(cmd.Context(), run.PR)
 		}
 		if kind == policy.Plan {
 			// bottown reads the repository's settings from its default branch.
@@ -249,7 +250,7 @@ func newRunEnd() *cobra.Command {
 				return err
 			}
 			if a.Worktree != "" {
-				recovered, err := recoverLease(a)
+				recovered, err := recoverLease(cmd.Context(), a)
 				if err != nil {
 					return err
 				}
@@ -281,7 +282,7 @@ func newRunEnd() *cobra.Command {
 			if failed {
 				status = runs.StatusFailed
 			}
-			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Body: handoverText(rec, status, 0, text)}, nil); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/comment", server.CommentIn{Body: handoverText(rec, status, 0, text)}, nil); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
 			}
 			// In-harness runs leave no log: the digest is the handover.
@@ -291,7 +292,7 @@ func newRunEnd() *cobra.Command {
 				// its summary.
 				end.Failure = &secrets.Failure{Cause: secrets.FailureReported, Detail: "the agent ended the run as failed"}
 			}
-			if err := endLease(a, rec, end); err != nil {
+			if err := endLease(cmd.Context(), a, rec, end); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "run %s %s; key revoked\n", rec.ID, status)
@@ -349,13 +350,13 @@ func finishLease(a *agentCtx, rec runs.Record, ended secrets.Run) error {
 	return nil
 }
 
-func endLease(a *agentCtx, rec runs.Record, end server.EndRunRequest) error {
+func endLease(ctx context.Context, a *agentCtx, rec runs.Record, end server.EndRunRequest) error {
 	actor, err := leaseActor(a)
 	if err != nil {
 		return err
 	}
 	var ended secrets.Run
-	if err := actor.call("DELETE", "/v1/runs/"+rec.ID, end, &ended); err != nil {
+	if err := actor.call(ctx, "DELETE", "/v1/runs/"+rec.ID, end, &ended); err != nil {
 		return err
 	}
 	return finishLease(a, rec, ended)
@@ -364,7 +365,7 @@ func endLease(a *agentCtx, rec runs.Record, end server.EndRunRequest) error {
 // recoverLease reconciles only the durable local run ID, never a different
 // active run. Startup interrupted before the prompt is delivered is revoked;
 // an already ended run only needs its local metadata finalized.
-func recoverLease(a *agentCtx) (bool, error) {
+func recoverLease(ctx context.Context, a *agentCtx) (bool, error) {
 	file := filepath.Join(a.KeyDir, "run.json")
 	rec, err := runs.LoadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
@@ -384,7 +385,7 @@ func recoverLease(a *agentCtx) (bool, error) {
 		return false, err
 	}
 	var remote secrets.Run
-	if err := actor.call("GET", "/v1/runs/"+rec.ID, nil, &remote); err != nil {
+	if err := actor.call(ctx, "GET", "/v1/runs/"+rec.ID, nil, &remote); err != nil {
 		return false, err
 	}
 	if remote.ID != rec.ID || remote.Actor != rec.Actor {
@@ -394,18 +395,20 @@ func recoverLease(a *agentCtx) (bool, error) {
 		return true, finishLease(a, rec, remote)
 	}
 	if rec.Status == runs.StatusPreparing {
-		return true, endLease(a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+		return true, endLease(ctx, a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
 			Cause: secrets.FailureStartup, Detail: "its startup was interrupted before the agent received the prompt"}}})
 	}
 	return false, nil
 }
 
-func prepareLease(a *agentCtx, rec runs.Record, setup func() error) (err error) {
+func prepareLease(ctx context.Context, a *agentCtx, rec runs.Record, setup func() error) (err error) {
 	// Keep a durable identity before setup. A later start/end can revoke a
 	// preparing run even if this process dies or rollback cannot reach the server.
 	defer func() {
 		if err != nil {
-			cleanupErr := endLease(a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+			// The rollback runs even when ctx was cancelled; the client's
+			// timeout bounds it.
+			cleanupErr := endLease(context.WithoutCancel(ctx), a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
 				Cause: secrets.FailureStartup, Detail: err.Error()}}})
 			if cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("rollback run %s (retry run end): %w", rec.ID, cleanupErr))

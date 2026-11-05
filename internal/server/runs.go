@@ -52,6 +52,13 @@ const ActorBusyMessage = secrets.ActorBusyMessage
 // no longer the PR's head.
 const HeadMovedMessage = "the head moved"
 
+// Error codes, in the "code" field of an error answer, for the refusals
+// clients branch on.
+const (
+	ErrorCodeActorBusy = "actor_busy" // ActorBusyMessage
+	ErrorCodeHeadMoved = "head_moved" // HeadMovedMessage
+)
+
 // RunResponse is a created run and its key. The key is returned once.
 type RunResponse struct {
 	secrets.Run
@@ -60,13 +67,14 @@ type RunResponse struct {
 
 type runError struct {
 	status int
+	code   string // ErrorCode*, if a client branches on it
 	msg    string
 }
 
 func (e *runError) Error() string { return e.msg }
 
 func runErr(status int, format string, args ...any) *runError {
-	return &runError{status, fmt.Sprintf(format, args...)}
+	return &runError{status: status, msg: fmt.Sprintf(format, args...)}
 }
 
 func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +110,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.newRun(r, req)
 	if err != nil {
 		if re, ok := err.(*runError); ok {
-			writeError(w, re.status, re.msg)
+			writeErrorCode(w, re.status, re.code, re.msg)
 			return
 		}
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -113,7 +121,11 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var busy *secrets.RunBusyError
 		if errors.As(err, &busy) {
-			writeError(w, http.StatusConflict, err.Error())
+			code := ""
+			if busy.Actor != "" {
+				code = ErrorCodeActorBusy
+			}
+			writeErrorCode(w, http.StatusConflict, code, err.Error())
 		} else {
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}
@@ -190,7 +202,9 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		case req.SHA != "" && req.SHA != pr.Head.Sha:
 			// The run is pinned at the head read here, so this comparison
 			// leaves no window between what the caller checked and the pin.
-			return run, runErr(http.StatusConflict, "pull request #%d: %s: it is at %s, not %s", req.PR, HeadMovedMessage, pr.Head.Sha, req.SHA)
+			re := runErr(http.StatusConflict, "pull request #%d: %s: it is at %s, not %s", req.PR, HeadMovedMessage, pr.Head.Sha, req.SHA)
+			re.code = ErrorCodeHeadMoved
+			return run, re
 		}
 		if pr.Poster != nil {
 			run.Author = pr.Poster.UserName

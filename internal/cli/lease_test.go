@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -83,7 +84,7 @@ func TestLeaseSetupRollback(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			f := newLeaseFixture(t)
 			boom := errors.New("injected " + stage + " failure")
-			err := prepareLease(f.a, f.rec, func() error {
+			err := prepareLease(context.Background(), f.a, f.rec, func() error {
 				if stage != "record" {
 					if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
 						t.Fatal(err)
@@ -116,7 +117,7 @@ func TestLeaseSetupRollback(t *testing.T) {
 func TestLeaseRollbackFailureCanRecover(t *testing.T) {
 	f := newLeaseFixture(t)
 	f.failEnd = true
-	err := prepareLease(f.a, f.rec, func() error { return errors.New("setup failed") })
+	err := prepareLease(context.Background(), f.a, f.rec, func() error { return errors.New("setup failed") })
 	if err == nil || !strings.Contains(err.Error(), "rollback run r-test") {
 		t.Fatalf("error = %v", err)
 	}
@@ -125,7 +126,7 @@ func TestLeaseRollbackFailureCanRecover(t *testing.T) {
 		t.Fatalf("lost recovery identity: %+v, %v", rec, err)
 	}
 	f.failEnd = false
-	if recovered, err := recoverLease(f.a); err != nil || !recovered {
+	if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
 		t.Fatalf("recovery = %v, %v", recovered, err)
 	}
 }
@@ -153,7 +154,7 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 			if err := os.Mkdir(obstruction, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err == nil {
+			if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err == nil {
 				t.Fatal("expected local persistence failure")
 			}
 			if f.remote.Ended == nil {
@@ -162,7 +163,7 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 			if err := os.Remove(obstruction); err != nil {
 				t.Fatal(err)
 			}
-			if recovered, err := recoverLease(f.a); err != nil || !recovered {
+			if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
 				t.Fatalf("recovery = %v, %v", recovered, err)
 			}
 			if f.ends != 1 {
@@ -182,7 +183,7 @@ func TestLeaseRecoveryRefusesDifferentRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.remote.ID = "r-other"
-	if _, err := recoverLease(f.a); err == nil {
+	if _, err := recoverLease(context.Background(), f.a); err == nil {
 		t.Fatal("accepted different server run")
 	}
 	if f.ends != 0 {
@@ -192,19 +193,19 @@ func TestLeaseRecoveryRefusesDifferentRun(t *testing.T) {
 
 func TestLeaseSetupSuccessKeepsRun(t *testing.T) {
 	f := newLeaseFixture(t)
-	if err := prepareLease(f.a, f.rec, func() error {
+	if err := prepareLease(context.Background(), f.a, f.rec, func() error {
 		f.rec.Status = runs.StatusRunning
 		return saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if recovered, err := recoverLease(f.a); err != nil || recovered {
+	if recovered, err := recoverLease(context.Background(), f.a); err != nil || recovered {
 		t.Fatalf("live run recovery = %v, %v", recovered, err)
 	}
 	if f.ends != 0 {
 		t.Fatal("ended successful setup")
 	}
-	if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
+	if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -215,7 +216,7 @@ func TestLeaseInterruptedStartupRecovery(t *testing.T) {
 	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
 		t.Fatal(err)
 	}
-	if recovered, err := recoverLease(f.a); err != nil || !recovered {
+	if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
 		t.Fatalf("recovery = %v, %v", recovered, err)
 	}
 	if f.a.Key != "actor-key" || f.a.RunID != "" {
@@ -236,7 +237,7 @@ func TestLeaseRecoveryPreservesDifferentWorktreeRun(t *testing.T) {
 	if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, "r-other"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := recoverLease(f.a); err == nil {
+	if _, err := recoverLease(context.Background(), f.a); err == nil {
 		t.Fatal("accepted different worktree run")
 	}
 	if id, _ := git(f.a.Worktree, "config", "--worktree", "--get", gitRunKey); id != "r-other" {
@@ -273,7 +274,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 	t.Run("end", func(t *testing.T) {
 		f := newLeaseFixture(t)
 		dir := fill(t, f)
-		if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
+		if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
 			t.Fatal(err)
 		}
 		gone(t, dir)
@@ -284,7 +285,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 		if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
 			t.Fatal(err)
 		}
-		if recovered, err := recoverLease(f.a); err != nil || !recovered {
+		if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
 			t.Fatalf("recovery = %v, %v", recovered, err)
 		}
 		gone(t, dir)
@@ -292,7 +293,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 	t.Run("rollback", func(t *testing.T) {
 		f := newLeaseFixture(t)
 		var dir string
-		if err := prepareLease(f.a, f.rec, func() error {
+		if err := prepareLease(context.Background(), f.a, f.rec, func() error {
 			dir = fill(t, f)
 			return errors.New("prompt failed")
 		}); err == nil {
@@ -309,14 +310,14 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 		if err := os.Chmod(dir, 0o500); err != nil {
 			t.Fatal(err)
 		}
-		if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err == nil {
+		if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err == nil {
 			t.Fatal("expected cleanup failure")
 		}
 		if rec, err := runs.LoadFile(filepath.Join(f.a.KeyDir, "run.json")); err != nil || rec.Key == "" {
 			t.Fatalf("record finalized before cleanup: %+v %v", rec, err)
 		}
 		_ = os.Chmod(dir, 0o700)
-		if recovered, err := recoverLease(f.a); err != nil || !recovered {
+		if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
 			t.Fatalf("recovery = %v, %v", recovered, err)
 		}
 		gone(t, dir)
@@ -331,7 +332,7 @@ func TestRunEndRetryAfterCleanup(t *testing.T) {
 	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
 		t.Fatal(err)
 	}
-	if err := endLease(f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
+	if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(f.a.Worktree)

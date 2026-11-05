@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
@@ -86,44 +86,13 @@ func resolveAgent() (*agentCtx, error) {
 	return a, nil
 }
 
-// call makes a JSON request to the bottown server with the agent's key.
-func (a *agentCtx) call(method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
-	}
-	req, err := http.NewRequest(method, a.ServerURL+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.Key)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
-	if err != nil {
-		return fmt.Errorf("bottown server unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(raw, &e) == nil && (e.Error != "" || e.Message != "") {
-			return errors.New(e.Error + e.Message)
-		}
-		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+// client is the bottown server as the agent's key.
+func (a *agentCtx) client() *client.Client { return client.New(a.ServerURL, a.Key) }
+
+// call makes a JSON request to the bottown server with the agent's key. A
+// refusal is a *client.APIError.
+func (a *agentCtx) call(ctx context.Context, method, path string, in, out any) error {
+	return a.client().Call(ctx, method, path, in, out)
 }
 
 // readBody returns --body, or the contents of --body-file ("-" is stdin).
@@ -163,7 +132,7 @@ func newWhoami() *cobra.Command {
 				Instance string          `json:"instance"`
 				RunRaw   json.RawMessage `json:"run"`
 			}
-			if err := a.call("GET", "/v1/whoami", nil, &who); err != nil {
+			if err := a.call(cmd.Context(), "GET", "/v1/whoami", nil, &who); err != nil {
 				return err
 			}
 			var last *runs.Record
@@ -403,7 +372,7 @@ their local paths; outside a run, --download DIR saves them there.`,
 				r = a.defaultRepo()
 			}
 			var is server.IssueOut
-			if err := a.call("GET", "/v1/forge/issue"+targetQuery(r, n, nil), nil, &is); err != nil {
+			if err := a.call(cmd.Context(), "GET", "/v1/forge/issue"+targetQuery(r, n, nil), nil, &is); err != nil {
 				return err
 			}
 			dir := download
@@ -451,7 +420,7 @@ their local paths; outside a run, --download DIR saves them there.`,
 				r = a.defaultRepo()
 			}
 			var out server.IssueCreateOut
-			if err := a.call("POST", "/v1/forge/issue", server.IssueCreateIn{Repo: r, Title: title, Body: b}, &out); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/issue", server.IssueCreateIn{Repo: r, Title: title, Body: b}, &out); err != nil {
 				return err
 			}
 			if createJSON {
@@ -491,7 +460,7 @@ their local paths; outside a run, --download DIR saves them there.`,
 				q.Set("state", listState)
 			}
 			var issues []server.IssueItem
-			if err := a.call("GET", "/v1/forge/issues?"+q.Encode(), nil, &issues); err != nil {
+			if err := a.call(cmd.Context(), "GET", "/v1/forge/issues?"+q.Encode(), nil, &issues); err != nil {
 				return err
 			}
 			if listJSON {
@@ -548,7 +517,7 @@ Without an earlier review it shows the full diff.`,
 				extra.Set("diff", "1")
 			}
 			var p server.PROut
-			if err := a.call("GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
+			if err := a.call(cmd.Context(), "GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
@@ -564,7 +533,7 @@ Without an earlier review it shows the full diff.`,
 			if !ok {
 				// No earlier review: everything is new.
 				extra.Set("diff", "1")
-				if err := a.call("GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
+				if err := a.call(cmd.Context(), "GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
 					return err
 				}
 				if asJSON {
@@ -624,7 +593,7 @@ Without an earlier review it shows the full diff.`,
 				return err
 			}
 			var out server.PRCreateOut
-			if err := a.call("POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b}, &out); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b}, &out); err != nil {
 				return err
 			}
 			if createJSON {
@@ -668,7 +637,7 @@ Without an earlier review it shows the full diff.`,
 				q.Set("state", listState)
 			}
 			var prs []server.PRItem
-			if err := a.call("GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
+			if err := a.call(cmd.Context(), "GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
 				return err
 			}
 			if listJSON {
@@ -710,7 +679,7 @@ func newComment() *cobra.Command {
 				r = a.defaultRepo()
 			}
 			var out server.CommentOut
-			if err := a.call("POST", "/v1/forge/comment", server.CommentIn{Target: server.Target{Repo: r, Number: n}, Body: b}, &out); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/comment", server.CommentIn{Target: server.Target{Repo: r, Number: n}, Body: b}, &out); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "commented (id %d) as %s\n", out.ID, out.Author)
@@ -740,7 +709,7 @@ func newReview() *cobra.Command {
 				return err
 			}
 			var out server.ReviewOut
-			if err := a.call("POST", "/v1/forge/review", server.ReviewIn{Event: event, Body: b, CommitID: commit}, &out); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/review", server.ReviewIn{Event: event, Body: b, CommitID: commit}, &out); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "review %s by %s at %s (official %v)\n", out.State, out.Reviewer, out.CommitID, out.Official)
@@ -785,13 +754,7 @@ func newAPI() *cobra.Command {
 				}
 				body = strings.NewReader(data)
 			}
-			req, err := http.NewRequest(strings.ToUpper(args[0]), a.ServerURL+"/forgejo/api/v1"+args[1], body)
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Authorization", "Bearer "+a.Key)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+			resp, err := a.client().Do(cmd.Context(), strings.ToUpper(args[0]), "/forgejo/api/v1"+args[1], body, "application/json")
 			if err != nil {
 				return err
 			}

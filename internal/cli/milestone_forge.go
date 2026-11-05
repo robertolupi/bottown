@@ -1,16 +1,14 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/milestone"
 )
 
@@ -18,61 +16,23 @@ import (
 // the owner's key: the server holds the token, and the owner is exempt from
 // the base policy that keeps actors from editing issues and dependencies.
 type proxyForge struct {
-	base      string // the server's /forgejo/api/v1
-	key       string
+	c         *client.Client
 	org, repo string
-	http      *http.Client
 }
 
 func newProxyForge(serverURL, key, org, repo string) *proxyForge {
-	return &proxyForge{base: serverURL + "/forgejo/api/v1", key: key, org: org, repo: repo,
-		http: &http.Client{Timeout: time.Minute}}
+	return &proxyForge{c: client.New(serverURL, key).WithTimeout(time.Minute), org: org, repo: repo}
 }
 
 // call sends a request to path (under /api/v1); out may be nil, a *[]byte
 // for the raw body, or a value to decode JSON into. A 404 is
 // milestone.ErrNotFound.
 func (f *proxyForge) call(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
+	err := f.c.Call(ctx, method, "/forgejo/api/v1"+path, in, out)
+	if errors.Is(err, client.ErrNotFound) {
+		return fmt.Errorf("%w: %w", milestone.ErrNotFound, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, f.base+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+f.key)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := f.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("bottown server unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("%s %s: %w", method, path, milestone.ErrNotFound)
-	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		return fmt.Errorf("%s %s: %s %s", method, path, resp.Status, strings.TrimSpace(string(raw)))
-	}
-	switch o := out.(type) {
-	case nil:
-		return nil
-	case *[]byte:
-		*o = raw
-		return nil
-	default:
-		return json.Unmarshal(raw, out)
-	}
+	return err
 }
 
 func (f *proxyForge) repoPath(rest string) string {

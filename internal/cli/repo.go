@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -199,23 +198,11 @@ type repoResult struct {
 
 func putRepo(ctx context.Context, inst config.Instance, key, name, branch string) (repoResult, error) {
 	var res repoResult
-	body, _ := json.Marshal(map[string]string{"default_branch": branch})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, inst.ServerURL()+"/v1/repos/"+name, bytes.NewReader(body))
+	err := callServer(ctx, inst, key, http.MethodPut, "/v1/repos/"+name, map[string]string{"default_branch": branch}, &res)
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("create repo %s: %w", name, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := hostClient().Do(req)
-	if err != nil {
-		return res, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return res, fmt.Errorf("create repo %s: %s: %s", name, resp.Status, strings.TrimSpace(string(b)))
-	}
-	return res, json.NewDecoder(resp.Body).Decode(&res)
+	return res, nil
 }
 
 func ownerKey(g *globals) (string, error) {

@@ -165,14 +165,7 @@ func (s *Server) handleActionAfterPull(w http.ResponseWriter, r *http.Request) {
 // getServerRaw is callServer for a response that is not JSON: it returns
 // the status and body rather than failing on a non-2xx status.
 func (s *Server) getServerRaw(ctx context.Context, path string) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.Instance.ServerURL()+path, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-	if s.cfg.OwnerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.OwnerKey)
-	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := s.client().Do(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return 0, nil, err
 	}

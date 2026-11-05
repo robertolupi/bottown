@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -615,27 +614,8 @@ func webSession(ctx context.Context, g *globals, body server.WebSessionRequest) 
 	if err != nil {
 		return res, err
 	}
-	b, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, inst.ServerURL()+"/v1/web/session", bytes.NewReader(b))
-	if err != nil {
-		return res, err
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := hostClient().Do(req)
-	if err != nil {
-		return res, fmt.Errorf("instance %s unreachable (is it up?): %w", inst.Name, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		var e struct{ Error string }
-		if json.Unmarshal(msg, &e) == nil && e.Error != "" {
-			return res, fmt.Errorf("%s: %s", inst.Name, e.Error)
-		}
-		return res, fmt.Errorf("%s: %s %s", inst.Name, resp.Status, strings.TrimSpace(string(msg)))
-	}
-	return res, json.NewDecoder(resp.Body).Decode(&res)
+	err = callServer(ctx, inst, key, http.MethodPost, "/v1/web/session", body, &res)
+	return res, err
 }
 
 func openLogin(cmd *cobra.Command, loginURL, landing string, printOnly bool) error {

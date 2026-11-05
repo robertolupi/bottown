@@ -1,15 +1,11 @@
 package flow
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
-	"time"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
@@ -17,52 +13,15 @@ import (
 
 // Client reads forge and run state through the owner-authenticated server API.
 type Client struct {
-	base string
-	key  string
-	http *http.Client
+	c *client.Client
 }
 
 func NewClient(inst config.Instance, key string) *Client {
-	return &Client{base: inst.ServerURL(), key: key, http: &http.Client{Timeout: 2 * time.Minute}}
+	return &Client{c: client.New(inst.ServerURL(), key)}
 }
 
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("bottown server unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(raw, &e) == nil && (e.Error != "" || e.Message != "") {
-			return fmt.Errorf("%s %s: %s%s", method, path, e.Error, e.Message)
-		}
-		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
+	return c.c.Call(ctx, method, path, in, out)
 }
 
 func (c *Client) Actors(ctx context.Context) ([]server.ActorInfo, error) {
