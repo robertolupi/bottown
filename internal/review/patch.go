@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // SamePatch reports whether old and head carry the same change: the diff
@@ -67,7 +68,7 @@ func isSHA(s string) bool {
 }
 
 func git(ctx context.Context, gitDir string, stdin *strings.Reader, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--git-dir", gitDir}, args...)...)
+	cmd := runs.GitCommand(ctx, "", []string{"--git-dir", gitDir}, args...)
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}

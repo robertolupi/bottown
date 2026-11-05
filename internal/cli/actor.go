@@ -68,11 +68,11 @@ remote other than bottown blocked.`,
 // mainCheckout returns the top of the owner's main checkout and refuses
 // actor worktrees or run worktrees.
 func mainCheckout() (string, error) {
-	top, err := git(".", "rev-parse", "--show-toplevel")
+	top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", errors.New("not inside a git checkout")
 	}
-	if v, _ := git(top, "config", "--worktree", "--get", gitActorKey); v != "" {
+	if v, _ := runs.Git(top, nil, "config", "--worktree", "--get", gitActorKey); v != "" {
 		return "", fmt.Errorf("%s is actor %s's worktree; run this in the main checkout", top, v)
 	}
 	if strings.Contains(filepath.ToSlash(top), "/.bottown/") {
@@ -123,14 +123,14 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 	}
 
 	// Worktree config must be on before any per-worktree settings exist.
-	if _, err := git(top, "config", "extensions.worktreeConfig", "true"); err != nil {
+	if _, err := runs.Git(top, nil, "config", "extensions.worktreeConfig", "true"); err != nil {
 		return err
 	}
 	remote := inst.Remote()
 	if _, err := runs.GitCtx(ctx, top, nil, "fetch", "-q", remote); err != nil {
 		return err
 	}
-	base, err := remoteDefaultBranch(top, remote)
+	base, err := runs.RemoteDefaultBranch(ctx, top, remote)
 	if err != nil {
 		return err
 	}
@@ -144,13 +144,13 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("%s exists and is not a worktree of this checkout", path)
 		}
-		if _, err := git(top, "worktree", "add", "-q", "--detach", path, remote+"/"+base); err != nil {
+		if _, err := runs.Git(top, nil, "worktree", "add", "-q", "--detach", path, remote+"/"+base); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "created %s's worktree at %s (detached at %s/%s)\n", name, path, remote, base)
 	}
 
-	gitDir, err := git(path, "rev-parse", "--absolute-git-dir")
+	gitDir, err := runs.Git(path, nil, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 		return err
 	}
 	set := func(k, v string) error {
-		_, err := git(path, "config", "--worktree", k, v)
+		_, err := runs.Git(path, nil, "config", "--worktree", k, v)
 		return err
 	}
 	for _, kv := range [][2]string{
@@ -179,7 +179,7 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 			return err
 		}
 	}
-	if _, err := git(path, "config", "--worktree", "--get", gitRunKey); err != nil {
+	if _, err := runs.Git(path, nil, "config", "--worktree", "--get", gitRunKey); err != nil {
 		if err := set(gitRunKey, ""); err != nil {
 			return err
 		}
@@ -188,9 +188,9 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 	// Credentials: forget every helper inherited from main and global
 	// config (the owner's bottown key, osxkeychain, gh), then answer only
 	// with this worktree's run key.
-	_, _ = git(path, "config", "--worktree", "--unset-all", "credential.helper")
+	_, _ = runs.Git(path, nil, "config", "--worktree", "--unset-all", "credential.helper")
 	for _, k := range urlScopedHelpers(path) {
-		if _, err := git(path, "config", "--worktree", "--replace-all", k, ""); err != nil {
+		if _, err := runs.Git(path, nil, "config", "--worktree", "--replace-all", k, ""); err != nil {
 			return err
 		}
 	}
@@ -201,12 +201,12 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 		return err
 	}
 	helper := fmt.Sprintf("!%q credential --key-dir %q", self, keyDir)
-	if _, err := git(path, "config", "--worktree", "--add", "credential.helper", helper); err != nil {
+	if _, err := runs.Git(path, nil, "config", "--worktree", "--add", "credential.helper", helper); err != nil {
 		return err
 	}
 
 	// Pushes: only to the bottown remote, and only with a run key.
-	remotes, err := git(top, "remote")
+	remotes, err := runs.Git(top, nil, "remote")
 	if err != nil {
 		return err
 	}
@@ -248,7 +248,7 @@ func ensureActorKey(cmd *cobra.Command, g *globals, inst config.Instance, actor,
 // urlScopedHelpers lists credential.<url>.helper keys visible in dir (from
 // main's or global config), so the worktree can reset each of them.
 func urlScopedHelpers(dir string) []string {
-	out, err := git(dir, "config", "--name-only", "--get-regexp", `^credential\..+\.helper$`)
+	out, err := runs.Git(dir, nil, "config", "--name-only", "--get-regexp", `^credential\..+\.helper$`)
 	if err != nil {
 		return nil
 	}
@@ -261,25 +261,9 @@ func urlScopedHelpers(dir string) []string {
 	return keys
 }
 
-func remoteDefaultBranch(top, remote string) (string, error) {
-	if ref, err := git(top, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD"); err == nil {
-		return strings.TrimPrefix(ref, remote+"/"), nil
-	}
-	out, err := git(top, "ls-remote", "--symref", remote, "HEAD")
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
-			return strings.Fields(ref)[0], nil
-		}
-	}
-	return "", fmt.Errorf("cannot find the default branch of remote %s", remote)
-}
-
 // worktreeAt reports whether path is a worktree of the checkout at top.
 func worktreeAt(top, path string) (bool, error) {
-	out, err := git(top, "worktree", "list", "--porcelain")
+	out, err := runs.Git(top, nil, "worktree", "list", "--porcelain")
 	if err != nil {
 		return false, err
 	}
@@ -303,7 +287,7 @@ type actorWorktree struct {
 }
 
 func listActorWorktrees(top string) ([]actorWorktree, error) {
-	out, err := git(top, "worktree", "list", "--porcelain")
+	out, err := runs.Git(top, nil, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
@@ -323,13 +307,13 @@ func listActorWorktrees(top string) ([]actorWorktree, error) {
 		if wt.Path == "" {
 			continue
 		}
-		wt.Actor, _ = git(wt.Path, "config", "--worktree", "--get", gitActorKey)
+		wt.Actor, _ = runs.Git(wt.Path, nil, "config", "--worktree", "--get", gitActorKey)
 		if wt.Actor == "" {
 			continue
 		}
-		wt.Run, _ = git(wt.Path, "config", "--worktree", "--get", gitRunKey)
+		wt.Run, _ = runs.Git(wt.Path, nil, "config", "--worktree", "--get", gitRunKey)
 		if wt.Head == "(detached)" {
-			if sha, err := git(wt.Path, "rev-parse", "--short", "HEAD"); err == nil {
+			if sha, err := runs.Git(wt.Path, nil, "rev-parse", "--short", "HEAD"); err == nil {
 				wt.Head = sha + " (detached)"
 			}
 		}

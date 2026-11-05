@@ -310,11 +310,11 @@ func parseManifestDiff(file, diff string) depChange {
 
 // depChanges lists the manifests HEAD changes since its merge base with base.
 func depChanges(top, base string) ([]depChange, error) {
-	mb, err := git(top, "merge-base", "HEAD", base)
+	mb, err := runs.Git(top, nil, "merge-base", "HEAD", base)
 	if err != nil {
 		return nil, err
 	}
-	names, err := git(top, "diff", "--name-only", "--no-renames", mb, "HEAD")
+	names, err := runs.Git(top, nil, "diff", "--name-only", "--no-renames", mb, "HEAD")
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func depChanges(top, base string) ([]depChange, error) {
 		if f == "" || !isManifest(f) {
 			continue
 		}
-		d, err := git(top, "diff", "-U0", "--no-color", mb, "HEAD", "--", f)
+		d, err := runs.Git(top, nil, "diff", "-U0", "--no-color", mb, "HEAD", "--", f)
 		if err != nil {
 			return nil, err
 		}
@@ -349,7 +349,7 @@ func (a *agentCtx) checkPaths() (logPath, resultPath string, err error) {
 // checkRemote is the forge remote in the checkout at top: the agent's, or
 // origin, which launched runs use.
 func checkRemote(top, preferred string) string {
-	out, _ := git(top, "remote")
+	out, _ := runs.Git(top, nil, "remote")
 	remotes := strings.Fields(out)
 	if slices.Contains(remotes, preferred) || !slices.Contains(remotes, "origin") {
 		return preferred
@@ -388,7 +388,7 @@ Exits non-zero when a check fails.`,
 			if err != nil {
 				return err
 			}
-			top, err := git(".", "rev-parse", "--show-toplevel")
+			top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 			if err != nil {
 				return errors.New("not inside a git checkout")
 			}
@@ -406,7 +406,7 @@ Exits non-zero when a check fails.`,
 				if err := json.Unmarshal(b, &res); err != nil {
 					return fmt.Errorf("%s: %w", resultPath, err)
 				}
-				if head, _ := git(top, "rev-parse", "HEAD"); head != res.SHA {
+				if head, _ := runs.Git(top, nil, "rev-parse", "HEAD"); head != res.SHA {
 					return fmt.Errorf("the last check ran at %s, but HEAD is %s: run bottown check again", short(res.SHA), short(head))
 				}
 			} else {
@@ -451,11 +451,11 @@ Exits non-zero when a check fails.`,
 func (a *agentCtx) runCheck(ctx context.Context, progress io.Writer, top, logPath string, e2e bool) (checkResult, error) {
 	res := checkResult{Started: time.Now(), Log: logPath}
 	var err error
-	if res.SHA, err = git(top, "rev-parse", "HEAD"); err != nil {
+	if res.SHA, err = runs.Git(top, nil, "rev-parse", "HEAD"); err != nil {
 		return res, err
 	}
-	res.Branch, _ = git(top, "symbolic-ref", "-q", "--short", "HEAD")
-	st, _ := git(top, "status", "--porcelain")
+	res.Branch, _ = runs.Git(top, nil, "symbolic-ref", "-q", "--short", "HEAD")
+	st, _ := runs.Git(top, nil, "status", "--porcelain")
 	res.Dirty = st != ""
 
 	remote := checkRemote(top, a.Remote)
@@ -466,7 +466,7 @@ func (a *agentCtx) runCheck(ctx context.Context, progress io.Writer, top, logPat
 	if ferr != nil {
 		res.Notes = append(res.Notes, "could not fetch "+remote+": comparing with the last fetch")
 	}
-	if branch, err := remoteDefaultBranch(top, remote); err != nil {
+	if branch, err := runs.RemoteDefaultBranch(ctx, top, remote); err != nil {
 		res.Notes = append(res.Notes, fmt.Sprintf("the default branch of %s is unknown (%v): running the default checks", remote, err))
 	} else {
 		res.Base = remote + "/" + branch

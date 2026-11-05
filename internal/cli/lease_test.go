@@ -29,10 +29,10 @@ func newLeaseFixture(t *testing.T) *leaseFixture {
 	t.Helper()
 	t.Setenv("BOTTOWN_RUN_FILE", "")
 	dir := t.TempDir()
-	if _, err := git(dir, "init", "-q"); err != nil {
+	if _, err := runs.Git(dir, nil, "init", "-q"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := git(dir, "config", "extensions.worktreeConfig", "true"); err != nil {
+	if _, err := runs.Git(dir, nil, "config", "extensions.worktreeConfig", "true"); err != nil {
 		t.Fatal(err)
 	}
 	f := &leaseFixture{}
@@ -86,7 +86,7 @@ func TestLeaseSetupRollback(t *testing.T) {
 			boom := errors.New("injected " + stage + " failure")
 			err := prepareLease(context.Background(), f.a, f.rec, func() error {
 				if stage != "record" {
-					if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
+					if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -104,7 +104,7 @@ func TestLeaseSetupRollback(t *testing.T) {
 			if err != nil || rec.Key != "" || rec.Ended == nil || rec.Status != "revoked" {
 				t.Fatalf("record = %+v, %v", rec, err)
 			}
-			if id, _ := git(f.a.Worktree, "config", "--worktree", "--get", gitRunKey); id != "" {
+			if id, _ := runs.Git(f.a.Worktree, nil, "config", "--worktree", "--get", gitRunKey); id != "" {
 				t.Fatalf("run config = %s", id)
 			}
 			if f.ends != 1 {
@@ -139,7 +139,7 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 			if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
+			if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
 				t.Fatal(err)
 			}
 			obstruction := filepath.Join(f.a.KeyDir, "r-test.lock")
@@ -234,13 +234,13 @@ func TestLeaseRecoveryPreservesDifferentWorktreeRun(t *testing.T) {
 	}
 	now := time.Now()
 	f.remote.Ended, f.remote.Status = &now, "revoked"
-	if _, err := git(f.a.Worktree, "config", "--worktree", gitRunKey, "r-other"); err != nil {
+	if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitRunKey, "r-other"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recoverLease(context.Background(), f.a); err == nil {
 		t.Fatal("accepted different worktree run")
 	}
-	if id, _ := git(f.a.Worktree, "config", "--worktree", "--get", gitRunKey); id != "r-other" {
+	if id, _ := runs.Git(f.a.Worktree, nil, "config", "--worktree", "--get", gitRunKey); id != "r-other" {
 		t.Fatalf("changed other run: %q", id)
 	}
 	if f.ends != 0 {
@@ -326,7 +326,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 
 func TestRunEndRetryAfterCleanup(t *testing.T) {
 	f := newLeaseFixture(t)
-	if _, err := git(f.a.Worktree, "config", "--worktree", gitActorKey, "codex"); err != nil {
+	if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitActorKey, "codex"); err != nil {
 		t.Fatal(err)
 	}
 	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {

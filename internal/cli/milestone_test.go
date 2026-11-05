@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/robertolupi/bottown/internal/runs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,7 @@ func runMilestone(t *testing.T, dir string, args ...string) (stdout, stderr stri
 
 func TestMilestoneCheck(t *testing.T) {
 	top := t.TempDir()
-	if _, err := git(top, "init", "-q"); err != nil {
+	if _, err := runs.Git(top, nil, "init", "-q"); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(top, ".bottown.toml"), "milestones_dir = \"plans\"\n")

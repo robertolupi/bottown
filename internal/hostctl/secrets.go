@@ -1,13 +1,17 @@
 package hostctl
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Secrets stores the owner's host-side credentials for one instance: the
@@ -34,33 +38,74 @@ func OpenSecrets(instance, dir string) Secrets {
 }
 
 // Keychain stores generic passwords via /usr/bin/security.
-type Keychain struct{ Service string }
+type Keychain struct {
+	Service string
+	Bin     string        // defaults to "security"
+	Timeout time.Duration // per command; defaults to KeychainTimeout
+}
+
+// KeychainTimeout bounds one security command. A locked keychain, or a
+// binary whose code signature changed (after `make install`), can make it
+// wait on a modal prompt; `bottown credential` sits in git's credential
+// path, so without a bound a run, a flow or a background `bottown web`
+// would hang on a dialog nobody sees.
+const KeychainTimeout = 5 * time.Second
+
+// errSecItemNotFound is security's exit status for a missing item.
+const errSecItemNotFound = 44
+
+// security runs the security command on the item account and returns its
+// stdout. A failure names the item; a missing item is errKeychainNotFound.
+func (k Keychain) security(op, account string, args ...string) (string, error) {
+	bin, timeout := k.Bin, k.Timeout
+	if bin == "" {
+		bin = "security"
+	}
+	if timeout <= 0 {
+		timeout = KeychainTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append([]string{op, "-s", k.Service, "-a", account}, args...)...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	cmd.WaitDelay = time.Second // a stray child must not hold the pipes open
+	err := cmd.Run()
+	item := fmt.Sprintf("keychain item %s/%s", k.Service, account)
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return out.String(), nil
+	case ctx.Err() != nil:
+		return "", fmt.Errorf("%s: security %s gave no answer in %s (is the keychain locked, or waiting on a prompt?)", item, op, timeout)
+	case errors.As(err, &ee) && ee.ExitCode() == errSecItemNotFound:
+		return "", errKeychainNotFound
+	default:
+		return "", fmt.Errorf("%s: security %s: %w: %s", item, op, err, strings.TrimSpace(errb.String()))
+	}
+}
+
+var errKeychainNotFound = errors.New("keychain item not found")
 
 func (k Keychain) Get(account string) (string, bool, error) {
-	out, err := exec.Command("security", "find-generic-password", "-s", k.Service, "-a", account, "-w").Output()
+	out, err := k.security("find-generic-password", account, "-w")
+	if errors.Is(err, errKeychainNotFound) {
+		return "", false, nil
+	}
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.ExitCode() == 44 { // errSecItemNotFound
-			return "", false, nil
-		}
 		return "", false, err
 	}
-	return strings.TrimRight(string(out), "\n"), true, nil
+	return strings.TrimRight(out, "\n"), true, nil
 }
 
 func (k Keychain) Set(account, value string) error {
-	out, err := exec.Command("security", "add-generic-password", "-U", "-s", k.Service, "-a", account,
-		"-l", k.Service+" "+account, "-w", value).CombinedOutput()
-	if err != nil {
-		return errors.New("keychain: " + strings.TrimSpace(string(out)))
-	}
-	return nil
+	_, err := k.security("add-generic-password", account, "-U", "-l", k.Service+" "+account, "-w", value)
+	return err
 }
 
 func (k Keychain) Delete(account string) error {
-	err := exec.Command("security", "delete-generic-password", "-s", k.Service, "-a", account).Run()
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 44 {
+	_, err := k.security("delete-generic-password", account)
+	if errors.Is(err, errKeychainNotFound) {
 		return nil
 	}
 	return err

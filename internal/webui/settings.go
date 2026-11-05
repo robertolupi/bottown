@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // afterPullTimeout bounds one run of the after-pull steps. bottown's own
@@ -46,7 +47,7 @@ type afterPullRequest struct {
 // nor the checkout's working tree can supply it.
 func (s *Server) LoadRepoSettings(ctx context.Context) RepoSettingsCheck {
 	base := "main"
-	if b, err := remoteDefaultBranch(s.cfg.RepoTop, s.cfg.Instance.Remote()); err == nil && b != "" {
+	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, s.cfg.Instance.Remote()); err == nil && b != "" {
 		base = b
 	}
 	res := RepoSettingsCheck{File: config.RepoSettingsFile, Branch: base, AfterPull: []string{}}

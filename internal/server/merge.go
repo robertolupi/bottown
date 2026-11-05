@@ -6,8 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/forgejo"
 	"github.com/robertolupi/bottown/internal/gitmerge"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 )
 
@@ -189,11 +188,11 @@ func (s *Server) pushMerge(ctx context.Context, state mergeState, commit string)
 }
 
 func mergeGit(ctx context.Context, gitDir string, stdin *strings.Reader, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--git-dir", gitDir}, args...)...)
+	cmd := runs.GitCommand(ctx, "", []string{"--git-dir", gitDir}, args...)
 	if stdin != nil {
 		cmd.Stdin = stdin
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(cmd.Env, env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {

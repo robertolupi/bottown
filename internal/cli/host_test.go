@@ -176,7 +176,7 @@ func TestUpDownRefuseInRun(t *testing.T) {
 	dir := t.TempDir()
 	mustGit := func(dir string, args ...string) {
 		t.Helper()
-		if _, err := git(dir, args...); err != nil {
+		if _, err := runs.Git(dir, nil, args...); err != nil {
 			t.Fatal(err)
 		}
 	}

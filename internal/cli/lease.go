@@ -75,7 +75,7 @@ func runTarget(kind string, args []string) (int64, error) {
 // worktreeRepo returns the bottown repo name the actor worktree's remote
 // points at (".../git/<org>/<name>.git").
 func worktreeRepo(a *agentCtx) (string, error) {
-	u, err := git(a.Worktree, "remote", "get-url", a.Remote)
+	u, err := runs.Git(a.Worktree, nil, "remote", "get-url", a.Remote)
 	if err != nil {
 		return "", fmt.Errorf("no bottown remote %q in this worktree", a.Remote)
 	}
@@ -103,7 +103,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	case a.RunID != "":
 		return fmt.Errorf("this worktree is already in run %s; finish it with `bottown run end`", a.RunID)
 	}
-	if st, err := git(a.Worktree, "status", "--porcelain"); err != nil {
+	if st, err := runs.Git(a.Worktree, nil, "status", "--porcelain"); err != nil {
 		return err
 	} else if st != "" {
 		return fmt.Errorf("worktree %s has uncommitted changes; commit, stash or clean them first", a.Worktree)
@@ -131,7 +131,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 		Attachments: leaseAttachments(a),
 	}
-	if inst, _ := git(a.Worktree, "config", "--get", gitInstanceKey); inst != "" {
+	if inst, _ := runs.Git(a.Worktree, nil, "config", "--get", gitInstanceKey); inst != "" {
 		rec.Instance = inst
 	}
 	return prepareLease(cmd.Context(), a, rec, func() (err error) {
@@ -141,33 +141,33 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		if kind == policy.Implement || kind == policy.Plan {
 			upstream := run.Branch
 			start := a.Remote + "/" + upstream
-			if _, err := git(a.Worktree, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
-				top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
-				base, err := remoteDefaultBranch(top, a.Remote)
+			if _, err := runs.Git(a.Worktree, nil, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
+				top, _ := runs.Git(a.Worktree, nil, "rev-parse", "--show-toplevel")
+				base, err := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
 				if err != nil {
 					return err
 				}
 				upstream = base
 				start = a.Remote + "/" + upstream
 			}
-			if _, err := git(a.Worktree, "checkout", "-q", "-B", run.Branch, start); err != nil {
+			if _, err := runs.Git(a.Worktree, nil, "checkout", "-q", "-B", run.Branch, start); err != nil {
 				return err
 			}
 			for _, kv := range [][2]string{
 				{"branch." + run.Branch + ".remote", a.Remote},
 				{"branch." + run.Branch + ".merge", "refs/heads/" + upstream},
 			} {
-				if _, err := git(a.Worktree, "config", kv[0], kv[1]); err != nil {
+				if _, err := runs.Git(a.Worktree, nil, "config", kv[0], kv[1]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if _, err := git(a.Worktree, "checkout", "-q", "--detach", run.SHA); err != nil {
+			if _, err := runs.Git(a.Worktree, nil, "checkout", "-q", "--detach", run.SHA); err != nil {
 				return err
 			}
 		}
 
-		if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, run.ID); err != nil {
+		if _, err := runs.Git(a.Worktree, nil, "config", "--worktree", gitRunKey, run.ID); err != nil {
 			return err
 		}
 
@@ -183,8 +183,8 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 			return err
 		}
 		atts := rk.fetchAttachments(cmd.Context(), rec.Attachments, "", item)
-		top, _ := git(a.Worktree, "rev-parse", "--show-toplevel")
-		base, _ := remoteDefaultBranch(top, a.Remote)
+		top, _ := runs.Git(a.Worktree, nil, "rev-parse", "--show-toplevel")
+		base, _ := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
 		self, _ := os.Executable()
 		d := runs.PromptData{
 			RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
@@ -330,11 +330,11 @@ func finishLease(a *agentCtx, rec runs.Record, ended secrets.Run) error {
 	}
 	// Clear config first: if saving fails, run.json still identifies the run
 	// for the next retry. resolveAgent selects records, not this config value.
-	id, _ := git(a.Worktree, "config", "--worktree", "--get", gitRunKey)
+	id, _ := runs.Git(a.Worktree, nil, "config", "--worktree", "--get", gitRunKey)
 	if id != "" && id != rec.ID {
 		return fmt.Errorf("worktree now belongs to run %s; refusing cleanup of %s", id, rec.ID)
 	}
-	if _, err := git(a.Worktree, "config", "--worktree", gitRunKey, ""); err != nil {
+	if _, err := runs.Git(a.Worktree, nil, "config", "--worktree", gitRunKey, ""); err != nil {
 		return err
 	}
 	// The run's attachments end with it. Before the record is finalized,

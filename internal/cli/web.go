@@ -199,7 +199,7 @@ func webPreview(cmd *cobra.Command, s previewSettings) error {
 	if s.detach && s.stop {
 		return errors.New("--detach and --stop are mutually exclusive")
 	}
-	top, err := git(".", "rev-parse", "--show-toplevel")
+	top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return errors.New("not inside a git checkout")
 	}
