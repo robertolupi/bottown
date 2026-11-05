@@ -1483,6 +1483,14 @@ func TestE2E(t *testing.T) {
 		if _, errMsg := call(vs, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "deadbeef"}); !strings.Contains(errMsg, "not the commit") {
 			t.Errorf("review at wrong commit: %q", errMsg)
 		}
+		// Forgejo checks each push in its own goroutine, unordered, and that
+		// check dismisses every undismissed approval on the PR, at any
+		// commit. An approval at head 1 that push 2 must dismiss tells when
+		// push 2's check has run, so it cannot dismiss the approvals below.
+		first, errMsg := call(vs, "review_submit", map[string]any{"event": "APPROVED", "body": "x", "commit_id": ver["sha"]})
+		if errMsg != "" {
+			t.Fatalf("approval at head 1: %s", errMsg)
+		}
 		// The PR moves after the verify run started: its verdict no longer covers it.
 		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("2\n"), 0o644)
 		git(t, demo, "commit", "-q", "-am", "mcp change 2")
@@ -1500,6 +1508,27 @@ func TestE2E(t *testing.T) {
 		if !strings.Contains(errMsg, "moved") {
 			t.Fatalf("review after PR moved: %q", errMsg)
 		}
+		prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
+		reviews := func() []map[string]any {
+			t.Helper()
+			var rs []map[string]any
+			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+			return rs
+		}
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+			dismissed := false
+			for _, r := range reviews() {
+				if r["id"] == first["id"] && r["dismissed"] == true {
+					dismissed = true
+				}
+			}
+			if dismissed {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("push 2 did not dismiss the approval at head 1: %v", reviews())
+			}
+		}
 		endRun(ver["id"].(string))
 		ver2 := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
 		vs2 := connect(a.cfg.ServerURL()+"/mcp", ver2["key"].(string))
@@ -1511,11 +1540,7 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("comment: %v %s", c, errMsg)
 		}
 
-		// Pin the Forgejo review semantics internal/review relies on. The
-		// approval above may already be dismissed: Forgejo dismisses every
-		// approval when it processes a push, and that runs after the head
-		// moves.
-		prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
+		// Pin the Forgejo review semantics internal/review relies on.
 		assessment := func(sess *mcp.ClientSession) string {
 			t.Helper()
 			got, errMsg := call(sess, "pr_get", nil)
@@ -1524,12 +1549,6 @@ func TestE2E(t *testing.T) {
 			}
 			as, _ := got["assessment"].(map[string]any)
 			return fmt.Sprint(as["decision"])
-		}
-		reviews := func() []map[string]any {
-			t.Helper()
-			var rs []map[string]any
-			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
-			return rs
 		}
 		// Forgejo computes a new review's stale flag from the pull ref, which
 		// the push task also updates, so reviews at this head may be born
@@ -1547,6 +1566,9 @@ func TestE2E(t *testing.T) {
 		// and then those at the pushed head not stale, and push 2's task
 		// may finish after push 3's, leaving the request at head 2 not
 		// stale. internal/review tells an older head by its commit instead.
+		// Push 2's check has run, so ver2's approval is undismissed until
+		// push 3's check dismisses it: waiting for that keeps push 3's check
+		// from dismissing the approvals at head 3 below.
 		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("3\n"), 0o644)
 		git(t, demo, "commit", "-q", "-am", "mcp change 3")
 		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
