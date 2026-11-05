@@ -417,7 +417,7 @@ Exits non-zero when a check fails.`,
 					_ = os.WriteFile(resultPath, b, 0o600)
 				}
 			}
-			recorded, recErr := a.recordCheck(top, res)
+			recorded, recErr := a.recordCheck(cmd.Context(), top, res)
 			if asJSON {
 				m := map[string]any{"result": res, "recorded": recorded}
 				if recErr != nil {
@@ -508,7 +508,7 @@ func (a *agentCtx) runCheck(ctx context.Context, progress io.Writer, top, logPat
 
 // recordCheck records each group that ran as a commit status on HEAD. It
 // returns the statuses written, and why it did not write (all of) them.
-func (a *agentCtx) recordCheck(top string, res checkResult) ([]server.CommitStatus, error) {
+func (a *agentCtx) recordCheck(ctx context.Context, top string, res checkResult) ([]server.CommitStatus, error) {
 	switch {
 	case a.RunID == "":
 		return nil, errors.New("no active run")
@@ -522,7 +522,7 @@ func (a *agentCtx) recordCheck(top string, res checkResult) ([]server.CommitStat
 			continue
 		}
 		var out server.CommitStatus
-		if err := a.call("POST", "/v1/forge/status", server.CommitStatusIn{SHA: res.SHA, Check: g, State: state, Description: res.groupDescription(g)}, &out); err != nil {
+		if err := a.call(ctx, "POST", "/v1/forge/status", server.CommitStatusIn{SHA: res.SHA, Check: g, State: state, Description: res.groupDescription(g)}, &out); err != nil {
 			return done, err
 		}
 		done = append(done, out)

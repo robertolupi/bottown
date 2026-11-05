@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -298,10 +299,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 	var created server.RunResponse
 	if err := callServer(ctx, rc.inst, rc.key, "POST", "/v1/runs", req, &created); err != nil {
-		if req.SHA != "" && strings.Contains(err.Error(), server.HeadMovedMessage) {
+		if errors.Is(err, client.ErrHeadMoved) {
 			return fmt.Errorf("%w: %v", errHeadMoved, err)
 		}
-		if req.SerializeActor && strings.Contains(err.Error(), server.ActorBusyMessage) {
+		if errors.Is(err, client.ErrActorBusy) {
 			return fmt.Errorf("%w: %v", errActorBusy, err)
 		}
 		return err
@@ -648,14 +649,14 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	}
 	// Attachments never stop a run: a failure is in the prompt instead.
 	var is server.IssueOut
-	if err := rk.call("GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is); err != nil {
+	if err := rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is); err != nil {
 		d.AttachmentsError = err.Error()
 	} else {
 		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", is), is.AttachmentsError
 	}
 	d.WebPreview = runs.HasWebPreview(rc.ws.Mirror, rc.ws.Remote+"/"+base)
 	if run.Kind == policy.Verify {
-		d.Reviewed = rk.prReviewed(run.PR)
+		d.Reviewed = rk.prReviewed(ctx, run.PR)
 	}
 	if run.Kind == policy.Plan {
 		// bottown reads the repository's settings from its default branch.

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -25,7 +26,7 @@ func TestOpenPRBeyondFirstForgePage(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(prs)
 	}))
 	defer srv.Close()
-	c := &Client{base: srv.URL, http: srv.Client()}
+	c := &Client{c: client.New(srv.URL, "")}
 	pr, found, err := c.OpenPR(context.Background(), "bottown/bottown", "issue/111")
 	if err != nil || !found || pr.Number != 51 {
 		t.Fatalf("pr=%v found=%v err=%v", pr, found, err)

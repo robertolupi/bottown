@@ -83,6 +83,9 @@ func TestVerifyRunExpectedHead(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), HeadMovedMessage) || !strings.Contains(w.Body.String(), "h2") {
 		t.Fatalf("verify run at a moved head = %d (%s), want 409 naming the head", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), `"code":"`+ErrorCodeHeadMoved+`"`) {
+		t.Fatalf("verify run at a moved head = %s, want error code %s", w.Body.String(), ErrorCodeHeadMoved)
+	}
 	w = do(`{"kind":"verify","actor":"codex","repo":"demo","pr":12,"sha":"h2"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("verify run at the head = %d (%s), want 201", w.Code, w.Body.String())

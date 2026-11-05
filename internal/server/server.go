@@ -417,5 +417,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeErrorCode(w, status, "", msg)
+}
+
+// writeErrorCode is writeError with an error code (ErrorCode*) clients
+// can branch on; an empty code is left out.
+func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	body := map[string]string{"error": msg}
+	if code != "" {
+		body["code"] = code
+	}
+	writeJSON(w, status, body)
 }

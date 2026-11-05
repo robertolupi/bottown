@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -387,21 +388,13 @@ func runNewContainer(inst config.Instance, run func(config.Instance) error, disc
 	}
 }
 
+// healthTimeout bounds one /healthz probe; waitHealthy retries.
+const healthTimeout = 3 * time.Second
+
 func fetchHealth(ctx context.Context, inst config.Instance) (server.Health, error) {
 	var h server.Health
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inst.ServerURL()+"/healthz", nil)
-	if err != nil {
-		return h, err
-	}
-	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
-	if err != nil {
-		return h, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return h, fmt.Errorf("healthz: %s", resp.Status)
-	}
-	return h, json.NewDecoder(resp.Body).Decode(&h)
+	err := client.New(inst.ServerURL(), "").WithTimeout(healthTimeout).Call(ctx, http.MethodGet, "/healthz", nil, &h)
+	return h, err
 }
 
 func waitHealthy(ctx context.Context, inst config.Instance, timeout time.Duration) (server.Health, error) {
@@ -443,11 +436,11 @@ func handOff(ctx context.Context, g *globals, d hostctl.Docker, inst config.Inst
 		return false, err
 	} else if ok {
 		actor, err := whoami(ctx, inst, key)
-		var status errHTTPStatus
+		var refused *client.APIError
 		switch {
 		case err == nil && actor == inst.OwnerLogin:
 			return false, nil
-		case err != nil && !errors.As(err, &status):
+		case err != nil && !errors.As(err, &refused):
 			// The server is unreachable or hung, not rejecting a stale key:
 			// return so up can say which step it was waiting on.
 			return false, err
@@ -478,12 +471,8 @@ func reconcileNow(ctx context.Context, g *globals, inst config.Instance) ([]stri
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, inst.ServerURL()+"/v1/reconcile", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	// A failed pass answers 502 with the changes it made before failing.
+	resp, err := client.New(inst.ServerURL(), key).Do(ctx, http.MethodPost, "/v1/reconcile", nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -501,43 +490,11 @@ func reconcileNow(ctx context.Context, g *globals, inst config.Instance) ([]stri
 	return v.Changes, nil
 }
 
-// serverCallTimeout bounds a host-side call to an instance's server. Calls that
-// used http.DefaultClient had no timeout at all, so a server that accepted the
-// connection but never answered could hang `up` and the other host commands
-// indefinitely.
-const serverCallTimeout = 30 * time.Second
-
-// hostClient is the HTTP client for host-side calls to an instance's server. It
-// has a timeout, unlike http.DefaultClient, so a hung server fails the command
-// instead of hanging it.
-func hostClient() *http.Client { return &http.Client{Timeout: serverCallTimeout} }
-
-// errHTTPStatus is a non-200 answer from an instance's server. The caller can
-// tell it from a transport error (the server was unreachable or hung), which
-// says the server itself is in trouble rather than the request being rejected.
-type errHTTPStatus struct {
-	op     string
-	status string
-}
-
-func (e errHTTPStatus) Error() string { return e.op + ": " + e.status }
-
+// whoami is the actor key acts as. A refusal (a stale key) is a
+// *client.APIError; any other error means the server is in trouble.
 func whoami(ctx context.Context, inst config.Instance, key string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inst.ServerURL()+"/v1/whoami", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := hostClient().Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", errHTTPStatus{"whoami", resp.Status}
-	}
 	var v struct{ Actor string }
-	err = json.NewDecoder(resp.Body).Decode(&v)
+	err := client.New(inst.ServerURL(), key).Call(ctx, http.MethodGet, "/v1/whoami", nil, &v)
 	return v.Actor, err
 }
 

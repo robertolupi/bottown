@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -74,18 +75,25 @@ func TestRunConcurrency(t *testing.T) {
 		name, body string
 		code       int
 		msg        string
+		errCode    string // the error code clients branch on, if any
 	}{
-		{"first implement", `{"kind":"implement","actor":"claude","repo":"demo","issue":7}`, http.StatusCreated, ""},
-		{"same actor, another issue", `{"kind":"implement","actor":"claude","repo":"demo","issue":8}`, http.StatusCreated, ""},
-		{"another actor, same issue", `{"kind":"implement","actor":"codex","repo":"demo","issue":7}`, http.StatusConflict, "same target"},
-		{"serialised actor", `{"kind":"implement","actor":"claude","repo":"demo","issue":9,"serialize_actor":true}`, http.StatusConflict, ActorBusyMessage},
-		{"verify", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusCreated, ""},
-		{"second verify at the head", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusConflict, "same target"},
-		{"implement while verifying", `{"kind":"implement","actor":"codex","repo":"demo","issue":9}`, http.StatusCreated, ""},
+		{"first implement", `{"kind":"implement","actor":"claude","repo":"demo","issue":7}`, http.StatusCreated, "", ""},
+		{"same actor, another issue", `{"kind":"implement","actor":"claude","repo":"demo","issue":8}`, http.StatusCreated, "", ""},
+		{"another actor, same issue", `{"kind":"implement","actor":"codex","repo":"demo","issue":7}`, http.StatusConflict, "same target", ""},
+		{"serialised actor", `{"kind":"implement","actor":"claude","repo":"demo","issue":9,"serialize_actor":true}`, http.StatusConflict, ActorBusyMessage, ErrorCodeActorBusy},
+		{"verify", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusCreated, "", ""},
+		{"second verify at the head", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusConflict, "same target", ""},
+		{"implement while verifying", `{"kind":"implement","actor":"codex","repo":"demo","issue":9}`, http.StatusCreated, "", ""},
 	} {
 		w := do(c.body)
 		if w.Code != c.code || !strings.Contains(w.Body.String(), c.msg) {
 			t.Errorf("%s = %d (%s), want %d %q", c.name, w.Code, w.Body.String(), c.code, c.msg)
+		}
+		if w.Code >= 300 {
+			var e struct{ Code string }
+			if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || e.Code != c.errCode {
+				t.Errorf("%s: error code = %q (%v), want %q", c.name, e.Code, err, c.errCode)
+			}
 		}
 	}
 }

@@ -3,7 +3,6 @@ package webui
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
@@ -521,38 +521,19 @@ func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, 
 	return strings.TrimSpace(out.String()), nil
 }
 
+// serverTimeout bounds the web UI's calls to the bottown server: a page
+// waits on them.
+const serverTimeout = 10 * time.Second
+
+// client is the bottown server as the owner.
+func (s *Server) client() *client.Client {
+	return client.New(s.cfg.Instance.ServerURL(), s.cfg.OwnerKey).WithTimeout(serverTimeout)
+}
+
+// callServer makes a JSON request to the bottown server as the owner. A
+// refusal is a *client.APIError.
 func (s *Server) callServer(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, s.cfg.Instance.ServerURL()+path, body)
-	if err != nil {
-		return err
-	}
-	if s.cfg.OwnerKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.OwnerKey)
-	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
+	return s.client().Call(ctx, method, path, in, out)
 }
 
 func remoteDefaultBranch(top, remote string) (string, error) {

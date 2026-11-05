@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os/exec"
@@ -26,9 +27,9 @@ type prSinceJSON struct {
 
 // prReviewed says whether PR n has a review --since-review can compare with,
 // for the verify prompt. An error reads as no: the hint is only a hint.
-func (a *agentCtx) prReviewed(n int64) bool {
+func (a *agentCtx) prReviewed(ctx context.Context, n int64) bool {
 	var p server.PROut
-	if err := a.call("GET", fmt.Sprintf("/v1/forge/pr?number=%d", n), nil, &p); err != nil {
+	if err := a.call(ctx, "GET", fmt.Sprintf("/v1/forge/pr?number=%d", n), nil, &p); err != nil {
 		return false
 	}
 	_, ok := sinceReviewOf(p.Reviews, "")

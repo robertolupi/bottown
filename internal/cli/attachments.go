@@ -2,13 +2,12 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -38,25 +37,12 @@ func (a *agentCtx) fetchAttachments(ctx context.Context, dir, repo string, is se
 // run's) from the bottown server.
 func (a *agentCtx) openAttachment(ctx context.Context, repo string, n, id int64) (io.ReadCloser, string, error) {
 	path := "/v1/forge/issue/attachment" + targetQuery(repo, n, url.Values{"id": {fmt.Sprint(id)}})
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.ServerURL+path, nil)
+	resp, err := a.client().Do(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.Key)
-	resp, err := hostClient().Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("bottown server unreachable: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		var e struct {
-			Error string `json:"error"`
-		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
-			return nil, "", errors.New(e.Error)
-		}
-		return nil, "", errors.New(resp.Status)
+		return nil, "", client.Error(resp)
 	}
 	return resp.Body, resp.Header.Get("Content-Type"), nil
 }
