@@ -2813,6 +2813,28 @@ fi`
 			statuses[one] != webui.NodeReady || statuses[two] != webui.NodeBlocked {
 			t.Errorf("milestones view: %+v, layers %v, statuses %v", g, layers, statuses)
 		}
+
+		// The UI reads branches and repository settings through the
+		// server too: main is protected, and the settings are read at its
+		// pinned head.
+		req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/forge/branch?repo=demo&name=main", nil)
+		req.Header.Set("Authorization", "Bearer "+owner)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var br struct {
+			Commit    string
+			Protected bool
+		}
+		json.NewDecoder(resp.Body).Decode(&br)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || br.Commit == "" || !br.Protected {
+			t.Errorf("GET /v1/forge/branch main: %d %+v", resp.StatusCode, br)
+		}
+		if st := ui.LoadRepoSettings(context.Background()); !st.Checked || st.Error != "" || st.Commit != br.Commit {
+			t.Errorf("repo settings: %+v, want read at %s", st, br.Commit)
+		}
 	})
 
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {

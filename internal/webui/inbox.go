@@ -57,38 +57,9 @@ type InboxAction struct {
 // its actor still counts as the answer.
 const discussAnswerMargin = time.Minute
 
-// forgejoPageLimit is the page size used when listing issues or pull
-// requests from Forgejo. Paging stops at the first page shorter than this.
-const forgejoPageLimit = 50
-
-// listAll fetches every item from a Forgejo list endpoint by paging with
-// ?page=N until a page shorter than forgejoPageLimit comes back. path must
-// already carry its query filters (state, type, …).
-func listAll[T any](ctx context.Context, s *Server, path string) ([]T, error) {
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
-	}
-	var all []T
-	for page := 1; ; page++ {
-		var items []T
-		p := fmt.Sprintf("%s%slimit=%d&page=%d", path, sep, forgejoPageLimit, page)
-		if err := s.callServer(ctx, http.MethodGet, p, nil, &items); err != nil {
-			return nil, err
-		}
-		all = append(all, items...)
-		if len(items) < forgejoPageLimit {
-			return all, nil
-		}
-	}
-}
-
 // ComputeInbox recomputes the owner inbox items from forge and run state (§4.1).
 func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
-	org, repo, ok := strings.Cut(s.cfg.FullRepo, "/")
-	if !ok {
-		org, repo = "bottown", s.cfg.FullRepo
-	}
+	_, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
 	// 1. Actors and their families
@@ -101,18 +72,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// 2. Owner login
 	ownerLogin := s.resolveOwnerLogin(ctx)
 
-	// 3. Server runs for this repo
-	var serverRuns []secrets.Run
-	runsPath := "/v1/runs?repo=" + url.QueryEscape(repo)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
+	// 3. Server runs for this repo, each with the state the server decided
+	serverRuns, err := s.serverRuns(ctx, "", false)
+	if err != nil {
 		return nil, fmt.Errorf("fetch runs: %w", err)
 	}
 
-	now := time.Now()
 	activeByIssue := make(map[int64]bool)
 	activeByPR := make(map[int64]bool)
 	for _, sr := range serverRuns {
-		if sr.Ended == nil && (sr.Expires.IsZero() || !now.After(sr.Expires)) {
+		if isActive(sr) {
 			if sr.Issue > 0 {
 				activeByIssue[sr.Issue] = true
 			}
@@ -137,7 +106,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// 5. Open PRs, with where their reviews leave them, from the server
-	prs, err := s.pullRequests(ctx, "open")
+	prs, err := s.pullRequests(ctx, "open", true)
 	if err != nil {
 		return nil, fmt.Errorf("fetch open pull requests: %w", err)
 	}
@@ -152,16 +121,15 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		}
 	}
 
-	// 6. Open Issues from Forgejo
-	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=open&type=issues", org, repo)
-	issues, err := listAll[*sdk.Issue](ctx, s, issuesPath)
+	// 6. Open issues
+	issues, err := s.issues(ctx, "open", false)
 	if err != nil {
 		return nil, fmt.Errorf("fetch open issues: %w", err)
 	}
 
-	issuesByIndex := make(map[int64]*sdk.Issue, len(issues))
+	issuesByIndex := make(map[int64]*serverapi.IssueItem, len(issues))
 	for _, issue := range issues {
-		issuesByIndex[issue.Index] = issue
+		issuesByIndex[issue.Number] = issue
 	}
 	issueForPR := func(pr *serverapi.PRItem) (int64, string) {
 		issueNum := parseIssueRef(pr.HeadBranch)
@@ -293,7 +261,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		a := assessment(pr)
 
 		// Check server runs for this PR
-		var latestRun *secrets.Run
+		var latestRun *serverapi.RunItem
 		for i := range serverRuns {
 			sr := &serverRuns[i]
 			if sr.PR == pr.Number {
@@ -338,7 +306,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   prURL,
 				Created:     a.Review.Submitted,
 			})
-		} else if st, ok := s.flowChecksFailed(ctx, org, repo, pr, ownerLogin); ok && !activeByIssue[parseIssueRef(pr.HeadBranch)] {
+		} else if st, ok := flowChecksFailed(pr); ok && !activeByIssue[parseIssueRef(pr.HeadBranch)] {
 			items = append(items, InboxItem{
 				ID:          fmt.Sprintf("stopped-flow-checks-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
@@ -352,32 +320,32 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	for _, issue := range issues {
-		if issue.State != sdk.StateOpen || issue.PullRequest != nil {
+		if issue.State != string(sdk.StateOpen) || issue.PullRequest {
 			continue
 		}
-		if activeByIssue[issue.Index] {
+		if activeByIssue[issue.Number] {
 			continue
 		}
-		var latestRun *secrets.Run
+		var latestRun *serverapi.RunItem
 		for i := range serverRuns {
 			sr := &serverRuns[i]
-			if sr.Issue == issue.Index && sr.PR == 0 {
+			if sr.Issue == issue.Number && sr.PR == 0 {
 				if latestRun == nil || sr.Created.After(latestRun.Created) {
 					latestRun = sr
 				}
 			}
 		}
 		if latestRun != nil && latestRun.Status == "failed" {
-			issueURL := issue.HTMLURL
+			issueURL := issue.URL
 			if issueURL == "" {
-				issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Index)
+				issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Number)
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("stopped-flow-run-failed-issue-%d", issue.Index),
+				ID:          fmt.Sprintf("stopped-flow-run-failed-issue-%d", issue.Number),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on #%d: run failed", issue.Index),
+				Title:       fmt.Sprintf("Flow stopped on #%d: run failed", issue.Number),
 				Description: fmt.Sprintf("Run %s (%s by %s) failed", latestRun.ID, latestRun.Kind, latestRun.Actor),
-				Target:      fmt.Sprintf("#%d", issue.Index),
+				Target:      fmt.Sprintf("#%d", issue.Number),
 				TargetURL:   issueURL,
 				Created:     latestRun.Created,
 			})
@@ -415,7 +383,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Ended (revoked) by `bottown run gc`: the run key no longer
 	// authenticates, so `run end` cannot end them.
 	for _, sr := range serverRuns {
-		if sr.Ended == nil && !sr.Expires.IsZero() && now.After(sr.Expires) {
+		if sr.State == secrets.RunExpired {
 			if seenBrokenRun[sr.ID] {
 				continue
 			}
@@ -467,13 +435,13 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Discuss run answered on an issue, owner has not commented since
 	// ----------------------------------------------------
 	for _, issue := range issues {
-		if issue.State != sdk.StateOpen || issue.PullRequest != nil {
+		if issue.State != string(sdk.StateOpen) || issue.PullRequest {
 			continue
 		}
-		var discussRun *secrets.Run
+		var discussRun *serverapi.RunItem
 		for i := range serverRuns {
 			sr := &serverRuns[i]
-			if sr.Issue == issue.Index && sr.Kind == "discuss" && sr.Status == "succeeded" && sr.Ended != nil {
+			if sr.Issue == issue.Number && sr.Kind == "discuss" && sr.Status == "succeeded" && sr.Ended != nil {
 				if discussRun == nil || sr.Created.After(discussRun.Created) {
 					discussRun = sr
 				}
@@ -483,10 +451,10 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			continue // Only issues with an ended discuss run count!
 		}
 
-		cPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issue.Index)
-		// Forgejo returns all issue comments and ignores page/limit.
-		var comments []*sdk.Comment
-		_ = s.callServer(ctx, http.MethodGet, cPath, nil, &comments)
+		var comments []serverapi.CommentOut
+		if is, err := s.issue(ctx, issue.Number, true); err == nil {
+			comments = is.Comments
+		}
 
 		// The answer is the discussant's last comment by the run's end
 		// (plus a margin for clock skew): a later comment by the same
@@ -496,32 +464,30 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		answerTime := *discussRun.Ended
 		answerBy := discussRun.Ended.Add(discussAnswerMargin)
 		for _, c := range comments {
-			poster := userLogin(c.Poster)
-			if poster == discussActor && !c.Created.After(answerBy) {
+			if c.Author == discussActor && !c.Created.After(answerBy) {
 				answerTime = c.Created
 			}
 		}
 
 		ownerReplied := false
 		for _, c := range comments {
-			poster := userLogin(c.Poster)
-			if poster == ownerLogin && c.Created.After(answerTime) {
+			if c.Author == ownerLogin && c.Created.After(answerTime) {
 				ownerReplied = true
 				break
 			}
 		}
 
 		if !ownerReplied {
-			issueURL := issue.HTMLURL
+			issueURL := issue.URL
 			if issueURL == "" {
-				issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Index)
+				issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Number)
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("discuss-answer-issue-%d", issue.Index),
+				ID:          fmt.Sprintf("discuss-answer-issue-%d", issue.Number),
 				Kind:        InboxDiscussAnswer,
-				Title:       fmt.Sprintf("Discuss answer on #%d waiting on owner reply", issue.Index),
+				Title:       fmt.Sprintf("Discuss answer on #%d waiting on owner reply", issue.Number),
 				Description: fmt.Sprintf("Discussant %s answered; owner has not replied", discussActor),
-				Target:      fmt.Sprintf("#%d", issue.Index),
+				Target:      fmt.Sprintf("#%d", issue.Number),
 				TargetURL:   issueURL,
 				Created:     answerTime,
 			})
@@ -533,16 +499,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Filed by an actor, not queued, no milestone, not closed
 	// ----------------------------------------------------
 	for _, issue := range issues {
-		if issue.State != sdk.StateOpen || issue.PullRequest != nil {
+		if issue.State != string(sdk.StateOpen) || issue.PullRequest {
 			continue
 		}
-		authorLogin := userLogin(issue.Poster)
+		authorLogin := issue.Author
 		fam := actors[authorLogin]
 		if fam == "" {
 			continue
 		}
 
-		if issue.Milestone != nil && issue.Milestone.ID > 0 {
+		if issue.Milestone != nil {
 			continue
 		}
 
@@ -550,29 +516,27 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		hasImplement := false
 		hasVerify := false
 		for _, lbl := range issue.Labels {
-			if lbl != nil {
-				if strings.HasPrefix(lbl.Name, "implement/") {
-					hasImplement = true
-				}
-				if strings.HasPrefix(lbl.Name, "verify/") {
-					hasVerify = true
-				}
+			if strings.HasPrefix(lbl, "implement/") {
+				hasImplement = true
+			}
+			if strings.HasPrefix(lbl, "verify/") {
+				hasVerify = true
 			}
 		}
 		if hasImplement && hasVerify {
 			continue
 		}
 
-		issueURL := issue.HTMLURL
+		issueURL := issue.URL
 		if issueURL == "" {
-			issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Index)
+			issueURL = fmt.Sprintf("%s/%s/issues/%d", forgeURL, s.cfg.FullRepo, issue.Number)
 		}
 		items = append(items, InboxItem{
-			ID:          fmt.Sprintf("actor-filed-issue-%d", issue.Index),
+			ID:          fmt.Sprintf("actor-filed-issue-%d", issue.Number),
 			Kind:        InboxActorFiledIssue,
-			Title:       fmt.Sprintf("Actor-filed issue #%d not triaged", issue.Index),
+			Title:       fmt.Sprintf("Actor-filed issue #%d not triaged", issue.Number),
 			Description: fmt.Sprintf("Filed by %s (%s); no milestone or queue label", authorLogin, fam),
-			Target:      fmt.Sprintf("#%d", issue.Index),
+			Target:      fmt.Sprintf("#%d", issue.Number),
 			TargetURL:   issueURL,
 			Created:     issue.Created,
 		})
@@ -607,23 +571,15 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 }
 
 // flowChecksFailed returns the flow's latest post-implement check at the
-// PR's head (the owner's bottown/e2e status) if it failed. Statuses that
-// cannot be read show nothing.
-func (s *Server) flowChecksFailed(ctx context.Context, org, repo string, pr *serverapi.PRItem, ownerLogin string) (*sdk.Status, bool) {
-	if pr.HeadSHA == "" || ownerLogin == "" {
-		return nil, false
-	}
-	sts, err := listAll[*sdk.Status](ctx, s, fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/commits/%s/statuses?sort=newest", org, repo, pr.HeadSHA))
-	if err != nil {
-		return nil, false
-	}
-	var latest *sdk.Status
-	for _, st := range sts {
-		if st.Context == "bottown/e2e" && userLogin(st.Creator) == ownerLogin && (latest == nil || st.Created.After(latest.Created) || st.Created.Equal(latest.Created) && st.ID > latest.ID) {
-			latest = st
+// PR's head (the owner's bottown/e2e status, which the server marks as the
+// gate) if it failed. Statuses that could not be read show nothing.
+func flowChecksFailed(pr *serverapi.PRItem) (serverapi.CommitStatus, bool) {
+	for _, st := range pr.Checks {
+		if st.Context == "bottown/e2e" && st.Gate {
+			return st, st.State == string(sdk.StatusFailure)
 		}
 	}
-	return latest, latest != nil && latest.State == sdk.StatusFailure
+	return serverapi.CommitStatus{}, false
 }
 
 func userLogin(u *sdk.User) string {
@@ -664,19 +620,6 @@ func actorFamilies(actorMap map[string]*ActorDetail) map[string]string {
 		}
 	}
 	return families
-}
-
-// pullRequests lists the repository's PRs in state (open, closed or all)
-// from the server, which also assesses each open PR's reviews: the web UI
-// shows that assessment rather than making its own (internal/review).
-func (s *Server) pullRequests(ctx context.Context, state string) ([]*serverapi.PRItem, error) {
-	_, repo := s.orgAndRepo()
-	q := url.Values{"repo": {repo}, "state": {state}}
-	var prs []*serverapi.PRItem
-	if err := s.callServer(ctx, http.MethodGet, "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
-		return nil, err
-	}
-	return prs, nil
 }
 
 // assessment is where the reviews leave pr, as the server assessed them;

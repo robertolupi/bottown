@@ -321,7 +321,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			if !resuming {
 				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("!%d no longer merges cleanly; rerun the flow to resolve it", pr.Number))
 			}
-			if countRounds(pr.Reviews) >= opts.Rounds {
+			if server.ChangesRequested(pr.Reviews) >= opts.Rounds {
 				return s.stop(ctx, result, OutOfRounds, "the PR conflicts with main and no implement rounds remain")
 			}
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
@@ -348,8 +348,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			return s.stop(ctx, result, ChangesRequested, fmt.Sprintf("!%d is approved at %s, but %s's request for changes at %s still blocks it; %s must review again, or the owner dismisses it",
 				pr.Number, shortSHA(pr.HeadSHA), blocking.Reviewer, shortSHA(blocking.CommitID), blocking.Reviewer))
 		case assessment.Decision == review.ChangesRequested:
-			if countRounds(pr.Reviews) >= opts.Rounds {
-				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("%d implement rounds used", countRounds(pr.Reviews)))
+			if server.ChangesRequested(pr.Reviews) >= opts.Rounds {
+				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("%d implement rounds used", server.ChangesRequested(pr.Reviews)))
 			}
 			head := pr.HeadSHA
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
@@ -739,18 +739,6 @@ func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason,
 		return result, nil
 	}
 	return result, &StopError{Result: result}
-}
-
-// countRounds includes stale and dismissed reviews: each requested change
-// consumed an implement round, even when it no longer gates the current head.
-func countRounds(reviews []server.ReviewOut) int {
-	count := 0
-	for _, review := range reviews {
-		if review.State == "REQUEST_CHANGES" {
-			count++
-		}
-	}
-	return count
 }
 
 func shortSHA(sha string) string {

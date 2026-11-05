@@ -318,3 +318,22 @@ func TestSerializeActorAtomic(t *testing.T) {
 		t.Fatalf("concurrent creations: %d succeeded, %d refused", succeeded, refused)
 	}
 }
+
+func TestRunState(t *testing.T) {
+	now := time.Now()
+	ended := now.Add(-time.Minute)
+	for _, c := range []struct {
+		run  Run
+		want string
+	}{
+		{Run{Expires: now.Add(time.Hour)}, RunActive},
+		{Run{Expires: now.Add(-time.Second)}, RunExpired},
+		{Run{}, RunExpired}, // no expiry: its key is not usable
+		{Run{Expires: now.Add(time.Hour), Ended: &ended}, RunEnded},
+		{Run{Expires: now.Add(-time.Hour), Ended: &ended}, RunEnded},
+	} {
+		if got := c.run.State(now); got != c.want {
+			t.Errorf("%+v: State = %s, want %s", c.run, got, c.want)
+		}
+	}
+}

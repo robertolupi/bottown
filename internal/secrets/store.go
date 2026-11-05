@@ -158,6 +158,27 @@ type Usage struct {
 // Active reports whether the run's key is usable at t.
 func (r Run) Active(t time.Time) bool { return r.Ended == nil && t.Before(r.Expires) }
 
+// Run states, as the server decides them (State).
+const (
+	RunActive  = "active"  // not ended, and its key is usable
+	RunExpired = "expired" // not ended, but its key expired: `run gc` ends it
+	RunEnded   = "ended"
+)
+
+// State is where the run stands at t: RunActive, RunExpired or RunEnded.
+// Whether the process behind a run is alive only its host knows (the
+// launcher's lock, `run gc`).
+func (r Run) State(t time.Time) string {
+	switch {
+	case r.Ended != nil:
+		return RunEnded
+	case r.Active(t):
+		return RunActive
+	default:
+		return RunExpired
+	}
+}
+
 // State is the full content of the secrets file.
 type State struct {
 	AdminToken    string                `json:"admin_token,omitempty"`

@@ -56,3 +56,11 @@ func (c *Client) AllStatuses(org, repo, ref string) ([]*sdk.Status, *sdk.Respons
 		return c.ListStatuses(org, repo, ref, sdk.ListStatusesOption{ListOptions: page})
 	})
 }
+
+// AllMilestones returns every page, retaining the supplied filters.
+func (c *Client) AllMilestones(org, repo string, opts sdk.ListMilestoneOption) ([]*sdk.Milestone, *sdk.Response, error) {
+	return allPages(func(page sdk.ListOptions) ([]*sdk.Milestone, *sdk.Response, error) {
+		opts.ListOptions = page
+		return c.ListRepoMilestones(org, repo, opts)
+	})
+}

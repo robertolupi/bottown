@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -269,14 +268,14 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	org, repoName, _ := strings.Cut(s.cfg.FullRepo, "/")
 	if org != "" && repoName != "" {
 		res.Health.ProtectedMain.Checked = true
-		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/branch_protections/%s", org, repoName, base)
-		var bp map[string]any
-		err := s.callServer(ctx, http.MethodGet, path, nil, &bp)
-		if err == nil {
-			res.Health.ProtectedMain.Protected = true
-		} else {
-			res.Health.ProtectedMain.Protected = false
+		br, err := s.branch(ctx, base)
+		switch {
+		case err != nil:
 			res.Health.ProtectedMain.Error = err.Error()
+		case !br.Protected:
+			res.Health.ProtectedMain.Error = "no branch protection rule covers " + base
+		default:
+			res.Health.ProtectedMain.Protected = true
 		}
 	}
 
@@ -353,16 +352,7 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 
 	// Live runs for this repository, from the server
 	liveRuns := map[string]bool{}
-	var runsList []struct {
-		ID    string `json:"id"`
-		Actor string `json:"actor"`
-	}
-	repoName := s.cfg.FullRepo
-	if _, repo, ok := strings.Cut(s.cfg.FullRepo, "/"); ok {
-		repoName = repo
-	}
-	runsPath := "/v1/runs?state=live&repo=" + url.QueryEscape(repoName)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &runsList); err == nil {
+	if runsList, err := s.serverRuns(ctx, "live", false); err == nil {
 		for _, r := range runsList {
 			liveRuns[r.ID] = true
 		}

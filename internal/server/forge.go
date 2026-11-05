@@ -139,12 +139,18 @@ func (s *Server) toolAudit(p secrets.Principal, repo, op, decision, detail strin
 
 // IssueOut is an issue with its discussion.
 type IssueOut struct {
-	Number   int64        `json:"number"`
-	Title    string       `json:"title"`
-	Body     string       `json:"body"`
-	State    string       `json:"state"`
-	Author   string       `json:"author"`
-	Labels   []string     `json:"labels"`
+	Number  int64     `json:"number"`
+	Title   string    `json:"title"`
+	Body    string    `json:"body"`
+	State   string    `json:"state"`
+	Author  string    `json:"author"`
+	Labels  []string  `json:"labels"`
+	URL     string    `json:"url,omitempty"`
+	Created time.Time `json:"created,omitzero"`
+	// Milestone is the issue's milestone, if it has one.
+	Milestone *MilestoneItem `json:"milestone,omitempty"`
+	// Comments are the discussion, oldest first; nil when the caller
+	// asked for the issue alone (GET /v1/forge/issue?comments=0).
 	Comments []CommentOut `json:"comments"`
 	// Attachments are the files on the description and the comments, as
 	// metadata: the bytes are at GET /v1/forge/issue/attachment.
@@ -201,14 +207,39 @@ type PROut struct {
 
 // ReviewOut is one review.
 type ReviewOut struct {
-	ID        int64  `json:"id"`
-	Reviewer  string `json:"reviewer"`
-	State     string `json:"state"`
-	CommitID  string `json:"commit_id"`
-	Body      string `json:"body"`
-	Stale     bool   `json:"stale"`
-	Dismissed bool   `json:"dismissed"`
-	Official  bool   `json:"official"`
+	ID        int64     `json:"id"`
+	Reviewer  string    `json:"reviewer"`
+	State     string    `json:"state"`
+	CommitID  string    `json:"commit_id"`
+	Body      string    `json:"body"`
+	Stale     bool      `json:"stale"`
+	Dismissed bool      `json:"dismissed"`
+	Official  bool      `json:"official"`
+	Submitted time.Time `json:"submitted,omitzero"`
+}
+
+// reviewOuts are a PR's reviews as pr show and the flow see them.
+func reviewOuts(rs []*sdk.PullReview) []ReviewOut {
+	out := make([]ReviewOut, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, ReviewOut{
+			ID: r.ID, Reviewer: login(r.Reviewer), State: string(r.State), CommitID: r.CommitID,
+			Body: r.Body, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official, Submitted: r.Submitted,
+		})
+	}
+	return out
+}
+
+// ChangesRequested counts a PR's requests for changes, dismissed and stale
+// ones included: each is a review round the flow has spent (--rounds).
+func ChangesRequested(reviews []ReviewOut) int {
+	n := 0
+	for _, r := range reviews {
+		if r.State == string(sdk.ReviewStateRequestChanges) {
+			n++
+		}
+	}
+	return n
 }
 
 // PRCreateIn is the input of pr create.
@@ -245,22 +276,66 @@ type IssueCreateOut struct {
 type IssueListIn struct {
 	Repo  string `json:"repo,omitempty" jsonschema:"repository name in the bottown org; defaults to the run's repository, required outside a run"`
 	State string `json:"state,omitempty" jsonschema:"state filter: open, closed, or all (default: open)"`
+	// Bodies adds each issue's description (GET /v1/forge/issues?body=1,
+	// for the web UI's milestone markers); agents' lists stay short.
+	Bodies bool `json:"-"`
 }
 
 // IssueItem is an issue summary in a list.
 type IssueItem struct {
-	Number int64    `json:"number"`
-	Title  string   `json:"title"`
-	State  string   `json:"state"`
-	Author string   `json:"author"`
-	Labels []string `json:"labels,omitempty"`
-	URL    string   `json:"url"`
+	Number    int64          `json:"number"`
+	Title     string         `json:"title"`
+	State     string         `json:"state"`
+	Author    string         `json:"author"`
+	Labels    []string       `json:"labels,omitempty"`
+	Milestone *MilestoneItem `json:"milestone,omitempty"`
+	Body      string         `json:"body,omitempty"`
+	// PullRequest marks a pull request, which an issue's dependencies may
+	// include.
+	PullRequest bool      `json:"pull_request,omitempty"`
+	Created     time.Time `json:"created,omitzero"`
+	URL         string    `json:"url"`
+}
+
+// MilestoneItem is a milestone.
+type MilestoneItem struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
+// NewIssueItem is is's list entry; withBody adds its description.
+func NewIssueItem(is *sdk.Issue, withBody bool) IssueItem {
+	item := IssueItem{
+		Number: is.Index, Title: is.Title, State: string(is.State), Author: login(is.Poster),
+		Labels: []string{}, Milestone: milestoneItem(is.Milestone), PullRequest: is.PullRequest != nil,
+		Created: is.Created, URL: is.HTMLURL,
+	}
+	for _, l := range is.Labels {
+		if l != nil {
+			item.Labels = append(item.Labels, l.Name)
+		}
+	}
+	if withBody {
+		item.Body = is.Body
+	}
+	return item
+}
+
+func milestoneItem(m *sdk.Milestone) *MilestoneItem {
+	if m == nil || m.ID <= 0 {
+		return nil
+	}
+	return &MilestoneItem{ID: m.ID, Title: m.Title, State: string(m.State)}
 }
 
 // PRListIn is the input of pr list.
 type PRListIn struct {
 	Repo  string `json:"repo,omitempty" jsonschema:"repository name in the bottown org; defaults to the run's repository, required outside a run"`
 	State string `json:"state,omitempty" jsonschema:"state filter: open, closed, or all (default: open)"`
+	// Checks adds the commit statuses at each open PR's head
+	// (GET /v1/forge/prs?checks=1, for the web UI's inbox).
+	Checks bool `json:"-"`
 }
 
 // PRItem is a pull request summary in a list.
@@ -283,11 +358,18 @@ type PRItem struct {
 	// ReviewState; nil for closed and merged PRs, or when the reviews
 	// could not be read.
 	Assessment *review.Assessment `json:"assessment,omitempty"`
-	URL        string             `json:"url"`
-	Created    *time.Time         `json:"created,omitempty"`
-	Updated    *time.Time         `json:"updated,omitempty"`
-	MergedAt   *time.Time         `json:"merged_at,omitempty"`
-	ClosedAt   *time.Time         `json:"closed_at,omitempty"`
+	// ChangesRequested counts an open PR's requests for changes, the
+	// review rounds the flow has spent (ChangesRequested).
+	ChangesRequested int `json:"changes_requested,omitempty"`
+	// Checks are the statuses at an open PR's head, as in pr show, when
+	// asked for (PRListIn.Checks); ChecksError says why they are missing.
+	Checks      []CommitStatus `json:"checks,omitempty"`
+	ChecksError string         `json:"checks_error,omitempty"`
+	URL         string         `json:"url"`
+	Created     *time.Time     `json:"created,omitempty"`
+	Updated     *time.Time     `json:"updated,omitempty"`
+	MergedAt    *time.Time     `json:"merged_at,omitempty"`
+	ClosedAt    *time.Time     `json:"closed_at,omitempty"`
 }
 
 // NewPRItem is pr's list entry without its review state, which needs the
@@ -350,6 +432,12 @@ func runDefault(p secrets.Principal) int64 {
 }
 
 func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (IssueOut, error) {
+	return s.readIssue(ctx, p, in, true)
+}
+
+// readIssue reads an issue, with its comments and attachments when
+// discussion is set.
+func (s *Server) readIssue(ctx context.Context, p secrets.Principal, in Target, discussion bool) (IssueOut, error) {
 	def := int64(0)
 	if p.Run != nil {
 		def = p.Run.Issue
@@ -368,9 +456,13 @@ func (s *Server) opIssue(ctx context.Context, p secrets.Principal, in Target) (I
 	} else if err != nil {
 		return IssueOut{}, err
 	}
-	out := IssueOut{Number: is.Index, Title: is.Title, Body: is.Body, State: string(is.State), Author: login(is.Poster), Labels: []string{}}
+	out := IssueOut{Number: is.Index, Title: is.Title, Body: is.Body, State: string(is.State), Author: login(is.Poster), Labels: []string{},
+		URL: is.HTMLURL, Created: is.Created, Milestone: milestoneItem(is.Milestone)}
 	for _, l := range is.Labels {
 		out.Labels = append(out.Labels, l.Name)
+	}
+	if !discussion {
+		return out, nil
 	}
 	cs, _, err := c.AllComments(org, repo, n, sdk.ListIssueCommentOptions{})
 	if err != nil {
@@ -530,18 +622,7 @@ func (s *Server) opIssueList(ctx context.Context, p secrets.Principal, in IssueL
 	}
 	out := make([]IssueItem, 0, len(issues))
 	for _, is := range issues {
-		item := IssueItem{
-			Number: is.Index,
-			Title:  is.Title,
-			State:  string(is.State),
-			Author: login(is.Poster),
-			URL:    is.HTMLURL,
-			Labels: []string{},
-		}
-		for _, l := range is.Labels {
-			item.Labels = append(item.Labels, l.Name)
-		}
-		out = append(out, item)
+		out = append(out, NewIssueItem(is, in.Bodies))
 	}
 	return out, nil
 }
@@ -580,12 +661,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 		return PROut{}, err
 	}
 	carries := s.carryOver(ctx, org, repo, pr, rs)
-	for _, r := range rs {
-		out.Reviews = append(out.Reviews, ReviewOut{
-			ID: r.ID, Reviewer: login(r.Reviewer), State: string(r.State), CommitID: r.CommitID,
-			Body: r.Body, Stale: r.Stale, Dismissed: r.Dismissed, Official: r.Official,
-		})
-	}
+	out.Reviews = reviewOuts(rs)
 	runs, err := s.runRecords()
 	if err != nil {
 		return PROut{}, err
@@ -615,8 +691,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 }
 
 // opCarries lists the older heads of an open PR whose approvals carry over
-// to its head (carry.go), for callers that assess reviews themselves (the
-// web UI).
+// to its head (carry.go).
 func (s *Server) opCarries(ctx context.Context, p secrets.Principal, in Target) ([]review.Carry, error) {
 	def := int64(0)
 	if p.Run != nil {
@@ -732,6 +807,15 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 			} else {
 				a := assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, s.carryOver(ctx, org, repo, pr, rs))
 				item.ReviewState, item.ReviewReason, item.Assessment = string(a.Decision), a.Reason, &a
+				item.ChangesRequested = ChangesRequested(reviewOuts(rs))
+			}
+			if in.Checks && item.HeadSHA != "" {
+				if sts, _, err := c.AllStatuses(org, repo, item.HeadSHA); err != nil {
+					item.ChecksError = err.Error()
+				} else {
+					item.Checks = latestStatuses(sts)
+					s.markGate(item.Checks)
+				}
 			}
 		}
 		out = append(out, item)

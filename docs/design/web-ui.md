@@ -615,8 +615,9 @@ The file names commands; bottown runs them only when the owner asks
 (after-pull steps are shown, or run on the owner's click with the command
 in full view).
 
-bottown resolves `main`'s head commit and reads the file at that commit,
-through the API proxy as the owner; the checkout's own copy is never read.
+bottown resolves `main`'s head commit (`GET /v1/forge/branch`) and reads
+the file at that commit (`GET /v1/forge/file`), as the owner; the
+checkout's own copy is never read.
 Unknown keys are an error, shown in the health checklist, so a misspelt
 key is not silently ignored. After a Pull, the UI shows the steps in a
 confirmation; on confirm it sends back the steps it showed, and the host
@@ -672,16 +673,19 @@ action only updates the PR's own branch.
 
 | Data | Where | How the UI gets it |
 |---|---|---|
-| Runs: live and ended, with digests | server | `GET /v1/runs` (§7) |
+| Runs: live and ended, with digests and each run's state | server | `GET /v1/runs` (§7) |
 | Policy decisions (allow/deny per forge write) | server | `GET /v1/audit` (new, §7) |
-| PRs, with where their reviews leave each open one | server | `GET /v1/forge/prs?state=open\|all` (`pr list`): each item carries the PR's branches, mergeability, milestone, dates and its `assessment` |
-| Issues, review bodies, comments, labels, milestones | Forgejo | the server's API proxy, as the owner |
+| PRs, with where their reviews leave each open one | server | `GET /v1/forge/prs?state=open\|all[&checks=1]` (`pr list`): each item carries the PR's branches, mergeability, milestone, dates, its `assessment` and rounds spent, and with `checks=1` the statuses at its head |
+| One PR's reviews (bodies and times, for a timeline) | server | `GET /v1/forge/pr` (`pr show`) |
+| Issues, with labels, milestone and, for markers, bodies | server | `GET /v1/forge/issues?state=…[&body=1]` (`issue list`) |
+| One issue, with or without its comments | server | `GET /v1/forge/issue[?comments=0]` (`issue show`) |
+| Issue dependencies, milestones, branches | server | `GET /v1/forge/issue/dependencies`, `/v1/forge/milestones`, `/v1/forge/branch` (§7) |
 | Actors and their families | server | `GET /v1/actors` |
 | Run records and logs of this checkout's runs | host, `.bottown/runs/` | read directly |
 | Actor worktrees | host | `git worktree list` in the checkout, and run records in `.bottown/runs` |
 | Upstream | host, the checkout's `origin` | `git fetch origin` with the owner's credentials |
 | Harness slash commands | host, each harness's config | compared with what `harness setup` would write |
-| Repository settings | `.bottown.toml` on the forge's `main` | read through the API proxy |
+| Repository settings | `.bottown.toml` on the forge's `main` | `GET /v1/forge/branch` for `main`'s head, then `GET /v1/forge/file` at it (§4.4) |
 
 **What logs yield** differs by harness, so each binding extracts what its
 log has, at run end, into the digest:
@@ -762,9 +766,15 @@ The UI uses the server's existing API where it can. What changes:
   drops full run records, keys included, but keeps each run, with its
   digest, in a history, marked `purged`. `GET /v1/runs/{id}` finds it
   there too, and `bottown run show` prints it.
-- **`GET /v1/runs`** (owner only) takes filters: `repo`, `state=live|ended`,
+- **`GET /v1/runs`** (owner only) takes filters: `repo`, `state`,
   `since` (RFC 3339, created at or after) and `history=1`, which adds
-  purged runs, so history works after `gc`. Every run carries its digest.
+  purged runs, so history works after `gc`. Every run carries its digest
+  and its `state`, decided by the server (`secrets.Run.State`): `active`
+  (not ended, key usable), `expired` (not ended, key expired: `run gc`
+  ends it) or `ended`. The `state` filter takes one of those, or `live`
+  for every run not ended. The UI shows these states and has no rule of
+  its own; only whether a run's process is alive is the host's to know,
+  from its own run records.
 - **`GET /v1/audit`** (owner only): the policy decisions the server
   makes, stored rather than only logged: every refusal (`deny`, or
   `reject` for an unclean path) by the API and git proxies and the forge
@@ -785,17 +795,28 @@ The UI uses the server's existing API where it can. What changes:
   `review_state`, and, for an open PR whose reviews could be read, the
   whole `assessment` (decision, deciding review, carry-over). The UI
   lists PRs only through it, so the review assessment is made in one
-  place, the server.
+  place, the server. `changes_requested` counts the requests for changes,
+  dismissed and stale ones included: the rounds the flow has spent, as
+  the flow counts them (`server.ChangesRequested`). `checks=1` adds the
+  statuses at each open PR's head, as `pr show` has them.
+- **The UI's other forge reads.** `GET /v1/forge/issues` with `body=1`
+  adds descriptions (agents' lists stay short); `GET /v1/forge/issue`
+  with `comments=0` reads the issue alone; `GET
+  /v1/forge/issue/dependencies?repo=&number=` lists what blocks an issue;
+  `GET /v1/forge/milestones?repo=&state=` the milestones; `GET
+  /v1/forge/branch?repo=&name=` a branch's head and whether a protection
+  rule covers it; `GET /v1/forge/file?repo=&ref=&path=` a file's bytes at
+  a ref the caller pinned. Each pages in full and stays within the key's
+  repository.
 - **Run concurrency** (§3.4): `POST /v1/runs` refuses a second live run on
   the same issue or pull request head, and, with `serialize_actor`, a batch
   run whose actor has another live one.
 - **Later, for the queue:** provisioning creates `implement/<actor>` and
   `verify/<actor>` labels, and an owner-only endpoint sets or clears them.
 
-Other forge data (review bodies for a flow's timeline, who commented
-since, issues filed by actors) the UI still reads as the owner through
-the API proxy; moving those reads to the server, too, is #249's next
-steps.
+The UI makes no Forgejo reads of its own: everything it shows from the
+forge comes from these endpoints, so a rule (what counts as approved, as
+live, as a round) is decided in one place.
 
 ## 8. Security
 

@@ -56,24 +56,20 @@ func (s *Server) LoadRepoSettings(ctx context.Context) RepoSettingsCheck {
 		res.Error = "unknown repository " + s.cfg.FullRepo
 		return res
 	}
-	prefix := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s", org, repo)
 
-	var branch struct {
-		Commit struct {
-			ID string `json:"id"`
-		} `json:"commit"`
-	}
-	if err := s.callServer(ctx, http.MethodGet, prefix+"/branches/"+base, nil, &branch); err != nil {
+	branch, err := s.branch(ctx, base)
+	if err != nil {
 		res.Error = fmt.Sprintf("branch %s: %v", base, err)
 		return res
 	}
-	if branch.Commit.ID == "" {
+	if branch.Commit == "" {
 		res.Error = fmt.Sprintf("branch %s: no head commit", base)
 		return res
 	}
-	res.Commit = branch.Commit.ID
+	res.Commit = branch.Commit
 
-	code, body, err := s.getServerRaw(ctx, prefix+"/raw/"+config.RepoSettingsFile+"?ref="+url.QueryEscape(res.Commit))
+	q := url.Values{"repo": {repo}, "ref": {res.Commit}, "path": {config.RepoSettingsFile}}
+	code, body, err := s.getServerRaw(ctx, "/v1/forge/file?"+q.Encode())
 	switch {
 	case err != nil:
 		res.Error = err.Error()

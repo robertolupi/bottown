@@ -355,3 +355,110 @@ func TestNewPRItem(t *testing.T) {
 		t.Fatalf("bare PR item = %+v", item)
 	}
 }
+
+// The reads the web UI makes besides pr list: issues with their bodies and
+// milestones, one issue without its discussion, an issue's dependencies, the
+// milestones, a branch and a file at a pinned ref, all paged in full.
+func TestForgeWebReads(t *testing.T) {
+	var commentReads int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		path := r.URL.Path
+		list := func(n int, item func(i int) map[string]any) {
+			items := []map[string]any{}
+			for i := (page - 1) * 50; i < min(page*50, n); i++ {
+				items = append(items, item(i))
+			}
+			_ = json.NewEncoder(w).Encode(items)
+		}
+		issue := func(i int) map[string]any {
+			return map[string]any{"number": i + 1, "title": fmt.Sprintf("t%d", i+1), "body": "b", "state": "open",
+				"user": map[string]string{"login": "rlupi"}, "html_url": "http://forge/i",
+				"labels": []map[string]string{{"name": "implement/claude"}}, "milestone": map[string]any{"id": 3, "title": "M", "state": "open"}}
+		}
+		switch {
+		case strings.HasSuffix(path, "/issues/7/dependencies"):
+			list(51, issue)
+		case strings.HasSuffix(path, "/issues"):
+			list(2, issue)
+		case strings.HasSuffix(path, "/issues/7/comments"):
+			commentReads++
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case strings.HasSuffix(path, "/issues/7"):
+			_ = json.NewEncoder(w).Encode(issue(6))
+		case strings.HasSuffix(path, "/milestones"):
+			list(51, func(i int) map[string]any { return map[string]any{"id": i + 1, "title": "m", "state": "closed"} })
+		case strings.HasSuffix(path, "/branches/milestone/3"):
+			http.NotFound(w, r)
+		case strings.HasSuffix(path, "/branches/main"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": "main", "commit": map[string]string{"id": "abc"}, "protected": true})
+		case strings.Contains(path, "/raw/") || strings.Contains(path, "/media/"):
+			if !strings.Contains(r.URL.String(), "abc") {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte("after_pull = []\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(st *secrets.State) error {
+		st.Tokens = map[string]secrets.ActorToken{"rlupi": {Token: "token"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL, Desired: config.Desired{Org: "bottown"}}}
+	p := secrets.Principal{Actor: "rlupi"}
+	ctx := context.Background()
+
+	issues, err := s.opIssueList(ctx, p, IssueListIn{Repo: "demo", Bodies: true})
+	if err != nil || len(issues) != 2 || issues[0].Body != "b" || issues[0].Milestone == nil || issues[0].Milestone.Title != "M" || issues[0].Labels[0] != "implement/claude" {
+		t.Fatalf("issues with bodies = %+v, %v", issues, err)
+	}
+	if issues, _ := s.opIssueList(ctx, p, IssueListIn{Repo: "demo"}); issues[0].Body != "" {
+		t.Errorf("issue list without body=1 carries bodies: %+v", issues[0])
+	}
+	is, err := s.readIssue(ctx, p, Target{Repo: "demo", Number: 7}, false)
+	if err != nil || is.Comments != nil || commentReads != 0 || is.Milestone == nil || is.URL != "http://forge/i" {
+		t.Fatalf("issue alone = %+v, %v (comment reads %d)", is, err, commentReads)
+	}
+	if deps, err := s.opIssueDependencies(ctx, p, Target{Repo: "demo", Number: 7}); err != nil || len(deps) != 51 || deps[50].Body != "b" {
+		t.Fatalf("dependencies = %d, %v", len(deps), err)
+	}
+	if ms, err := s.opMilestoneList(ctx, p, MilestoneListIn{Repo: "demo", State: "all"}); err != nil || len(ms) != 51 || ms[0].State != "closed" {
+		t.Fatalf("milestones = %d, %v", len(ms), err)
+	}
+	if b, err := s.opBranch(ctx, p, "demo", "main"); err != nil || b.Commit != "abc" || !b.Protected {
+		t.Fatalf("branch main = %+v, %v", b, err)
+	}
+	if _, err := s.opBranch(ctx, p, "demo", "milestone/3"); errStatus(err) != http.StatusNotFound {
+		t.Errorf("missing branch: %v, want 404", err)
+	}
+	if b, err := s.repoFile(ctx, p, "demo", "abc", ".bottown.toml"); err != nil || string(b) != "after_pull = []\n" {
+		t.Fatalf("file at abc = %q, %v", b, err)
+	}
+	if _, err := s.repoFile(ctx, p, "demo", "def", ".bottown.toml"); errStatus(err) != http.StatusNotFound {
+		t.Errorf("file at an unknown ref: %v, want 404", err)
+	}
+}
+
+// Every request for changes is a round the flow spent, dismissed and stale
+// ones included; other verdicts are not.
+func TestChangesRequested(t *testing.T) {
+	rs := reviewOuts([]*sdk.PullReview{
+		{State: sdk.ReviewStateRequestChanges},
+		{State: sdk.ReviewStateRequestChanges, Dismissed: true},
+		{State: sdk.ReviewStateRequestChanges, Stale: true},
+		{State: sdk.ReviewStateApproved},
+		{State: sdk.ReviewStateComment},
+	})
+	if n := ChangesRequested(rs); n != 3 {
+		t.Fatalf("ChangesRequested = %d, want 3", n)
+	}
+}

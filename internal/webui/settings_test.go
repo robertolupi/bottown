@@ -14,12 +14,13 @@ import (
 	"testing"
 
 	"github.com/robertolupi/bottown/internal/config"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 const mainSHA = "1111111111111111111111111111111111111111"
 
-// fakeSettingsForge serves the branch and raw-file endpoints the settings
-// loader uses. files maps a ref to the .bottown.toml at that ref; a ref
+// fakeSettingsForge serves the branch and file reads the settings loader
+// makes. files maps a ref to the .bottown.toml at that ref; a ref
 // without an entry has no file. main's head is mainSHA.
 type fakeSettingsForge struct {
 	mu    sync.Mutex
@@ -40,19 +41,11 @@ func (f *fakeSettingsForge) set(ref, content string) {
 func (f *fakeSettingsForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	const prefix = "/forgejo/api/v1/repos/bottown/demo"
-	switch r.URL.Path {
-	case prefix + "/branches/main":
-		_ = json.NewEncoder(w).Encode(map[string]any{"name": "main", "commit": map[string]any{"id": mainSHA}})
-	case prefix + "/raw/.bottown.toml":
-		ref := r.URL.Query().Get("ref")
-		f.refs = append(f.refs, ref)
-		if c, ok := f.files[ref]; ok {
-			_, _ = w.Write([]byte(c))
-			return
-		}
-		http.NotFound(w, r)
-	default:
+	api := fakeAPI{
+		branches: map[string]serverapi.BranchOut{"main": {Name: "main", Commit: mainSHA, Protected: true}},
+		files:    f.files, fileRefs: &f.refs,
+	}
+	if !api.serve(w, r) {
 		http.NotFound(w, r)
 	}
 }

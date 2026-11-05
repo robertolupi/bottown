@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
-
 	"github.com/robertolupi/bottown/internal/runs"
 	serverapi "github.com/robertolupi/bottown/internal/server"
 )
@@ -174,11 +172,8 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 	// Verify cross-family rule for verify runs
 	if req.Kind == "verify" && !req.AllowSameFamily {
 		actorMap, _ := s.fetchActorMap(ctx)
-		org, repo := s.orgAndRepo()
-		pullPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d", org, repo, req.Target)
-		var pr sdk.PullRequest
-		if err := s.callServer(ctx, http.MethodGet, pullPath, nil, &pr); err == nil && pr.Poster != nil {
-			author := pr.Poster.UserName
+		if pr, err := s.pullRequest(ctx, req.Target); err == nil && pr.Author != "" {
+			author := pr.Author
 			authorAct := actorMap[author]
 			verAct := actorMap[actorName]
 			if authorAct != nil && verAct != nil && authorAct.Family != "" && authorAct.Family == verAct.Family {

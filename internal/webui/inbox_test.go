@@ -52,20 +52,19 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 		w.Header().Set("Content-Type", "application/json")
 		p := r.URL.Path
 
+		owner, _ := fix.whoami["actor"].(string)
+		if (fakeAPI{
+			prs: fix.prs, reviews: fix.reviews, carries: fix.carries, statuses: fix.statuses,
+			issues: fix.issues, comments: fix.comments, runs: fix.runs,
+			families: familiesOf(fix.actors), owner: owner,
+		}).serve(w, r) {
+			return
+		}
 		switch {
 		case p == "/v1/actors":
 			_ = json.NewEncoder(w).Encode(fix.actors)
 		case p == "/v1/whoami":
 			_ = json.NewEncoder(w).Encode(fix.whoami)
-		case p == "/v1/runs":
-			_ = json.NewEncoder(w).Encode(fix.runs)
-		case p == "/v1/forge/pr/carries":
-			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
-			carries := fix.carries[num]
-			if carries == nil {
-				carries = []review.Carry{}
-			}
-			_ = json.NewEncoder(w).Encode(carries)
 		case p == "/v1/forge/pr/merge-base" && r.Method == http.MethodPost:
 			var in serverapi.PRMergeIn
 			_ = json.NewDecoder(r.Body).Decode(&in)
@@ -74,39 +73,6 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 		case p == "/v1/forge/pr/merge-base":
 			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
 			_ = json.NewEncoder(w).Encode(fix.merges[num])
-		case p == "/v1/forge/prs":
-			owner, _ := fix.whoami["actor"].(string)
-			_ = json.NewEncoder(w).Encode(fakePRList{
-				prs: fix.prs, reviews: fix.reviews, carries: fix.carries,
-				families: familiesOf(fix.actors), owner: owner, runs: fix.runs, repo: r.URL.Query().Get("repo"),
-			}.items(r))
-		case strings.Contains(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
-			parts := strings.Split(p, "/")
-			sts := fix.statuses[parts[len(parts)-2]]
-			if sts == nil {
-				sts = []*sdk.Status{}
-			}
-			_ = json.NewEncoder(w).Encode(paginate(r, sts))
-		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
-			// /forgejo/api/v1/repos/{org}/{repo}/pulls/{number}/reviews
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)
-			revs := fix.reviews[num]
-			if revs == nil {
-				revs = []*sdk.PullReview{}
-			}
-			_ = json.NewEncoder(w).Encode(paginate(r, revs))
-		case strings.HasSuffix(p, "/issues"):
-			_ = json.NewEncoder(w).Encode(paginate(r, fix.issues))
-		case strings.Contains(p, "/issues/") && strings.HasSuffix(p, "/comments"):
-			// /forgejo/api/v1/repos/{org}/{repo}/issues/{number}/comments
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)
-			cmts := fix.comments[num]
-			if cmts == nil {
-				cmts = []*sdk.Comment{}
-			}
-			_ = json.NewEncoder(w).Encode(cmts)
 		case p == "/healthz":
 			_ = json.NewEncoder(w).Encode(map[string]any{"version": "dev"})
 		default:
@@ -372,8 +338,8 @@ func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
 	// A live run on the PR hides the offer: a verifier records the PR, a
 	// follow-up implement run only its issue and branch.
 	for _, run := range []secrets.Run{
-		{ID: "r-verify", Kind: "verify", PR: 15, Issue: 15, Created: now},
-		{ID: "r-implement", Kind: "implement", Issue: 15, Branch: "issue/15", Created: now},
+		{ID: "r-verify", Kind: "verify", PR: 15, Issue: 15, Created: now, Expires: now.Add(time.Hour)},
+		{ID: "r-implement", Kind: "implement", Issue: 15, Branch: "issue/15", Created: now, Expires: now.Add(time.Hour)},
 	} {
 		fix.mu.Lock()
 		fix.runs = []secrets.Run{run}

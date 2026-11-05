@@ -3,8 +3,6 @@ package webui
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,7 +11,6 @@ import (
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/review"
-	"github.com/robertolupi/bottown/internal/secrets"
 	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
@@ -141,63 +138,62 @@ var flowStopRE = regexp.MustCompile(`^\*\*bottown flow: ([^*\n]+)\*\*`)
 func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
-	repoAPI := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s", org, repo)
 	repoWeb := fmt.Sprintf("%s/%s/%s", forgeURL, org, repo)
 
 	ownerLogin := s.resolveOwnerLogin(ctx)
-	issues, err := listAll[*sdk.Issue](ctx, s, repoAPI+"/issues?state=all&type=issues")
+	issues, err := s.issues(ctx, "all", true)
 	if err != nil {
 		return nil, fmt.Errorf("fetch issues: %w", err)
 	}
-	milestones, err := listAll[*sdk.Milestone](ctx, s, repoAPI+"/milestones?state=all")
+	milestones, err := s.milestones(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch milestones: %w", err)
 	}
-	prs, err := s.pullRequests(ctx, "all")
+	prs, err := s.pullRequests(ctx, "all", false)
 	if err != nil {
 		return nil, fmt.Errorf("fetch pull requests: %w", err)
 	}
-	var allRuns []secrets.Run
-	if err := s.callServer(ctx, http.MethodGet, "/v1/runs?history=1&repo="+url.QueryEscape(repo), nil, &allRuns); err != nil {
+	allRuns, err := s.serverRuns(ctx, "", true)
+	if err != nil {
 		return nil, fmt.Errorf("fetch runs: %w", err)
 	}
 
-	byNumber := make(map[int64]*sdk.Issue, len(issues))
+	byNumber := make(map[int64]*serverapi.IssueItem, len(issues))
 	for _, is := range issues {
-		if is != nil && is.PullRequest == nil {
-			byNumber[is.Index] = is
+		if is != nil && !is.PullRequest {
+			byNumber[is.Number] = is
 		}
 	}
-	issueURL := func(is *sdk.Issue) string {
-		if is.HTMLURL != "" {
-			return is.HTMLURL
+	issueURL := func(is *serverapi.IssueItem) string {
+		if is.URL != "" {
+			return is.URL
 		}
-		return fmt.Sprintf("%s/issues/%d", repoWeb, is.Index)
+		return fmt.Sprintf("%s/issues/%d", repoWeb, is.Number)
 	}
-	ref := func(is *sdk.Issue) IssueRef {
-		r := IssueRef{Number: is.Index, Title: is.Title, State: string(is.State), URL: issueURL(is)}
-		if m, _, ok := milestone.ParseMarker(is.Body); ok && milestone.Trusted(userLogin(is.Poster), ownerLogin) {
+	ref := func(is *serverapi.IssueItem) IssueRef {
+		r := IssueRef{Number: is.Number, Title: is.Title, State: is.State, URL: issueURL(is)}
+		if m, _, ok := milestone.ParseMarker(is.Body); ok && milestone.Trusted(is.Author, ownerLogin) {
 			r.Key = m.Key
 		}
 		return r
 	}
-	msRef := func(m *sdk.Milestone) *MilestoneRef {
+	msRef := func(m *serverapi.MilestoneItem) *MilestoneRef {
 		if m == nil || m.ID <= 0 {
 			return nil
 		}
-		return &MilestoneRef{ID: m.ID, Title: m.Title, State: string(m.State), URL: fmt.Sprintf("%s/milestone/%d", repoWeb, m.ID)}
+		return &MilestoneRef{ID: m.ID, Title: m.Title, State: m.State, URL: fmt.Sprintf("%s/milestone/%d", repoWeb, m.ID)}
 	}
 	depsOf := func(n int64) ([]int64, error) {
-		list, err := listAll[*sdk.Issue](ctx, s, fmt.Sprintf("%s/issues/%d/dependencies", repoAPI, n))
+		list, err := s.issueDependencies(ctx, n)
 		if err != nil {
 			return nil, err
 		}
 		out := make([]int64, 0, len(list))
 		for _, d := range list {
 			if d != nil {
-				out = append(out, d.Index)
-				if byNumber[d.Index] == nil && d.PullRequest == nil {
-					byNumber[d.Index] = d
+				out = append(out, d.Number)
+				if byNumber[d.Number] == nil && !d.PullRequest {
+					byNumber[d.Number] = d
 				}
 			}
 		}
@@ -205,10 +201,10 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	}
 
 	// Trusted markers: epics by plan, children by plan.
-	epics := map[string][]*sdk.Issue{}
-	children := map[string][]*sdk.Issue{}
+	epics := map[string][]*serverapi.IssueItem{}
+	children := map[string][]*serverapi.IssueItem{}
 	for _, is := range issues {
-		if is == nil || is.PullRequest != nil || !milestone.Trusted(userLogin(is.Poster), ownerLogin) {
+		if is == nil || is.PullRequest || !milestone.Trusted(is.Author, ownerLogin) {
 			continue
 		}
 		m, _, ok := milestone.ParseMarker(is.Body)
@@ -232,7 +228,7 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	for _, plan := range plans {
 		for _, epic := range epics[plan] {
 			g := &MilestoneGroup{
-				ID:        fmt.Sprintf("epic-%d", epic.Index),
+				ID:        fmt.Sprintf("epic-%d", epic.Number),
 				Milestone: msRef(epic.Milestone),
 				Plan:      plan,
 				deps:      map[int64][]int64{},
@@ -256,17 +252,17 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 			}
 			// The active children are the plan's children the epic is
 			// blocked by; the plan's other children were removed from it.
-			active, err := depsOf(epic.Index)
+			active, err := depsOf(epic.Number)
 			if err != nil {
-				g.Error = fmt.Sprintf("dependencies of #%d: %v", epic.Index, err)
+				g.Error = fmt.Sprintf("dependencies of #%d: %v", epic.Number, err)
 			}
 			inEpic := map[int64]bool{}
 			for _, n := range active {
 				inEpic[n] = true
 			}
 			for _, c := range children[plan] {
-				if inEpic[c.Index] {
-					g.members = append(g.members, c.Index)
+				if inEpic[c.Number] {
+					g.members = append(g.members, c.Number)
 				} else {
 					g.Removed = append(g.Removed, ref(c))
 				}
@@ -275,8 +271,9 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 		}
 	}
 	// Open Forgejo milestones without a plan epic, with their issues.
-	for _, m := range milestones {
-		if m == nil || withEpic[m.ID] || m.State == sdk.StateClosed {
+	for i := range milestones {
+		m := &milestones[i]
+		if withEpic[m.ID] || m.State == string(sdk.StateClosed) {
 			continue
 		}
 		g := &MilestoneGroup{
@@ -285,8 +282,8 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 			deps:      map[int64][]int64{},
 		}
 		for _, is := range issues {
-			if is != nil && is.PullRequest == nil && is.Milestone != nil && is.Milestone.ID == m.ID {
-				g.members = append(g.members, is.Index)
+			if is != nil && !is.PullRequest && is.Milestone != nil && is.Milestone.ID == m.ID {
+				g.members = append(g.members, is.Number)
 			}
 		}
 		groups = append(groups, g)
@@ -296,8 +293,7 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	for _, g := range groups {
 		g.Base = "main"
 		if g.Epic != nil {
-			var br sdk.Branch
-			if err := s.callServer(ctx, http.MethodGet, fmt.Sprintf("%s/branches/milestone/%d", repoAPI, g.Epic.Number), nil, &br); err == nil && br.Name != "" {
+			if br, err := s.branch(ctx, fmt.Sprintf("milestone/%d", g.Epic.Number)); err == nil && br.Name != "" {
 				g.Base = br.Name
 			}
 		}
@@ -326,7 +322,7 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 
 	now := time.Now()
 	for _, g := range groups {
-		s.buildGraph(ctx, g, byNumber, depsOf, ref, prByIssue, allRuns, ownerLogin, repoAPI, repoWeb, now)
+		s.buildGraph(ctx, g, byNumber, depsOf, ref, prByIssue, allRuns, ownerLogin, repoWeb, now)
 	}
 
 	out := make([]MilestoneGroup, 0, len(groups))
@@ -368,12 +364,12 @@ func (g *MilestoneGroup) sortKey() string {
 func (s *Server) buildGraph(
 	ctx context.Context,
 	g *MilestoneGroup,
-	byNumber map[int64]*sdk.Issue,
+	byNumber map[int64]*serverapi.IssueItem,
 	depsOf func(int64) ([]int64, error),
-	ref func(*sdk.Issue) IssueRef,
+	ref func(*serverapi.IssueItem) IssueRef,
 	prByIssue map[int64]*serverapi.PRItem,
-	allRuns []secrets.Run,
-	ownerLogin, repoAPI, repoWeb string,
+	allRuns []serverapi.RunItem,
+	ownerLogin, repoWeb string,
 	now time.Time,
 ) {
 	g.Nodes, g.Edges = []MilestoneNode{}, []MilestoneEdge{}
@@ -416,8 +412,8 @@ func (s *Server) buildGraph(
 	}
 
 	// Runs by issue and by PR, oldest first.
-	runsFor := func(issue int64, pr *serverapi.PRItem) []secrets.Run {
-		var out []secrets.Run
+	runsFor := func(issue int64, pr *serverapi.PRItem) []serverapi.RunItem {
+		var out []serverapi.RunItem
 		for _, r := range allRuns {
 			if r.Kind != "implement" && r.Kind != "verify" {
 				continue
@@ -426,7 +422,7 @@ func (s *Server) buildGraph(
 				out = append(out, r)
 			}
 		}
-		slices.SortStableFunc(out, func(a, b secrets.Run) int { return a.Created.Compare(b.Created) })
+		slices.SortStableFunc(out, func(a, b serverapi.RunItem) int { return a.Created.Compare(b.Created) })
 		return out
 	}
 
@@ -444,13 +440,10 @@ func (s *Server) buildGraph(
 			node.DependsOn = []int64{}
 		}
 		for _, l := range is.Labels {
-			if l == nil {
-				continue
-			}
-			if a, ok := strings.CutPrefix(l.Name, "implement/"); ok {
+			if a, ok := strings.CutPrefix(l, "implement/"); ok {
 				node.Implement = a
 			}
-			if a, ok := strings.CutPrefix(l.Name, "verify/"); ok {
+			if a, ok := strings.CutPrefix(l, "verify/"); ok {
 				node.Verify = a
 			}
 		}
@@ -472,11 +465,11 @@ func (s *Server) buildGraph(
 		}
 
 		runs := runsFor(n, pr)
-		var live *secrets.Run
+		var live *serverapi.RunItem
 		var lastImpl, lastVer string
 		for i := range runs {
 			r := &runs[i]
-			if r.Ended == nil && (r.Expires.IsZero() || now.Before(r.Expires)) {
+			if isActive(*r) {
 				live = r
 			}
 			if r.Kind == "implement" {
@@ -503,22 +496,22 @@ func (s *Server) buildGraph(
 
 		blocked := false
 		for _, d := range node.DependsOn {
-			if di := byNumber[d]; di == nil || di.State != sdk.StateClosed {
+			if di := byNumber[d]; di == nil || di.State != string(sdk.StateClosed) {
 				blocked = true
 			}
 		}
 
 		switch {
-		case is.State == sdk.StateClosed:
+		case is.State == string(sdk.StateClosed):
 			node.Status = NodeClosed
 		case live != nil || flowRec != nil:
 			node.Status = NodeRunning
 		default:
-			var lastRun *secrets.Run
+			var lastRun *serverapi.RunItem
 			if len(runs) > 0 {
 				lastRun = &runs[len(runs)-1]
 			}
-			reason, at := s.lastFlowStop(ctx, repoAPI, n, ownerLogin)
+			reason, at := s.lastFlowStop(ctx, n, ownerLogin)
 			var decision review.Decision
 			if node.PR != nil && node.PR.State == "open" {
 				decision = assessment(pr).Decision
@@ -579,16 +572,15 @@ func (s *Server) buildGraph(
 
 // lastFlowStop is the reason and time of the newest stop comment the flow
 // (running as the owner) posted on an issue.
-func (s *Server) lastFlowStop(ctx context.Context, repoAPI string, issue int64, ownerLogin string) (string, time.Time) {
-	var comments []*sdk.Comment
-	// Forgejo returns all issue comments and ignores page/limit.
-	if err := s.callServer(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d/comments", repoAPI, issue), nil, &comments); err != nil {
+func (s *Server) lastFlowStop(ctx context.Context, issue int64, ownerLogin string) (string, time.Time) {
+	is, err := s.issue(ctx, issue, true)
+	if err != nil {
 		return "", time.Time{}
 	}
 	var reason string
 	var at time.Time
-	for _, c := range comments {
-		if c == nil || userLogin(c.Poster) != ownerLogin {
+	for _, c := range is.Comments {
+		if c.Author != ownerLogin {
 			continue
 		}
 		if m := flowStopRE.FindStringSubmatch(c.Body); m != nil && !c.Created.Before(at) {
