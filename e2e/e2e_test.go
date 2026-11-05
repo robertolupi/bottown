@@ -1984,10 +1984,12 @@ func TestE2E(t *testing.T) {
 		_ = os.Remove(staleFile)
 
 		// A batch discuss run from main: the question reaches the prompt
-		// through stdin, the agent comments, and it cannot push.
+		// through stdin, the agent comments, and it cannot push. It hands
+		// over with run end, which the launcher posts over its last message.
 		discuss := "set -e; grep -q '## Question to discuss' \"$BOTTOWN_PROMPT_FILE\"; grep -q \"what's best: blah or foo?\" \"$BOTTOWN_PROMPT_FILE\"; " +
 			"echo 'foo, because' | " + bin + " comment --body-file -; " +
-			"if git push -q " + remote + " HEAD:refs/heads/discuss-push 2>/dev/null; then echo pushed; exit 9; fi; echo 'discussed by script'"
+			"if git push -q " + remote + " HEAD:refs/heads/discuss-push 2>/dev/null; then echo pushed; exit 9; fi; " +
+			bin + " run end --summary 'discussed by script' | grep -q 'handover saved'; echo 'not the handover'"
 		c := exec.Command(bin, "run", "discuss", "-a", "agy", "--question-file", "-", fmt.Sprint(issue.Number))
 		c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+discuss)
 		c.Dir, c.Stdin = demo, strings.NewReader("what's best: blah or foo?\n")
@@ -2004,7 +2006,7 @@ func TestE2E(t *testing.T) {
 		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue.Number), nil, &dc)
 		if k := len(dc); k < 2 || dc[k-2].User.Login != "agy" || strings.TrimSpace(dc[k-2].Body) != "foo, because" ||
 			!strings.Contains(dc[k-1].Body, "· discuss · agy") || !strings.Contains(dc[k-1].Body, "Question:\n> what's best: blah or foo?") ||
-			!strings.Contains(dc[k-1].Body, "discussed by script") {
+			!strings.Contains(dc[k-1].Body, "discussed by script") || strings.Contains(dc[k-1].Body, "not the handover") {
 			t.Errorf("discuss comments on the issue: %+v", dc)
 		}
 		if out := a.mustCmd(demo, "run", "ls"); !strings.Contains(out, "discuss") || !strings.Contains(out, "succeeded") {

@@ -229,6 +229,9 @@ func newRunEnd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if a.Worktree == "" && a.RunFile != "" {
+				return handOverLaunched(cmd, a, failed, summary, summaryFile)
+			}
 			if a.Worktree != "" {
 				recovered, err := recoverLease(cmd.Context(), a)
 				if err != nil {
@@ -282,6 +285,32 @@ func newRunEnd() *cobra.Command {
 	cmd.Flags().StringVar(&summary, "summary", "", "handover summary")
 	cmd.Flags().StringVar(&summaryFile, "summary-file", "", "read the handover summary from a file, or - for stdin")
 	return cmd
+}
+
+// handOverLaunched is `run end` in a launched run ($BOTTOWN_RUN_FILE): the
+// launcher owns the run, and ends it when the harness exits, with the run
+// key it still needs for the handover. So the agent's summary, and whether
+// it failed, go in the run's record, for the launcher's handover and digest.
+func handOverLaunched(cmd *cobra.Command, a *agentCtx, failed bool, summary, summaryFile string) error {
+	text, err := readBody(cmd, summary, summaryFile)
+	if err != nil {
+		return err
+	}
+	if err := (runs.Store{Path: a.RunFile}).Update(func(r *runs.Record) error {
+		if r.ID != a.RunID || r.Key == "" {
+			return fmt.Errorf("run %s has ended", a.RunID)
+		}
+		r.Handover = &runs.Handover{Summary: strings.TrimSpace(text), Failed: failed}
+		return nil
+	}); err != nil {
+		return err
+	}
+	status := runs.StatusSucceeded
+	if failed {
+		status = runs.StatusFailed
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "run %s: handover saved (%s); the launcher posts it and ends the run when you exit\n", a.RunID, status)
+	return nil
 }
 
 // leaseActor uses the permanent actor credential, which remains usable after

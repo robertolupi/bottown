@@ -237,7 +237,7 @@ repository. They hold no token: the server enforces the policy.
 |---|---|
 | `whoami` | The actor, forge remote, its run or last run, and HEAD against the default branch. |
 | `run start implement\|verify\|discuss\|plan N` | Start a run and print its goal prompt (what the slash commands call). |
-| `run end [--failed] --summary-file -` | End the run with a handover summary. |
+| `run end [--failed] --summary-file -` | End the run with a handover summary. In a run that `bottown run …` launched, it saves the summary (and `--failed`) for the launcher, which posts it and ends the run when the harness exits. |
 | `issue list`, `issue show [N]` | Read issues. |
 | `issue create --title T --body-file -` | File an issue, in or outside a run. |
 | `pr list`, `pr show [N] [--diff \| --stat \| --since-review [--reviewer R]]` | Read pull requests; `--since-review` shows what changed since the latest review (same patch rebased, or a range-diff). |

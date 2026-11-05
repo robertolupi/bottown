@@ -355,3 +355,40 @@ func TestRunEndRetryAfterCleanup(t *testing.T) {
 		t.Fatalf("retry: %q, ends = %d", output.String(), f.ends)
 	}
 }
+
+// In a launched run ($BOTTOWN_RUN_FILE), the launcher ends the run when the
+// harness exits: `run end` saves the agent's handover in the run's record
+// for it, and ends nothing itself (#258).
+func TestRunEndLaunchedSavesHandover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r-1.json")
+	store := runs.Store{Path: path}
+	rec := runs.Record{ID: "r-1", Kind: "implement", Actor: "crush", Status: runs.StatusRunning, Key: "run-key", ServerURL: "http://127.0.0.1:1", Worktree: t.TempDir()}
+	if err := store.Create(rec); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOTTOWN_RUN_FILE", path)
+	t.Chdir(rec.Worktree)
+
+	cmd := newRunEnd()
+	var output strings.Builder
+	cmd.SetOut(&output)
+	cmd.SetIn(strings.NewReader("  blocked on #1\n"))
+	cmd.SetArgs([]string{"--failed", "--summary-file", "-"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "run r-1: handover saved (failed)") {
+		t.Fatalf("output = %q", output.String())
+	}
+	got, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Handover == nil || got.Handover.Summary != "blocked on #1" || !got.Handover.Failed {
+		t.Fatalf("handover = %+v", got.Handover)
+	}
+	// The launcher still owns the run: it stays live, with its key.
+	if got.Key != "run-key" || got.Status != runs.StatusRunning || got.Ended != nil {
+		t.Fatalf("record = %+v", got)
+	}
+}
