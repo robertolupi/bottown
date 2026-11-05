@@ -234,6 +234,6 @@ func TestRenderLogElidesEncoded(t *testing.T) {
 	b64 := strings.Repeat("QUFB", 100)
 	lines := RenderLog("script", []byte("reading the screenshot\n"+b64+"\n"))
 	if len(lines) != 2 || lines[0].Text != "reading the screenshot" || lines[1].Text != "[400 encoded bytes elided by bottown]" {
-		t.Errorf("lines %q", lines)
+		t.Errorf("lines %+v", lines)
 	}
 }

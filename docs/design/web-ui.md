@@ -196,7 +196,7 @@ the owner sees it in Forgejo and in the UI:
 |---|---|---|
 | ready to merge | the verifier approved the PR's current head | review and merge |
 | out of rounds | changes were still requested after N rounds | read the reviews; re-run with more rounds, steer it interactively, or take over |
-| run failed | a run failed, crashed or timed out | read its handover; fix the issue text or the environment, then re-run the flow |
+| run failed | a run failed, crashed or timed out | read its handover, and the run log and the harness's last error line that the stop names; fix the issue text or the environment, then re-run the flow (with another actor, if the run ended before the agent did anything because its actor is out of quota or signed out) |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | merging `main` into the PR would conflict | read the named files; start an implement run to resolve them |
@@ -732,9 +732,10 @@ stream with no recognized events falls back to readable plain text rather
 than disappearing. One table in `internal/runs` classifies tools by the names
 the harnesses use; a shell command that runs `bottown` is `forge`. claude's stream-json
 names every part, so its lines are typed: assistant text, tool calls,
-denials and failed tool results as errors, and the session start,
-background tasks, rate limits other than `allowed` and the result
-(turns, cost, duration) as status. agy's stream-json is typed by its
+denials, failed tool results, a `rejected` rate limit and a failed
+result (with claude's error, such as an API error) as errors, and the
+session start, background tasks, other rate limits than `allowed` and the
+result (turns, cost, duration) as status. agy's stream-json is typed by its
 `step_update` events, each step shown once, when it ends or while it is
 the latest step: an `agent_response`'s streamed text, a `tool` step's
 call (its argument from agy's parameter names, an MCP call as
@@ -745,7 +746,8 @@ typed: agent_message text, command_execution and mcp_tool_call calls
 with their class, file_change edits, commands with non-zero exit code as
 errors, and thread.started, turn completion with usage, and the preamble
 as status. kimi's messages are typed: assistant text, tool_calls with
-their class, tool results that start with failure messages as errors,
+their class, tool results that start with failure messages and kimi's
+own `error: failed to run prompt:` line as errors,
 non-JSON tool output capped to a few lines, and the latest of
 consecutive background task waits and meta messages (system.version,
 session.resume_hint) as status. `crush run` prints only the final

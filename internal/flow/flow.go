@@ -742,7 +742,26 @@ func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (
 	if errors.As(err, &busy) {
 		return s.stop(ctx, result, ActorBusy, busy.Error()+"; end that run, or re-run the flow when it has ended")
 	}
-	return s.stop(ctx, result, RunFailed, err.Error())
+	return s.stop(ctx, result, RunFailed, runFailedDetail(err))
+}
+
+// runFailedDetail is a RunFailed stop's detail: for a batch run, also its
+// log and the harness's last error line, and, when the agent made no tool
+// call, a hint that the actor may be unavailable.
+func runFailedDetail(err error) string {
+	detail := err.Error()
+	var failed *runs.FailedRunError
+	if !errors.As(err, &failed) || failed.Log == "" {
+		return detail
+	}
+	detail += "; log: " + failed.Log
+	if failed.LastError != "" {
+		detail += "; last error: " + failed.LastError
+	}
+	if !failed.ToolCalls {
+		detail += "; the run ended before the agent did anything; if the actor is unavailable (quota, sign-in), rerun the flow with another `--implement`/`--verify`"
+	}
+	return detail
 }
 
 func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason, detail string) (Result, error) {

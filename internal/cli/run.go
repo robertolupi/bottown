@@ -551,10 +551,21 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	} else {
 		fmt.Fprintf(out, "run %s %s (exit %d); worktree kept at %s\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status), code, dir)
 	}
-	if status != runs.StatusSucceeded {
-		return outcomeError(run.ID, status)
+	if status == runs.StatusSucceeded {
+		return nil
 	}
-	return nil
+	failed := &runs.FailedRunError{ID: run.ID, Status: status}
+	if !o.interactive {
+		// Why it failed is often only in the log: a provider error, an
+		// actor out of quota or not signed in.
+		failed.Log = logPath
+		failed.LastError, failed.ToolCalls = runs.LastError(harnessName, logBytes)
+		fmt.Fprintf(out, "  log: %s\n", logPath)
+		if failed.LastError != "" {
+			fmt.Fprintf(out, "  last error: %s\n", st.Danger.Render(failed.LastError))
+		}
+	}
+	return failed
 }
 
 // launchedLifecycle is the lifecycle of a run this process launches, just
@@ -573,10 +584,6 @@ func launchedLifecycle(rc *runContext, run secrets.Run) *runs.Lifecycle {
 	return lc
 }
 
-// outcomeError is what startRun returns for a run that did not succeed.
-func outcomeError(id, status string) error {
-	return fmt.Errorf("run %s %s", id, status)
-}
 
 // launchPhase is how far startRun got, for what its error means.
 type launchPhase int
