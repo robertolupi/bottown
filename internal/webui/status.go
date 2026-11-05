@@ -131,11 +131,59 @@ func (s *Server) git(ctx context.Context, args ...string) (string, error) {
 	return runs.GitCtx(ctx, s.cfg.RepoTop, nil, args...)
 }
 
+// fetchTimeout bounds a git fetch: status polls and page loads wait on it.
+var fetchTimeout = 5 * time.Second
+
+// originFetchInterval rate-limits unforced fetches of origin: background polls
+// and rapid unforced page reloads reuse cached origin status if fetched recently.
+var originFetchInterval = 1 * time.Minute
+
+func (s *Server) snapshot() *UIStatusResponse {
+	s.lastStatusMu.RLock()
+	defer s.lastStatusMu.RUnlock()
+	return s.lastStatus
+}
+
+func (s *Server) setSnapshot(st *UIStatusResponse) {
+	s.lastStatusMu.Lock()
+	defer s.lastStatusMu.Unlock()
+	s.lastStatus = st
+}
+
 // ComputeStatus calculates the Upstream and Health view data.
 func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusResponse, error) {
-	s.statusMu.Lock()
-	defer s.statusMu.Unlock()
+	if !s.statusMu.TryLock() {
+		// If another computation is in progress, serve the last snapshot
+		// for unforced callers to prevent request queueing.
+		if !forceFetch {
+			if snap := s.snapshot(); snap != nil {
+				return snap, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		s.statusMu.Lock()
+		// If another computation just finished and we have a snapshot:
+		// for unforced callers, or forced callers where origin was just fetched,
+		// return the fresh snapshot.
+		if snap := s.snapshot(); snap != nil {
+			if !forceFetch || time.Since(s.lastFetch) < 2*time.Second {
+				s.statusMu.Unlock()
+				return snap, nil
+			}
+		}
+		defer s.statusMu.Unlock()
+		return s.computeStatusLocked(ctx, forceFetch)
+	}
 
+	defer s.statusMu.Unlock()
+	return s.computeStatusLocked(ctx, forceFetch)
+}
+
+func (s *Server) computeStatusLocked(ctx context.Context, forceFetch bool) (*UIStatusResponse, error) {
 	res := &UIStatusResponse{
 		Instance: s.cfg.Instance.Name,
 		Repo:     s.cfg.FullRepo,
@@ -154,13 +202,15 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	res.Forge.ForgeURL = s.cfg.Instance.ForgejoURL()
 
 	base := "main"
-	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
+	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	if b, err := runs.RemoteDefaultBranch(fctx, s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 	res.Forge.DefaultBranch = base
 
 	// Fetch forge remote
-	_, _ = s.git(ctx, "fetch", "-q", remote)
+	_, _ = s.git(fctx, "fetch", "-q", remote)
+	cancel()
 
 	if checkoutSHA, err := s.git(ctx, "rev-parse", "--short", "HEAD"); err == nil {
 		res.Forge.CheckoutSHA = checkoutSHA
@@ -187,17 +237,29 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		res.Upstream.HasUpstream = true
 		res.Upstream.OriginURL = originURL
 
-		// Fetch origin if forced or never fetched
-		if forceFetch || s.lastFetch.IsZero() {
-			if _, err := s.git(ctx, "fetch", "-q", "origin"); err == nil {
-				now := time.Now()
-				s.lastFetch = now
+		// Fetch origin if forced, never fetched, or interval elapsed
+		if forceFetch || s.lastFetch.IsZero() || time.Since(s.lastFetch) >= originFetchInterval {
+			fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+			_, err := s.git(fctx, "fetch", "-q", "origin")
+			now := time.Now()
+			s.lastFetch = now
+			if err == nil {
+				s.lastSuccessfulFetch = now
+				s.lastOriginErr = ""
 				res.Upstream.FetchedAt = &now
 			} else {
+				s.lastOriginErr = err.Error()
 				res.Upstream.Error = err.Error()
+				if !s.lastSuccessfulFetch.IsZero() {
+					res.Upstream.FetchedAt = &s.lastSuccessfulFetch
+				}
 			}
+			cancel()
 		} else {
-			res.Upstream.FetchedAt = &s.lastFetch
+			if !s.lastSuccessfulFetch.IsZero() {
+				res.Upstream.FetchedAt = &s.lastSuccessfulFetch
+			}
+			res.Upstream.Error = s.lastOriginErr
 		}
 
 		originRef := "refs/remotes/origin/" + base
@@ -327,6 +389,7 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	// 6. Actors
 	res.Actors = s.fetchActors(ctx)
 
+	s.setSnapshot(res)
 	return res, nil
 }
 

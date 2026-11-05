@@ -10,7 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -345,5 +348,155 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 	if !eph.Ephemeral || eph.Actor != "claude" || eph.Path != ephDir || eph.Head != "issue/71" ||
 		eph.Kind != "implement" || eph.Target != "#71" || eph.ActiveRun != "r-11fe1234" || eph.LastRun != "r-11fe1234" {
 		t.Errorf("unexpected ephemeral worktree: %+v", eph)
+	}
+}
+
+func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
+	mainCheckout, _, _ := setupThrowawayRepos(t)
+
+	// A hanging HTTP server simulates an unreachable origin (e.g. captive portal or offline).
+	var originRequests atomic.Int32
+	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originRequests.Add(1)
+		<-r.Context().Done()
+	}))
+	defer hangSrv.Close()
+
+	runGit(t, mainCheckout, "remote", "set-url", "origin", hangSrv.URL+"/repo.git")
+
+	origTimeout := fetchTimeout
+	fetchTimeout = 300 * time.Millisecond
+	defer func() { fetchTimeout = origTimeout }()
+
+	origInterval := originFetchInterval
+	originFetchInterval = 400 * time.Millisecond
+	defer func() { originFetchInterval = origInterval }()
+
+	cfg := Config{
+		Instance: config.Instance{
+			Name: "prod",
+		},
+		RepoTop:    mainCheckout,
+		FullRepo:   "bottown/bottown",
+		OwnerKey:   "",
+		CLIVersion: "dev",
+	}
+
+	srv, err := NewServer(cfg)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer srv.Close()
+
+	ctx := context.Background()
+
+	// 1. Cold start: concurrent status requests return within the timeout and do not queue up.
+	// If 5 requests queued up sequentially with 300ms timeout, they would take >= 1500ms.
+	const numReqs = 5
+	var wg sync.WaitGroup
+	wg.Add(numReqs)
+
+	results := make([]*UIStatusResponse, numReqs)
+	errors := make([]error, numReqs)
+
+	start := time.Now()
+	for i := 0; i < numReqs; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			results[idx], errors[idx] = srv.ComputeStatus(ctx, false)
+		}(i)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	if elapsed >= 1200*time.Millisecond {
+		t.Fatalf("concurrent status requests queued up: took %v (expected < 1200ms for %d requests)", elapsed, numReqs)
+	}
+
+	if reqs := originRequests.Load(); reqs != 1 {
+		t.Fatalf("expected exactly 1 fetch attempt to hanging origin on cold start, got %d", reqs)
+	}
+
+	for i := 0; i < numReqs; i++ {
+		if errors[i] != nil {
+			t.Errorf("request %d returned error: %v", i, errors[i])
+		}
+		if results[i] == nil {
+			t.Fatalf("request %d returned nil status", i)
+		}
+		if results[i].Upstream.Error == "" {
+			t.Errorf("request %d expected Upstream.Error to be populated for hanging origin", i)
+		}
+	}
+
+	// 2. Rate-limiting: subsequent status poll within interval does not fetch origin.
+	st, err := srv.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus: %v", err)
+	}
+	if reqs := originRequests.Load(); reqs != 1 {
+		t.Fatalf("expected unforced poll within interval to not fetch origin, got %d attempts (expected 1)", reqs)
+	}
+	if st.Upstream.Error == "" {
+		t.Errorf("expected Upstream.Error to remain cached on unforced poll")
+	}
+
+	// 3. Interval expiry: after originFetchInterval elapses, unforced status poll fetches origin again.
+	time.Sleep(450 * time.Millisecond)
+	st, err = srv.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus after interval: %v", err)
+	}
+	if reqs := originRequests.Load(); reqs != 2 {
+		t.Fatalf("expected unforced poll after interval to fetch origin, got %d attempts (expected 2)", reqs)
+	}
+
+	// 4. TryLock and serve snapshot: while a forced refresh is in flight, an unforced
+	// poll serves the last snapshot immediately without waiting for the fetch.
+	refreshStarted := make(chan struct{})
+	refreshDone := make(chan struct{})
+	go func() {
+		close(refreshStarted)
+		_, _ = srv.ComputeStatus(ctx, true)
+		close(refreshDone)
+	}()
+
+	<-refreshStarted
+	// Wait a moment for the forced refresh goroutine to acquire statusMu and start git fetch
+	time.Sleep(50 * time.Millisecond)
+
+	start = time.Now()
+	snap, err := srv.ComputeStatus(ctx, false)
+	snapElapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("ComputeStatus snapshot: %v", err)
+	}
+	if snapElapsed >= 250*time.Millisecond {
+		t.Fatalf("concurrent poll during refresh took %v (expected < 250ms snapshot return)", snapElapsed)
+	}
+	if snap == nil {
+		t.Fatalf("expected snapshot to be returned")
+	}
+
+	<-refreshDone
+	if reqs := originRequests.Load(); reqs != 3 {
+		t.Fatalf("expected 3 total origin fetch attempts after forced refresh, got %d", reqs)
+	}
+
+	// 5. Concurrent forced refreshes: rapid forced refreshes coalesce within 2s and do not queue.
+	const forcedReqs = 3
+	var forcedWg sync.WaitGroup
+	forcedWg.Add(forcedReqs)
+	start = time.Now()
+	for i := 0; i < forcedReqs; i++ {
+		go func() {
+			defer forcedWg.Done()
+			_, _ = srv.ComputeStatus(ctx, true)
+		}()
+	}
+	forcedWg.Wait()
+	forcedElapsed := time.Since(start)
+	if forcedElapsed >= 700*time.Millisecond {
+		t.Fatalf("concurrent forced refreshes queued up: took %v (expected < 700ms for %d requests with 300ms timeout)", forcedElapsed, forcedReqs)
 	}
 }
