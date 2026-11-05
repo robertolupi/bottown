@@ -73,10 +73,19 @@ func newLeaseFixture(t *testing.T) *leaseFixture {
 	f.a = &agentCtx{Actor: "codex", Worktree: dir, KeyDir: keyDir, ServerURL: srv.URL, Key: "run-key", RunID: "r-test"}
 	f.rec = runs.Record{ID: "r-test", Actor: "codex", Worktree: dir, ServerURL: srv.URL, Key: "run-key", Status: runs.StatusPreparing}
 	f.remote = secrets.Run{ID: "r-test", Actor: "codex"}
-	if err := saveRecord(filepath.Join(keyDir, "actor.json"), runs.Record{ID: "actor", Actor: "codex", ServerURL: srv.URL, Key: "actor-key"}); err != nil {
+	if err := (runs.Store{Path: filepath.Join(keyDir, "actor.json")}).Save(runs.Record{ID: "actor", Actor: "codex", ServerURL: srv.URL, Key: "actor-key"}); err != nil {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// prepareLease is run start's lifecycle around setup, as runStart drives it.
+func prepareLease(ctx context.Context, a *agentCtx, rec runs.Record, setup func() error) error {
+	lc, err := leaseLifecycle(a)
+	if err != nil {
+		return err
+	}
+	return lc.Prepare(ctx, rec, setup)
 }
 
 func TestLeaseSetupRollback(t *testing.T) {
@@ -136,13 +145,13 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			f := newLeaseFixture(t)
 			f.rec.Status = runs.StatusRunning
-			if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+			if err := leaseStore(f.a).Save(f.rec); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitRunKey, f.rec.ID); err != nil {
 				t.Fatal(err)
 			}
-			obstruction := filepath.Join(f.a.KeyDir, "r-test.lock")
+			obstruction := filepath.Join(f.a.KeyDir, "run.lock")
 			if stage == "config" {
 				obstruction = filepath.Join(f.a.Worktree, ".git", "config.worktree.lock")
 			}
@@ -179,7 +188,7 @@ func TestLeaseEndLocalFailureCanRecover(t *testing.T) {
 
 func TestLeaseRecoveryRefusesDifferentRun(t *testing.T) {
 	f := newLeaseFixture(t)
-	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+	if err := leaseStore(f.a).Save(f.rec); err != nil {
 		t.Fatal(err)
 	}
 	f.remote.ID = "r-other"
@@ -195,7 +204,7 @@ func TestLeaseSetupSuccessKeepsRun(t *testing.T) {
 	f := newLeaseFixture(t)
 	if err := prepareLease(context.Background(), f.a, f.rec, func() error {
 		f.rec.Status = runs.StatusRunning
-		return saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec)
+		return leaseStore(f.a).Save(f.rec)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +222,7 @@ func TestLeaseSetupSuccessKeepsRun(t *testing.T) {
 func TestLeaseInterruptedStartupRecovery(t *testing.T) {
 	f := newLeaseFixture(t)
 	// Simulate process death: the preparing record survives without deferred rollback.
-	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+	if err := leaseStore(f.a).Save(f.rec); err != nil {
 		t.Fatal(err)
 	}
 	if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
@@ -229,7 +238,7 @@ func TestLeaseInterruptedStartupRecovery(t *testing.T) {
 
 func TestLeaseRecoveryPreservesDifferentWorktreeRun(t *testing.T) {
 	f := newLeaseFixture(t)
-	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+	if err := leaseStore(f.a).Save(f.rec); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -282,7 +291,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 	t.Run("interrupted startup", func(t *testing.T) {
 		f := newLeaseFixture(t)
 		dir := fill(t, f)
-		if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+		if err := leaseStore(f.a).Save(f.rec); err != nil {
 			t.Fatal(err)
 		}
 		if recovered, err := recoverLease(context.Background(), f.a); err != nil || !recovered {
@@ -304,7 +313,7 @@ func TestLeaseRemovesAttachments(t *testing.T) {
 	t.Run("removal failure is retried", func(t *testing.T) {
 		f := newLeaseFixture(t)
 		dir := fill(t, f)
-		if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+		if err := leaseStore(f.a).Save(f.rec); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chmod(dir, 0o500); err != nil {
@@ -329,7 +338,7 @@ func TestRunEndRetryAfterCleanup(t *testing.T) {
 	if _, err := runs.Git(f.a.Worktree, nil, "config", "--worktree", gitActorKey, "codex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveRecord(filepath.Join(f.a.KeyDir, "run.json"), f.rec); err != nil {
+	if err := leaseStore(f.a).Save(f.rec); err != nil {
 		t.Fatal(err)
 	}
 	if err := endLease(context.Background(), f.a, f.rec, server.EndRunRequest{Status: runs.StatusSucceeded}); err != nil {

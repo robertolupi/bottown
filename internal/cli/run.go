@@ -231,39 +231,6 @@ func parseNumber(s string) (int64, error) {
 	return n, nil
 }
 
-// errNoChange makes a Workspace.Update leave the record as it is.
-var errNoChange = errors.New("record unchanged")
-
-// endRunBudget is how long a launcher keeps trying to end its run on the
-// server, and endRunBackoff the waits between its attempts.
-var (
-	endRunBudget  = 2 * time.Minute
-	endRunBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 30 * time.Second}
-)
-
-// retryEndRun calls end, each attempt bounded to 30s, until it succeeds,
-// endRunBackoff runs out or ctx is done, and returns its last error.
-func retryEndRun(ctx context.Context, end func(context.Context) error) error {
-	attempt := func() error {
-		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		return end(actx)
-	}
-	err := attempt()
-	for _, d := range endRunBackoff {
-		if err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return err
-		case <-time.After(d):
-		}
-		err = attempt()
-	}
-	return err
-}
-
 func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (err error) {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -311,43 +278,29 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	run := created.Run
+	lc := launchedLifecycle(rc, run)
 	// The launcher's lock (see below) is released last, after the deferred
 	// end below has finished the record.
 	releaseLauncher := func() {}
 	defer func() { releaseLauncher() }()
-	// From here on, always end the run on the server, whatever happens.
+	// From here on, always end the run on the server, whatever happens; a
+	// failed setup has already (see Lifecycle.Prepare).
 	status := runs.StatusFailed
 	var digest secrets.Digest
 	phase := launchStarting
 	defer func() {
-		cctx, cancel := context.WithTimeout(context.Background(), endRunBudget)
-		defer cancel()
 		if status != runs.StatusSucceeded {
 			if f := launcherFailure(phase, err); f != nil {
 				digest.Failure = f
 			}
 		}
-		end := server.EndRunRequest{Status: status, Digest: digest}
-		// The server may be restarting (an upgrade, say): retry for a
-		// while. If it never answers, the next run gc revokes the run.
-		e := retryEndRun(cctx, func(ctx context.Context) error {
-			return callServer(ctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil)
-		})
+		e := lc.End(ctx, status, digest)
 		switch {
 		case e != nil && err == nil:
-			err = fmt.Errorf("end run %s: %w; the next `bottown run gc` revokes it", run.ID, e)
+			err = e
 		case e != nil:
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: end run %s: %v; the next `bottown run gc` revokes it\n", run.ID, e)
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", e)
 		}
-		// A startup that failed before the run was running ends its record too.
-		_ = rc.ws.Update(run.ID, func(current *runs.Record) error {
-			if current.Status != runs.StatusPreparing {
-				return errNoChange
-			}
-			now := time.Now().UTC()
-			current.Status, current.Ended, current.Key = runs.StatusFailed, &now, ""
-			return nil
-		})
 	}()
 
 	// A server that predates RunRequest.SHA pins whatever the head is.
@@ -376,22 +329,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName, Spec: run.Spec,
-		Status: runs.StatusPreparing, PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
+		PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
 		FlowNote: strings.TrimSpace(o.flowNote), ChecksPassed: o.checksPassed,
-	}
-	if err := rc.ws.Save(rec); err != nil {
-		return err
 	}
 	defer func() {
 		if e := runs.RemoveAttachments(attachDir); e != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
 		}
 	}()
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		return err
-	}
 	defer func() {
 		// Stop a detached web preview recorded in the scratch directory
 		// before it goes, so the preview does not outlive the run.
@@ -400,41 +347,42 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove tmp dir: %v\n", e)
 		}
 	}()
-	rk := &agentCtx{Actor: run.Actor, ServerURL: rc.inst.ServerURL(), Key: created.Key, RunID: run.ID}
-	prompt, base, err := renderPrompt(ctx, rc, run, rec, rk, attachDir)
-	if err != nil {
-		return err
-	}
-	var dir string
-	if kind == policy.Implement || kind == policy.Plan {
-		dir, err = rc.ws.AddImplement(run.ID, run.Branch, base)
-	} else {
-		dir, err = rc.ws.AddVerify(run.ID, run.SHA)
-	}
-	if err != nil {
-		return err
-	}
-	h, err := runs.LookupHarness(harnessName)
-	if err != nil {
-		return err
-	}
-
 	recPath := rc.ws.Path(run.ID, ".json")
-	self, _ := os.Executable()
-	if err := runs.Configure(dir, run.Actor, fmt.Sprintf("!%q credential --run-file %q", self, recPath)); err != nil {
-		return err
-	}
 	mcpURL := rc.inst.ServerURL() + "/mcp"
-	if err := os.WriteFile(rc.ws.Path(run.ID, ".prompt.md"), []byte(prompt), 0o600); err != nil {
-		return err
-	}
-	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
-		current.Status, current.Worktree = runs.StatusRunning, dir
-		rec = *current
-		return nil
+	var prompt, dir string
+	var h runs.Harness
+	if err := lc.Prepare(ctx, rec, func() error {
+		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+			return err
+		}
+		rk := &agentCtx{Actor: run.Actor, ServerURL: rc.inst.ServerURL(), Key: created.Key, RunID: run.ID}
+		p, base, err := renderPrompt(ctx, rc, run, rec, rk, attachDir)
+		if err != nil {
+			return err
+		}
+		prompt = p
+		if kind == policy.Implement || kind == policy.Plan {
+			dir, err = rc.ws.AddImplement(run.ID, run.Branch, base)
+		} else {
+			dir, err = rc.ws.AddVerify(run.ID, run.SHA)
+		}
+		if err != nil {
+			return err
+		}
+		if h, err = runs.LookupHarness(harnessName); err != nil {
+			return err
+		}
+		if err := runs.Configure(dir, run.Actor, fmt.Sprintf("!%q credential --run-file %q", selfPath(), recPath)); err != nil {
+			return err
+		}
+		if err := os.WriteFile(rc.ws.Path(run.ID, ".prompt.md"), []byte(prompt), 0o600); err != nil {
+			return err
+		}
+		return lc.Running(func(r *runs.Record) { r.Worktree = dir })
 	}); err != nil {
 		return err
 	}
+	rec = lc.Record()
 
 	l := runs.Launch{
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
@@ -479,7 +427,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	phase = launchHarnessRan
-	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
+	if err := lc.Update(func(current *runs.Record) error {
 		current.HarnessPID = c.Process.Pid
 		return nil
 	}); err != nil {
@@ -538,14 +486,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	logBytes, _ := os.ReadFile(rc.ws.Path(run.ID, ".log"))
 	summary := h.Summary(logBytes)
 
-	now := time.Now().UTC()
-	if err := rc.ws.Update(run.ID, func(current *runs.Record) error {
+	if rec, err = lc.Finished(func(current *runs.Record) {
 		if current.StopRequested {
 			status = runs.StatusFailed
 		}
-		current.Status, current.ExitCode, current.Ended, current.Key = status, &code, &now, ""
-		rec = *current
-		return nil
+		current.Status, current.ExitCode = status, &code
 	}); err != nil {
 		return err
 	}
@@ -573,6 +518,22 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return outcomeError(run.ID, status)
 	}
 	return nil
+}
+
+// launchedLifecycle is the lifecycle of a run this process launches, just
+// created on the server: the owner key ends it there.
+func launchedLifecycle(rc *runContext, run secrets.Run) *runs.Lifecycle {
+	lc := &runs.Lifecycle{
+		Mode:  runs.Launched,
+		Store: rc.ws.Store(run.ID),
+		EndRun: func(ctx context.Context, id, status string, d secrets.Digest) (secrets.Run, error) {
+			return secrets.Run{}, callServer(ctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+id, server.EndRunRequest{Status: status, Digest: d}, nil)
+		},
+	}
+	// The run exists on the server from here, whether or not its record
+	// is ever saved.
+	lc.Resume(runs.Record{ID: run.ID, Actor: run.Actor})
+	return lc
 }
 
 // outcomeError is what startRun returns for a run that did not succeed.
@@ -623,9 +584,9 @@ func observedFailure(ctxErr error, stopped bool, code int, elapsed time.Duration
 	return nil
 }
 
-// renderPrompt fetches the issue or PR and renders the goal prompt, with
-// the owner's question or message from rec, after downloading its
-// attachments with the run key rk into attachDir. It also returns the
+// renderPrompt fetches the issue or PR and renders a launched run's goal
+// prompt, with the owner's question or message from rec, after downloading
+// its attachments with the run key rk into attachDir. It also returns the
 // repository's default branch.
 func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, rk *agentCtx, attachDir string) (string, string, error) {
 	base, err := rc.ws.DefaultBranch(ctx)
@@ -644,33 +605,50 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		return "", "", err
 	}
 	d := runs.PromptData{
-		RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
-		Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
-		Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message, AttachmentsOf: n,
+		Title: item.Title, Body: item.Body, Base: base,
+		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message,
 		FlowNote: rec.FlowNote, ChecksPassed: rec.ChecksPassed,
 	}
-	// Attachments never stop a run: a failure is in the prompt instead.
+	// Attachments never stop a launched run: a failure is in the prompt
+	// instead.
 	var is server.IssueOut
-	if err := rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is); err != nil {
-		d.AttachmentsError = err.Error()
-	} else {
-		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", is), is.AttachmentsError
+	isErr := rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is)
+	p, err := goalPrompt(ctx, rk, run, d, rc.ws.Mirror, rc.ws.Remote+"/"+base, attachDir, &is, isErr)
+	return p, base, err
+}
+
+// goalPrompt renders run's goal prompt, for either kind of run: d holds
+// what the caller knows (the issue's text, the default branch, the
+// owner's notes), and goalPrompt adds the run and what the run key rk
+// fetches: item's attachments, into attachDir (or itemErr, why item could
+// not be read), and a verifier's earlier reviews. gitDir has the
+// repository's refs; baseRef names its default branch there, whose
+// settings a plan run follows.
+func goalPrompt(ctx context.Context, rk *agentCtx, run secrets.Run, d runs.PromptData, gitDir, baseRef, attachDir string, item *server.IssueOut, itemErr error) (string, error) {
+	d.RunID, d.Actor, d.Family, d.Repo = run.ID, run.Actor, run.Family, run.Org+"/"+run.Repo
+	d.Issue, d.PR, d.Branch, d.SHA, d.Author, d.AllowSameFamily = run.Issue, run.PR, run.Branch, run.SHA, run.Author, run.AllowSameFamily
+	d.AttachmentsOf = run.Issue
+	if run.Kind == policy.Verify {
+		d.AttachmentsOf = run.PR
 	}
-	d.WebPreview = runs.HasWebPreview(rc.ws.Mirror, rc.ws.Remote+"/"+base)
+	if itemErr != nil {
+		d.AttachmentsError = itemErr.Error()
+	} else {
+		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", *item), item.AttachmentsError
+	}
+	d.WebPreview = runs.HasWebPreview(gitDir, baseRef)
 	if run.Kind == policy.Verify {
 		d.Reviewed = rk.prReviewed(ctx, run.PR)
 	}
 	if run.Kind == policy.Plan {
 		// bottown reads the repository's settings from its default branch.
-		settings, err := runs.RepoSettingsAt(rc.ws.Mirror, rc.ws.Remote+"/"+base)
+		settings, err := runs.RepoSettingsAt(gitDir, baseRef)
 		if err != nil {
-			return "", "", err
+			return "", err
 		}
 		d.MilestonesDir = settings.MilestonesDir
 	}
-	p, err := runs.Prompt(run.Kind, d)
-	return p, base, err
+	return runs.Prompt(run.Kind, d)
 }
 
 // modelNote is sep+"model SPEC", or "" for the harness's default model.

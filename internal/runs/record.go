@@ -115,50 +115,22 @@ func validRunID(id string) bool {
 func (w *Workspace) Path(id, suffix string) string { return filepath.Join(w.RunsDir, id+suffix) }
 
 // Save creates a record with 0600. Existing records must be changed with Update.
-func (w *Workspace) Save(r Record) error {
-	return w.withRecordLock(r.ID, func() error {
-		if _, err := os.Stat(w.Path(r.ID, ".json")); !errors.Is(err, os.ErrNotExist) {
-			if err != nil {
-				return err
-			}
-			return os.ErrExist
-		}
-		return w.writeRecord(r)
-	})
-}
+func (w *Workspace) Save(r Record) error { return w.Store(r.ID).Create(r) }
 
-// Update serializes a read-modify-write across processes. The callback must not
-// call Save or Update for this record. An error leaves the record unchanged.
+// Update serializes a read-modify-write of run id's record (see Store.Update).
 func (w *Workspace) Update(id string, change func(*Record) error) error {
-	return w.withRecordLock(id, func() error {
-		r, err := w.Load(id)
-		if err != nil {
-			return err
-		}
-		if err := change(&r); err != nil {
-			return err
-		}
-		return w.writeRecord(r)
-	})
+	return w.Store(id).Update(change)
 }
 
-func (w *Workspace) withRecordLock(id string, fn func() error) error {
-	f, err := w.lockRecord(id, true)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return fn()
-}
+// Store is run id's record in this workspace.
+func (w *Workspace) Store(id string) Store { return Store{Path: w.Path(id, ".json")} }
 
-// lockRecord opens and exclusively locks a run's lock file, creating it
-// with create; without create, a missing lock file is (nil, nil). Removing
-// a run unlinks its lock file (see removeLock), so a lock taken on a file
-// since unlinked or replaced is dropped and taken again: every holder
-// locks the inode the path names.
-func (w *Workspace) lockRecord(id string, create bool) (*os.File, error) {
-	path := w.Path(id, ".lock")
+// lockFile opens and exclusively locks a lock file, creating it with
+// create; without create, a missing lock file is (nil, nil). Removing a
+// run unlinks its lock file (see removeLock), so a lock taken on a file
+// since unlinked or replaced is dropped and taken again: every holder locks
+// the inode the path names.
+func lockFile(path string, create bool) (*os.File, error) {
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
@@ -196,7 +168,7 @@ func (w *Workspace) lockRecord(id string, create bool) (*os.File, error) {
 // and once the record is gone none takes it again for long: Update fails
 // to load the record, and a run's id is never saved twice.
 func (w *Workspace) removeLock(id string) error {
-	f, err := w.lockRecord(id, false)
+	f, err := lockFile(w.Path(id, ".lock"), false)
 	if err != nil || f == nil {
 		return err
 	}
@@ -226,31 +198,8 @@ func (w *Workspace) RemoveOrphanLocks() {
 	}
 }
 
-func (w *Workspace) writeRecord(r Record) error {
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(w.RunsDir, r.ID+".json.tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(b)
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(f.Name(), w.Path(r.ID, ".json"))
-}
-
 // Load reads one record.
-func (w *Workspace) Load(id string) (Record, error) {
-	return LoadFile(w.Path(id, ".json"))
-}
+func (w *Workspace) Load(id string) (Record, error) { return w.Store(id).Load() }
 
 // LoadFile reads a record file.
 func LoadFile(path string) (Record, error) {

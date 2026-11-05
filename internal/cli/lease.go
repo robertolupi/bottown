@@ -112,6 +112,12 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	if err != nil {
 		return err
 	}
+	// Before the run exists: without the actor credential it could not be
+	// rolled back or recovered.
+	lc, err := leaseLifecycle(a)
+	if err != nil {
+		return err
+	}
 
 	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true}
 	if kind == policy.Verify {
@@ -127,14 +133,14 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: true, Harness: run.Harness, Status: runs.StatusPreparing, Started: time.Now().UTC(),
+		Interactive: true, Harness: run.Harness, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 		Attachments: leaseAttachments(a),
 	}
 	if inst, _ := runs.Git(a.Worktree, nil, "config", "--get", gitInstanceKey); inst != "" {
 		rec.Instance = inst
 	}
-	return prepareLease(cmd.Context(), a, rec, func() (err error) {
+	return lc.Prepare(cmd.Context(), rec, func() error {
 		if _, err := runs.GitCtx(cmd.Context(), a.Worktree, nil, "fetch", "-q", "--prune", a.Remote); err != nil {
 			return err
 		}
@@ -182,38 +188,17 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		if err := runs.RemoveAttachments(rec.Attachments); err != nil {
 			return err
 		}
-		atts := rk.fetchAttachments(cmd.Context(), rec.Attachments, "", item)
 		top, _ := runs.Git(a.Worktree, nil, "rev-parse", "--show-toplevel")
 		base, _ := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
-		self, _ := os.Executable()
-		d := runs.PromptData{
-			RunID: run.ID, Actor: run.Actor, Family: run.Family, Repo: run.Org + "/" + run.Repo,
-			Issue: run.Issue, PR: run.PR, Title: item.Title, Body: item.Body,
-			Branch: run.Branch, Base: base, SHA: run.SHA, Author: run.Author, AllowSameFamily: run.AllowSameFamily,
-			Bottown: self, Remote: a.Remote, SelfEnd: true,
-			AttachmentsOf: item.Number, Attachments: atts, AttachmentsError: item.AttachmentsError,
-		}
-		d.WebPreview = runs.HasWebPreview(a.Worktree, a.Remote+"/"+base)
-		if kind == policy.Verify {
-			d.Reviewed = rk.prReviewed(cmd.Context(), run.PR)
-		}
-		if kind == policy.Plan {
-			// bottown reads the repository's settings from its default branch.
-			settings, err := runs.RepoSettingsAt(a.Worktree, a.Remote+"/"+base)
-			if err != nil {
-				return err
-			}
-			d.MilestonesDir = settings.MilestonesDir
-		}
-		prompt, err := runs.Prompt(run.Kind, d)
+		d := runs.PromptData{Title: item.Title, Body: item.Body, Base: base, Bottown: selfPath(), Remote: a.Remote, SelfEnd: true}
+		prompt, err := goalPrompt(cmd.Context(), &rk, run, d, a.Worktree, a.Remote+"/"+base, rec.Attachments, &item, nil)
 		if err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(a.KeyDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
 			return err
 		}
-		rec.Status = runs.StatusRunning
-		if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
+		if err := lc.Running(nil); err != nil {
 			return err
 		}
 		_, err = fmt.Fprint(cmd.OutOrStdout(), prompt)
@@ -226,15 +211,10 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 // checkout so a `git add -A` cannot commit the files.
 func leaseAttachments(a *agentCtx) string { return filepath.Join(a.KeyDir, "attachments") }
 
-func saveRecord(path string, rec runs.Record) error {
-	ws := &runs.Workspace{RunsDir: filepath.Dir(path)}
-	tmp := rec
-	if err := ws.Save(tmp); err != nil {
-		return err
-	}
-	// Workspace.Save names the file after the run; actor worktrees keep a
-	// fixed name.
-	return os.Rename(ws.Path(rec.ID, ".json"), path)
+// leaseStore is the actor worktree's run record: its latest run, live or
+// ended.
+func leaseStore(a *agentCtx) runs.Store {
+	return runs.Store{Path: filepath.Join(a.KeyDir, "run.json")}
 }
 
 func newRunEnd() *cobra.Command {
@@ -261,7 +241,7 @@ func newRunEnd() *cobra.Command {
 			}
 			if a.Worktree == "" || a.RunID == "" {
 				if a.Worktree != "" {
-					rec, err := runs.LoadFile(filepath.Join(a.KeyDir, "run.json"))
+					rec, err := leaseStore(a).Load()
 					if err == nil && rec.Ended != nil && rec.Key == "" {
 						fmt.Fprintf(cmd.OutOrStdout(), "run %s already ended; key revoked\n", rec.ID)
 						return nil
@@ -269,8 +249,7 @@ func newRunEnd() *cobra.Command {
 				}
 				return errors.New("no run to end in this worktree")
 			}
-			file := filepath.Join(a.KeyDir, "run.json")
-			rec, err := runs.LoadFile(file)
+			rec, err := leaseStore(a).Load()
 			if err != nil {
 				return err
 			}
@@ -320,54 +299,61 @@ func leaseActor(a *agentCtx) (*agentCtx, error) {
 	return &actor, nil
 }
 
-func finishLease(a *agentCtx, rec runs.Record, ended secrets.Run) error {
-	if ended.ID != rec.ID || ended.Actor != a.Actor || ended.Ended == nil {
-		return errors.New("server did not confirm this run ended")
-	}
+// leaseLifecycle is the lifecycle of the worktree's runs. It reaches the
+// server with the actor credential, so it can end or inspect a run whose
+// key is already revoked. Once it has ended a run, a acts with that
+// credential too.
+func leaseLifecycle(a *agentCtx) (*runs.Lifecycle, error) {
 	actor, err := leaseActor(a)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Clear config first: if saving fails, run.json still identifies the run
-	// for the next retry. resolveAgent selects records, not this config value.
-	id, _ := runs.Git(a.Worktree, nil, "config", "--worktree", "--get", gitRunKey)
-	if id != "" && id != rec.ID {
-		return fmt.Errorf("worktree now belongs to run %s; refusing cleanup of %s", id, rec.ID)
-	}
-	if _, err := runs.Git(a.Worktree, nil, "config", "--worktree", gitRunKey, ""); err != nil {
-		return err
-	}
-	// The run's attachments end with it. Before the record is finalized,
-	// so that a failure here leaves the next run end or start to retry.
-	if err := runs.RemoveAttachments(leaseAttachments(a)); err != nil {
-		return err
-	}
-	rec.Status, rec.Ended, rec.Key = ended.Status, ended.Ended, ""
-	if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
-		return err
-	}
-	a.RunID, a.Key = "", actor.Key
-	return nil
+	return &runs.Lifecycle{
+		Mode:  runs.Leased,
+		Store: leaseStore(a),
+		EndRun: func(ctx context.Context, id, status string, d secrets.Digest) (secrets.Run, error) {
+			var ended secrets.Run
+			err := actor.call(ctx, "DELETE", "/v1/runs/"+id, server.EndRunRequest{Status: status, Digest: d}, &ended)
+			return ended, err
+		},
+		GetRun: func(ctx context.Context, id string) (secrets.Run, error) {
+			var remote secrets.Run
+			err := actor.call(ctx, "GET", "/v1/runs/"+id, nil, &remote)
+			return remote, err
+		},
+		Release: func(rec runs.Record) error {
+			// Clear config first: if saving fails, run.json still identifies
+			// the run for the next retry. resolveAgent selects records, not
+			// this config value.
+			id, _ := runs.Git(a.Worktree, nil, "config", "--worktree", "--get", gitRunKey)
+			if id != "" && id != rec.ID {
+				return fmt.Errorf("worktree now belongs to run %s; refusing cleanup of %s", id, rec.ID)
+			}
+			if _, err := runs.Git(a.Worktree, nil, "config", "--worktree", gitRunKey, ""); err != nil {
+				return err
+			}
+			// The run's attachments end with it.
+			return runs.RemoveAttachments(leaseAttachments(a))
+		},
+		Ended: func(runs.Record) { a.RunID, a.Key = "", actor.Key },
+	}, nil
 }
 
+// endLease ends the worktree's run rec, on the server and then locally.
 func endLease(ctx context.Context, a *agentCtx, rec runs.Record, end server.EndRunRequest) error {
-	actor, err := leaseActor(a)
+	lc, err := leaseLifecycle(a)
 	if err != nil {
 		return err
 	}
-	var ended secrets.Run
-	if err := actor.call(ctx, "DELETE", "/v1/runs/"+rec.ID, end, &ended); err != nil {
-		return err
-	}
-	return finishLease(a, rec, ended)
+	lc.Resume(rec)
+	return lc.End(ctx, end.Status, end.Digest)
 }
 
 // recoverLease reconciles only the durable local run ID, never a different
 // active run. Startup interrupted before the prompt is delivered is revoked;
 // an already ended run only needs its local metadata finalized.
 func recoverLease(ctx context.Context, a *agentCtx) (bool, error) {
-	file := filepath.Join(a.KeyDir, "run.json")
-	rec, err := runs.LoadFile(file)
+	rec, err := leaseStore(a).Load()
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -380,44 +366,9 @@ func recoverLease(ctx context.Context, a *agentCtx) (bool, error) {
 	if rec.ID != a.RunID || rec.Actor != a.Actor || rec.Worktree != a.Worktree || rec.ServerURL != a.ServerURL {
 		return false, errors.New("local lease identity mismatch; refusing recovery")
 	}
-	actor, err := leaseActor(a)
+	lc, err := leaseLifecycle(a)
 	if err != nil {
 		return false, err
 	}
-	var remote secrets.Run
-	if err := actor.call(ctx, "GET", "/v1/runs/"+rec.ID, nil, &remote); err != nil {
-		return false, err
-	}
-	if remote.ID != rec.ID || remote.Actor != rec.Actor {
-		return false, errors.New("server lease identity mismatch; refusing recovery")
-	}
-	if remote.Ended != nil {
-		return true, finishLease(a, rec, remote)
-	}
-	if rec.Status == runs.StatusPreparing {
-		return true, endLease(ctx, a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
-			Cause: secrets.FailureStartup, Detail: "its startup was interrupted before the agent received the prompt"}}})
-	}
-	return false, nil
-}
-
-func prepareLease(ctx context.Context, a *agentCtx, rec runs.Record, setup func() error) (err error) {
-	// Keep a durable identity before setup. A later start/end can revoke a
-	// preparing run even if this process dies or rollback cannot reach the server.
-	defer func() {
-		if err != nil {
-			// The rollback runs even when ctx was cancelled; the client's
-			// timeout bounds it.
-			cleanupErr := endLease(context.WithoutCancel(ctx), a, rec, server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
-				Cause: secrets.FailureStartup, Detail: err.Error()}}})
-			if cleanupErr != nil {
-				err = errors.Join(err, fmt.Errorf("rollback run %s (retry run end): %w", rec.ID, cleanupErr))
-			}
-		}
-	}()
-	if err := saveRecord(filepath.Join(a.KeyDir, "run.json"), rec); err != nil {
-		return err
-	}
-
-	return setup()
+	return lc.Recover(ctx, rec)
 }
