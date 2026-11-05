@@ -2430,7 +2430,7 @@ fi`
 			if err != nil || !strings.Contains(out, "ready to merge") {
 				t.Fatalf("flow after clean merge: %v\n%s", err, out)
 			}
-			if !strings.Contains(out, fmt.Sprintf("Merge main into %s for !%d? [y/N]", branch, prn)) {
+			if !strings.Contains(out, fmt.Sprintf("Merge main into %s for !%d? [Y/n]", branch, prn)) {
 				t.Errorf("flow did not ask for confirmation:\n%s", out)
 			}
 			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {

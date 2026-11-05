@@ -574,46 +574,53 @@ func TestFlowRefusesLiveRun(t *testing.T) {
 }
 
 func TestFlowMergeBaseCleanApproved(t *testing.T) {
-	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
-	approve(api)
-	opts := testOptions()
-	opts.Attended = true
-	var out bytes.Buffer
-	runner := RunnerFunc(func(context.Context, RunRequest) error {
-		t.Fatal("an unchanged approval should not cost another run")
-		return nil
-	})
-	// The prompt is asked, and answered, between Pause and its resume.
-	var paused []string
-	pause := func() func() {
-		paused = append(paused, "pause:"+out.String())
-		return func() { paused = append(paused, "resume:"+out.String()) }
-	}
-	result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader("y\n"), Out: &out, Pause: pause}).Run(context.Background(), opts)
-	if err != nil || result.Reason != ReadyToMerge {
-		t.Fatalf("result = %+v, err = %v", result, err)
-	}
-	if len(paused) != 2 || paused[0] != "pause:" || paused[1] != "resume:Merge main into issue/9 for !12? [y/N] " {
-		t.Fatalf("pause = %q, want the prompt inside it", paused)
-	}
-	if len(api.mergeCalls) != 1 || api.mergeCalls[0] != "h1" {
-		t.Fatalf("merge calls = %v, want the offered head", api.mergeCalls)
-	}
-	if got := out.String(); !strings.Contains(got, "Merge main into issue/9 for !12? [y/N]") || !strings.Contains(got, "merged main into issue/9") {
-		t.Fatalf("output = %q", got)
-	}
-	if len(api.comments) != 1 || !strings.Contains(api.comments[0], "carried over") {
-		t.Fatalf("comments = %v, want the approval to carry over", api.comments)
+	// The default is yes: an empty line merges, as y does.
+	for _, input := range []string{"\n", "y\n", "yes"} {
+		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
+			api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
+			approve(api)
+			opts := testOptions()
+			opts.Attended = true
+			var out bytes.Buffer
+			runner := RunnerFunc(func(context.Context, RunRequest) error {
+				t.Fatal("an unchanged approval should not cost another run")
+				return nil
+			})
+			// The prompt is asked, and answered, between Pause and its resume.
+			var paused []string
+			pause := func() func() {
+				paused = append(paused, "pause:"+out.String())
+				return func() { paused = append(paused, "resume:"+out.String()) }
+			}
+			result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader(input), Out: &out, Pause: pause}).Run(context.Background(), opts)
+			if err != nil || result.Reason != ReadyToMerge {
+				t.Fatalf("result = %+v, err = %v", result, err)
+			}
+			if len(paused) != 2 || paused[0] != "pause:" || paused[1] != "resume:Merge main into issue/9 for !12? [Y/n] " {
+				t.Fatalf("pause = %q, want the prompt inside it", paused)
+			}
+			if len(api.mergeCalls) != 1 || api.mergeCalls[0] != "h1" {
+				t.Fatalf("merge calls = %v, want the offered head", api.mergeCalls)
+			}
+			if got := out.String(); !strings.Contains(got, "Merge main into issue/9 for !12? [Y/n]") || !strings.Contains(got, "merged main into issue/9") {
+				t.Fatalf("output = %q", got)
+			}
+			if len(api.comments) != 1 || !strings.Contains(api.comments[0], "carried over") {
+				t.Fatalf("comments = %v, want the approval to carry over", api.comments)
+			}
+		})
 	}
 }
 
-func TestFlowMergeBaseDefaultNoAndUnattended(t *testing.T) {
+func TestFlowMergeBaseNoAndUnattended(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		attended bool
 		input    string
 	}{
-		{name: "default no", attended: true, input: "\n"},
+		{name: "no", attended: true, input: "n\n"},
+		{name: "anything else", attended: true, input: "maybe\n"},
+		{name: "end of input", attended: true, input: ""},
 		{name: "unattended"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -634,7 +641,7 @@ func TestFlowMergeBaseDefaultNoAndUnattended(t *testing.T) {
 			if err != nil || result.Reason != ReadyToMerge || verifies != 1 || len(api.mergeCalls) != 0 {
 				t.Fatalf("result = %+v, err = %v, verifies = %d, merges = %v", result, err, verifies, api.mergeCalls)
 			}
-			if got, want := strings.Contains(out.String(), "[y/N]"), tc.attended; got != want {
+			if got, want := strings.Contains(out.String(), "[Y/n]"), tc.attended; got != want {
 				t.Fatalf("prompt present = %v, want %v; output %q", got, want, out.String())
 			}
 		})
