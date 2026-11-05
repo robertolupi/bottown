@@ -576,7 +576,9 @@ func (s *Supervisor) checkLiveRuns(ctx context.Context, opts Options, pr int64) 
 	now := time.Now().UTC()
 	for _, run := range runs {
 		if run.Active(now) && (run.Issue == opts.Issue || pr > 0 && run.PR == pr) {
-			return fmt.Errorf("run %s is still live for this issue; end it before resuming the flow", run.ID)
+			return fmt.Errorf("run %s is still live for this issue; end it before resuming the flow: "+
+				"`bottown run stop %s` stops it, or, if no launcher in this checkout holds it, "+
+				"`bottown run stop --revoke %s` revokes it", run.ID, run.ID, run.ID)
 		}
 	}
 	return nil

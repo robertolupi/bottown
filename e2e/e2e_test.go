@@ -1758,6 +1758,24 @@ func TestE2E(t *testing.T) {
 		if revoked.Status != "revoked" || revoked.Ended == nil {
 			t.Errorf("expired run after gc: %+v, want ended revoked", revoked)
 		}
+		// A live run with only a server record (#232), whose key has not
+		// expired, is ended by one owner command.
+		var orphan struct{ ID string }
+		ownerRuns("POST", "/v1/runs", map[string]any{"kind": "implement", "actor": "codex", "repo": "demo", "issue": issue.Number}, &orphan)
+		if out, err := a.cmd(demo, "run", "stop", orphan.ID); err == nil {
+			t.Errorf("run stop without a local record succeeded:\n%s", out)
+		}
+		if out := a.mustCmd(demo, "run", "stop", "--revoke", orphan.ID); !strings.Contains(out, "run "+orphan.ID+" revoked") {
+			t.Errorf("run stop --revoke: %s", out)
+		}
+		revoked.Status, revoked.Ended = "", nil
+		ownerRuns("GET", "/v1/runs/"+orphan.ID, nil, &revoked)
+		if revoked.Status != "revoked" || revoked.Ended == nil {
+			t.Errorf("orphaned run after run stop --revoke: %+v, want ended revoked", revoked)
+		}
+		if out, err := a.cmd(demo, "run", "stop", "--revoke", orphan.ID); err == nil || !strings.Contains(out, "already ended") {
+			t.Errorf("second run stop --revoke: %v\n%s", err, out)
+		}
 		if n, _ := endedInDemo(); n < 2 {
 			t.Errorf("ended demo runs before purge: %d", n)
 		}
