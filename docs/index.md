@@ -158,17 +158,20 @@ runs `make check` and `make e2e` on Linux. It needs
 `bottown-linux` (4 CPUs, 8G memory, 30G disk; `BOTTOWN_LINUX_*` override
 the name, size, Ubuntu image and Node major), with Docker installed by
 cloud-init, the Go that `go.mod` names and the newest Node of the host's
-major (26 without one), since `web/` declares none. Its user gets a global git identity, as a developer's
-machine has.
+major (26 without one), since `web/` declares none. Its user gets a global
+git identity, as a developer's machine has.
 The VM is a real Linux host, so the `e2e-*` containers are reachable at
 `127.0.0.1` as on the Mac, which a container sharing the host's Docker
 socket would not give. The VM is created on first use and kept for re-runs;
 `--fresh` (`make e2e-linux ARGS=--fresh`) recreates it and `--delete`
-removes it afterwards, each waiting for other runs in it to finish. It
-tests HEAD, cloned into the VM from a git bundle so the commit and `git
-describe` match, not the working tree; each checkout has its own directory
-in the VM, so worktrees can use it at once, and two runs from one checkout
-take turns. The output goes to `<gitdir>/bottown/linux-e2e.log`
+removes it afterwards. It tests HEAD, not the working tree: HEAD and the
+tags, as a git bundle, cloned into a directory of the checkout's own in
+the VM, so the commit and `git describe` match. Runs take turns, whatever
+checkout they come from: each holds a lock on the host
+(`/tmp/bottown-linux-e2e-<vm>.lock`, with `flock` or macOS's `lockf`) from
+before it touches the VM until it exits, so none deletes the VM or changes
+its toolchains under another; each puts its own Go and Node first in its
+`PATH`. The output, setup included, goes to `<gitdir>/bottown/linux-e2e.log`
 (`BOTTOWN_LINUX_LOG`), and the script exits with the checks' status. It
 covers linux/arm64 on Apple Silicon, where Multipass runs only arm64
 guests; not amd64, and not the real agent harnesses, which e2e replaces

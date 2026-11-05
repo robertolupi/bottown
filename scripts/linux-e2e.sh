@@ -11,15 +11,14 @@
 # containers that `make e2e` starts are reachable at 127.0.0.1 as on the Mac.
 # It is created on first use and kept running for fast re-runs.
 #
-# What runs is HEAD, not the working tree: a git bundle of it is cloned into
-# a directory of its own in the VM, so the build sees the same commit (and
-# `git describe`) as here, and web/node_modules is Linux's own. Uncommitted
-# changes are left out, with a warning.
+# What runs is HEAD, not the working tree: a git bundle of it and the tags
+# is cloned into the checkout's own directory in the VM, so the build sees
+# the same commit (and `git describe`) as here, and web/node_modules is
+# Linux's own. Uncommitted changes are left out, with a warning.
 #
-# Several checkouts may use the VM at once: each gets its own directory in
-# it, named after the checkout's path, and e2e allocates its instances'
-# ports per run as it does here. Two runs from the same checkout take turns.
-# --fresh and --delete wait for every other run in the VM to finish.
+# Runs take turns: each holds a lock on this host, per VM, from before it
+# touches the VM until it exits, so no run deletes the VM, or changes its
+# toolchains, under another.
 #
 # Environment:
 #   BOTTOWN_LINUX_VM      VM name (bottown-linux)
@@ -68,6 +67,22 @@ die() {
 	exit 1
 }
 
+# Re-run this script holding the VM's host lock, a kernel lock that is
+# released however the holder exits: flock(1) on Linux, lockf(1) on macOS.
+lock=/tmp/bottown-linux-e2e-$vm.lock
+if [ "${BOTTOWN_LINUX_E2E_LOCK:-}" != "$lock" ]; then
+	BOTTOWN_LINUX_E2E_LOCK=$lock
+	export BOTTOWN_LINUX_E2E_LOCK
+	if command -v flock >/dev/null 2>&1; then
+		flock -n "$lock" true || say "waiting for another run using $vm"
+		exec flock "$lock" sh "$0" "$@"
+	elif command -v lockf >/dev/null 2>&1; then
+		lockf -k -s -t 0 "$lock" true || say "waiting for another run using $vm"
+		exec lockf -k "$lock" sh "$0" "$@"
+	fi
+	die "needs flock(1) or lockf(1) to take turns with other runs"
+fi
+
 command -v multipass >/dev/null 2>&1 ||
 	die "needs Multipass (https://multipass.run; brew install --cask multipass)"
 top=$(git rev-parse --show-toplevel) || die "not inside a git checkout"
@@ -92,34 +107,9 @@ work=/home/ubuntu/work/$key
 vmexec() { multipass exec "$vm" -- "$@"; }
 exists() { multipass info "$vm" >/dev/null 2>&1; }
 
-# Runs in the VM take a shared lock on this file for as long as they test;
-# deleting the VM takes it exclusively, so it waits for them.
-vmlock=/var/lock/bottown-linux-e2e
-
-# hostlock runs its arguments holding a lock on this host, so two runs do not
-# launch or delete the VM at once. It is a directory, which mkdir creates
-# atomically, holding the owner's pid; a lock whose owner is gone is taken over.
-hostlock() {
-	lock=/tmp/bottown-linux-e2e-$vm.lock
-	while ! mkdir "$lock" 2>/dev/null; do
-		pid=$(cat "$lock/pid" 2>/dev/null || true)
-		if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-			rm -rf "$lock"
-			continue
-		fi
-		sleep 2
-	done
-	echo $$ >"$lock/pid"
-	rc=0
-	"$@" || rc=$?
-	rm -rf "$lock"
-	return $rc
-}
-
 delete_vm() {
 	exists || return 0
-	say "deleting $vm (waiting for other runs in it to finish)"
-	vmexec sudo flock -x "$vmlock" true 2>/dev/null || true
+	say "deleting $vm"
 	multipass delete --purge "$vm"
 }
 
@@ -128,7 +118,8 @@ delete_vm() {
 # spin on the host without returning.
 wait_init() {
 	vmexec sh -c 'n=0; until [ -f /var/lib/cloud/instance/boot-finished ]; do
-		n=$((n + 1)); [ $n -lt 450 ] || { echo "cloud-init did not finish" >&2; exit 1; }; sleep 2; done'
+		n=$((n + 1)); [ $n -lt 450 ] || { echo "cloud-init did not finish" >&2; exit 1; }; sleep 2; done' ||
+		die "cloud-init did not finish in $vm; try --fresh"
 	vmexec sh -c 'command -v docker >/dev/null' || die "cloud-init did not install Docker in $vm; try --fresh"
 }
 
@@ -165,55 +156,54 @@ EOF
 	say "$vm is up"
 }
 
-[ $fresh = 1 ] && hostlock delete_vm
-hostlock launch_vm
-
-say "checking Go $gover and Node $node in $vm"
-# Install the Go that go.mod names and the newest Node of the wanted major,
-# each once per version, under /opt; /usr/local/bin links to the current ones.
-vmexec sudo flock /var/lock/bottown-linux-e2e-tools sh -eu -c '
+# tools installs the Go that go.mod names and the newest Node of the wanted
+# major, each once per version under /opt, and prints the PATH entries for
+# them: each run uses its own, never links shared with another.
+tools() {
+	say "checking Go $gover and Node $node in $vm" >&2
+	vmexec sudo sh -eu -c '
 gover=$1 node=$2
+say() { echo "linux-e2e $(date +%H:%M:%S): $*" >&2; }
 case $(uname -m) in aarch64) arch=arm64 narch=arm64 ;; x86_64) arch=amd64 narch=x64 ;; *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;; esac
 if [ ! -x /opt/go-$gover/bin/go ]; then
-	echo "linux-e2e $(date +%H:%M:%S): installing Go $gover"
+	say "installing Go $gover"
 	rm -rf /opt/go-$gover.tmp && mkdir -p /opt/go-$gover.tmp
 	curl -fsSL https://go.dev/dl/go$gover.linux-$arch.tar.gz | tar xz -C /opt/go-$gover.tmp --strip-components=1
 	mv /opt/go-$gover.tmp /opt/go-$gover
 fi
-ln -sf /opt/go-$gover/bin/go /opt/go-$gover/bin/gofmt /usr/local/bin/
 base=https://nodejs.org/dist/latest-v$node.x
 file=$(curl -fsSL $base/SHASUMS256.txt | awk -v a="linux-$narch.tar.xz" "index(\$2, a) { print \$2 }")
 [ -n "$file" ] || { echo "no Node $node for linux-$narch" >&2; exit 1; }
 dir=/opt/${file%.tar.xz}
 if [ ! -x $dir/bin/node ]; then
-	echo "linux-e2e $(date +%H:%M:%S): installing $file"
+	say "installing $file"
 	rm -rf $dir.tmp && mkdir -p $dir.tmp
 	curl -fsSL $base/$file | tar xJ -C $dir.tmp --strip-components=1
 	mv $dir.tmp $dir
 fi
-ln -sf $dir/bin/node $dir/bin/npm $dir/bin/npx /usr/local/bin/
-touch "$3" && chmod 644 "$3"
-' sh "$gover" "$node" "$vmlock"
+echo "/opt/go-$gover/bin:$dir/bin"
+' sh "$gover" "$node"
+}
 
-# Clone HEAD into the checkout's directory: a fresh clone each time, keeping
-# only web/node_modules (npm ci refreshes it when the lock file changes).
-say "copying $head to $vm:$work"
-vmexec mkdir -p "$work"
-bundle=$work.$$.bundle
-git bundle create - HEAD 2>/dev/null | vmexec sh -c "cat >'$bundle'"
-
-# The test itself: holds the VM's shared lock and the checkout's own lock,
-# and runs as ubuntu (sudo -u gives it the docker group).
-st=$(mktemp "${TMPDIR:-/tmp}/linux-e2e-status.XXXXXX")
-echo 1 >"$st"
-{ rc=0; vmexec sudo -u ubuntu -H sh -c '
-set -eu
+# test_head clones HEAD into the checkout's directory, a fresh clone each time
+# keeping only web/node_modules (npm ci refreshes it when the lock file
+# changes), and runs the targets there as ubuntu (sudo -u gives it the docker
+# group), with the toolchains in path first. run calls it on the left of
+# ||, where errexit is off, so each step here checks its own status.
+test_head() {
+	path=$1
+	say "copying $head to $vm:$work"
+	vmexec mkdir -p "$work" || return
+	bundle=$(mktemp "${TMPDIR:-/tmp}/linux-e2e-bundle.XXXXXX")
+	git bundle create "$bundle" HEAD --tags 2>/dev/null &&
+		vmexec sh -c "cat >'$work.bundle'" <"$bundle" || {
+		rm -f "$bundle"
+		return 1
+	}
+	rm -f "$bundle"
+	vmexec sudo -u ubuntu -H env PATH="$path:/usr/local/bin:/usr/bin:/bin" sh -eu -c '
 say() { echo "linux-e2e $(date +%H:%M:%S): $*"; }
-work=$1 head=$2 targets=$3 vmlock=$4 bundle=$5
-exec 8>"$work.lock"
-flock -n 8 || { say "waiting for another run from this checkout"; flock 8; }
-exec 9<"$vmlock"
-flock -s 9
+work=$1 head=$2 targets=$3
 # A global git identity, as a developer machine has: bottown commits as the
 # user (clone --agents-md), and e2e expects that to work.
 git config --global user.name >/dev/null || git config --global user.name "bottown linux-e2e"
@@ -222,28 +212,51 @@ say "cloning into $work/src"
 cd "$work"
 if [ -d src/web/node_modules ]; then mv src/web/node_modules node_modules.keep; fi
 rm -rf src
-git clone -q "$bundle" src
-rm -f "$bundle"
+git clone -q "$work.bundle" src
+rm -f "$work.bundle"
 git -C src checkout -q --detach "$head"
 if [ -d node_modules.keep ]; then mv node_modules.keep src/web/node_modules; fi
 cd src
-say "$(uname -sm), $(go version), node $(node --version), $(docker --version)"
+say "$(uname -sm), $(go version), node $(node --version), $(docker --version), $(git describe --always --abbrev=12)"
 for t in $targets; do
 	say "make $t"
 	t0=$(date +%s)
 	make "$t"
 	say "make $t passed in $(($(date +%s) - t0))s"
 done
-' sh "$work" "$head" "$targets" "$vmlock" "$bundle" || rc=$?
-	echo $rc >"$st"; } 2>&1 | tee "$log"
+' sh "$work" "$head" "$targets"
+}
+
+# run does it all, failing at the first step that fails. --delete removes
+# the VM even after a failed test.
+run() {
+	[ $fresh = 0 ] || delete_vm
+	launch_vm
+	path=$(tools)
+	rc=0
+	test_head "$path" || rc=$?
+	[ $delete = 0 ] || delete_vm
+	return $rc
+}
+
+# Everything run prints, setup included, goes to the log too. run is called
+# in a subshell of its own with errexit on, so that any step's failure stops
+# it, and its status is kept in a file, since a pipeline's is tee's.
+st=$(mktemp "${TMPDIR:-/tmp}/linux-e2e-status.XXXXXX")
+{
+	set +e
+	(
+		set -e
+		run
+	)
+	echo $? >"$st"
+} 2>&1 | tee "$log"
 status=$(cat "$st")
 rm -f "$st"
 
-[ $delete = 1 ] && hostlock delete_vm
-
-if [ $status = 0 ]; then
+if [ "$status" = 0 ]; then
 	say "passed at $head (log: $log)"
 else
 	say "FAILED at $head (log: $log)" >&2
 fi
-exit $status
+exit "$status"
