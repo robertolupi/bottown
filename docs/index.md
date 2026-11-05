@@ -152,6 +152,29 @@ a branch cannot change what its own checks are.
   ([web-ui.md §3.2](design/web-ui.md#32-the-loop)). So implementers need
   not run `--e2e` before opening a PR.
 
+bottown is developed on macOS; `make e2e-linux` (`scripts/linux-e2e.sh`)
+runs `make check` and `make e2e` on Linux. It needs
+[Multipass](https://multipass.run) and runs them in an Ubuntu VM,
+`bottown-linux` (4 CPUs, 8G memory, 30G disk; `BOTTOWN_LINUX_*` override
+the name, size, Ubuntu image and Node major), with Docker installed by
+cloud-init, the Go that `go.mod` names and the newest Node of the host's
+major (26 without one), since `web/` declares none. Its user gets a global git identity, as a developer's
+machine has.
+The VM is a real Linux host, so the `e2e-*` containers are reachable at
+`127.0.0.1` as on the Mac, which a container sharing the host's Docker
+socket would not give. The VM is created on first use and kept for re-runs;
+`--fresh` (`make e2e-linux ARGS=--fresh`) recreates it and `--delete`
+removes it afterwards, each waiting for other runs in it to finish. It
+tests HEAD, cloned into the VM from a git bundle so the commit and `git
+describe` match, not the working tree; each checkout has its own directory
+in the VM, so worktrees can use it at once, and two runs from one checkout
+take turns. The output goes to `<gitdir>/bottown/linux-e2e.log`
+(`BOTTOWN_LINUX_LOG`), and the script exits with the checks' status. It
+covers linux/arm64 on Apple Silicon, where Multipass runs only arm64
+guests; not amd64, and not the real agent harnesses, which e2e replaces
+with `BOTTOWN_HARNESS_CMD` scripts. It is not one of the repository's
+checks and runs do not need it: the owner runs it before publishing `main`.
+
 A retry on the same issue can reuse `issue/<n>` even when an earlier run
 kept its worktree. Before creating the server run, the launcher detaches
 that old worktree, preserving its commits and working files for inspection.

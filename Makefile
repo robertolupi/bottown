@@ -1,4 +1,4 @@
-.PHONY: build install test e2e vet check web
+.PHONY: build install test e2e e2e-linux vet check web
 
 # The web UI, built by vite into internal/webui/dist/ui, which is not
 # tracked. Needs Node and npm. make build does not depend on it: without
@@ -68,3 +68,10 @@ check: vet test web/node_modules
 # Needs Docker. Uses throwaway e2e-* instances; never touches prod or dev.
 e2e:
 	go test -tags e2e -count=1 -timeout 30m -v ./e2e/
+
+# make check and make e2e on Linux, in a Multipass VM (bottown-linux) that
+# is created on first use and kept for re-runs; tests HEAD, not the working
+# tree. ARGS=--fresh recreates the VM, ARGS=--delete removes it afterwards.
+# Optional: not part of check or e2e. See scripts/linux-e2e.sh.
+e2e-linux:
+	scripts/linux-e2e.sh $(ARGS)
