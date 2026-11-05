@@ -10,7 +10,13 @@ import (
 // REST front end for the forge operations in forge.go, used by the bottown
 // CLI that agents run in their worktrees:
 //
-//	GET  /v1/forge/issue?repo=&number=
+//	GET  /v1/forge/issue?repo=&number=&comments=0   (comments=0: the issue alone)
+//	GET  /v1/forge/issues?repo=&state=&body=1
+//	GET  /v1/forge/issue/dependencies?repo=&number=
+//	GET  /v1/forge/prs?repo=&state=&checks=1
+//	GET  /v1/forge/milestones?repo=&state=
+//	GET  /v1/forge/branch?repo=&name=
+//	GET  /v1/forge/file?repo=&ref=&path=   (the file's bytes, at a pinned ref)
 //	GET  /v1/forge/issue/attachment?repo=&number=&id=   (the file's bytes)
 //	POST /v1/forge/issue    {repo, title, body}
 //	GET  /v1/forge/pr?repo=&number=&diff=1
@@ -27,8 +33,33 @@ import (
 
 func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		out, err := s.opIssue(r.Context(), Who(r.Context()), targetFromQuery(r))
+		out, err := s.readIssue(r.Context(), Who(r.Context()), targetFromQuery(r), r.URL.Query().Get("comments") != "0")
 		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/issue/dependencies", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opIssueDependencies(r.Context(), Who(r.Context()), targetFromQuery(r))
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/milestones", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opMilestoneList(r.Context(), Who(r.Context()), MilestoneListIn{
+			Repo: r.URL.Query().Get("repo"), State: r.URL.Query().Get("state"),
+		})
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/branch", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opBranch(r.Context(), Who(r.Context()), r.URL.Query().Get("repo"), r.URL.Query().Get("name"))
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/file", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		b, err := s.repoFile(r.Context(), Who(r.Context()), q.Get("repo"), q.Get("ref"), q.Get("path"))
+		if err != nil {
+			writeError(w, errStatus(err), err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(b)
 	})))
 	mux.Handle("GET /v1/forge/issue/attachment", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
@@ -56,8 +87,9 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	})))
 	mux.Handle("GET /v1/forge/issues", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opIssueList(r.Context(), Who(r.Context()), IssueListIn{
-			Repo:  r.URL.Query().Get("repo"),
-			State: r.URL.Query().Get("state"),
+			Repo:   r.URL.Query().Get("repo"),
+			State:  r.URL.Query().Get("state"),
+			Bodies: r.URL.Query().Get("body") == "1",
 		})
 		writeOp(w, out, err)
 	})))
@@ -103,8 +135,9 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	})))
 	mux.Handle("GET /v1/forge/prs", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opPRList(r.Context(), Who(r.Context()), PRListIn{
-			Repo:  r.URL.Query().Get("repo"),
-			State: r.URL.Query().Get("state"),
+			Repo:   r.URL.Query().Get("repo"),
+			State:  r.URL.Query().Get("state"),
+			Checks: r.URL.Query().Get("checks") == "1",
 		})
 		writeOp(w, out, err)
 	})))

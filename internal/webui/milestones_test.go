@@ -7,14 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/secrets"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 // milestoneFixture is the forge and server state GET /api/milestones reads.
@@ -36,55 +35,24 @@ func (f *milestoneFixture) serve(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byNum := map[int64]*sdk.Issue{}
-	for _, is := range f.issues {
-		byNum[is.Index] = is
-	}
-	num := func(parts []string, i int) int64 {
-		n, _ := strconv.ParseInt(parts[len(parts)+i], 10, 64)
-		return n
+	branches := map[string]serverapi.BranchOut{}
+	for _, b := range f.branches {
+		branches[b] = serverapi.BranchOut{Name: b, Commit: "abc"}
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := r.URL.Path
-		parts := strings.Split(p, "/")
-		var out any
-		switch {
-		case p == "/v1/actors":
-			out = f.actors
-		case p == "/v1/runs":
-			out = f.runs
-		case strings.Contains(p, "/branches/"):
-			name := p[strings.Index(p, "/branches/")+len("/branches/"):]
-			if !slices.Contains(f.branches, name) {
-				http.NotFound(w, r)
-				return
-			}
-			out = sdk.Branch{Name: name}
-		case strings.HasSuffix(p, "/dependencies"):
-			list := []*sdk.Issue{}
-			for _, d := range f.deps[num(parts, -2)] {
-				list = append(list, byNum[d])
-			}
-			out = paginate(r, list)
-		case strings.HasSuffix(p, "/comments"):
-			out = f.comments[num(parts, -2)]
-		case strings.HasSuffix(p, "/reviews"):
-			out = paginate(r, f.reviews[num(parts, -2)])
-		case strings.HasSuffix(p, "/issues"):
-			out = paginate(r, f.issues)
-		case strings.HasSuffix(p, "/milestones"):
-			out = paginate(r, f.milestones)
-		case p == "/v1/forge/prs":
-			out = fakePRList{
-				prs: f.prs, reviews: f.reviews,
-				families: familiesOf(f.actors), owner: "rlupi", runs: f.runs, repo: r.URL.Query().Get("repo"),
-			}.items(r)
-		default:
-			http.NotFound(w, r)
+		if (fakeAPI{
+			prs: f.prs, reviews: f.reviews, issues: f.issues, comments: f.comments, deps: f.deps,
+			milestones: f.milestones, branches: branches, runs: f.runs,
+			families: familiesOf(f.actors), owner: "rlupi",
+		}).serve(w, r) {
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(out)
+		if r.URL.Path == "/v1/actors" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.actors)
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	srv.Listener = ln
 	srv.Start()

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -223,9 +222,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	}
 
 	// 2. Fetch live runs from server
-	var serverRuns []secrets.Run
-	runsPath := "/v1/runs?state=live&repo=" + url.QueryEscape(repo)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns); err != nil {
+	serverRuns, err := s.serverRuns(ctx, "live", false)
+	if err != nil {
 		return nil, fmt.Errorf("fetch live runs: %w", err)
 	}
 	if len(serverRuns) == 0 {
@@ -234,7 +232,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	denials := s.fetchDenials(ctx)
 
 	// 3. Fetch open PRs only if needed
-	prs, _ := s.pullRequests(ctx, "open")
+	prs, _ := s.pullRequests(ctx, "open", false)
 
 	// PR by issue index and PR by PR index
 	prByIssue := make(map[int64]*serverapi.PRItem)
@@ -252,9 +250,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		}
 	}
 
-	// Fetch issues and reviews ONLY for issues/PRs matching active runs
-	issuesByIndex := make(map[int64]*sdk.Issue)
-	prReviews := make(map[int64][]*sdk.PullReview)
+	// Fetch issues ONLY for those matching live runs
+	issuesByIndex := make(map[int64]*serverapi.IssueOut)
 	for _, sr := range serverRuns {
 		issueNum := sr.Issue
 		if issueNum <= 0 {
@@ -268,20 +265,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			}
 		}
 		if issueNum > 0 && issuesByIndex[issueNum] == nil {
-			var iss sdk.Issue
-			issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
-			if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &iss); err == nil && iss.Index > 0 {
-				issuesByIndex[issueNum] = &iss
-			}
-		}
-		if sr.Kind != "implement" && sr.Kind != "verify" {
-			continue
-		}
-		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Number] == nil {
-			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Number)
-			revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
-			if err == nil {
-				prReviews[pr.Number] = revs
+			if iss, err := s.issue(ctx, issueNum, false); err == nil && iss.Number > 0 {
+				issuesByIndex[issueNum] = iss
 			}
 		}
 	}
@@ -353,13 +338,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 				pr := prByIssue[issueNum]
 				round := 1
 				if pr != nil {
-					for _, r := range prReviews[pr.Number] {
-						// Matching internal/flow countRounds: count all requested changes
-						// including dismissed/stale ones
-						if r.State == sdk.ReviewStateRequestChanges {
-							round++
-						}
-					}
+					// The server counts the rounds as the flow does.
+					round += pr.ChangesRequested
 				}
 				maxRounds := flowRec.Rounds
 				if maxRounds <= 0 {
@@ -457,8 +437,6 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 		return []ActiveFlowInfo{}
 	}
 
-	org, repo := s.orgAndRepo()
-
 	liveByIssue := make(map[int64]LiveRunInfo)
 	for _, r := range liveRuns {
 		if r.Flow != nil {
@@ -503,18 +481,10 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 
 		// When waiting between runs, compute current round from PR reviews
 		round := 1
-		prs, _ := s.pullRequests(ctx, "open")
+		prs, _ := s.pullRequests(ctx, "open", false)
 		for _, pr := range prs {
 			if pr.HeadBranch == fmt.Sprintf("issue/%d", issueNum) {
-				revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Number)
-				revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
-				if err == nil {
-					for _, r := range revs {
-						if r.State == sdk.ReviewStateRequestChanges {
-							round++
-						}
-					}
-				}
+				round += pr.ChangesRequested
 				break
 			}
 		}
@@ -606,17 +576,17 @@ func isPROpen(pr *serverapi.PRItem) bool {
 // pre-PR implement runs group under the issue and join the PR thread once the PR is created;
 // discuss runs remain standalone entries.
 func (s *Server) resolveRunsMeta(
-	allRuns []secrets.Run,
-	issues []*sdk.Issue,
+	allRuns []serverapi.RunItem,
+	issues []*serverapi.IssueItem,
 	prs []*serverapi.PRItem,
 ) (map[string]resolvedRunMeta, map[int64][]int64, map[int64]time.Time) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
-	issuesByIndex := make(map[int64]*sdk.Issue, len(issues))
+	issuesByIndex := make(map[int64]*serverapi.IssueItem, len(issues))
 	for _, iss := range issues {
-		if iss != nil && iss.Index > 0 {
-			issuesByIndex[iss.Index] = iss
+		if iss != nil && iss.Number > 0 {
+			issuesByIndex[iss.Number] = iss
 		}
 	}
 
@@ -732,7 +702,6 @@ func (s *Server) resolveRunsMeta(
 	meta := make(map[string]resolvedRunMeta, len(allRuns))
 	activeThreads := make(map[string]bool)
 	seenIssues := make(map[int64]bool)
-	now := time.Now().UTC()
 
 	for _, sr := range allRuns {
 		var issueNum, prNum int64
@@ -817,7 +786,7 @@ func (s *Server) resolveRunsMeta(
 			ThreadKey:  threadKey,
 		}
 
-		if (sr.Kind == "implement" || sr.Kind == "verify") && sr.Ended == nil && (sr.Expires.IsZero() || sr.Active(now)) {
+		if (sr.Kind == "implement" || sr.Kind == "verify") && isActive(sr) {
 			activeThreads[threadKey] = true
 		}
 	}
@@ -853,14 +822,13 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 
 	actorMap, _ := s.fetchActorMap(ctx)
 
-	var allRuns []secrets.Run
-	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
-	if err := s.callServer(ctx, http.MethodGet, runsPath, nil, &allRuns); err != nil {
+	allRuns, err := s.serverRuns(ctx, "", true)
+	if err != nil {
 		return nil, fmt.Errorf("fetch history runs: %w", err)
 	}
 	denials := s.fetchDenials(ctx)
 
-	prs, pullsErr := s.pullRequests(ctx, "all")
+	prs, pullsErr := s.pullRequests(ctx, "all", false)
 	prsByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	for _, pr := range prs {
 		if pr != nil && pr.Number > 0 {
@@ -868,8 +836,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		}
 	}
 
-	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=all&type=issues", org, repo)
-	issues, _ := listAll[*sdk.Issue](ctx, s, issuesPath)
+	issues, _ := s.issues(ctx, "all", false)
 
 	metaMap, _, _ := s.resolveRunsMeta(allRuns, issues, prs)
 
@@ -1034,12 +1001,11 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 // ComputeIssueDetails fetches the text for an issue reference popup.
 func (s *Server) ComputeIssueDetails(ctx context.Context, issueNum int64) (*IssueDetails, error) {
 	org, repo := s.orgAndRepo()
-	issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
-	var issue sdk.Issue
-	if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &issue); err != nil {
+	issue, err := s.issue(ctx, issueNum, false)
+	if err != nil {
 		return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, err)
 	}
-	issueURL := issue.HTMLURL
+	issueURL := issue.URL
 	if issueURL == "" {
 		issueURL = fmt.Sprintf("%s/%s/%s/issues/%d", s.cfg.Instance.ForgejoURL(), org, repo, issueNum)
 	}
@@ -1047,7 +1013,7 @@ func (s *Server) ComputeIssueDetails(ctx context.Context, issueNum int64) (*Issu
 		Issue: issueNum,
 		Title: issue.Title,
 		Body:  issue.Body,
-		State: string(issue.State),
+		State: issue.State,
 		URL:   issueURL,
 	}, nil
 }
@@ -1066,26 +1032,23 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
 	// 1. Fetch issue when issueNum > 0
-	var issue *sdk.Issue
+	var issue *serverapi.IssueOut
 	if issueNum > 0 {
-		issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
-		var fetched sdk.Issue
-		if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &fetched); err != nil {
+		fetched, err := s.issue(ctx, issueNum, true)
+		if err != nil {
 			return nil, fmt.Errorf("fetch issue #%d: %w", issueNum, err)
 		}
-		issue = &fetched
+		issue = fetched
 	}
 
 	// 2. Fetch all PRs and runs to resolve thread membership accurately
-	prs, _ := s.pullRequests(ctx, "all")
+	prs, _ := s.pullRequests(ctx, "all", false)
 
-	var serverRuns []secrets.Run
-	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
-	_ = s.callServer(ctx, http.MethodGet, runsPath, nil, &serverRuns)
+	serverRuns, _ := s.serverRuns(ctx, "", true)
 
-	var issuesList []*sdk.Issue
+	var issuesList []*serverapi.IssueItem
 	if issue != nil {
-		issuesList = []*sdk.Issue{issue}
+		issuesList = []*serverapi.IssueItem{{Number: issue.Number, Title: issue.Title, Milestone: issue.Milestone}}
 	}
 	metaMap, prsForIssue, prCutoffs := s.resolveRunsMeta(serverRuns, issuesList, prs)
 
@@ -1110,10 +1073,8 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 			issueNum = parseIssueRef(pr.HeadBranch)
 		}
 		if issueNum > 0 && issue == nil {
-			issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
-			var fetched sdk.Issue
-			if err := s.callServer(ctx, http.MethodGet, issuePath, nil, &fetched); err == nil {
-				issue = &fetched
+			if fetched, err := s.issue(ctx, issueNum, true); err == nil {
+				issue = fetched
 			}
 		}
 	}
@@ -1137,7 +1098,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	}
 	if issue != nil {
 		timeline.Title = issue.Title
-		timeline.State = string(issue.State)
+		timeline.State = issue.State
 		timeline.URL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, issueNum)
 		if !issue.Created.IsZero() {
 			timeline.Events = append(timeline.Events, TimelineEvent{
@@ -1145,7 +1106,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 				Time:   issue.Created,
 				Title:  fmt.Sprintf("Issue #%d opened", issueNum),
 				Detail: issue.Title,
-				Actor:  userLogin(issue.Poster),
+				Actor:  issue.Author,
 				URL:    timeline.URL,
 			})
 		}
@@ -1172,17 +1133,15 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 			}
 
 			// Reviews for this specific PR
-			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, prIndex)
-			revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
-			if err == nil {
-				for _, r := range revs {
+			if full, err := s.pullRequest(ctx, prIndex); err == nil {
+				for _, r := range full.Reviews {
 					timeline.Events = append(timeline.Events, TimelineEvent{
 						Type:   "review",
 						Time:   r.Submitted,
 						Title:  fmt.Sprintf("Review on !%d: %s", prIndex, r.State),
 						Detail: r.Body,
-						Actor:  userLogin(r.Reviewer),
-						Status: string(r.State),
+						Actor:  r.Reviewer,
+						Status: r.State,
 						URL:    prURL,
 					})
 				}
@@ -1260,11 +1219,9 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 			afterTime = prCutoffs[cands[len(cands)-1]]
 		}
 
-		commentsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", org, repo, issueNum)
-		var comments []*sdk.Comment
-		if err := s.callServer(ctx, http.MethodGet, commentsPath, nil, &comments); err == nil {
-			for _, c := range comments {
-				if c == nil || c.Created.IsZero() {
+		if issue != nil {
+			for _, c := range issue.Comments {
+				if c.Created.IsZero() {
 					continue
 				}
 				if strings.Contains(c.Body, "**bottown run ") && strings.Contains(c.Body, "· discuss ·") {
@@ -1279,9 +1236,9 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 				timeline.Events = append(timeline.Events, TimelineEvent{
 					Type:   "comment",
 					Time:   c.Created,
-					Title:  fmt.Sprintf("Comment by %s", userLogin(c.Poster)),
+					Title:  fmt.Sprintf("Comment by %s", c.Author),
 					Detail: c.Body,
-					Actor:  userLogin(c.Poster),
+					Actor:  c.Author,
 					URL:    timeline.URL,
 				})
 			}

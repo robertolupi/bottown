@@ -259,14 +259,17 @@ func newRunID() string {
 	return "r-" + hex.EncodeToString(b)
 }
 
-// listRuns lists runs, newest first. Query filters: repo (name within the
-// org), state (live: not ended; ended), since (RFC 3339: created at or
+// listRuns lists runs, newest first, each with its state. Query filters:
+// repo (name within the org), state (live: not ended, active or expired;
+// active, expired or ended: that state), since (RFC 3339: created at or
 // after), and history=1 to include the digests of purged runs.
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	repo, state := q.Get("repo"), q.Get("state")
-	if state != "" && state != "live" && state != "ended" {
-		writeError(w, http.StatusBadRequest, "state must be live or ended")
+	switch state {
+	case "", "live", secrets.RunActive, secrets.RunExpired, secrets.RunEnded:
+	default:
+		writeError(w, http.StatusBadRequest, "state must be live, active, expired or ended")
 		return
 	}
 	var since time.Time
@@ -284,33 +287,42 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	now := time.Now().UTC()
 	match := func(run secrets.Run) bool {
 		switch {
 		case repo != "" && run.Repo != repo,
 			state == "live" && run.Ended != nil,
-			state == "ended" && run.Ended == nil,
+			state != "" && state != "live" && run.State(now) != state,
 			run.Created.Before(since):
 			return false
 		}
 		return true
 	}
-	runs := make([]secrets.Run, 0, len(st.Runs))
+	runs := make([]RunItem, 0, len(st.Runs))
 	for _, run := range st.Runs {
 		if match(run) {
-			runs = append(runs, run)
+			runs = append(runs, RunItem{Run: run, State: run.State(now)})
 		}
 	}
 	if history {
 		for _, run := range st.History {
 			if match(run) {
-				runs = append(runs, run)
+				runs = append(runs, RunItem{Run: run, State: run.State(now)})
 			}
 		}
 	}
-	slices.SortFunc(runs, func(a, b secrets.Run) int {
+	slices.SortFunc(runs, func(a, b RunItem) int {
 		return cmp.Or(b.Created.Compare(a.Created), strings.Compare(a.ID, b.ID))
 	})
 	writeJSON(w, http.StatusOK, runs)
+}
+
+// RunItem is a run in GET /v1/runs, with its State decided by the server
+// (secrets.Run.State), so its clients do not each decide what counts as
+// live.
+type RunItem struct {
+	secrets.Run
+	State string `json:"state"`
 }
 
 // PurgeRequest asks to delete a repository's ended runs (POST

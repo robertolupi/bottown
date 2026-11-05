@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -48,30 +47,23 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 		fix.mu.Lock()
 		defer fix.mu.Unlock()
 
+		families := map[string]string{}
+		for _, a := range fix.actors {
+			families[a.Name] = a.Family
+		}
+		if (fakeAPI{
+			prs: fix.prs, reviews: fix.reviews, reviewsErr: fix.reviewsErr, pullsErr: fix.pullsErr,
+			issues: fix.issues, comments: fix.comments, runs: fix.runs,
+			families: families, owner: "rlupi",
+		}).serve(w, r) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		p := r.URL.Path
 
 		switch {
 		case p == "/v1/actors":
 			_ = json.NewEncoder(w).Encode(fix.actors)
-		case p == "/v1/runs":
-			state := r.URL.Query().Get("state")
-			history := r.URL.Query().Get("history")
-			var filtered []secrets.Run
-			now := time.Now().UTC()
-			for _, run := range fix.runs {
-				if state == "live" && (run.Ended != nil || !run.Active(now)) {
-					continue
-				}
-				if state == "ended" && run.Ended == nil {
-					continue
-				}
-				if history != "1" && run.Purged {
-					continue
-				}
-				filtered = append(filtered, run)
-			}
-			_ = json.NewEncoder(w).Encode(filtered)
 		case p == "/v1/audit":
 			// Refusals are selected by run: a repo filter would drop a
 			// run's out-of-repo and repo-less ones.
@@ -89,61 +81,6 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 			for _, run := range fix.runs {
 				if run.ID == id {
 					_ = json.NewEncoder(w).Encode(run)
-					return
-				}
-			}
-			http.NotFound(w, r)
-		case p == "/v1/forge/prs":
-			if fix.pullsErr > 0 {
-				http.Error(w, "pulls error", fix.pullsErr)
-				return
-			}
-			families := map[string]string{}
-			for _, a := range fix.actors {
-				families[a.Name] = a.Family
-			}
-			_ = json.NewEncoder(w).Encode(fakePRList{
-				prs: fix.prs, reviews: fix.reviews, reviewsErr: fix.reviewsErr,
-				families: families, owner: "rlupi", runs: fix.runs, repo: r.URL.Query().Get("repo"),
-			}.items(r))
-		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)
-			if fix.reviewsErr != nil && fix.reviewsErr[num] > 0 {
-				http.Error(w, "reviews error", fix.reviewsErr[num])
-				return
-			}
-			revs := fix.reviews[num]
-			if revs == nil {
-				revs = []*sdk.PullReview{}
-			}
-			_ = json.NewEncoder(w).Encode(paginate(r, revs))
-		case strings.Contains(p, "/pulls/"):
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-1], 10, 64)
-			for _, pr := range fix.prs {
-				if pr.Index == num {
-					_ = json.NewEncoder(w).Encode(pr)
-					return
-				}
-			}
-			http.NotFound(w, r)
-		case strings.HasSuffix(p, "/issues"):
-			_ = json.NewEncoder(w).Encode(fix.issues)
-		case strings.Contains(p, "/issues/") && strings.HasSuffix(p, "/comments"):
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)
-			cmts := fix.comments[num]
-			if cmts == nil {
-				cmts = []*sdk.Comment{}
-			}
-			_ = json.NewEncoder(w).Encode(paginate(r, cmts))
-		case strings.Contains(p, "/issues/"):
-			parts := strings.Split(p, "/")
-			num, _ := strconv.ParseInt(parts[len(parts)-1], 10, 64)
-			for _, iss := range fix.issues {
-				if iss.Index == num {
-					_ = json.NewEncoder(w).Encode(iss)
 					return
 				}
 			}

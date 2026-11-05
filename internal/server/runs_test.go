@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,5 +123,49 @@ func TestEndRunDigest(t *testing.T) {
 	if run.Status != "succeeded" || run.Summary != "Opened PR !4." || *run.Usage.OutputTokens != 120 ||
 		*run.Usage.CostUSD != 0.5 || run.Usage.InputTokens != nil {
 		t.Fatalf("ended run: %+v %+v", run, run.Usage)
+	}
+}
+
+// GET /v1/runs decides each run's state once, so its clients (the web UI,
+// the CLI) do not each decide what counts as live.
+func TestListRunsStates(t *testing.T) {
+	store, err := secrets.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	store.NewRun(secrets.Run{ID: "r-active", Repo: "demo", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, false)
+	store.NewRun(secrets.Run{ID: "r-expired", Repo: "demo", Actor: "claude", Created: now.Add(-2 * time.Hour), Expires: now.Add(-time.Hour)}, false)
+	store.NewRun(secrets.Run{ID: "r-ended", Repo: "demo", Actor: "claude", Created: now.Add(-3 * time.Hour), Expires: now.Add(time.Hour)}, false)
+	store.EndRun("r-ended", "succeeded", now, secrets.Digest{})
+	ownerKey, _ := store.NewAPIKey("owner", "test", "")
+	srv := &Server{Owner: "owner", Store: store, Log: slog.Default()}
+	srv.health.Reconciled = true
+	h := srv.Handler()
+
+	get := func(path string) (int, map[string]string) {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+ownerKey)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var runs []RunItem
+		json.Unmarshal(w.Body.Bytes(), &runs)
+		states := map[string]string{}
+		for _, r := range runs {
+			states[r.ID] = r.State
+		}
+		return w.Code, states
+	}
+	all := map[string]string{"r-active": "active", "r-expired": "expired", "r-ended": "ended"}
+	for path, want := range map[string]map[string]string{
+		"/v1/runs":               all,
+		"/v1/runs?state=live":    {"r-active": "active", "r-expired": "expired"},
+		"/v1/runs?state=active":  {"r-active": "active"},
+		"/v1/runs?state=expired": {"r-expired": "expired"},
+		"/v1/runs?state=ended":   {"r-ended": "ended"},
+	} {
+		if code, got := get(path); code != http.StatusOK || !maps.Equal(got, want) {
+			t.Errorf("GET %s: %d %v, want %v", path, code, got, want)
+		}
 	}
 }
