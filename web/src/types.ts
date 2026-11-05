@@ -177,6 +177,24 @@ export interface LiveRunInfo {
   denials: Denial[];
 }
 
+// A flow's post-implement checks (the repository's e2e commands) while they
+// run: not a run, but shown with a live tail like one. Its id,
+// flow-<issue>-<sha>.e2e, names its log for GET /api/runs/{id}/log.
+export interface LiveCheckInfo {
+  id: string;
+  issue?: number;
+  issue_url?: string;
+  issue_title?: string;
+  pr?: number;
+  pr_url?: string;
+  sha: string;
+  commands: string[];
+  created: string;
+  elapsed: string;
+  timeout?: string; // the flow's --check-timeout
+  log_tail: LogLine[];
+}
+
 export interface Denial {
   time: string;
   run?: string;
@@ -378,6 +396,7 @@ export interface UIStatusResponse {
   inbox: InboxItem[];
   inbox_error?: string;
   live_runs?: LiveRunInfo[];
+  live_checks?: LiveCheckInfo[];
   active_flows?: ActiveFlowInfo[];
   actors?: ActorDetail[];
 }

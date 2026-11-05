@@ -29,6 +29,7 @@ import {
   resolveInboxAction,
   runOutcome,
   selectDefaultActors,
+  standaloneLiveChecks,
   standaloneLiveRuns,
   toggleExpandedThread,
   updateLogTailFollow,
@@ -81,6 +82,27 @@ test('groupLiveFlows pairs runs with active flows and falls back to run flow met
   assert.deepEqual(standaloneLiveRuns(liveRuns).map((r) => r.id), ['r-solo']);
 });
 
+test('groupLiveFlows puts post-implement checks under their flow, and the rest stand alone', () => {
+  const activeFlows = [
+    { issue: 11, implement: 'agy', verify: 'claude', round: 1, max_rounds: 3, step: 'post-implement checks at 1a2b3c4d5e', label: '', waiting: false },
+  ];
+  const checks = [
+    { id: 'flow-11-1a2b3c4d5e.e2e', issue: 11 },
+    { id: 'flow-12-ffffffffff.e2e', issue: 12 },
+  ] as any[];
+  const grouped = groupLiveFlows(activeFlows, [], checks);
+  assert.deepEqual(grouped[0].checks.map((c) => c.id), ['flow-11-1a2b3c4d5e.e2e']);
+  assert.deepEqual(standaloneLiveChecks(checks, grouped).map((c) => c.id), ['flow-12-ffffffffff.e2e']);
+
+  // Without active flows (a terminal's flow), a check joins the group its
+  // flow's run metadata makes, if any.
+  const runs = [{ id: 'r-1', flow: { issue: 12, round: 1, max_rounds: 3, step: 'implement', label: '' } }] as any[];
+  const fallback = groupLiveFlows([], runs, checks);
+  assert.deepEqual(fallback[0].checks.map((c) => c.id), ['flow-12-ffffffffff.e2e']);
+  assert.deepEqual(standaloneLiveChecks(checks, fallback).map((c) => c.id), ['flow-11-1a2b3c4d5e.e2e']);
+  assert.deepEqual(standaloneLiveChecks(undefined, fallback), []);
+});
+
 test('filterHistoryRuns filters by actor, kind, status, age window, and search text', () => {
   const now = Date.parse('2026-11-01T20:00:00Z');
   const runs = [
@@ -122,6 +144,12 @@ test('parseLivePollSnapshot and nextPollDelayMs handle active and idle polling s
 
   const fromObject = parseLivePollSnapshot({ live_runs: [], active_flows: [] });
   assert.equal(nextPollDelayMs(fromObject.liveRuns, fromObject.activeFlows), 10000);
+  assert.deepEqual(fromObject.liveChecks, []);
+
+  // A flow's checks running alone keep the poll fast.
+  const checking = parseLivePollSnapshot({ live_runs: [], live_checks: [{ id: 'flow-1-ab.e2e' }], active_flows: [] });
+  assert.equal(checking.liveChecks.length, 1);
+  assert.equal(nextPollDelayMs(checking.liveRuns, checking.activeFlows, checking.liveChecks), 2500);
 });
 
 test('buildFlowActionPayload and buildRunActionPayload normalize action requests', () => {

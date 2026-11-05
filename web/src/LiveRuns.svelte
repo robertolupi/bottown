@@ -1,14 +1,16 @@
 <script lang="ts">
-  // Live runs and flow actions (§4.2, §5): active flows with their runs,
-  // then standalone runs, and the buttons that start flows and runs or
-  // clean up.
-  import type { ActiveFlowInfo, LiveRunInfo } from './types';
-  import { groupLiveFlows, standaloneLiveRuns } from './state';
+  // Live runs and flow actions (§4.2, §5): active flows with their runs
+  // and post-implement checks, then standalone runs and checks, and the
+  // buttons that start flows and runs or clean up.
+  import type { ActiveFlowInfo, LiveCheckInfo, LiveRunInfo } from './types';
+  import { groupLiveFlows, standaloneLiveChecks, standaloneLiveRuns } from './state';
   import FlowGroupCard from './FlowGroupCard.svelte';
+  import LiveCheckCard from './LiveCheckCard.svelte';
   import LiveRunCard from './LiveRunCard.svelte';
 
   interface Props {
     liveRuns: LiveRunInfo[] | undefined;
+    liveChecks: LiveCheckInfo[] | undefined;
     activeFlows: ActiveFlowInfo[] | undefined;
     issuesLink: string;
     now: number;
@@ -18,11 +20,12 @@
     onStop: (runId: string) => void;
   }
 
-  let { liveRuns, activeFlows, issuesLink, now, onStartFlow, onStartRun, onGC, onStop }: Props = $props();
+  let { liveRuns, liveChecks, activeFlows, issuesLink, now, onStartFlow, onStartRun, onGC, onStop }: Props = $props();
 
-  let flowGroups = $derived(groupLiveFlows(activeFlows, liveRuns));
+  let flowGroups = $derived(groupLiveFlows(activeFlows, liveRuns, liveChecks));
   let standaloneRuns = $derived(standaloneLiveRuns(liveRuns));
-  let activeCount = $derived((liveRuns?.length || 0) + (activeFlows?.length || 0));
+  let standaloneChecks = $derived(standaloneLiveChecks(liveChecks, flowGroups));
+  let activeCount = $derived((liveRuns?.length || 0) + (activeFlows?.length || 0) + standaloneChecks.length);
 </script>
 
 <section class="card full-width">
@@ -49,7 +52,7 @@
   </div>
 
   <div class="card-body">
-    {#if (!liveRuns || liveRuns.length === 0) && (!activeFlows || activeFlows.length === 0)}
+    {#if (!liveRuns || liveRuns.length === 0) && (!activeFlows || activeFlows.length === 0) && (!liveChecks || liveChecks.length === 0)}
       <div class="inbox-zero">
         <span class="inbox-zero-icon">💤</span>
         <span>No runs or flows currently active in this repository.</span>
@@ -64,6 +67,11 @@
         <!-- Standalone Runs -->
         {#each standaloneRuns as run (run.id)}
           <LiveRunCard {run} {now} stopLabel="Stop" {onStop} />
+        {/each}
+
+        <!-- Post-implement checks of flows not started here -->
+        {#each standaloneChecks as check (check.id)}
+          <LiveCheckCard {check} {now} />
         {/each}
       </div>
     {/if}

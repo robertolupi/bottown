@@ -29,16 +29,18 @@ const liveTailLines = 25
 // instance. It is read from web/fixtures/<name>.json, strictly, so a field
 // that the UI's types do not have is an error rather than silently dropped.
 type Fixture struct {
-	// Status is GET /api/status. Its inbox, live_runs and active_flows are
-	// replaced by the fixture's own, so the views agree with each other.
+	// Status is GET /api/status. Its inbox, live_runs, live_checks and
+	// active_flows are replaced by the fixture's own, so the views agree
+	// with each other.
 	Status      UIStatusResponse `json:"status"`
 	Inbox       []InboxItem      `json:"inbox"`
 	LiveRuns    []LiveRunInfo    `json:"live_runs"`
+	LiveChecks  []LiveCheckInfo  `json:"live_checks,omitempty"`
 	ActiveFlows []ActiveFlowInfo `json:"active_flows"`
 	History     []HistoryRunInfo `json:"history"`
 	Milestones  []MilestoneGroup `json:"milestones"`
 	// Logs are the rendered logs by run ID: GET /api/runs/{id}/log, and a
-	// live run's log_tail (its last lines) when the run has one here.
+	// live run's or check's log_tail (its last lines) when it has one here.
 	Logs map[string][]runs.LogLine `json:"logs"`
 	// RawLogs are the original records served by GET /api/runs/{id}/log?raw=1.
 	RawLogs map[string]string `json:"raw_logs,omitempty"`
@@ -237,6 +239,23 @@ func liveRuns(fx *Fixture) []LiveRunInfo {
 	return out
 }
 
+// liveChecks returns the fixture's live checks, each with the tail of its
+// log when the fixture has one.
+func liveChecks(fx *Fixture) []LiveCheckInfo {
+	out := make([]LiveCheckInfo, 0, len(fx.LiveChecks))
+	for _, c := range fx.LiveChecks {
+		if log, ok := fx.Logs[c.ID]; ok {
+			c.LogTail = tail(log, liveTailLines)
+		}
+		if c.LogTail == nil {
+			c.LogTail = []runs.LogLine{}
+		}
+		c.Commands = orEmpty(c.Commands)
+		out = append(out, c)
+	}
+	return out
+}
+
 func tail(lines []runs.LogLine, n int) []runs.LogLine {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
@@ -249,6 +268,7 @@ func (s *PreviewServer) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		st := fx.Status
 		st.Inbox = orEmpty(fx.Inbox)
 		st.LiveRuns = liveRuns(fx)
+		st.LiveChecks = liveChecks(fx)
 		st.ActiveFlows = orEmpty(fx.ActiveFlows)
 		st.Actors = orEmpty(st.Actors)
 		return st
@@ -272,7 +292,7 @@ func (s *PreviewServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any {
 		live := liveRuns(fx)
 		if q.Get("state") == "live" {
-			return map[string]any{"live_runs": live, "active_flows": orEmpty(fx.ActiveFlows)}
+			return map[string]any{"live_runs": live, "live_checks": liveChecks(fx), "active_flows": orEmpty(fx.ActiveFlows)}
 		}
 		history := []HistoryRunInfo{}
 		for _, h := range fx.History {

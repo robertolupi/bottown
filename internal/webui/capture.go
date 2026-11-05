@@ -53,6 +53,7 @@ func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []
 	fx := &Fixture{
 		Inbox:       orEmpty(st.Inbox),
 		LiveRuns:    orEmpty(st.LiveRuns),
+		LiveChecks:  orEmpty(st.LiveChecks),
 		ActiveFlows: orEmpty(st.ActiveFlows),
 		History:     orEmpty(history),
 		Milestones:  orEmpty(milestones),
@@ -61,9 +62,9 @@ func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []
 		Timelines:   map[string]IssueTimeline{},
 		Actions:     map[string]ActionResult{},
 	}
-	// The preview serves the fixture's own inbox, live runs and active
-	// flows in the status: keep one copy.
-	status.Inbox, status.LiveRuns, status.ActiveFlows = nil, nil, nil
+	// The preview serves the fixture's own inbox, live runs and checks and
+	// active flows in the status: keep one copy.
+	status.Inbox, status.LiveRuns, status.LiveChecks, status.ActiveFlows = nil, nil, nil, nil
 	fx.Status = status
 
 	issues, prs, logs := opts.Issues, []int64(nil), opts.Logs
@@ -148,6 +149,10 @@ func linked(fx *Fixture) (issues, prs []int64, logs []string) {
 		addIssue(r.Issue)
 		addPR(r.Issue, r.PR)
 		addLog(r.ID)
+	}
+	for _, c := range fx.LiveChecks {
+		addIssue(c.Issue)
+		addLog(c.ID)
 	}
 	for _, f := range fx.ActiveFlows {
 		addIssue(f.Issue)
@@ -249,7 +254,7 @@ func WriteFixture(dir, name string, b []byte, force bool) (string, error) {
 
 // Summary counts what fx holds, per section.
 func (fx *Fixture) Summary() string {
-	return fmt.Sprintf("%d inbox, %d live runs, %d active flows, %d history, %d milestones, %d issues, %d timelines, %d logs",
-		len(fx.Inbox), len(fx.LiveRuns), len(fx.ActiveFlows), len(fx.History), len(fx.Milestones),
+	return fmt.Sprintf("%d inbox, %d live runs, %d live checks, %d active flows, %d history, %d milestones, %d issues, %d timelines, %d logs",
+		len(fx.Inbox), len(fx.LiveRuns), len(fx.LiveChecks), len(fx.ActiveFlows), len(fx.History), len(fx.Milestones),
 		len(fx.Issues), len(fx.Timelines), len(fx.Logs))
 }

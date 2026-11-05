@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -79,6 +80,24 @@ type FlowInfo struct {
 	MaxRounds int    `json:"max_rounds"`
 	Step      string `json:"step"`  // "implementing with agy" / "verifying with kimi"
 	Label     string `json:"label"` // "#51 · round 2/3 · verifying with kimi"
+}
+
+// LiveCheckInfo is a flow's post-implement checks (the repository's e2e
+// commands) while they run: not a run, but shown with a live tail like
+// one. GET /api/runs/{id}/log serves its log.
+type LiveCheckInfo struct {
+	ID         string         `json:"id"` // flow-<issue>-<sha>.e2e
+	Issue      int64          `json:"issue,omitempty"`
+	IssueURL   string         `json:"issue_url,omitempty"`
+	IssueTitle string         `json:"issue_title,omitempty"`
+	PR         int64          `json:"pr,omitempty"`
+	PRURL      string         `json:"pr_url,omitempty"`
+	SHA        string         `json:"sha"`
+	Commands   []string       `json:"commands"`
+	Created    time.Time      `json:"created"`
+	Elapsed    string         `json:"elapsed"`
+	Timeout    string         `json:"timeout,omitempty"` // the flow's --check-timeout
+	LogTail    []runs.LogLine `json:"log_tail"`
 }
 
 // ActiveFlowInfo represents an in-progress flow supervising an issue.
@@ -443,6 +462,11 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 			liveByIssue[r.Flow.Issue] = r
 		}
 	}
+	// A flow between runs may be running its post-implement checks.
+	checking := make(map[int64]runs.CheckRecord)
+	for _, c := range s.liveCheckRecords() {
+		checking[c.Issue] = c
+	}
 
 	var flows []ActiveFlowInfo
 	for _, e := range entries {
@@ -489,7 +513,10 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 			}
 		}
 
-		step := "waiting between rounds"
+		step, waiting := "waiting between rounds", true
+		if c, ok := checking[issueNum]; ok {
+			step, waiting = "post-implement checks at "+shortSHA(c.SHA), false
+		}
 		label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
 		flows = append(flows, ActiveFlowInfo{
 			Issue:     issueNum,
@@ -499,7 +526,7 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 			MaxRounds: maxRounds,
 			Step:      step,
 			Label:     label,
-			Waiting:   true,
+			Waiting:   waiting,
 		})
 	}
 
@@ -510,6 +537,58 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 		return flows[i].Issue < flows[j].Issue
 	})
 	return flows
+}
+
+// liveCheckRecords are the flows' post-implement checks running in this
+// checkout, for its repository.
+func (s *Server) liveCheckRecords() []runs.CheckRecord {
+	_, repo := s.orgAndRepo()
+	var out []runs.CheckRecord
+	for _, c := range runs.LiveChecks(filepath.Join(s.cfg.RepoTop, ".bottown", "runs")) {
+		if c.Repo == "" || path.Base(c.Repo) == repo {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ComputeLiveChecks returns the flows' post-implement checks while they
+// run, each with the tail of its log, as a live run has (§4.2).
+func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
+	org, repo := s.orgAndRepo()
+	forgeURL := s.cfg.Instance.ForgejoURL()
+	now := time.Now().UTC()
+	live := []LiveCheckInfo{}
+	for _, c := range s.liveCheckRecords() {
+		info := LiveCheckInfo{
+			ID:       c.ID,
+			Issue:    c.Issue,
+			PR:       c.PR,
+			SHA:      c.SHA,
+			Commands: orEmpty(c.Commands),
+			Created:  c.Started,
+			Elapsed:  formatDuration(now.Sub(c.Started)),
+			LogTail:  []runs.LogLine{},
+		}
+		if c.Issue > 0 {
+			info.IssueURL = fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, c.Issue)
+			if iss, err := s.issue(ctx, c.Issue, false); err == nil && iss.Number > 0 {
+				info.IssueTitle = iss.Title
+			}
+		}
+		if c.PR > 0 {
+			info.PRURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, c.PR)
+		}
+		if c.Expires.After(c.Started) {
+			info.Timeout = formatDuration(c.Expires.Sub(c.Started))
+		}
+		logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", c.ID+".log")
+		if b, err := runs.ReadLog(logPath); err == nil {
+			info.LogTail = tail(runs.RenderLog("", b), liveTailLines)
+		}
+		live = append(live, info)
+	}
+	return live
 }
 
 var summaryPRRegex = regexp.MustCompile(`!(\d+)\b`)

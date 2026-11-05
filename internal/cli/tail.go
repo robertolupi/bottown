@@ -42,9 +42,12 @@ func terminalOut(cmd *cobra.Command) (*os.File, bool) {
 	return f, true
 }
 
-// tailRun is the run the tail follows, for its header.
+// tailRun is the run the tail follows, for its header. A flow's
+// post-implement checks are followed like a run: Check is their commands,
+// and they have no actor.
 type tailRun struct {
 	ID, Kind, Target, Actor, Family string
+	Check                           string
 	Started                         time.Time
 	Limit                           time.Duration // the run's time limit, if known
 }
@@ -390,7 +393,8 @@ func (m *tailModel) View() tea.View {
 }
 
 // runHeader is the followed run: "run r-… · implement #12 · claude
-// (anthropic) · 3m12s of 1h00m".
+// (anthropic) · 3m12s of 1h00m", or the flow's checks: "checks
+// flow-12-….e2e · !30 at 1a2b3c4d5e · make e2e · 3m12s of 1h00m".
 func (m *tailModel) runHeader() string {
 	r := m.run
 	elapsed := clockDuration(m.now().Sub(r.Started))
@@ -398,6 +402,10 @@ func (m *tailModel) runHeader() string {
 		elapsed += " of " + clockDuration(r.Limit)
 	}
 	dot := m.st.Dim.Render(" · ")
+	if r.Check != "" {
+		return "checks " + m.st.Info.Bold(true).Render(r.ID) + dot + r.Target + dot +
+			r.Check + dot + m.st.Dim.Render(elapsed)
+	}
 	return "run " + m.st.Info.Bold(true).Render(r.ID) + dot + r.Kind + " " + r.Target + dot +
 		r.Actor + " (" + r.Family + ")" + dot + m.st.Dim.Render(elapsed)
 }

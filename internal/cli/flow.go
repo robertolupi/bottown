@@ -30,7 +30,8 @@ After each implement run, before a verifier sees a new head, the flow runs
 the post-implement checks itself: the e2e commands .bottown.toml names on
 the default branch (default: make e2e), in a clean worktree detached at the
 head, with no agent involved. The log goes next to the run records
-(.bottown/runs/flow-<issue>-<sha>.e2e.log), and the result is the commit
+(.bottown/runs/flow-<issue>-<sha>.e2e.log); while the commands run, the
+web UI's Live Runs and the terminal tail follow it. The result is the commit
 status bottown/e2e on the head, written by the owner. If they pass, the
 verify run's prompt says so and names the log; if they fail, the flow
 starts another implement round with the failure in its prompt. Those
@@ -57,14 +58,16 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				In:      cmd.InOrStdin(),
 				Out:     cmd.OutOrStdout(),
 			}
-			// An attended flow on a terminal shows its runs' live tail,
-			// under the flow's state; its own lines and prompts go through
-			// it. --unattended keeps the plain output.
+			// An attended flow on a terminal shows its runs' and its
+			// post-implement checks' live tail, under the flow's state; its
+			// own lines and prompts go through it. --unattended keeps the
+			// plain output.
 			var tail *liveTail
 			if f, ok := terminalOut(cmd); ok && !unattended {
 				tail = newLiveTail(f)
 				defer tail.Close()
 				supervisor.Out, supervisor.Pause = tail, tail.Pause
+				supervisor.Checker = flowChecker{ws: rc.ws, tail: tail}
 				tail.setFlow(fmt.Sprintf("#%d", issue))
 			}
 			supervisor.Runner = flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {

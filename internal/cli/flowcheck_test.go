@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -106,5 +107,81 @@ func TestFlowChecker(t *testing.T) {
 	git(remote, "commit", "-q", "-am", "no e2e")
 	if out, err := c.Check(ctx, req); err != nil || !out.Skipped {
 		t.Fatalf("no e2e commands: %+v, %v", out, err)
+	}
+}
+
+// While the checks run, their log has what the commands wrote so far, and
+// a check record marks them live, with the flow's time limit; both live
+// tails read them. The record goes when the checks end.
+func TestFlowCheckerLive(t *testing.T) {
+	remote, top, sync := t.TempDir(), t.TempDir(), t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	started, release := filepath.Join(sync, "started"), filepath.Join(sync, "release")
+	toml := fmt.Sprintf("e2e = [\"echo first output; touch %s; while [ ! -f %s ]; do sleep 0.05; done\"]\n", started, release)
+	if err := os.WriteFile(filepath.Join(remote, ".bottown.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(remote, "init", "-q", "-b", "main")
+	git(remote, "add", ".")
+	git(remote, "commit", "-q", "-m", "init")
+	head := git(remote, "rev-parse", "HEAD")
+	git(top, "init", "-q")
+	ws, err := runs.Open(top, "bottown", remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := flowChecker{ws: ws}
+	req := flow.CheckRequest{Repo: "demo", Issue: 9, PR: 12, SHA: head}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	type result struct {
+		out flow.CheckOutcome
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := c.Check(ctx, req)
+		done <- result{out, err}
+	}()
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("checks ended early: %+v, %v", r.out, r.err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if log, _ := os.ReadFile(c.LogPath(req)); !strings.Contains(string(log), "first output") {
+		t.Errorf("log while running:\n%s", log)
+	}
+	live := runs.LiveChecks(ws.RunsDir)
+	if len(live) != 1 {
+		t.Fatalf("live checks = %+v", live)
+	}
+	rec := live[0]
+	if rec.ID+".log" != filepath.Base(c.LogPath(req)) || rec.Issue != 9 || rec.PR != 12 || rec.SHA != head || rec.Repo != "demo" ||
+		len(rec.Commands) != 1 || rec.Expires.IsZero() {
+		t.Errorf("record = %+v", rec)
+	}
+
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.err != nil || !r.out.Passed {
+		t.Fatalf("checks: %+v, %v", r.out, r.err)
+	}
+	if live := runs.LiveChecks(ws.RunsDir); len(live) != 0 {
+		t.Errorf("checks still live after they ended: %+v", live)
 	}
 }
