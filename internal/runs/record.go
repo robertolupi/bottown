@@ -68,9 +68,18 @@ type Record struct {
 	// ChecksPassed: the flow ran the post-implement checks at the verify
 	// run's SHA, and they passed.
 	ChecksPassed bool `json:"checks_passed,omitempty"`
+	// Handover is what a launched run's agent said with `run end`, for the
+	// launcher to post when the harness exits; nil if it said nothing.
+	Handover *Handover `json:"handover,omitempty"`
 	// LoadError is why Records could not read the record file of a run it
 	// lists as StatusUnknown; never saved.
 	LoadError string `json:"-"`
+}
+
+// Handover is an agent's own account of its launched run.
+type Handover struct {
+	Summary string `json:"summary,omitempty"`
+	Failed  bool   `json:"failed,omitempty"` // the agent ended the run as failed
 }
 
 // Target is "#<issue>" or "!<pr>".

@@ -513,10 +513,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		code = -1
 	}
 	if current, loadErr := rc.ws.Load(run.ID); loadErr == nil {
-		rec.StopRequested = current.StopRequested
+		rec.StopRequested, rec.Handover = current.StopRequested, current.Handover
 	}
+	reportedFailed := rec.Handover != nil && rec.Handover.Failed
 	status = runs.StatusFailed
-	if code == 0 && !rec.StopRequested {
+	if code == 0 && !rec.StopRequested && !reportedFailed {
 		status = runs.StatusSucceeded
 	}
 	if o.interactive {
@@ -525,6 +526,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 
 	logBytes, _ := os.ReadFile(logPath)
 	summary := h.Summary(logBytes)
+	if rec.Handover != nil && rec.Handover.Summary != "" {
+		// The agent's own handover (`run end`) over its last message.
+		summary = rec.Handover.Summary
+	}
 
 	if rec, err = lc.Finished(func(current *runs.Record) {
 		if current.StopRequested {
@@ -537,6 +542,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	digest = secrets.Digest{Summary: cleanSummary(rec, summary), Usage: h.Usage(logBytes)}
 	if status != runs.StatusSucceeded {
 		digest.Failure = observedFailure(ctx.Err(), rec.StopRequested, code, time.Since(started))
+		if digest.Failure == nil && reportedFailed {
+			digest.Failure = &secrets.Failure{Cause: secrets.FailureReported, Detail: "the agent ended the run as failed"}
+		}
 	}
 	// The digest now says what was observed, if anything: the error this
 	// returns for a failed run is its outcome, not a launcher failure.
