@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/client"
@@ -428,7 +427,7 @@ Exits non-zero when a check fails.`,
 					return err
 				}
 			} else {
-				printCheck(out, lipgloss.NewRenderer(out), res, recorded, recErr)
+				printCheck(colorOut(out), res, recorded, recErr)
 			}
 			switch {
 			case res.failed():
@@ -537,8 +536,8 @@ func (a *agentCtx) recordCheck(ctx context.Context, top string, res checkResult)
 	return done, nil
 }
 
-func printCheck(out io.Writer, r *lipgloss.Renderer, res checkResult, recorded []server.CommitStatus, recErr error) {
-	st := newStyles(r)
+func printCheck(out io.Writer, res checkResult, recorded []server.CommitStatus, recErr error) {
+	st := newStyles()
 	at := short(res.SHA)
 	if res.Branch != "" {
 		at += " on " + res.Branch

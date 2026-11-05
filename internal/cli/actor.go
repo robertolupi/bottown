@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -220,7 +219,7 @@ func actorSetup(cmd *cobra.Command, g *globals, name, path string) error {
 		}
 		blocked = append(blocked, r)
 	}
-	printActorSetup(out, lipgloss.NewRenderer(out), name, info.Family, info.Harness, inst.Name, blocked)
+	printActorSetup(colorOut(out), name, info.Family, info.Harness, inst.Name, blocked)
 	return nil
 }
 
@@ -336,14 +335,14 @@ func newActorLs(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			return printActorList(out, lipgloss.NewRenderer(out), wts)
+			out := colorOut(cmd.OutOrStdout())
+			return printActorList(out, wts)
 		},
 	}
 }
 
-func printActorList(out io.Writer, r *lipgloss.Renderer, wts []actorWorktree) error {
-	st := newStyles(r)
+func printActorList(out io.Writer, wts []actorWorktree) error {
+	st := newStyles()
 	tw := newTableWriter(out)
 	tw.Row(
 		st.Header.Render("ACTOR"),
@@ -370,8 +369,8 @@ func printActorList(out io.Writer, r *lipgloss.Renderer, wts []actorWorktree) er
 	return tw.Flush()
 }
 
-func printActorSetup(out io.Writer, r *lipgloss.Renderer, name, family, harness, instName string, blocked []string) {
-	st := newStyles(r)
+func printActorSetup(out io.Writer, name, family, harness, instName string, blocked []string) {
+	st := newStyles()
 	fmt.Fprintf(out, "%s (%s, %s): identity %s <%s@bottown.local>, instance %s",
 		st.Info.Bold(true).Render(name),
 		st.Dim.Render(family),

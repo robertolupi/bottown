@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/hostctl"
@@ -659,8 +659,8 @@ func newDown(g *globals) *cobra.Command {
 	return cmd
 }
 
-func printStatus(out io.Writer, r *lipgloss.Renderer, inst config.Instance, source, state string, h *server.Health, healthErr error) {
-	bold := r.NewStyle().Bold(true).Render
+func printStatus(out io.Writer, inst config.Instance, source, state string, h *server.Health, healthErr error) {
+	bold := lipgloss.NewStyle().Bold(true).Render
 	label := func(w string) string {
 		pad := 10 - len(w)
 		if pad < 1 {
@@ -719,7 +719,7 @@ func newStatus(g *globals) *cobra.Command {
 					h = &res
 				}
 			}
-			printStatus(out, lipgloss.NewRenderer(out), inst, g.source, state, h, healthErr)
+			printStatus(colorOut(out), inst, g.source, state, h, healthErr)
 			return nil
 		},
 	}

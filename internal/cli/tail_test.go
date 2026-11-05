@@ -2,30 +2,34 @@ package cli
 
 import (
 	"bytes"
-	"io"
 	"strings"
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
-// testTail is a tail model with no colours, a fixed clock, and the
-// scrollback it prints.
+// testTail is a tail model with a fixed clock and the scrollback it
+// prints, with the styling stripped.
 func testTail() (*tailModel, *[]string) {
-	m := newTailModel(newStyles(lipgloss.NewRenderer(io.Discard)))
+	m := newTailModel(newStyles())
 	start := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	m.now = func() time.Time { return start.Add(3*time.Minute + 12*time.Second) }
 	var printed []string
 	m.println = func(s string) tea.Cmd {
-		printed = append(printed, strings.Split(s, "\n")...)
+		printed = append(printed, strings.Split(stripANSI(s), "\n")...)
 		return nil
 	}
 	m.Update(attachMsg{ID: "r-1", Kind: "implement", Target: "#12", Actor: "claude", Family: "anthropic", Started: start, Limit: time.Hour})
 	return m, &printed
+}
+
+// tailView is the view's text with the styling removed.
+func tailView(m *tailModel) string {
+	return stripANSI(m.View().Content)
 }
 
 // update delivers msg, and the printedMsg of any print it starts.
@@ -50,7 +54,7 @@ func TestTailPrintsFinalLinesAndKeepsRunningCallsLive(t *testing.T) {
 	if want := []string{"  session started", "  Reading the code.", "  Then the tests."}; strings.Join(*printed, "|") != strings.Join(want, "|") {
 		t.Fatalf("scrollback = %q, want %q", *printed, want)
 	}
-	view := m.View()
+	view := tailView(m)
 	if !strings.Contains(view, "run r-1 · implement #12 · claude (anthropic) · 3m12s of 1h00m") {
 		t.Fatalf("view has no run header:\n%s", view)
 	}
@@ -66,7 +70,7 @@ func TestTailPrintsFinalLinesAndKeepsRunningCallsLive(t *testing.T) {
 	if got := (*printed)[3:]; len(got) != 1 || got[0] != "  Bash go test ./... · completed" {
 		t.Fatalf("after the result: %q", got)
 	}
-	if view := m.View(); strings.Contains(view, "Bash") || !strings.Contains(view, "session started") {
+	if view := tailView(m); strings.Contains(view, "Bash") || !strings.Contains(view, "session started") {
 		t.Fatalf("view after the result:\n%s", view)
 	}
 
@@ -75,7 +79,7 @@ func TestTailPrintsFinalLinesAndKeepsRunningCallsLive(t *testing.T) {
 	if got := (*printed)[4:]; len(got) != 1 || got[0] != "  session started" {
 		t.Fatalf("at the end: %q", got)
 	}
-	if view := m.View(); strings.Contains(view, "run r-1") {
+	if view := tailView(m); strings.Contains(view, "run r-1") {
 		t.Fatalf("view still shows the ended run:\n%s", view)
 	}
 	// Lines of no run (a late follower) are dropped.
@@ -123,11 +127,11 @@ func TestTailDrainPauseAndQuit(t *testing.T) {
 		t.Fatal("not drained after the print finished")
 	}
 	// Paused, the view is empty, so the prompt below it starts clean.
-	if v := m.View(); v != "" {
+	if v := tailView(m); v != "" {
 		t.Fatalf("paused view = %q", v)
 	}
 	m.Update(resumeMsg{})
-	if m.View() == "" {
+	if tailView(m) == "" {
 		t.Fatal("resumed view is empty")
 	}
 	_, cmd := m.Update(quitMsg{})
@@ -148,7 +152,7 @@ func TestTailViewBoundsLiveLines(t *testing.T) {
 	}
 	lines[11].Text = "Bash: " + strings.Repeat("x", 100)
 	update(m, linesMsg{lines: lines})
-	view := m.View()
+	view := tailView(m)
 	if !strings.Contains(view, "… 4 more") || strings.Count(view, "Bash") != maxLiveLines {
 		t.Fatalf("view should show the last %d live lines:\n%s", maxLiveLines, view)
 	}
@@ -160,7 +164,7 @@ func TestTailViewBoundsLiveLines(t *testing.T) {
 }
 
 func TestTailLogLine(t *testing.T) {
-	st := newStyles(lipgloss.NewRenderer(io.Discard))
+	st := newStyles()
 	for _, tc := range []struct {
 		line runs.LogLine
 		full bool
@@ -172,7 +176,7 @@ func TestTailLogLine(t *testing.T) {
 		{textLine, true, "Reading the code.\nThen the tests."},
 		{runs.LogLine{Kind: runs.LinePlain, Text: "\x1b[31mred\x1b[0m\a bell"}, false, "red bell"},
 	} {
-		if got := st.logLine(tc.line, tc.full, ""); got != tc.want {
+		if got := stripANSI(st.logLine(tc.line, tc.full, "")); got != tc.want {
 			t.Errorf("logLine(%+v, %v) = %q, want %q", tc.line, tc.full, got, tc.want)
 		}
 	}

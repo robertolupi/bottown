@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/client"
@@ -253,6 +252,8 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 	if tail != nil {
 		out, errOut = tail, tail
+	} else {
+		out = colorOut(out)
 	}
 	n, err := parseNumber(target)
 	if err != nil {
@@ -541,7 +542,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		fmt.Fprintf(errOut, "warning: handover comment failed: %v\n", err)
 	}
 
-	st := newStyles(lipgloss.NewRenderer(cmd.OutOrStdout()))
+	st := newStyles()
 	if status == runs.StatusSucceeded && !o.keep {
 		if err := rc.ws.Remove(run.ID); err != nil {
 			fmt.Fprintf(errOut, "warning: remove worktree: %v\n", err)
@@ -818,20 +819,20 @@ func newRunLs(g *globals) *cobra.Command {
 			if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?repo="+rc.repo, nil, &remote); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			return printRunLs(out, lipgloss.NewRenderer(out), local, remote)
+			out := colorOut(cmd.OutOrStdout())
+			return printRunLs(out, local, remote)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list the server's runs for every repository on the instance")
 	return cmd
 }
 
-func printRunLs(out io.Writer, r *lipgloss.Renderer, local []runs.Record, remote []secrets.Run) error {
+func printRunLs(out io.Writer, local []runs.Record, remote []secrets.Run) error {
 	byID := map[string]secrets.Run{}
 	for _, rem := range remote {
 		byID[rem.ID] = rem
 	}
-	st := newStyles(r)
+	st := newStyles()
 	tw := newTableWriter(out)
 	tw.Row(
 		st.Header.Render("RUN"),
@@ -965,12 +966,12 @@ func lsAll(cmd *cobra.Command, g *globals) error {
 	if err := callServer(cmd.Context(), inst, key, "GET", "/v1/runs", nil, &remote); err != nil {
 		return err
 	}
-	out := cmd.OutOrStdout()
-	return printRunLsAll(out, lipgloss.NewRenderer(out), remote)
+	out := colorOut(cmd.OutOrStdout())
+	return printRunLsAll(out, remote)
 }
 
-func printRunLsAll(out io.Writer, r *lipgloss.Renderer, remote []secrets.Run) error {
-	st := newStyles(r)
+func printRunLsAll(out io.Writer, remote []secrets.Run) error {
+	st := newStyles()
 	tw := newTableWriter(out)
 	tw.Row(
 		st.Header.Render("RUN"),
@@ -1066,7 +1067,7 @@ func newRunShow(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
+			out := colorOut(cmd.OutOrStdout())
 			var (
 				rec        *runs.Record
 				sr         *secrets.Run
@@ -1087,14 +1088,14 @@ func newRunShow(g *globals) *cobra.Command {
 			if b, err := runs.ReadLog(logPath); err == nil && len(b) > 0 {
 				logContent = string(b)
 			}
-			printRunShow(out, lipgloss.NewRenderer(out), rec, sr, srErr, logPath, logContent)
+			printRunShow(out, rec, sr, srErr, logPath, logContent)
 			return nil
 		},
 	}
 }
 
-func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *secrets.Run, srErr error, logPath, logContent string) {
-	st := newStyles(r)
+func printRunShow(out io.Writer, rec *runs.Record, sr *secrets.Run, srErr error, logPath, logContent string) {
+	st := newStyles()
 	if rec != nil {
 		fmt.Fprintf(out, "%s  %s %s %s as %s (%s), %s, %s\n",
 			st.Bold.Render("local:"),
