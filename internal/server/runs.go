@@ -34,12 +34,19 @@ type RunRequest struct {
 	// SHA, for a verify run, is the head the caller expects: the run is
 	// refused (409, HeadMovedMessage) if the PR's head is another commit,
 	// so the run is pinned exactly at it.
-	SHA              string `json:"sha,omitempty"`
-	AllowSameFamily  bool   `json:"allow_same_family,omitempty"`
-	BypassActorLimit bool   `json:"bypass_actor_limit,omitempty"`
-	Interactive      bool   `json:"interactive,omitempty"`
-	TTLSeconds       int64  `json:"ttl_seconds,omitempty"`
+	SHA             string `json:"sha,omitempty"`
+	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	// SerializeActor refuses a batch run (409, ActorBusyMessage) while
+	// its actor has another live batch run. Without it an actor's batch
+	// runs on different targets run concurrently.
+	SerializeActor bool  `json:"serialize_actor,omitempty"`
+	Interactive    bool  `json:"interactive,omitempty"`
+	TTLSeconds     int64 `json:"ttl_seconds,omitempty"`
 }
+
+// ActorBusyMessage is in the error for a SerializeActor run refused
+// because its actor has another live batch run.
+const ActorBusyMessage = secrets.ActorBusyMessage
 
 // HeadMovedMessage is in the error for a verify run whose expected SHA is
 // no longer the PR's head.
@@ -84,9 +91,6 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		case req.AllowSameFamily:
 			writeError(w, http.StatusForbidden, "only the owner can allow a same-family review")
 			return
-		case req.BypassActorLimit:
-			writeError(w, http.StatusForbidden, "only the owner can bypass the actor run limit")
-			return
 		case req.Spec != "":
 			// A self-started run is in the actor's own TUI, which chose
 			// its model; bottown launches nothing that could use a spec.
@@ -105,15 +109,10 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.StartedBy = p.Actor
-	actor, _ := s.desired().Actor(run.Actor)
-	limit := actor.BatchRunLimit()
-	if req.BypassActorLimit {
-		limit = 0
-	}
-	key, err := s.Store.NewRun(run, limit)
+	key, err := s.Store.NewRun(run, req.SerializeActor)
 	if err != nil {
-		var limit *secrets.RunLimitError
-		if errors.As(err, &limit) {
+		var busy *secrets.RunBusyError
+		if errors.As(err, &busy) {
 			writeError(w, http.StatusConflict, err.Error())
 		} else {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -122,7 +121,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "spec", run.Spec, "repo", run.Org+"/"+run.Repo,
 		"issue", run.Issue, "pr", run.PR, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
-		"interactive", run.Interactive, "started_by", run.StartedBy)
+		"serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
 }
 

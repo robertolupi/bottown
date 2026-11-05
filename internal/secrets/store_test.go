@@ -3,6 +3,7 @@ package secrets
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +17,7 @@ func TestRunKeyLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	key, err := s.NewRun(Run{ID: "r-1", Kind: "implement", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
+	key, err := s.NewRun(Run{ID: "r-1", Kind: "implement", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func TestPurgeRuns(t *testing.T) {
 		{ID: "r-live", Repo: "demo", Created: now, Expires: now.Add(time.Hour)},
 		{ID: "r-stuck", Repo: "demo", Created: now.Add(-5 * time.Hour), Expires: now.Add(-time.Hour)},
 	} {
-		if _, err := s.NewRun(r, 0); err != nil {
+		if _, err := s.NewRun(r, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +94,7 @@ func TestPurgeRuns(t *testing.T) {
 		t.Fatalf("history: %+v", st.History)
 	}
 	// A purged run's id is not reused.
-	if _, err := s.NewRun(Run{ID: "r-old", Created: now, Expires: now.Add(time.Hour)}, 0); err == nil {
+	if _, err := s.NewRun(Run{ID: "r-old", Created: now, Expires: now.Add(time.Hour)}, false); err == nil {
 		t.Fatal("NewRun reused a purged id")
 	}
 }
@@ -123,7 +124,7 @@ func TestEndRunDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, 1)
+	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, false)
 	long := strings.Repeat("é", MaxSummary)
 	failure := &Failure{Cause: FailureStartup, Detail: long}
 	run, _, _ := s.EndRun("r-1", "failed", now, Digest{Summary: long, Failure: failure})
@@ -149,7 +150,7 @@ func TestSetOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, 1)
+	s.NewRun(Run{ID: "r-1", Created: now, Expires: now.Add(time.Hour)}, false)
 	if ok, err := s.SetOutcome("r-1", OutcomeCommented); !ok || err != nil {
 		t.Fatalf("set outcome: %v %v", ok, err)
 	}
@@ -172,52 +173,114 @@ func TestSetOutcome(t *testing.T) {
 	}
 }
 
-func TestBatchRunLimit(t *testing.T) {
+// Batch runs by one actor on different targets run concurrently, unless a
+// run asks for its actor to be serialised.
+func TestSerializeActor(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	newRun := func(id, actor string, interactive bool, expires time.Time, limit int) error {
-		_, err := s.NewRun(Run{ID: id, Actor: actor, Interactive: interactive, Created: now, Expires: expires}, limit)
+	issue := int64(0)
+	newRun := func(id, actor string, interactive bool, expires time.Time, serialize bool) error {
+		issue++
+		_, err := s.NewRun(Run{ID: id, Kind: "implement", Repo: "demo", Issue: issue, Actor: actor, Interactive: interactive, Created: now, Expires: expires}, serialize)
 		return err
 	}
-	if err := newRun("r-live", "claude", false, now.Add(time.Hour), 1); err != nil {
+	if err := newRun("r-live", "claude", false, now.Add(time.Hour), false); err != nil {
 		t.Fatal(err)
 	}
-	err = newRun("r-refused", "claude", false, now.Add(time.Hour), 1)
-	var limit *RunLimitError
-	if !errors.As(err, &limit) || limit.Actor != "claude" || len(limit.Runs) != 1 || limit.Runs[0] != "r-live" {
-		t.Fatalf("second batch run: %+v", err)
+	if err := newRun("r-concurrent", "claude", false, now.Add(time.Hour), false); err != nil {
+		t.Fatalf("second batch run on another issue: %v", err)
+	}
+	err = newRun("r-refused", "claude", false, now.Add(time.Hour), true)
+	var busy *RunBusyError
+	if !errors.As(err, &busy) || busy.Actor != "claude" || !slices.Equal(busy.Runs, []string{"r-concurrent", "r-live"}) ||
+		!strings.Contains(err.Error(), ActorBusyMessage) {
+		t.Fatalf("serialised batch run: %+v", err)
 	}
 	st, readErr := s.Read()
 	if readErr != nil || st.Runs["r-refused"].ID != "" {
 		t.Fatalf("refused run was stored: %v", readErr)
 	}
-	if err := newRun("r-interactive", "claude", true, now.Add(time.Hour), 1); err != nil {
+	if err := newRun("r-interactive", "claude", true, now.Add(time.Hour), true); err != nil {
 		t.Fatalf("interactive run: %v", err)
 	}
-	if err := newRun("r-other", "agy", false, now.Add(time.Hour), 1); err != nil {
+	if err := newRun("r-other", "agy", false, now.Add(time.Hour), true); err != nil {
 		t.Fatalf("other actor: %v", err)
 	}
-	if err := newRun("r-unlimited", "claude", false, now.Add(time.Hour), 0); err != nil {
-		t.Fatalf("unlimited run: %v", err)
-	}
-	if err := newRun("r-expired", "kimi", false, now.Add(-time.Hour), 1); err != nil {
+	if err := newRun("r-expired", "kimi", false, now.Add(-time.Hour), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := newRun("r-after-expiry", "kimi", false, now.Add(time.Hour), 1); err != nil {
+	if err := newRun("r-after-expiry", "kimi", false, now.Add(time.Hour), true); err != nil {
 		t.Fatalf("expired run counted as live: %v", err)
 	}
-	if _, ok, err := s.EndRun("r-live", "succeeded", now, Digest{}); err != nil || !ok {
-		t.Fatalf("end live run: %v %v", ok, err)
+	for _, id := range []string{"r-live", "r-concurrent"} {
+		if _, ok, err := s.EndRun(id, "succeeded", now, Digest{}); err != nil || !ok {
+			t.Fatalf("end %s: %v %v", id, ok, err)
+		}
 	}
-	if err := newRun("r-after-end", "claude", false, now.Add(time.Hour), 2); err != nil {
+	// The interactive run does not hold the slot.
+	if err := newRun("r-after-end", "claude", false, now.Add(time.Hour), true); err != nil {
 		t.Fatalf("ended run counted as live: %v", err)
 	}
 }
 
-func TestBatchRunLimitAtomic(t *testing.T) {
+// A second live run on the same target is refused, whoever runs it and
+// whether or not it serialises its actor.
+func TestSameTargetRefused(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	live := func(r Run) Run {
+		r.Org, r.Created, r.Expires = "bottown", now, now.Add(time.Hour)
+		if r.Repo == "" {
+			r.Repo = "demo"
+		}
+		return r
+	}
+	for _, r := range []Run{
+		{ID: "r-impl", Kind: "implement", Actor: "claude", Issue: 4},
+		{ID: "r-verify", Kind: "verify", Actor: "codex", PR: 9, SHA: "abc"},
+		{ID: "r-discuss", Kind: "discuss", Actor: "kimi", Issue: 5},
+	} {
+		if _, err := s.NewRun(live(r), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		run     Run
+		refused bool
+	}{
+		{Run{ID: "r-impl-again", Kind: "implement", Actor: "agy", Issue: 4}, true},
+		{Run{ID: "r-plan-same", Kind: "plan", Actor: "agy", Issue: 4, Interactive: true}, true},
+		{Run{ID: "r-verify-again", Kind: "verify", Actor: "agy", PR: 9, SHA: "abc"}, true},
+		{Run{ID: "r-impl-other-repo", Kind: "implement", Actor: "agy", Repo: "other", Issue: 4}, false},
+		{Run{ID: "r-impl-other-issue", Kind: "implement", Actor: "claude", Issue: 6}, false},
+		{Run{ID: "r-verify-new-head", Kind: "verify", Actor: "agy", PR: 9, SHA: "def"}, false},
+		{Run{ID: "r-discuss-impl", Kind: "discuss", Actor: "agy", Issue: 4}, false},
+		{Run{ID: "r-discuss-again", Kind: "discuss", Actor: "agy", Issue: 5}, false},
+	} {
+		_, err := s.NewRun(live(c.run), false)
+		var busy *RunBusyError
+		switch {
+		case c.refused && (!errors.As(err, &busy) || busy.Actor != "" || len(busy.Runs) != 1):
+			t.Errorf("%s: %v, want a target refusal", c.run.ID, err)
+		case !c.refused && err != nil:
+			t.Errorf("%s: %v", c.run.ID, err)
+		}
+	}
+	if _, _, err := s.EndRun("r-impl", "succeeded", now, Digest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.NewRun(live(Run{ID: "r-impl-after-end", Kind: "implement", Actor: "agy", Issue: 4}), false); err != nil {
+		t.Fatalf("after the first ended: %v", err)
+	}
+}
+
+func TestSerializeActorAtomic(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +295,7 @@ func TestBatchRunLimitAtomic(t *testing.T) {
 			defer wg.Done()
 			<-start
 			now := time.Now()
-			_, err := s.NewRun(Run{ID: fmt.Sprintf("r-%d", i), Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
+			_, err := s.NewRun(Run{ID: fmt.Sprintf("r-%d", i), Kind: "implement", Issue: int64(i), Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, true)
 			results <- err
 		}()
 	}
@@ -241,11 +304,11 @@ func TestBatchRunLimitAtomic(t *testing.T) {
 	close(results)
 	var succeeded, refused int
 	for err := range results {
-		var limit *RunLimitError
+		var busy *RunBusyError
 		switch {
 		case err == nil:
 			succeeded++
-		case errors.As(err, &limit):
+		case errors.As(err, &busy):
 			refused++
 		default:
 			t.Errorf("unexpected error: %v", err)

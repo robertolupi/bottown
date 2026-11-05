@@ -44,20 +44,10 @@ type Team struct {
 // Actor is the forge identity of a coding agent. Roles (implementer,
 // verifier) are not part of it: a run grants one.
 type Actor struct {
-	Name         string `toml:"name"`
-	Family       string `toml:"family"`  // model vendor, for the cross-family review rule
-	Harness      string `toml:"harness"` // which CLI runs it
-	FullName     string `toml:"full_name"`
-	MaxBatchRuns *int   `toml:"max_batch_runs"`
-}
-
-// BatchRunLimit returns the actor's limit on live batch runs. Zero means no
-// limit; an omitted setting defaults to one.
-func (a Actor) BatchRunLimit() int {
-	if a.MaxBatchRuns == nil {
-		return 1
-	}
-	return *a.MaxBatchRuns
+	Name     string `toml:"name"`
+	Family   string `toml:"family"`  // model vendor, for the cross-family review rule
+	Harness  string `toml:"harness"` // which CLI runs it
+	FullName string `toml:"full_name"`
 }
 
 // Account is a token-only forge account bottown reconciles.
@@ -173,9 +163,6 @@ func (d Desired) validate() error {
 	for _, a := range d.Actors {
 		if a.Family == "" {
 			return fmt.Errorf("desired state: actor %s: family is required", a.Name)
-		}
-		if a.BatchRunLimit() < 0 {
-			return fmt.Errorf("desired state: actor %s: max_batch_runs cannot be negative", a.Name)
 		}
 	}
 	for _, r := range d.Retired {

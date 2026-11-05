@@ -19,10 +19,10 @@ func TestPurgeRunsRoute(t *testing.T) {
 	}
 	now := time.Now()
 	for _, id := range []string{"r-done", "r-kept"} {
-		store.NewRun(secrets.Run{ID: id, Repo: "demo", Actor: "claude", Created: now.Add(-time.Hour), Expires: now.Add(time.Hour)}, 1)
+		store.NewRun(secrets.Run{ID: id, Repo: "demo", Actor: "claude", Created: now.Add(-time.Hour), Expires: now.Add(time.Hour)}, false)
 		store.EndRun(id, "succeeded", now.Add(-time.Minute), secrets.Digest{Summary: "done " + id})
 	}
-	runKey, _ := store.NewRun(secrets.Run{ID: "r-live", Repo: "demo", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
+	runKey, _ := store.NewRun(secrets.Run{ID: "r-live", Repo: "demo", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, false)
 	ownerKey, _ := store.NewAPIKey("owner", "test", "")
 	actorKey, _ := store.NewAPIKey("claude", "test", "")
 	srv := &Server{Owner: "owner", Store: store, Log: slog.Default()}
@@ -107,7 +107,7 @@ func TestEndRunDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	runKey, _ := store.NewRun(secrets.Run{ID: "r-1", Repo: "demo", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, 1)
+	runKey, _ := store.NewRun(secrets.Run{ID: "r-1", Repo: "demo", Actor: "claude", Created: now, Expires: now.Add(time.Hour)}, false)
 	srv := &Server{Owner: "owner", Store: store, Log: slog.Default()}
 	srv.health.Reconciled = true
 	req := httptest.NewRequest("DELETE", "/v1/runs/r-1", strings.NewReader(

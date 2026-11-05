@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,7 +15,7 @@ func newFlow(g *globals) *cobra.Command {
 	var implement, verify, repo, message string
 	var rounds, checkRounds int
 	var timeout, checkTimeout time.Duration
-	var waitActors, unattended bool
+	var serializeActors, unattended bool
 	cmd := &cobra.Command{
 		Use:   "flow N --implement ACTOR[:MODEL] --verify ACTOR[:MODEL]",
 		Short: "Drive one issue through implement and cross-family verify",
@@ -62,11 +61,11 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				}
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
-				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, bypassActorLimit: req.BypassActorLimit,
+				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, serializeActor: req.SerializeActor,
 					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA})
 				cmd.SetContext(previous)
-				if err != nil && strings.Contains(err.Error(), "live batch run") {
-					return fmt.Errorf("%w: %v", flow.ErrActorLimit, err)
+				if errors.Is(err, errActorBusy) {
+					return fmt.Errorf("%w: %v", flow.ErrActorBusy, err)
 				}
 				if errors.Is(err, errHeadMoved) {
 					return fmt.Errorf("%w: %v", flow.ErrHeadMoved, err)
@@ -75,7 +74,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 			})
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
 				Issue: issue, Repo: repo, Implement: implement, Verify: verify,
-				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, WaitActors: waitActors,
+				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, SerializeActors: serializeActors,
 				Attended: !unattended,
 			})
 			if err == nil {
@@ -91,7 +90,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 	cmd.Flags().IntVar(&checkRounds, "check-rounds", 2, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", time.Hour, "time limit for the post-implement checks at each head; running out is a failure")
-	cmd.Flags().BoolVar(&waitActors, "wait-actors", false, "wait for each actor's live batch run slot instead of bypassing the limit")
+	cmd.Flags().BoolVar(&serializeActors, "serialize-actors", false, "start each run only when its actor has no other live batch run, waiting until then (by default an actor's runs on different issues run concurrently)")
 	cmd.Flags().BoolVar(&unattended, "unattended", false, "leave clean base merges to the owner inbox")
 	_ = cmd.Flags().MarkHidden("unattended")
 	cmd.Flags().StringVarP(&message, "message", "m", "", `a note added to the goal prompt of every run the flow starts, implement and verify, e.g. "also read the epic #123"`)

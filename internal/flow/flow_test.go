@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -301,8 +302,8 @@ func TestFlowMovedHeadGetsAnotherVerify(t *testing.T) {
 	}
 }
 
-func TestFlowActorLimitPolicy(t *testing.T) {
-	t.Run("bypass by default", func(t *testing.T) {
+func TestFlowSerializeActors(t *testing.T) {
+	t.Run("concurrent by default", func(t *testing.T) {
 		api := &fakeAPI{}
 		var calls []RunRequest
 		runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
@@ -319,8 +320,8 @@ func TestFlowActorLimitPolicy(t *testing.T) {
 			t.Fatalf("result = %+v, error = %v, calls = %v", result, err, calls)
 		}
 		for _, req := range calls {
-			if !req.BypassActorLimit {
-				t.Errorf("%s run did not bypass the actor limit", req.Kind)
+			if req.SerializeActor {
+				t.Errorf("%s run serialised its actor", req.Kind)
 			}
 		}
 	})
@@ -329,13 +330,13 @@ func TestFlowActorLimitPolicy(t *testing.T) {
 		api := &fakeAPI{}
 		attempts := 0
 		runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
-			if req.BypassActorLimit {
-				t.Error("waiting flow bypassed the actor limit")
+			if !req.SerializeActor {
+				t.Error("serialising flow did not ask to serialise its actor")
 			}
 			if req.Kind == policy.Implement {
 				attempts++
-				if attempts == 1 {
-					return ErrActorLimit
+				if attempts <= 3 {
+					return fmt.Errorf("%w: wording the flow does not read", ErrActorBusy)
 				}
 				api.open, api.pr = true, openPR()
 				return nil
@@ -344,12 +345,69 @@ func TestFlowActorLimitPolicy(t *testing.T) {
 			return nil
 		})
 		opts := testOptions()
-		opts.WaitActors = true
+		opts.SerializeActors = true
 		result, err := (&Supervisor{API: api, Runner: runner, RetryDelay: time.Millisecond}).Run(context.Background(), opts)
-		if err != nil || result.Reason != ReadyToMerge || attempts != 2 {
+		if err != nil || result.Reason != ReadyToMerge || attempts != 4 {
 			t.Fatalf("result = %+v, error = %v, implement attempts = %d", result, err, attempts)
 		}
 	})
+
+	t.Run("a busy actor fails a flow that does not serialise", func(t *testing.T) {
+		api := &fakeAPI{}
+		attempts := 0
+		runner := RunnerFunc(func(context.Context, RunRequest) error { attempts++; return ErrActorBusy })
+		_, err := (&Supervisor{API: api, Runner: runner, RetryDelay: time.Millisecond}).Run(context.Background(), testOptions())
+		var stop *StopError
+		if !errors.As(err, &stop) || stop.Result.Reason != RunFailed || attempts != 1 {
+			t.Fatalf("error = %v, attempts = %d", err, attempts)
+		}
+	})
+}
+
+// Two flows with the same implementer on different issues run their
+// implement runs at the same time.
+func TestFlowsShareActor(t *testing.T) {
+	started := make(chan int64, 2)
+	release := make(chan struct{})
+	flowFor := func(issue int64) (Result, error) {
+		api := &fakeAPI{}
+		runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+			if req.Kind == policy.Implement {
+				started <- req.Issue
+				<-release
+				api.open, api.pr = true, openPR()
+				return nil
+			}
+			approve(api)
+			return nil
+		})
+		opts := testOptions()
+		opts.Issue = issue
+		return (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
+	}
+	errs := make(chan error, 2)
+	for _, issue := range []int64{1, 2} {
+		go func() {
+			result, err := flowFor(issue)
+			if err == nil && result.Reason != ReadyToMerge {
+				err = fmt.Errorf("flow #%d: %s", issue, result.Reason)
+			}
+			errs <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the implement runs did not start concurrently")
+		}
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
 }
 
 func TestFlowImplementWithoutPRFails(t *testing.T) {

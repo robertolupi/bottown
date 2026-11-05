@@ -71,7 +71,7 @@ func TestIssueAttachments(t *testing.T) {
 	runKey, err := store.NewRun(secrets.Run{
 		ID: "r-1", Kind: policy.Implement, Actor: "claude", Org: "bottown", Repo: "demo", Issue: 4,
 		Created: now, Expires: now.Add(time.Hour),
-	}, 1)
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

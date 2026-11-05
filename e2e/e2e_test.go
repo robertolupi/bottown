@@ -2226,7 +2226,7 @@ fi`
 
 		t.Run("resume killed flow while waiting for an actor", func(t *testing.T) {
 			issue := newIssue("flow resume")
-			blockerIssue := newIssue("actor slot blocker")
+			blockerIssue := newIssue("busy actor blocker")
 			dir := t.TempDir()
 			idFile := filepath.Join(dir, "blocker-id")
 			blockerScript := `echo "$BOTTOWN_RUN_ID" > ` + idFile + `; trap 'exit 0' TERM; while :; do sleep 1; done`
@@ -2257,17 +2257,17 @@ fi`
 				}
 			}
 
-			t.Run("bypasses the actor slot by default", func(t *testing.T) {
-				bypassIssue := newIssue("flow bypass actor slot")
-				bypassDir := t.TempDir()
-				out, err := withHarness(flowScript(bypassDir, "approve"), "flow", fmt.Sprint(bypassIssue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			t.Run("runs alongside the actor's other run by default", func(t *testing.T) {
+				concurrentIssue := newIssue("flow alongside a busy actor")
+				concurrentDir := t.TempDir()
+				out, err := withHarness(flowScript(concurrentDir, "approve"), "flow", fmt.Sprint(concurrentIssue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
 				if err != nil || !strings.Contains(out, "ready to merge") {
-					t.Fatalf("flow bypass actor slot: %v\n%s", err, out)
+					t.Fatalf("flow alongside a busy actor: %v\n%s", err, out)
 				}
-				if readCount(filepath.Join(bypassDir, "implements")) != "1" || readCount(filepath.Join(bypassDir, "verifies")) != "1" {
-					t.Error("bypassing flow used more than one round")
+				if readCount(filepath.Join(concurrentDir, "implements")) != "1" || readCount(filepath.Join(concurrentDir, "verifies")) != "1" {
+					t.Error("concurrent flow used more than one round")
 				}
-				assertStopComment(bypassIssue, "ready to merge")
+				assertStopComment(concurrentIssue, "ready to merge")
 			})
 
 			startFlow := func(name string) (*exec.Cmd, *os.File) {
@@ -2275,7 +2275,7 @@ fi`
 				if err != nil {
 					t.Fatal(err)
 				}
-				cmd := exec.Command(bin, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--wait-actors", "--timeout", "10s")
+				cmd := exec.Command(bin, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--serialize-actors", "--timeout", "10s")
 				cmd.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+flowScript(dir, "approve"))
 				cmd.Dir = demo
 				cmd.Stdout, cmd.Stderr = log, log
@@ -2307,13 +2307,13 @@ fi`
 			}
 
 			first, firstLog := startFlow("first.log")
-			waitFor("first.log", "waiting for agy's actor slot")
+			waitFor("first.log", "waiting for agy's other batch run to end")
 			_ = first.Process.Kill()
 			_ = first.Wait()
 			_ = firstLog.Close()
 
 			resumed, _ := startFlow("resumed.log")
-			waitFor("resumed.log", "waiting for agy's actor slot")
+			waitFor("resumed.log", "waiting for agy's other batch run to end")
 			a.mustCmd(demo, "run", "stop", blockerID)
 			if err := resumed.Wait(); err != nil {
 				b, _ := os.ReadFile(filepath.Join(dir, "resumed.log"))
