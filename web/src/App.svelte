@@ -137,6 +137,33 @@
     }
   }
 
+  async function handleRefresh() {
+    refreshing = true;
+    errorMessage = null;
+    try {
+      const res = await fetch('/api/actions/refresh', { method: 'POST' });
+      if (!res.ok) {
+        throw new Error(`Failed to refresh status: ${res.statusText}`);
+      }
+      status = await res.json();
+      ({
+        flowImplement: flowForm.implement,
+        flowVerify: flowForm.verify,
+        runActor: runForm.actor,
+      } = selectDefaultActors(status?.actors, {
+        flowImplement: flowForm.implement,
+        flowVerify: flowForm.verify,
+        runActor: runForm.actor,
+      }));
+      await loadHistory();
+      milestonesRefresh++;
+    } catch (e: any) {
+      errorMessage = e.message || 'Unknown error refreshing';
+    } finally {
+      refreshing = false;
+    }
+  }
+
   // Run one owner action: one at a time, its error in the banner.
   async function act(fn: () => Promise<void>) {
     if (actionLoading) return;
@@ -336,7 +363,7 @@
   <AppHeader
     {status}
     {refreshing}
-    onRefresh={() => { loadStatus(true); loadHistory(); milestonesRefresh++; }}
+    onRefresh={handleRefresh}
   />
 
   {#if actionMessage}
