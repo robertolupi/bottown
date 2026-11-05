@@ -173,7 +173,8 @@ take turns. The output goes to `<gitdir>/bottown/linux-e2e.log`
 covers linux/arm64 on Apple Silicon, where Multipass runs only arm64
 guests; not amd64, and not the real agent harnesses, which e2e replaces
 with `BOTTOWN_HARNESS_CMD` scripts. It is not one of the repository's
-checks and runs do not need it: the owner runs it before publishing `main`.
+checks, and neither `bottown check --e2e` nor `bottown flow` runs it:
+the owner runs it by hand before pushing `main` to GitHub.
 
 A retry on the same issue can reuse `issue/<n>` even when an earlier run
 kept its worktree. Before creating the server run, the launcher detaches

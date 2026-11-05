@@ -78,8 +78,8 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   needed). `make e2e` needs Docker and starts throwaway `e2e-*` instances;
   it never touches prod or dev.
   `make e2e-linux` runs `make check` and `make e2e` on Linux in a
-  Multipass VM ([docs/index.md](docs/index.md)); it is optional, and
-  runs need not use it.
+  Multipass VM ([docs/index.md](docs/index.md)); the owner runs it by
+  hand before pushing `main` to GitHub, and runs do not run it.
 - **Checks:** `make check` is what "the repository's checks" means to
   implementers and verifiers (needs Go, Node and npm; installs
   `web/node_modules` reproducibly with `npm ci` on a clean checkout):
