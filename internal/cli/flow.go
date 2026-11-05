@@ -8,13 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/flow"
 )
 
 func newFlow(g *globals) *cobra.Command {
 	var implement, verify, repo, message string
 	var rounds, checkRounds int
-	var timeout, checkTimeout time.Duration
+	var timeout, checkTimeout, actorWait time.Duration
 	var serializeActors, unattended bool
 	cmd := &cobra.Command{
 		Use:   "flow N --implement ACTOR[:MODEL] --verify ACTOR[:MODEL]",
@@ -62,10 +63,10 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
 				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, serializeActor: req.SerializeActor,
-					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA})
+					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA, synced: req.Retry})
 				cmd.SetContext(previous)
 				if errors.Is(err, errActorBusy) {
-					return fmt.Errorf("%w: %v", flow.ErrActorBusy, err)
+					return actorBusyRefusal(err)
 				}
 				if errors.Is(err, errHeadMoved) {
 					return fmt.Errorf("%w: %v", flow.ErrHeadMoved, err)
@@ -74,7 +75,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 			})
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
 				Issue: issue, Repo: repo, Implement: implement, Verify: verify,
-				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, SerializeActors: serializeActors,
+				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, SerializeActors: serializeActors, ActorWait: actorWait,
 				Attended: !unattended,
 			})
 			if err == nil {
@@ -91,6 +92,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", time.Hour, "time limit for the post-implement checks at each head; running out is a failure")
 	cmd.Flags().BoolVar(&serializeActors, "serialize-actors", false, "start each run only when its actor has no other live batch run, waiting until then (by default an actor's runs on different issues run concurrently)")
+	cmd.Flags().DurationVar(&actorWait, "actor-wait", 2*time.Hour, "with --serialize-actors, how long to wait for an actor's other batch run to end before stopping (actor busy)")
 	cmd.Flags().BoolVar(&unattended, "unattended", false, "leave clean base merges to the owner inbox")
 	_ = cmd.Flags().MarkHidden("unattended")
 	cmd.Flags().StringVarP(&message, "message", "m", "", `a note added to the goal prompt of every run the flow starts, implement and verify, e.g. "also read the epic #123"`)
@@ -98,3 +100,21 @@ rounds count against --check-rounds, not --rounds. A repository whose
 	_ = cmd.MarkFlagRequired("verify")
 	return cmd
 }
+
+// actorBusyRefusal is flow.ErrActorBusy carrying the server's refusal of a
+// run alone, which names the actor and the run that holds it, rather than
+// every layer's prefix.
+func actorBusyRefusal(err error) error {
+	msg := err.Error()
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) && apiErr.Message != "" {
+		msg = apiErr.Message
+	}
+	return busyRefusal(msg)
+}
+
+type busyRefusal string
+
+func (e busyRefusal) Error() string { return string(e) }
+
+func (e busyRefusal) Is(target error) bool { return target == flow.ErrActorBusy }

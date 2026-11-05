@@ -76,7 +76,7 @@ func TestGateHeadMovesWhileWaitingForActor(t *testing.T) {
 		return nil
 	})
 	opts := gateOptions()
-	opts.SerializeActors = true
+	opts.SerializeActors, opts.ActorWait = true, time.Minute
 	result, err := (&Supervisor{API: api, Runner: runner, Checker: checker, RetryDelay: time.Millisecond}).Run(context.Background(), opts)
 	if err != nil || result.Reason != ReadyToMerge || kinds(reqs) != "implement,verify" {
 		t.Fatalf("result = %+v, error = %v, runs = %s", result, err, kinds(reqs))
