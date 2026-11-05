@@ -354,13 +354,46 @@ func Git(dir string, cfg []string, args ...string) (string, error) {
 
 // GitCtx is Git with a context.
 func GitCtx(ctx context.Context, dir string, cfg []string, args ...string) (string, error) {
-	all := append([]string{"-C", dir}, cfg...)
-	cmd := exec.CommandContext(ctx, "git", append(all, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd := GitCommand(ctx, dir, cfg, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// GitCommand is the one place bottown builds a git command: in dir (none
+// when empty) with the global options cfg (`-c k=v`, `--git-dir D`), killed
+// with ctx, and never prompting on a terminal for credentials, which would
+// hang a run or a background process that nobody watches. Callers that
+// stream output or feed stdin set them on the command; extra environment is
+// appended to its Env.
+func GitCommand(ctx context.Context, dir string, cfg []string, args ...string) *exec.Cmd {
+	var all []string
+	if dir != "" {
+		all = append(all, "-C", dir)
+	}
+	all = append(append(all, cfg...), args...)
+	cmd := exec.CommandContext(ctx, "git", all...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cmd
+}
+
+// RemoteDefaultBranch is the default branch of remote in the checkout at
+// top: its remote HEAD if set, else what the remote says HEAD is.
+func RemoteDefaultBranch(ctx context.Context, top, remote string) (string, error) {
+	if ref, err := GitCtx(ctx, top, nil, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD"); err == nil {
+		return strings.TrimPrefix(ref, remote+"/"), nil
+	}
+	out, err := GitCtx(ctx, top, nil, "ls-remote", "--symref", remote, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			return strings.Fields(ref)[0], nil
+		}
+	}
+	return "", fmt.Errorf("cannot find the default branch of remote %s", remote)
 }

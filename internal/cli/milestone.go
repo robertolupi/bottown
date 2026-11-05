@@ -10,6 +10,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/milestone"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/spf13/cobra"
 )
 
@@ -83,7 +84,7 @@ the plan keep their issues, which apply flags for the owner.`,
 // milestoneCheck checks the plan file arg names, from the directory dir. It
 // prints the diagnostics to errw and fails if there are any.
 func milestoneCheck(out, errw io.Writer, dir, arg string) error {
-	top, topErr := git(dir, "rev-parse", "--show-toplevel")
+	top, topErr := runs.Git(dir, nil, "rev-parse", "--show-toplevel")
 
 	var file, name string // the file to read, and how diagnostics name it
 	if strings.Contains(arg, "/") || strings.HasSuffix(arg, ".md") {

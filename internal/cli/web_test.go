@@ -45,7 +45,7 @@ func fakeCheckout(t *testing.T) string {
 		t.Skip("the vite stand-in is a shell script")
 	}
 	top := t.TempDir()
-	if _, err := git(top, "init", "-q"); err != nil {
+	if _, err := runs.Git(top, nil, "init", "-q"); err != nil {
 		t.Fatal(err)
 	}
 	web := filepath.Join(top, "web")

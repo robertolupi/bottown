@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -61,11 +60,11 @@ func refuseInRun(cmd, instance string) error {
 	where := ""
 	if os.Getenv("BOTTOWN_RUN_FILE") != "" {
 		where = "this is a bottown run"
-	} else if top, err := git(".", "rev-parse", "--show-toplevel"); err == nil {
+	} else if top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel"); err == nil {
 		if strings.Contains(filepath.ToSlash(top), "/.bottown/") {
 			where = "this is a run worktree"
-		} else if actor, _ := git(top, "config", "--worktree", "--get", gitActorKey); actor != "" {
-			if gitDir, err := git(top, "rev-parse", "--absolute-git-dir"); err == nil {
+		} else if actor, _ := runs.Git(top, nil, "config", "--worktree", "--get", gitActorKey); actor != "" {
+			if gitDir, err := runs.Git(top, nil, "rev-parse", "--absolute-git-dir"); err == nil {
 				if rec, err := runs.LoadFile(filepath.Join(gitDir, "bottown", "run.json")); err == nil && rec.Key != "" {
 					where = fmt.Sprintf("actor %s's worktree is in run %s", actor, rec.ID)
 				}
@@ -310,12 +309,10 @@ func portFree(p int) bool {
 	return true
 }
 
+// gitConfig is key in the git config seen from the current directory, or "".
 func gitConfig(key string) string {
-	out, err := exec.Command("git", "config", "--get", key).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	out, _ := runs.Git("", nil, "config", "--get", key)
+	return out
 }
 
 // specLabel records a hash of the run spec, so `up` recreates the container
@@ -501,11 +498,11 @@ func whoami(ctx context.Context, inst config.Instance, key string) (string, erro
 // findSource locates the bottown source checkout.
 func findSource(src string) (string, error) {
 	if src == "" {
-		out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		out, err := runs.Git("", nil, "rev-parse", "--show-toplevel")
 		if err != nil {
 			return "", errors.New("not inside a git checkout; pass --src with the bottown source checkout")
 		}
-		src = strings.TrimSpace(string(out))
+		src = out
 	}
 	b, err := os.ReadFile(filepath.Join(src, "go.mod"))
 	if err != nil || !strings.Contains(string(b), "module "+modulePath+"\n") {
@@ -531,13 +528,13 @@ func sameImageSource(src, image, ref string) bool {
 	if err != nil {
 		return false
 	}
-	old := strings.TrimSpace(gitOut(src, "rev-parse", "--verify", "--quiet", built+"^{commit}"))
-	sha := strings.TrimSpace(gitOut(src, "rev-parse", "--verify", "--quiet", ref+"^{commit}"))
+	old, _ := runs.Git(src, nil, "rev-parse", "--verify", "--quiet", built+"^{commit}")
+	sha, _ := runs.Git(src, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if old == "" || sha == "" || !strings.HasPrefix(old, built) {
 		return false
 	}
-	args := append([]string{"-C", src, "diff", "--quiet", old, sha, "--"}, imageInputs...)
-	return exec.Command("git", args...).Run() == nil
+	_, err = runs.Git(src, nil, append([]string{"diff", "--quiet", old, sha, "--"}, imageInputs...)...)
+	return err == nil
 }
 
 func hasImage(ctx context.Context, d hostctl.Docker, image string) bool {
@@ -553,7 +550,7 @@ func buildImage(ctx context.Context, d hostctl.Docker, src, ref, instance string
 		return "", err
 	}
 	if ref == "" {
-		version := strings.TrimSpace(gitOut(src, "describe", "--always", "--dirty", "--abbrev=12"))
+		version, _ := runs.GitCtx(ctx, src, nil, "describe", "--always", "--dirty", "--abbrev=12")
 		if version == "" {
 			version = "uncommitted"
 		}
@@ -561,7 +558,7 @@ func buildImage(ctx context.Context, d hostctl.Docker, src, ref, instance string
 		err := d.Build(ctx, src, nil, "docker/Dockerfile", tag, map[string]string{"VERSION": version})
 		return tag, err
 	}
-	sha := strings.TrimSpace(gitOut(src, "rev-parse", "--verify", ref+"^{commit}"))
+	sha, _ := runs.GitCtx(ctx, src, nil, "rev-parse", "--verify", ref+"^{commit}")
 	if sha == "" {
 		return "", fmt.Errorf("unknown git ref %q in %s", ref, src)
 	}
@@ -570,7 +567,7 @@ func buildImage(ctx context.Context, d hostctl.Docker, src, ref, instance string
 	if id, err := d.ImageID(ctx, tag); err != nil || id != "" {
 		return tag, err
 	}
-	archive := exec.CommandContext(ctx, "git", "-C", src, "archive", "--format=tar", sha)
+	archive := runs.GitCommand(ctx, src, nil, "archive", "--format=tar", sha)
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -584,11 +581,6 @@ func buildImage(ctx context.Context, d hostctl.Docker, src, ref, instance string
 		berr = fmt.Errorf("git archive: %w", werr)
 	}
 	return tag, berr
-}
-
-func gitOut(dir string, args ...string) string {
-	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
-	return string(out)
 }
 
 func newImage(g *globals) *cobra.Command {

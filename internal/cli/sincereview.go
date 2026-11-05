@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -71,30 +71,30 @@ func sinceReviewOf(reviews []server.ReviewOut, reviewer string) (rev server.Revi
 // mergeBase is the forge's merge base of new, if it knows one: once the PR
 // has merged, new is on the base branch and only the forge remembers where
 // it branched.
-func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, error) {
+func sinceReview(ctx context.Context, dir, remote, baseBranch, mergeBase, old, new string) (string, error) {
 	if old == new {
 		return fmt.Sprintf("no change: the head is still the reviewed commit %s\n", short(new)), nil
 	}
-	if _, err := git(dir, "fetch", "-q", remote, baseBranch); err != nil {
+	if _, err := runs.GitCtx(ctx, dir, nil, "fetch", "-q", remote, baseBranch); err != nil {
 		return "", err
 	}
-	tip, err := git(dir, "rev-parse", "FETCH_HEAD")
+	tip, err := runs.GitCtx(ctx, dir, nil, "rev-parse", "FETCH_HEAD")
 	if err != nil {
 		return "", err
 	}
 	for _, sha := range []string{old, new} {
-		if _, err := git(dir, "cat-file", "-e", sha+"^{commit}"); err == nil {
+		if _, err := runs.GitCtx(ctx, dir, nil, "cat-file", "-e", sha+"^{commit}"); err == nil {
 			continue
 		}
-		if _, err := git(dir, "fetch", "-q", remote, sha); err != nil {
+		if _, err := runs.GitCtx(ctx, dir, nil, "fetch", "-q", remote, sha); err != nil {
 			return "", fmt.Errorf("cannot fetch %s from %s: %w", short(sha), remote, err)
 		}
 	}
-	oldBase, err := git(dir, "merge-base", old, tip)
+	oldBase, err := runs.GitCtx(ctx, dir, nil, "merge-base", old, tip)
 	if err != nil {
 		return "", err
 	}
-	newBase, err := git(dir, "merge-base", new, tip)
+	newBase, err := runs.GitCtx(ctx, dir, nil, "merge-base", new, tip)
 	if err != nil {
 		return "", err
 	}
@@ -103,12 +103,12 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 	// forge's merge base, a point of the base branch before the merge.
 	if mergeBase != "" {
 		if newBase == new {
-			if _, err := git(dir, "merge-base", "--is-ancestor", mergeBase, new); err == nil {
+			if _, err := runs.GitCtx(ctx, dir, nil, "merge-base", "--is-ancestor", mergeBase, new); err == nil {
 				newBase = mergeBase
 			}
 		}
 		if oldBase == old {
-			if mb, err := git(dir, "merge-base", old, mergeBase); err == nil {
+			if mb, err := runs.GitCtx(ctx, dir, nil, "merge-base", old, mergeBase); err == nil {
 				oldBase = mb
 			}
 		}
@@ -118,11 +118,11 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 			return "", fmt.Errorf("cannot tell where %s branched from %s: it is already on it", short(c[1]), baseBranch)
 		}
 	}
-	oldID, err := patchID(dir, oldBase, old)
+	oldID, err := patchID(ctx, dir, oldBase, old)
 	if err != nil {
 		return "", err
 	}
-	newID, err := patchID(dir, newBase, new)
+	newID, err := patchID(ctx, dir, newBase, new)
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +132,7 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 		}
 		return fmt.Sprintf("same patch, rebased onto %s (was on %s)\n", short(newBase), short(oldBase)), nil
 	}
-	rd, err := git(dir, "range-diff", "--no-color", oldBase+".."+old, newBase+".."+new)
+	rd, err := runs.GitCtx(ctx, dir, nil, "range-diff", "--no-color", oldBase+".."+old, newBase+".."+new)
 	if err != nil {
 		return "", err
 	}
@@ -154,7 +154,7 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 		if f[0] != "-:" || f[2] != ">" {
 			continue
 		}
-		show, err := git(dir, "show", "--no-color", "--no-ext-diff", "--format=commit %H%n%n    %s", f[4])
+		show, err := runs.GitCtx(ctx, dir, nil, "show", "--no-color", "--no-ext-diff", "--format=commit %H%n%n    %s", f[4])
 		if err != nil {
 			return "", err
 		}
@@ -163,7 +163,7 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 	// Every commit matches, yet the whole change differs: the difference is
 	// in what range-diff leaves out, such as an edit in a merge commit.
 	if !differs {
-		full, err := git(dir, "diff", "--no-color", "--no-ext-diff", newBase, new)
+		full, err := runs.GitCtx(ctx, dir, nil, "diff", "--no-color", "--no-ext-diff", newBase, new)
 		if err != nil {
 			return "", err
 		}
@@ -177,9 +177,9 @@ func sinceReview(dir, remote, baseBranch, mergeBase, old, new string) (string, e
 // the same change on any base, however it is split into commits. It is
 // --verbatim, as whitespace can matter (indentation, string literals): the
 // default ID ignores it.
-func patchID(dir, base, head string) (string, error) {
-	diff := exec.Command("git", "-C", dir, "diff", "--no-color", "--no-ext-diff", base, head)
-	id := exec.Command("git", "-C", dir, "patch-id", "--verbatim")
+func patchID(ctx context.Context, dir, base, head string) (string, error) {
+	diff := runs.GitCommand(ctx, dir, nil, "diff", "--no-color", "--no-ext-diff", base, head)
+	id := runs.GitCommand(ctx, dir, nil, "patch-id", "--verbatim")
 	var out, errb bytes.Buffer
 	pipe, err := diff.StdoutPipe()
 	if err != nil {

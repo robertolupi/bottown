@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -128,18 +127,9 @@ type ActionResult struct {
 
 var prRegex = regexp.MustCompile(`(?:Merge pull request '.*'|PR)\s+[#!](\d+)|\([#!](\d+)\)`)
 
-func (s *Server) git(args ...string) (string, error) {
-	return git(s.cfg.RepoTop, args...)
-}
-
-func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
+// git runs git in the owner's checkout.
+func (s *Server) git(ctx context.Context, args ...string) (string, error) {
+	return runs.GitCtx(ctx, s.cfg.RepoTop, nil, args...)
 }
 
 // ComputeStatus calculates the Upstream and Health view data.
@@ -165,42 +155,42 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	res.Forge.ForgeURL = s.cfg.Instance.ForgejoURL()
 
 	base := "main"
-	if b, err := remoteDefaultBranch(s.cfg.RepoTop, remote); err == nil && b != "" {
+	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 	res.Forge.DefaultBranch = base
 
 	// Fetch forge remote
-	_, _ = s.git("fetch", "-q", remote)
+	_, _ = s.git(ctx, "fetch", "-q", remote)
 
-	if checkoutSHA, err := s.git("rev-parse", "--short", "HEAD"); err == nil {
+	if checkoutSHA, err := s.git(ctx, "rev-parse", "--short", "HEAD"); err == nil {
 		res.Forge.CheckoutSHA = checkoutSHA
 	}
 	remoteRef := "refs/remotes/" + remote + "/" + base
-	if forgeSHA, err := s.git("rev-parse", "--short", remoteRef); err == nil {
+	if forgeSHA, err := s.git(ctx, "rev-parse", "--short", remoteRef); err == nil {
 		res.Forge.ForgeSHA = forgeSHA
-		if out, err := s.git("rev-list", "--count", "HEAD.."+remoteRef); err == nil {
+		if out, err := s.git(ctx, "rev-list", "--count", "HEAD.."+remoteRef); err == nil {
 			res.Forge.BehindCount, _ = strconv.Atoi(out)
 		}
-		if out, err := s.git("rev-list", "--count", remoteRef+"..HEAD"); err == nil {
+		if out, err := s.git(ctx, "rev-list", "--count", remoteRef+"..HEAD"); err == nil {
 			res.Forge.AheadCount, _ = strconv.Atoi(out)
 		}
 	}
 
 	// 2. Upstream Status (evaluated against refs/heads/<base>, not HEAD)
 	localRef := "refs/heads/" + base
-	if headSHA, err := s.git("rev-parse", localRef); err == nil {
+	if headSHA, err := s.git(ctx, "rev-parse", localRef); err == nil {
 		res.Upstream.HeadSHA = headSHA
 	}
 
-	originURL, err := s.git("remote", "get-url", "origin")
+	originURL, err := s.git(ctx, "remote", "get-url", "origin")
 	if err == nil && originURL != "" {
 		res.Upstream.HasUpstream = true
 		res.Upstream.OriginURL = originURL
 
 		// Fetch origin if forced or never fetched
 		if forceFetch || s.lastFetch.IsZero() {
-			if _, err := s.git("fetch", "-q", "origin"); err == nil {
+			if _, err := s.git(ctx, "fetch", "-q", "origin"); err == nil {
 				now := time.Now()
 				s.lastFetch = now
 				res.Upstream.FetchedAt = &now
@@ -212,16 +202,16 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 		}
 
 		originRef := "refs/remotes/origin/" + base
-		if _, err := s.git("rev-parse", "--verify", originRef); err == nil && res.Upstream.HeadSHA != "" {
-			if out, err := s.git("rev-list", "--count", originRef+".."+localRef); err == nil {
+		if _, err := s.git(ctx, "rev-parse", "--verify", originRef); err == nil && res.Upstream.HeadSHA != "" {
+			if out, err := s.git(ctx, "rev-list", "--count", originRef+".."+localRef); err == nil {
 				res.Upstream.AheadCount, _ = strconv.Atoi(out)
 			}
-			if out, err := s.git("rev-list", "--count", localRef+".."+originRef); err == nil {
+			if out, err := s.git(ctx, "rev-list", "--count", localRef+".."+originRef); err == nil {
 				res.Upstream.BehindCount, _ = strconv.Atoi(out)
 			}
 
 			if res.Upstream.AheadCount > 0 {
-				logOut, err := s.git("log", "--format=%H%x1f%s%x1f%an%x1f%ad", "--date=short", originRef+".."+localRef)
+				logOut, err := s.git(ctx, "log", "--format=%H%x1f%s%x1f%an%x1f%ad", "--date=short", originRef+".."+localRef)
 				if err == nil && logOut != "" {
 					lines := strings.Split(logOut, "\n")
 					for _, line := range lines {
@@ -356,7 +346,7 @@ func (s *Server) fetchActors(ctx context.Context) []ActorDetail {
 }
 
 func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
-	out, err := s.git("worktree", "list", "--porcelain")
+	out, err := s.git(ctx, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil
 	}
@@ -394,18 +384,18 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		if path == "" {
 			continue
 		}
-		actor, _ := git(path, "config", "--worktree", "--get", "bottown.actor")
+		actor, _ := runs.GitCtx(ctx, path, nil, "config", "--worktree", "--get", "bottown.actor")
 		if actor == "" {
 			continue
 		}
-		lastRun, _ := git(path, "config", "--worktree", "--get", "bottown.run")
+		lastRun, _ := runs.GitCtx(ctx, path, nil, "config", "--worktree", "--get", "bottown.run")
 		if head == "(detached)" {
-			if sha, err := git(path, "rev-parse", "--short", "HEAD"); err == nil {
+			if sha, err := runs.GitCtx(ctx, path, nil, "rev-parse", "--short", "HEAD"); err == nil {
 				head = sha + " (detached)"
 			}
 		}
 
-		statusOut, _ := git(path, "status", "--porcelain")
+		statusOut, _ := runs.GitCtx(ctx, path, nil, "status", "--porcelain")
 		isDirty := len(strings.TrimSpace(statusOut)) > 0
 
 		// A leased worktree holds its run in bottown.run until `run end`.
@@ -421,14 +411,14 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		}
 		wts = append(wts, info)
 	}
-	return append(wts, s.ephemeralWorktrees(liveRuns)...)
+	return append(wts, s.ephemeralWorktrees(ctx, liveRuns)...)
 }
 
 // ephemeralWorktrees lists the worktrees of launched runs (`bottown run
 // implement/verify/discuss`) still present under .bottown/runs. They belong
 // to the runs mirror, not the main checkout, so `git worktree list` in the
 // checkout does not show them.
-func (s *Server) ephemeralWorktrees(liveRuns map[string]bool) []ActorWorktreeInfo {
+func (s *Server) ephemeralWorktrees(ctx context.Context, liveRuns map[string]bool) []ActorWorktreeInfo {
 	runsDir := filepath.Join(s.cfg.RepoTop, ".bottown", "runs")
 	ws := &runs.Workspace{RunsDir: runsDir}
 	recs, err := ws.Records(io.Discard)
@@ -447,13 +437,13 @@ func (s *Server) ephemeralWorktrees(liveRuns map[string]bool) []ActorWorktreeInf
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			continue
 		}
-		head, _ := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
+		head, _ := runs.GitCtx(ctx, dir, nil, "rev-parse", "--abbrev-ref", "HEAD")
 		if head == "HEAD" {
-			if sha, err := git(dir, "rev-parse", "--short", "HEAD"); err == nil {
+			if sha, err := runs.GitCtx(ctx, dir, nil, "rev-parse", "--short", "HEAD"); err == nil {
 				head = sha + " (detached)"
 			}
 		}
-		statusOut, _ := git(dir, "status", "--porcelain")
+		statusOut, _ := runs.GitCtx(ctx, dir, nil, "status", "--porcelain")
 		info := ActorWorktreeInfo{
 			Actor:     r.Actor,
 			Path:      dir,
@@ -476,11 +466,11 @@ func (s *Server) ephemeralWorktrees(liveRuns map[string]bool) []ActorWorktreeInf
 func (s *Server) ExecutePull(ctx context.Context) (string, error) {
 	remote := s.cfg.Instance.Remote()
 	base := "main"
-	if b, err := remoteDefaultBranch(s.cfg.RepoTop, remote); err == nil && b != "" {
+	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "-C", s.cfg.RepoTop, "pull", "--ff-only", remote, base)
+	cmd := runs.GitCommand(ctx, s.cfg.RepoTop, nil, "pull", "--ff-only", remote, base)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
@@ -494,12 +484,12 @@ func (s *Server) ExecutePull(ctx context.Context) (string, error) {
 func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, error) {
 	remote := s.cfg.Instance.Remote()
 	base := "main"
-	if b, err := remoteDefaultBranch(s.cfg.RepoTop, remote); err == nil && b != "" {
+	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 
 	localRef := "refs/heads/" + base
-	currentHead, err := s.git("rev-parse", localRef)
+	currentHead, err := s.git(ctx, "rev-parse", localRef)
 	if err != nil {
 		return "", fmt.Errorf("rev-parse %s: %w", localRef, err)
 	}
@@ -512,7 +502,7 @@ func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, 
 	}
 
 	refspec := fmt.Sprintf("%s:refs/heads/%s", currentHead, base)
-	cmd := exec.CommandContext(ctx, "git", "-C", s.cfg.RepoTop, "push", "origin", refspec)
+	cmd := runs.GitCommand(ctx, s.cfg.RepoTop, nil, "push", "origin", refspec)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
@@ -534,20 +524,4 @@ func (s *Server) client() *client.Client {
 // refusal is a *client.APIError.
 func (s *Server) callServer(ctx context.Context, method, path string, in, out any) error {
 	return s.client().Call(ctx, method, path, in, out)
-}
-
-func remoteDefaultBranch(top, remote string) (string, error) {
-	if ref, err := git(top, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD"); err == nil {
-		return strings.TrimPrefix(ref, remote+"/"), nil
-	}
-	out, err := git(top, "ls-remote", "--symref", remote, "HEAD")
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
-			return strings.Fields(ref)[0], nil
-		}
-	}
-	return "main", nil
 }

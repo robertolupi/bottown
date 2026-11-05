@@ -604,10 +604,10 @@ func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := git(mainDir, "init", "-q"); err != nil {
+	if _, err := runs.Git(mainDir, nil, "init", "-q"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := git(mainDir, "config", "extensions.worktreeConfig", "true"); err != nil {
+	if _, err := runs.Git(mainDir, nil, "config", "extensions.worktreeConfig", "true"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -616,13 +616,13 @@ func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
 		if err := os.MkdirAll(actorDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := git(actorDir, "init", "-q"); err != nil {
+		if _, err := runs.Git(actorDir, nil, "init", "-q"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := git(actorDir, "config", "extensions.worktreeConfig", "true"); err != nil {
+		if _, err := runs.Git(actorDir, nil, "config", "extensions.worktreeConfig", "true"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := git(actorDir, "config", "--worktree", gitActorKey, "crush"); err != nil {
+		if _, err := runs.Git(actorDir, nil, "config", "--worktree", gitActorKey, "crush"); err != nil {
 			t.Fatal(err)
 		}
 		t.Chdir(actorDir)
@@ -640,7 +640,7 @@ func TestOpenRunContextRefusesActorAndRunWorktrees(t *testing.T) {
 		if err := os.MkdirAll(runDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := git(runDir, "init", "-q"); err != nil {
+		if _, err := runs.Git(runDir, nil, "init", "-q"); err != nil {
 			t.Fatal(err)
 		}
 		t.Chdir(runDir)

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // Result is a trial merge of head and base.
@@ -19,7 +21,7 @@ type Result struct {
 // MergeTree tests merging base into head without touching a worktree.
 // A conflict is a result, not an error; its tree must not be committed.
 func MergeTree(ctx context.Context, gitDir, head, base string) (Result, error) {
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "merge-tree", "--write-tree", "--name-only", head, base)
+	cmd := runs.GitCommand(ctx, "", []string{"--git-dir", gitDir}, "merge-tree", "--write-tree", "--name-only", head, base)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -45,7 +47,7 @@ func MergeTree(ctx context.Context, gitDir, head, base string) (Result, error) {
 
 // IsAncestor reports whether ancestor is already contained in commit.
 func IsAncestor(ctx context.Context, gitDir, ancestor, commit string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "merge-base", "--is-ancestor", ancestor, commit)
+	cmd := runs.GitCommand(ctx, "", []string{"--git-dir", gitDir}, "merge-base", "--is-ancestor", ancestor, commit)
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {

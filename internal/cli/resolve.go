@@ -2,11 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 // gitInstanceKey is the checkout-local git config key naming the instance a
@@ -21,8 +21,8 @@ const gitInstanceKey = "bottown.instance"
 //  3. prod.
 func resolveInstance(dir string) (name, source string, err error) {
 	// Repository or worktree config (an actor worktree carries its own).
-	if out, err := exec.Command("git", "-C", dir, "config", "--get", gitInstanceKey).Output(); err == nil {
-		name := strings.TrimSpace(string(out))
+	if out, err := runs.Git(dir, nil, "config", "--get", gitInstanceKey); err == nil {
+		name := out
 		if err := config.ValidInstance(name); err != nil {
 			return "", "", fmt.Errorf("git config %s: %w", gitInstanceKey, err)
 		}
@@ -46,7 +46,7 @@ func resolveInstance(dir string) (name, source string, err error) {
 // remoteInstances lists the configured instances whose git endpoint some
 // remote of the checkout in dir points at.
 func remoteInstances(dir string) ([]string, error) {
-	out, err := exec.Command("git", "-C", dir, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+	out, err := remoteURLs(dir)
 	if err != nil {
 		return nil, nil // not a checkout, or no remotes
 	}
@@ -61,7 +61,7 @@ func remoteInstances(dir string) ([]string, error) {
 			continue
 		}
 		prefix := inst.ServerURL() + "/git/"
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, line := range strings.Split(out, "\n") {
 			_, url, _ := strings.Cut(line, " ")
 			if strings.HasPrefix(url, prefix) && !slices.Contains(matches, n) {
 				matches = append(matches, n)
@@ -71,15 +71,21 @@ func remoteInstances(dir string) ([]string, error) {
 	return matches, nil
 }
 
+// remoteURLs is the checkout's remote URLs, one "remote.<name>.url <url>"
+// line each.
+func remoteURLs(dir string) (string, error) {
+	return runs.Git(dir, nil, "config", "--get-regexp", `^remote\..*\.url$`)
+}
+
 // repoOnInstance returns "org/name" if the checkout in dir has a remote on
 // inst's git endpoint.
 func repoOnInstance(dir string, inst config.Instance) (string, bool) {
-	out, err := exec.Command("git", "-C", dir, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+	out, err := remoteURLs(dir)
 	if err != nil {
 		return "", false
 	}
 	prefix := inst.ServerURL() + "/git/"
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		_, url, _ := strings.Cut(line, " ")
 		if rest, ok := strings.CutPrefix(url, prefix); ok {
 			return strings.TrimSuffix(rest, ".git"), true

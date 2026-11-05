@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/webui"
 )
 
@@ -177,7 +178,7 @@ func Shoot(ctx context.Context, opts Options) (Result, error) {
 	top := opts.CheckoutDir
 	if top == "" {
 		var err error
-		top, err = git(".", "rev-parse", "--show-toplevel")
+		top, err = runs.Git(".", nil, "rev-parse", "--show-toplevel")
 		if err != nil {
 			return Result{}, errors.New("not inside a git checkout")
 		}
@@ -815,14 +816,4 @@ func tailFile(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
-}
-
-func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	b, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
 }

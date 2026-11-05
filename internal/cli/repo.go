@@ -2,14 +2,12 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,22 +44,12 @@ protection. "origin" is never touched: it stays the external upstream.`,
 	return repo
 }
 
-func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
-}
-
 func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string) error {
 	inst, err := g.loadInstance()
 	if err != nil {
 		return err
 	}
-	top, err := git(".", "rev-parse", "--show-toplevel")
+	top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return errors.New("not inside a git checkout")
 	}
@@ -69,7 +57,7 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	// existing remote is never silently re-pointed at a different repo.
 	remote := inst.Remote()
 	existing := ""
-	if u, err := git(top, "remote", "get-url", remote); err == nil {
+	if u, err := runs.Git(top, nil, "remote", "get-url", remote); err == nil {
 		if _, p, ok := strings.Cut(u, "/git/"); ok {
 			_, existing, _ = strings.Cut(strings.TrimSuffix(p, ".git"), "/")
 		}
@@ -87,7 +75,7 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 		return fmt.Errorf("remote %s already points at bottown repo %q, not %q; change it with `git remote set-url` first if that is intended", remote, existing, name)
 	}
 	if branch == "" {
-		if branch, err = git(top, "symbolic-ref", "--short", "HEAD"); err != nil {
+		if branch, err = runs.Git(top, nil, "symbolic-ref", "--short", "HEAD"); err != nil {
 			return errors.New("detached HEAD; pass --branch")
 		}
 	}
@@ -101,13 +89,13 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	}
 	url := inst.ServerURL() + res.GitPath
 	r := lipgloss.NewRenderer(out)
-	if have, err := git(top, "remote", "get-url", remote); err != nil {
-		if _, err := git(top, "remote", "add", remote, url); err != nil {
+	if have, err := runs.Git(top, nil, "remote", "get-url", remote); err != nil {
+		if _, err := runs.Git(top, nil, "remote", "add", remote, url); err != nil {
 			return err
 		}
 		printRepoRemoteAdded(out, r, remote, url)
 	} else if have != url {
-		if _, err := git(top, "remote", "set-url", remote, url); err != nil {
+		if _, err := runs.Git(top, nil, "remote", "set-url", remote, url); err != nil {
 			return err
 		}
 		printRepoRemoteUpdated(out, r, remote, url)
@@ -117,13 +105,13 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 	}
 	// Associate the checkout with this instance unless it already is with
 	// one (a repo can live on several; the first stays the default).
-	if _, err := git(top, "config", "--local", "--get", gitInstanceKey); err != nil {
-		if _, err := git(top, "config", "--local", gitInstanceKey, inst.Name); err != nil {
+	if _, err := runs.Git(top, nil, "config", "--local", "--get", gitInstanceKey); err != nil {
+		if _, err := runs.Git(top, nil, "config", "--local", gitInstanceKey, inst.Name); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "set git config %s = %s\n", gitInstanceKey, inst.Name)
 	}
-	push := exec.CommandContext(ctx, "git", "-C", top, "push", remote, branch)
+	push := runs.GitCommand(ctx, top, nil, "push", remote, branch)
 	push.Stdout, push.Stderr = out, os.Stderr
 	if err := push.Run(); err != nil {
 		return fmt.Errorf("git push %s %s: %w", remote, branch, err)
@@ -178,13 +166,13 @@ func configureCredentialHelper(top string, inst config.Instance) error {
 		return err
 	}
 	k := "credential." + inst.ServerURL() + ".helper"
-	_, _ = git(top, "config", "--local", "--unset-all", k)
+	_, _ = runs.Git(top, nil, "config", "--local", "--unset-all", k)
 	// An empty helper resets helpers inherited from global config (such as
 	// osxkeychain), so the key is neither looked up nor stored elsewhere.
-	if _, err := git(top, "config", "--local", "--add", k, ""); err != nil {
+	if _, err := runs.Git(top, nil, "config", "--local", "--add", k, ""); err != nil {
 		return err
 	}
-	_, err = git(top, "config", "--local", "--add", k, fmt.Sprintf("!%q -i %s credential", self, inst.Name))
+	_, err = runs.Git(top, nil, "config", "--local", "--add", k, fmt.Sprintf("!%q -i %s credential", self, inst.Name))
 	return err
 }
 

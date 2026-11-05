@@ -113,7 +113,7 @@ func planBranchGC(base string, remote map[string]string, local []string, gd bran
 // "refs/heads/") matching pattern whose tips are reachable from into, with
 // their tips.
 func mergedBranches(top, into, prefix, pattern string) (map[string]string, error) {
-	out, err := git(top, "for-each-ref", "--merged", into, "--format=%(objectname) %(refname)", prefix+pattern)
+	out, err := runs.Git(top, nil, "for-each-ref", "--merged", into, "--format=%(objectname) %(refname)", prefix+pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func mergedBranches(top, into, prefix, pattern string) (map[string]string, error
 // checkedOutBranches maps each branch checked out in a worktree of top
 // (main itself, actor and run worktrees) to that worktree's path.
 func checkedOutBranches(top string) (map[string]string, error) {
-	out, err := git(top, "worktree", "list", "--porcelain")
+	out, err := runs.Git(top, nil, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func gcBranches(cmd *cobra.Command, g *globals, pattern string, dryRun bool) err
 	if _, err := runs.GitCtx(ctx, top, nil, "fetch", "-q", "--prune", remote); err != nil {
 		return err
 	}
-	base, err := remoteDefaultBranch(top, remote)
+	base, err := runs.RemoteDefaultBranch(ctx, top, remote)
 	if err != nil {
 		return err
 	}
@@ -262,7 +262,7 @@ func gcBranches(cmd *cobra.Command, g *globals, pattern string, dryRun bool) err
 		// -D, not -d: -d compares with HEAD or a (just deleted) upstream,
 		// not with the forge's default branch, which mergedBranches did.
 		if len(p.Local) > 0 {
-			if _, err := git(top, append([]string{"branch", "-q", "-D"}, p.Local...)...); err != nil {
+			if _, err := runs.Git(top, nil, append([]string{"branch", "-q", "-D"}, p.Local...)...); err != nil {
 				return err
 			}
 		}

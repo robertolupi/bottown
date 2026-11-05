@@ -95,7 +95,7 @@ func (r *sinceRepo) commit(file, content, msg string) string {
 // since is sinceReview from the verifier's clone.
 func (r *sinceRepo) since(mergeBase, old, new string) string {
 	r.t.Helper()
-	out, err := sinceReview(r.check, "origin", "main", mergeBase, old, new)
+	out, err := sinceReview(r.t.Context(), r.check, "origin", "main", mergeBase, old, new)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestSinceReview(t *testing.T) {
 	// Merged: the head is on main, and only the forge's merge base says
 	// where it branched.
 	r.git("push", "-q", "origin", "feature:main")
-	if _, err := sinceReview(r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
+	if _, err := sinceReview(t.Context(), r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
 		t.Errorf("merged without a merge base: %v", err)
 	}
 	if out := r.since(m1, reviewed, fixed); !strings.Contains(out, "fix f") {
@@ -168,7 +168,7 @@ func TestSinceReviewMergedFollowUp(t *testing.T) {
 	fixed := r.commit("f.txt", "one\ntwo\n", "fix f")
 	r.git("push", "-q", "origin", "feature:main")
 
-	if _, err := sinceReview(r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
+	if _, err := sinceReview(t.Context(), r.check, "origin", "main", "", reviewed, fixed); err == nil || !strings.Contains(err.Error(), "already on it") {
 		t.Errorf("without a merge base: %v", err)
 	}
 	out := r.since(base, reviewed, fixed)

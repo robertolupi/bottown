@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -65,7 +66,7 @@ func clone(cmd *cobra.Command, g *globals, src, famDir, name, origin string, act
 	if origin == "" {
 		if isURL(src) {
 			origin = src
-		} else if u, err := git(src, "remote", "get-url", "origin"); err == nil {
+		} else if u, err := runs.Git(src, nil, "remote", "get-url", "origin"); err == nil {
 			origin = u
 		}
 	}
@@ -73,10 +74,10 @@ func clone(cmd *cobra.Command, g *globals, src, famDir, name, origin string, act
 		if src, err = filepath.Abs(src); err != nil {
 			return err
 		}
-		if _, err := git(src, "rev-parse", "--show-toplevel"); err != nil {
+		if _, err := runs.Git(src, nil, "rev-parse", "--show-toplevel"); err != nil {
 			return fmt.Errorf("%s is not a git checkout", src)
 		}
-		if st, err := git(src, "status", "--porcelain"); err == nil && st != "" {
+		if st, err := runs.Git(src, nil, "status", "--porcelain"); err == nil && st != "" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s has uncommitted changes; only committed history is cloned\n", src)
 		}
 	}
@@ -99,22 +100,22 @@ func clone(cmd *cobra.Command, g *globals, src, famDir, name, origin string, act
 	if err := os.MkdirAll(famDir, 0o755); err != nil {
 		return err
 	}
-	if _, err := git(famDir, "clone", "-q", src, main); err != nil {
+	if _, err := runs.Git(famDir, nil, "clone", "-q", src, main); err != nil {
 		return err
 	}
 	switch {
 	case origin == "":
-		if _, err := git(main, "remote", "remove", "origin"); err != nil {
+		if _, err := runs.Git(main, nil, "remote", "remove", "origin"); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "cloned %s into %s (no upstream origin; add one with `git remote add origin URL`)\n", src, main)
 	case origin != src:
-		if _, err := git(main, "remote", "set-url", "origin", origin); err != nil {
+		if _, err := runs.Git(main, nil, "remote", "set-url", "origin", origin); err != nil {
 			return err
 		}
 		// Refresh origin's refs from the real upstream; ignore failures
 		// (offline, or a private upstream), the clone itself is complete.
-		if _, err := git(main, "fetch", "-q", "--prune", "origin"); err != nil {
+		if _, err := runs.Git(main, nil, "fetch", "-q", "--prune", "origin"); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: fetch from origin %s: %v\n", origin, err)
 		}
 		fmt.Fprintf(out, "cloned %s into %s (origin %s)\n", src, main, origin)

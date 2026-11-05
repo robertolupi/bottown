@@ -57,15 +57,15 @@ func resolveAgent() (*agentCtx, error) {
 		}
 		return &agentCtx{Actor: rec.Actor, ServerURL: rec.ServerURL, Key: rec.Key, RunID: rec.ID, Remote: config.Instance{Name: inst}.Remote(), AttachDir: rec.Attachments, RunFile: f}, nil
 	}
-	top, err := git(".", "rev-parse", "--show-toplevel")
+	top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, errors.New("not inside a git checkout")
 	}
-	actor, _ := git(top, "config", "--worktree", "--get", gitActorKey)
+	actor, _ := runs.Git(top, nil, "config", "--worktree", "--get", gitActorKey)
 	if actor == "" {
 		return nil, errors.New("not an actor worktree (run `bottown actor setup <actor>` in the main checkout), and no run in $BOTTOWN_RUN_FILE")
 	}
-	gitDir, err := git(top, "rev-parse", "--absolute-git-dir")
+	gitDir, err := runs.Git(top, nil, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func resolveAgent() (*agentCtx, error) {
 	} else {
 		return nil, fmt.Errorf("actor worktree %s has no key; run `bottown actor setup %s` in the main checkout", top, actor)
 	}
-	inst, _ := git(top, "config", "--get", gitInstanceKey)
+	inst, _ := runs.Git(top, nil, "config", "--get", gitInstanceKey)
 	if inst == "" {
 		inst = config.DefaultInstance
 	}
@@ -234,22 +234,22 @@ type headInfo struct {
 // shows) and compares HEAD with its default branch. It returns nil when
 // HEAD cannot be read.
 func worktreeHead(ctx context.Context, top, remote string) *headInfo {
-	sha, err := git(top, "rev-parse", "--short", "HEAD")
+	sha, err := runs.Git(top, nil, "rev-parse", "--short", "HEAD")
 	if err != nil {
 		return nil
 	}
 	h := &headInfo{SHA: sha}
-	h.Branch, _ = git(top, "symbolic-ref", "-q", "--short", "HEAD")
+	h.Branch, _ = runs.Git(top, nil, "symbolic-ref", "-q", "--short", "HEAD")
 	fctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = runs.GitCtx(fctx, top, nil, "fetch", "-q", remote)
 	h.Fetched = err == nil
-	branch, err := remoteDefaultBranch(top, remote)
+	branch, err := runs.RemoteDefaultBranch(ctx, top, remote)
 	if err != nil {
 		return h
 	}
 	base := remote + "/" + branch
-	counts, err := git(top, "rev-list", "--left-right", "--count", "HEAD..."+base)
+	counts, err := runs.Git(top, nil, "rev-list", "--left-right", "--count", "HEAD..."+base)
 	if err != nil {
 		return h
 	}
@@ -338,7 +338,7 @@ func (a *agentCtx) defaultRepo() string {
 	if a.RunID != "" || a.Worktree == "" {
 		return ""
 	}
-	u, err := git(a.Worktree, "remote", "get-url", a.Remote)
+	u, err := runs.Git(a.Worktree, nil, "remote", "get-url", a.Remote)
 	if err != nil {
 		return ""
 	}
@@ -554,7 +554,7 @@ Without an earlier review it shows the full diff.`,
 			if dir == "" {
 				dir = "."
 			}
-			text, err := sinceReview(dir, a.Remote, p.BaseBranch, p.MergeBase, rev.CommitID, p.HeadSHA)
+			text, err := sinceReview(cmd.Context(), dir, a.Remote, p.BaseBranch, p.MergeBase, rev.CommitID, p.HeadSHA)
 			if err != nil {
 				return err
 			}
