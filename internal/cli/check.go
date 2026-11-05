@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
@@ -523,6 +524,12 @@ func (a *agentCtx) recordCheck(ctx context.Context, top string, res checkResult)
 		}
 		var out server.CommitStatus
 		if err := a.call(ctx, "POST", "/v1/forge/status", server.CommitStatusIn{SHA: res.SHA, Check: g, State: state, Description: res.groupDescription(g)}, &out); err != nil {
+			// The server's refusal ("push HEAD first", …) is the reason
+			// the user acts on; the method and path are noise here.
+			var apiErr *client.APIError
+			if errors.As(err, &apiErr) && apiErr.Message != "" {
+				return done, errors.New(apiErr.Message)
+			}
 			return done, err
 		}
 		done = append(done, out)

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -238,5 +240,22 @@ func TestPrintCheck(t *testing.T) {
 	if got := out.String(); !strings.Contains(got, "not recorded: issue/7 on the forge is at abc, not 012: push HEAD first; then `bottown check --report` records this result") ||
 		!strings.HasSuffix(got, "PASSED\n") {
 		t.Errorf("unpushed summary:\n%s", got)
+	}
+}
+
+// A refusal from the server reads as its message alone, so the summary's
+// "push HEAD first" hint is not buried behind the method and path.
+func TestRecordCheckRefusalIsTheServerMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"issue/7 is not on the forge yet: push HEAD first"}`)
+	}))
+	defer srv.Close()
+	a := &agentCtx{ServerURL: srv.URL, Key: "k", RunID: "r-1"}
+	res := checkResult{SHA: "0123456789abcdef", Steps: []checkStep{{Group: "check", Command: "true", Status: stepPassed}}}
+	done, err := a.recordCheck(context.Background(), t.TempDir(), res)
+	if len(done) != 0 || err == nil || err.Error() != "issue/7 is not on the forge yet: push HEAD first" {
+		t.Fatalf("recordCheck = %v, %v", done, err)
 	}
 }
