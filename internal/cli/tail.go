@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -71,7 +71,7 @@ type liveTail struct {
 
 // newLiveTail starts the tail's program on out, a terminal.
 func newLiveTail(out *os.File) *liveTail {
-	m := newTailModel(newStyles(lipgloss.NewRenderer(out)))
+	m := newTailModel(newStyles())
 	// Input is read only for ctrl+c: the terminal is in raw mode, so it
 	// does not raise SIGINT itself. Sending it keeps the launcher's own
 	// handling (main's signal context), as without the tail.
@@ -277,8 +277,8 @@ func (m *tailModel) Init() tea.Cmd { return m.spin.Tick }
 
 func (m *tailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC {
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
 			m.interrupt()
 		}
 		return m, nil
@@ -351,9 +351,9 @@ func (m *tailModel) next() tea.Cmd {
 	return nil
 }
 
-func (m *tailModel) View() string {
+func (m *tailModel) View() tea.View {
 	if m.paused || m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 	var b strings.Builder
 	line := func(s string) {
@@ -371,7 +371,7 @@ func (m *tailModel) View() string {
 		if m.note != "" {
 			line(spin + m.st.Dim.Render(m.note))
 		}
-		return b.String()
+		return tea.NewView(b.String())
 	}
 	line(spin + m.runHeader())
 	live := m.live
@@ -386,7 +386,7 @@ func (m *tailModel) View() string {
 		}
 		line("  " + mark + m.st.logLine(l, false, ""))
 	}
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // runHeader is the followed run: "run r-… · implement #12 · claude
@@ -464,7 +464,7 @@ func (s *styles) toolName(class string) lipgloss.Style {
 	case runs.ToolShell:
 		return s.Success
 	case runs.ToolRead:
-		return s.r.NewStyle().Foreground(lipgloss.ANSIColor(4)) // ANSI blue
+		return lipgloss.NewStyle().Foreground(lipgloss.Blue) // ANSI blue
 	case runs.ToolEdit:
 		return s.Warning
 	case runs.ToolSearch:
@@ -472,7 +472,7 @@ func (s *styles) toolName(class string) lipgloss.Style {
 	case runs.ToolForge:
 		return s.Purple
 	case runs.ToolBrowser:
-		return s.r.NewStyle().Foreground(lipgloss.ANSIColor(13)) // ANSI bright magenta
+		return lipgloss.NewStyle().Foreground(lipgloss.BrightMagenta) // ANSI bright magenta
 	default:
 		return s.Bold
 	}

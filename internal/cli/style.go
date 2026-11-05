@@ -2,10 +2,12 @@ package cli
 
 import (
 	"io"
+	"os"
 	"regexp"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
@@ -13,6 +15,14 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
+}
+
+// colorOut wraps w so styled output is downsampled to what w supports: a
+// terminal keeps the colors, a redirected output or a dumb terminal gets
+// none. Lip Gloss v2 renders full ANSI and downsamples on write, detecting
+// the profile from the environment (NO_COLOR, CLICOLOR, TERM, …).
+func colorOut(w io.Writer) io.Writer {
+	return colorprofile.NewWriter(w, os.Environ())
 }
 
 type tableWriter struct {
@@ -66,8 +76,6 @@ func (tw *tableWriter) Flush() error {
 }
 
 type styles struct {
-	r *lipgloss.Renderer
-
 	Bold    lipgloss.Style
 	Dim     lipgloss.Style
 	Success lipgloss.Style
@@ -78,17 +86,16 @@ type styles struct {
 	Purple  lipgloss.Style
 }
 
-func newStyles(r *lipgloss.Renderer) *styles {
+func newStyles() *styles {
 	return &styles{
-		r:       r,
-		Bold:    r.NewStyle().Bold(true),
-		Dim:     r.NewStyle().Faint(true),
-		Success: r.NewStyle().Foreground(lipgloss.ANSIColor(2)), // ANSI green
-		Danger:  r.NewStyle().Foreground(lipgloss.ANSIColor(1)), // ANSI red
-		Warning: r.NewStyle().Foreground(lipgloss.ANSIColor(3)), // ANSI yellow
-		Info:    r.NewStyle().Foreground(lipgloss.ANSIColor(6)), // ANSI cyan
-		Header:  r.NewStyle().Bold(true),
-		Purple:  r.NewStyle().Foreground(lipgloss.ANSIColor(5)), // ANSI magenta
+		Bold:    lipgloss.NewStyle().Bold(true),
+		Dim:     lipgloss.NewStyle().Faint(true),
+		Success: lipgloss.NewStyle().Foreground(lipgloss.Green),  // ANSI green
+		Danger:  lipgloss.NewStyle().Foreground(lipgloss.Red),    // ANSI red
+		Warning: lipgloss.NewStyle().Foreground(lipgloss.Yellow), // ANSI yellow
+		Info:    lipgloss.NewStyle().Foreground(lipgloss.Cyan),   // ANSI cyan
+		Header:  lipgloss.NewStyle().Bold(true),
+		Purple:  lipgloss.NewStyle().Foreground(lipgloss.Magenta), // ANSI magenta
 	}
 }
 

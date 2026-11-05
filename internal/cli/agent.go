@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/client"
@@ -163,7 +162,7 @@ func newWhoami() *cobra.Command {
 					run = &wr
 				}
 			}
-			printWhoami(out, lipgloss.NewRenderer(out), who.Actor, who.Instance, a.Remote, run, last, head)
+			printWhoami(colorOut(out), who.Actor, who.Instance, a.Remote, run, last, head)
 			return nil
 		},
 	}
@@ -176,8 +175,8 @@ type whoamiRun struct {
 	Issue, PR                   int64
 }
 
-func printWhoami(out io.Writer, r *lipgloss.Renderer, actor, instance, remote string, run *whoamiRun, last *runs.Record, head *headInfo) {
-	st := newStyles(r)
+func printWhoami(out io.Writer, actor, instance, remote string, run *whoamiRun, last *runs.Record, head *headInfo) {
+	st := newStyles()
 	fmt.Fprintf(out, "actor %s on instance %s\n", st.Info.Bold(true).Render(actor), st.Bold.Render(instance))
 	fmt.Fprintf(out, "forge remote %s\n", st.Bold.Render(remote))
 	if run != nil {
@@ -392,7 +391,7 @@ their local paths; outside a run, --download DIR saves them there.`,
 				return printJSON(cmd, issueShowJSON{IssueOut: is, Attachments: atts})
 			}
 			out := cmd.OutOrStdout()
-			printIssueShow(out, lipgloss.NewRenderer(out), is, atts)
+			printIssueShow(colorOut(out), is, atts)
 			return nil
 		},
 	}
@@ -467,7 +466,7 @@ their local paths; outside a run, --download DIR saves them there.`,
 				return printJSON(cmd, issues)
 			}
 			out := cmd.OutOrStdout()
-			printIssueList(out, lipgloss.NewRenderer(out), issues)
+			printIssueList(colorOut(out), issues)
 			return nil
 		},
 	}
@@ -520,13 +519,12 @@ Without an earlier review it shows the full diff.`,
 			if err := a.call(cmd.Context(), "GET", "/v1/forge/pr"+targetQuery(r, n, extra), nil, &p); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			rr := lipgloss.NewRenderer(out)
+			out := colorOut(cmd.OutOrStdout())
 			if !since {
 				if asJSON {
 					return printJSON(cmd, p)
 				}
-				printPRShow(out, rr, p, diff, stat, full)
+				printPRShow(out, p, diff, stat, full)
 				return nil
 			}
 			rev, ok := sinceReviewOf(p.Reviews, reviewer)
@@ -539,7 +537,7 @@ Without an earlier review it shows the full diff.`,
 				if asJSON {
 					return printJSON(cmd, prSinceJSON{PROut: p})
 				}
-				printPRShow(out, rr, p, true, false, full)
+				printPRShow(out, p, true, false, full)
 				who := "no earlier review"
 				if reviewer != "" {
 					who = "no earlier review by " + reviewer
@@ -561,8 +559,8 @@ Without an earlier review it shows the full diff.`,
 			if asJSON {
 				return printJSON(cmd, prSinceJSON{PROut: p, SinceReview: &rev, SinceText: text})
 			}
-			printPRShow(out, rr, p, false, false, full)
-			printSinceReview(out, newStyles(rr), rev, text)
+			printPRShow(out, p, false, false, full)
+			printSinceReview(out, newStyles(), rev, text)
 			return nil
 		},
 	}
@@ -644,7 +642,7 @@ Without an earlier review it shows the full diff.`,
 				return printJSON(cmd, prs)
 			}
 			out := cmd.OutOrStdout()
-			printPRList(out, lipgloss.NewRenderer(out), prs)
+			printPRList(colorOut(out), prs)
 			return nil
 		},
 	}
@@ -775,8 +773,8 @@ func newAPI() *cobra.Command {
 	return cmd
 }
 
-func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut, atts []runs.Attachment) {
-	st := newStyles(r)
+func printIssueShow(out io.Writer, is server.IssueOut, atts []runs.Attachment) {
+	st := newStyles()
 	fmt.Fprintf(out, "%s %s [%s] by %s",
 		st.Info.Bold(true).Render(fmt.Sprintf("#%d", is.Number)),
 		st.Bold.Render(is.Title),
@@ -809,12 +807,12 @@ func printIssueShow(out io.Writer, r *lipgloss.Renderer, is server.IssueOut, att
 	}
 }
 
-func printIssueList(out io.Writer, r *lipgloss.Renderer, issues []server.IssueItem) {
+func printIssueList(out io.Writer, issues []server.IssueItem) {
 	if len(issues) == 0 {
 		fmt.Fprintln(out, "no issues found")
 		return
 	}
-	st := newStyles(r)
+	st := newStyles()
 	for _, is := range issues {
 		labels := ""
 		if len(is.Labels) > 0 {
@@ -838,8 +836,8 @@ func printIssueList(out io.Writer, r *lipgloss.Renderer, issues []server.IssueIt
 	}
 }
 
-func printPRShow(out io.Writer, r *lipgloss.Renderer, p server.PROut, diff, stat, full bool) {
-	st := newStyles(r)
+func printPRShow(out io.Writer, p server.PROut, diff, stat, full bool) {
+	st := newStyles()
 	state := p.State
 	if p.Merged {
 		state = "merged"
@@ -927,12 +925,12 @@ func printPRChecks(out io.Writer, st *styles, p server.PROut) {
 	_ = tw.Flush()
 }
 
-func printPRList(out io.Writer, r *lipgloss.Renderer, prs []server.PRItem) {
+func printPRList(out io.Writer, prs []server.PRItem) {
 	if len(prs) == 0 {
 		fmt.Fprintln(out, "no pull requests found")
 		return
 	}
-	st := newStyles(r)
+	st := newStyles()
 	for _, p := range prs {
 		sha := p.HeadSHA
 		if len(sha) > 8 {

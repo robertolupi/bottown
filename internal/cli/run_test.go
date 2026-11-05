@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/config"
@@ -95,12 +94,12 @@ func TestModelShown(t *testing.T) {
 		t.Errorf("handover:\n%s", got)
 	}
 	var b strings.Builder
-	printRunShow(&b, lipgloss.NewRenderer(&b), &rec, nil, nil, "", "")
+	printRunShow(colorOut(&b), &rec, nil, nil, "", "")
 	if !strings.Contains(b.String(), "as agy (google, model gemini-3.8-flash)") {
 		t.Errorf("run show:\n%s", b.String())
 	}
 	b.Reset()
-	if err := printRunLs(&b, lipgloss.NewRenderer(&b), []runs.Record{rec}, []secrets.Run{{ID: "r-srv", Actor: "crush", Spec: "openrouter:~deepseek/latest", Expires: time.Now().Add(time.Hour)}}); err != nil {
+	if err := printRunLs(colorOut(&b), []runs.Record{rec}, []secrets.Run{{ID: "r-srv", Actor: "crush", Spec: "openrouter:~deepseek/latest", Expires: time.Now().Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"MODEL", "gemini-3.8-flash", "openrouter:~deepseek/latest"} {
@@ -350,7 +349,7 @@ func TestUnreadableRecordListedAndKept(t *testing.T) {
 
 	var b strings.Builder
 	remote := []secrets.Run{{ID: "r-bad1", Kind: policy.Implement, Issue: 7, Actor: "claude", Expires: time.Now().Add(time.Hour)}}
-	if err := printRunLs(&b, lipgloss.NewRenderer(&b), recs, remote); err != nil {
+	if err := printRunLs(colorOut(&b), recs, remote); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"r-bad1", "unknown", "live", "#7", "claude", "r-bad1.json: unreadable run record", recs[0].LoadError} {

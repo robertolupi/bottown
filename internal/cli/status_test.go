@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -31,8 +29,7 @@ func TestPrintStatusNonInteractive(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
-	printStatus(&buf, r, inst, "git config bottown.instance", "running", h, nil)
+	printStatus(colorOut(&buf), inst, "git config bottown.instance", "running", h, nil)
 
 	got := buf.String()
 	want := strings.Join([]string{
@@ -65,18 +62,15 @@ func TestPrintStatusInteractive(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
-	r.SetColorProfile(termenv.TrueColor)
-	printStatus(&buf, r, inst, "git config bottown.instance", "running", h, nil)
+	printStatus(interactiveOut(&buf), inst, "git config bottown.instance", "running", h, nil)
 
 	got := buf.String()
 
 	// Verify the bold tags wrap the first words
 	expectedBoldWords := []string{"instance", "container", "image", "forgejo", "bottown", "health", "error"}
 	for _, word := range expectedBoldWords {
-		boldWord := "\x1b[1m" + word + "\x1b[0m"
-		if !strings.Contains(got, boldWord) {
-			t.Errorf("interactive output should contain bold word %q:\n%s", boldWord, got)
+		if !strings.Contains(got, "\x1b[1m"+word) {
+			t.Errorf("interactive output should contain bold word %q:\n%s", word, got)
 		}
 	}
 
@@ -101,14 +95,11 @@ func TestPrintStatusInteractive(t *testing.T) {
 func TestPrintStatusUnreachable(t *testing.T) {
 	inst := testInstance()
 	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
-	r.SetColorProfile(termenv.TrueColor)
-	printStatus(&buf, r, inst, "default", "running", nil, errors.New("connection refused"))
+	printStatus(interactiveOut(&buf), inst, "default", "running", nil, errors.New("connection refused"))
 
 	got := buf.String()
-	boldHealth := "\x1b[1mhealth\x1b[0m"
-	if !strings.Contains(got, boldHealth) {
-		t.Errorf("interactive unreachable output should contain bold %q", boldHealth)
+	if !strings.Contains(got, "\x1b[1mhealth") {
+		t.Errorf("interactive unreachable output should contain bold health:\n%s", got)
 	}
 	if !strings.Contains(got, "unreachable: connection refused") {
 		t.Errorf("expected unreachable message in output:\n%s", got)
@@ -118,8 +109,7 @@ func TestPrintStatusUnreachable(t *testing.T) {
 func TestPrintStatusStopped(t *testing.T) {
 	inst := testInstance()
 	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
-	printStatus(&buf, r, inst, "default", "stopped", nil, nil)
+	printStatus(colorOut(&buf), inst, "default", "stopped", nil, nil)
 
 	got := buf.String()
 	if strings.Contains(got, "health") {

@@ -2,29 +2,80 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
-func newInteractiveRenderer(buf *bytes.Buffer) *lipgloss.Renderer {
-	r := lipgloss.NewRenderer(buf)
-	r.SetColorProfile(termenv.TrueColor)
-	return r
+// interactiveOut is a writer that keeps ANSI, as a terminal does: a
+// colorprofile.Writer with the TrueColor profile.
+func interactiveOut(buf *bytes.Buffer) io.Writer {
+	return &colorprofile.Writer{Forward: buf, Profile: colorprofile.TrueColor}
+}
+
+// TestColorOut checks that colorOut detects the color profile from the
+// environment: a forced terminal keeps colour, NO_COLOR and a non-terminal
+// strip it.
+func TestColorOut(t *testing.T) {
+	styled := newStyles().Success.Render("colored")
+
+	t.Run("ForcedTTYKeepsColor", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "1")
+		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("NO_COLOR", "")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), "\x1b[32m") {
+			t.Errorf("forced terminal output should keep the green colour: %q", buf.String())
+		}
+		if stripANSI(buf.String()) != "colored" {
+			t.Errorf("forced terminal output should carry the text: %q", buf.String())
+		}
+	})
+
+	t.Run("NoColorStripsColor", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "1")
+		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("NO_COLOR", "1")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(buf.String(), "\x1b[32m") {
+			t.Errorf("NO_COLOR output should have no colour: %q", buf.String())
+		}
+		if stripANSI(buf.String()) != "colored" {
+			t.Errorf("NO_COLOR output should carry the text: %q", buf.String())
+		}
+	})
+
+	t.Run("NoTTYStrips", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "")
+		t.Setenv("TERM", "")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if buf.String() != "colored" {
+			t.Errorf("non-terminal output should be plain: %q", buf.String())
+		}
+	})
 }
 
 func TestPrintWhoami(t *testing.T) {
 	t.Run("NonInteractiveNoRun", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := lipgloss.NewRenderer(&buf)
-		printWhoami(&buf, r, "agy", "prod", "bottown", nil, nil, nil)
+		r := colorOut(&buf)
+		printWhoami(r, "agy", "prod", "bottown", nil, nil, nil)
 		got := buf.String()
 		want := "actor agy on instance prod\nforge remote bottown\nno active run (read-only; start one with `bottown run start implement|verify N`)\n"
 		if got != want {
@@ -37,14 +88,14 @@ func TestPrintWhoami(t *testing.T) {
 
 	t.Run("InteractiveWithRun", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
+		r := interactiveOut(&buf)
 		run := &whoamiRun{
 			ID:    "r-ed4df40b",
 			Kind:  policy.Implement,
 			Repo:  "bottown/bottown",
 			Issue: 11,
 		}
-		printWhoami(&buf, r, "agy", "prod", "bottown", run, nil, nil)
+		printWhoami(r, "agy", "prod", "bottown", run, nil, nil)
 		got := buf.String()
 
 		if !strings.Contains(got, "\x1b[") {
@@ -62,7 +113,7 @@ func TestPrintWhoami(t *testing.T) {
 
 	t.Run("InteractiveWithPRRun", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
+		r := interactiveOut(&buf)
 		run := &whoamiRun{
 			ID:   "r-12345678",
 			Kind: policy.Verify,
@@ -70,7 +121,7 @@ func TestPrintWhoami(t *testing.T) {
 			PR:   5,
 			SHA:  "abcdef123456",
 		}
-		printWhoami(&buf, r, "claude", "prod", "bottown", run, nil, nil)
+		printWhoami(r, "claude", "prod", "bottown", run, nil, nil)
 		got := buf.String()
 		stripped := stripANSI(got)
 		wantStripped := "actor claude on instance prod\nforge remote bottown\nrun r-12345678: verify PR !5 at abcdef1234 in bottown/bottown\n"
@@ -85,12 +136,12 @@ func TestPrintWhoami(t *testing.T) {
 		want := "actor claude on instance prod\nforge remote bottown\nno active run (read-only; start one with `bottown run start implement|verify N`)\n" +
 			"last run r-1: implement issue #9 in bottown/bottown, succeeded\nHEAD c260e1c (detached), 2 commits behind bottown/main\n"
 		var plain bytes.Buffer
-		printWhoami(&plain, lipgloss.NewRenderer(&plain), "claude", "prod", "bottown", nil, last, head)
+		printWhoami(colorOut(&plain), "claude", "prod", "bottown", nil, last, head)
 		if plain.String() != want {
 			t.Fatalf("plain:\ngot:  %q\nwant: %q", plain.String(), want)
 		}
 		var buf bytes.Buffer
-		printWhoami(&buf, newInteractiveRenderer(&buf), "claude", "prod", "bottown", nil, last, head)
+		printWhoami(interactiveOut(&buf), "claude", "prod", "bottown", nil, last, head)
 		if !strings.Contains(buf.String(), "\x1b[") || stripANSI(buf.String()) != want {
 			t.Fatalf("interactive: %q", buf.String())
 		}
@@ -125,8 +176,8 @@ func TestPrintRunLs(t *testing.T) {
 
 	t.Run("NonInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := lipgloss.NewRenderer(&buf)
-		if err := printRunLs(&buf, r, []runs.Record{rec}, []secrets.Run{sr}); err != nil {
+		r := colorOut(&buf)
+		if err := printRunLs(r, []runs.Record{rec}, []secrets.Run{sr}); err != nil {
 			t.Fatal(err)
 		}
 		got := buf.String()
@@ -144,13 +195,13 @@ func TestPrintRunLs(t *testing.T) {
 		recFailed.Status = runs.StatusFailed
 
 		var plainBuf, intBuf bytes.Buffer
-		rPlain := lipgloss.NewRenderer(&plainBuf)
-		if err := printRunLs(&plainBuf, rPlain, []runs.Record{rec, recFailed}, []secrets.Run{sr}); err != nil {
+		rPlain := colorOut(&plainBuf)
+		if err := printRunLs(rPlain, []runs.Record{rec, recFailed}, []secrets.Run{sr}); err != nil {
 			t.Fatal(err)
 		}
 
-		rInt := newInteractiveRenderer(&intBuf)
-		if err := printRunLs(&intBuf, rInt, []runs.Record{rec, recFailed}, []secrets.Run{sr}); err != nil {
+		rInt := interactiveOut(&intBuf)
+		if err := printRunLs(rInt, []runs.Record{rec, recFailed}, []secrets.Run{sr}); err != nil {
 			t.Fatal(err)
 		}
 		got := intBuf.String()
@@ -227,11 +278,11 @@ func TestPrintRunLsFiltering(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
+	r := colorOut(&buf)
 	local := []runs.Record{recLocalEnded}
 	remote := []secrets.Run{srLocalEnded, srExpiredStuck, srServerEnded}
 
-	if err := printRunLs(&buf, r, local, remote); err != nil {
+	if err := printRunLs(r, local, remote); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
@@ -279,13 +330,13 @@ func TestPrintRunLsAll(t *testing.T) {
 	}
 
 	var plainBuf, intBuf bytes.Buffer
-	rPlain := lipgloss.NewRenderer(&plainBuf)
-	if err := printRunLsAll(&plainBuf, rPlain, []secrets.Run{sr}); err != nil {
+	rPlain := colorOut(&plainBuf)
+	if err := printRunLsAll(rPlain, []secrets.Run{sr}); err != nil {
 		t.Fatal(err)
 	}
 
-	rInt := newInteractiveRenderer(&intBuf)
-	if err := printRunLsAll(&intBuf, rInt, []secrets.Run{sr}); err != nil {
+	rInt := interactiveOut(&intBuf)
+	if err := printRunLsAll(rInt, []secrets.Run{sr}); err != nil {
 		t.Fatal(err)
 	}
 	got := intBuf.String()
@@ -318,8 +369,8 @@ func TestPrintRunShow(t *testing.T) {
 
 	t.Run("NonInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := lipgloss.NewRenderer(&buf)
-		printRunShow(&buf, r, &rec, &sr, nil, "/tmp/worktree/.log", "line 1\nline 2\n")
+		r := colorOut(&buf)
+		printRunShow(r, &rec, &sr, nil, "/tmp/worktree/.log", "line 1\nline 2\n")
 		got := buf.String()
 		if strings.Contains(got, "\x1b[") {
 			t.Errorf("plain output must not contain ANSI: %q", got)
@@ -331,8 +382,8 @@ func TestPrintRunShow(t *testing.T) {
 
 	t.Run("Interactive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printRunShow(&buf, r, &rec, &sr, nil, "/tmp/worktree/.log", "line 1\nline 2\n")
+		r := interactiveOut(&buf)
+		printRunShow(r, &rec, &sr, nil, "/tmp/worktree/.log", "line 1\nline 2\n")
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -349,7 +400,7 @@ func TestPrintRunShow(t *testing.T) {
 		d := sr
 		d.Purged = true
 		d.Digest = secrets.Digest{Summary: "Opened PR !4.\nDetails.", Usage: &secrets.Usage{InputTokens: &in, Turns: &turns}}
-		printRunShow(&buf, lipgloss.NewRenderer(&buf), nil, &d, nil, "", "")
+		printRunShow(colorOut(&buf), nil, &d, nil, "", "")
 		got := buf.String()
 		for _, want := range []string{", purged (digest kept)\n", "usage 15775 in tokens · 1 turns\n", "summary Opened PR !4.\n"} {
 			if !strings.Contains(got, want) {
@@ -394,12 +445,12 @@ func TestPrintIssueShowAndList(t *testing.T) {
 
 	t.Run("IssueShowInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
+		r := interactiveOut(&buf)
 		atts := []runs.Attachment{
 			{ID: 3, Name: "shot.png", Size: 2048, ContentType: "image/png", Path: "/run/attachments/3-shot.png"},
 			{ID: 4, Name: "log.txt", Size: 10, Comment: 9, Error: "download failed: 404 Not Found"},
 		}
-		printIssueShow(&buf, r, is, atts)
+		printIssueShow(r, is, atts)
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -421,8 +472,8 @@ func TestPrintIssueShowAndList(t *testing.T) {
 
 	t.Run("IssueListInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printIssueList(&buf, r, []server.IssueItem{item})
+		r := interactiveOut(&buf)
+		printIssueList(r, []server.IssueItem{item})
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -466,8 +517,8 @@ func TestPrintPRShowAndList(t *testing.T) {
 
 	t.Run("PRShowInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printPRShow(&buf, r, pr, false, false, false)
+		r := interactiveOut(&buf)
+		printPRShow(r, pr, false, false, false)
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -483,8 +534,8 @@ func TestPrintPRShowAndList(t *testing.T) {
 
 	t.Run("PRListInteractive", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printPRList(&buf, r, []server.PRItem{item})
+		r := interactiveOut(&buf)
+		printPRList(r, []server.PRItem{item})
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -505,13 +556,13 @@ func TestPrintActorAndRepo(t *testing.T) {
 		}
 
 		var plainBuf, intBuf bytes.Buffer
-		rPlain := lipgloss.NewRenderer(&plainBuf)
-		if err := printActorList(&plainBuf, rPlain, wts); err != nil {
+		rPlain := colorOut(&plainBuf)
+		if err := printActorList(rPlain, wts); err != nil {
 			t.Fatal(err)
 		}
 
-		rInt := newInteractiveRenderer(&intBuf)
-		if err := printActorList(&intBuf, rInt, wts); err != nil {
+		rInt := interactiveOut(&intBuf)
+		if err := printActorList(rInt, wts); err != nil {
 			t.Fatal(err)
 		}
 		got := intBuf.String()
@@ -526,8 +577,8 @@ func TestPrintActorAndRepo(t *testing.T) {
 
 	t.Run("ActorSetup", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printActorSetup(&buf, r, "agy", "google", "agy", "prod", []string{"origin"})
+		r := interactiveOut(&buf)
+		printActorSetup(r, "agy", "google", "agy", "prod", []string{"origin"})
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)
@@ -541,9 +592,9 @@ func TestPrintActorAndRepo(t *testing.T) {
 
 	t.Run("RepoAdd", func(t *testing.T) {
 		var buf bytes.Buffer
-		r := newInteractiveRenderer(&buf)
-		printRepoRemoteAdded(&buf, r, "bottown", "http://127.0.0.1:3031/git/bottown/bottown.git")
-		printRepoAdded(&buf, r, "bottown", "prod", "http://127.0.0.1:3030/bottown/bottown")
+		r := interactiveOut(&buf)
+		printRepoRemoteAdded(r, "bottown", "http://127.0.0.1:3031/git/bottown/bottown.git")
+		printRepoAdded(r, "bottown", "prod", "http://127.0.0.1:3030/bottown/bottown")
 		got := buf.String()
 		if !strings.Contains(got, "\x1b[") {
 			t.Errorf("interactive output must contain ANSI: %q", got)

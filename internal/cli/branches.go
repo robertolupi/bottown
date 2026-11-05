@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/runs"
@@ -267,12 +266,12 @@ func gcBranches(cmd *cobra.Command, g *globals, pattern string, dryRun bool) err
 			}
 		}
 	}
-	printBranchGC(out, lipgloss.NewRenderer(out), remote, base, p, dryRun)
+	printBranchGC(colorOut(out), remote, base, p, dryRun)
 	return nil
 }
 
-func printBranchGC(out io.Writer, r *lipgloss.Renderer, remote, base string, p branchGC, dryRun bool) {
-	st := newStyles(r)
+func printBranchGC(out io.Writer, remote, base string, p branchGC, dryRun bool) {
+	st := newStyles()
 	verb := "deleted"
 	if dryRun {
 		verb = "would delete"
