@@ -127,7 +127,7 @@ func newWeb(g *globals) *cobra.Command {
 	for _, c := range []*cobra.Command{forgejoCmd, uiCmd, healthCmd} {
 		c.Flags().BoolVar(&printOnly, "print", false, "print the one-time login URL instead of opening a browser")
 	}
-	web.AddCommand(forgejoCmd, uiCmd, healthCmd, newWebPreview(), newWebShot())
+	web.AddCommand(forgejoCmd, uiCmd, healthCmd, newWebPreview(g), newWebShot())
 	return web
 }
 
@@ -151,9 +151,15 @@ type previewSettings struct {
 	detach  bool
 	stop    bool
 	ttl     time.Duration
+
+	// --capture and what it takes
+	capture string
+	issues  []int64
+	logs    []string
+	force   bool
 }
 
-func newWebPreview() *cobra.Command {
+func newWebPreview(g *globals) *cobra.Command {
 	var s previewSettings
 	cmd := &cobra.Command{
 		Use:   "preview",
@@ -177,10 +183,21 @@ While it runs:
                                         to a run's log and live tail
 
 The controls take the same Origin check as the UI's actions: send
--H "Origin: <the URL>" with curl.`,
+-H "Origin: <the URL>" with curl.
+
+--capture NAME does not serve: in the owner's main checkout, with the
+owner's key, it computes what bottown web ui's API answers now and writes
+it as web/fixtures/NAME.json, for a run to serve with --fixture NAME.
+--issue adds an issue's details and timeline and --log a run's log; with
+neither, it takes the issues and runs the views link to, up to a cap. The
+capture holds real data (titles, comments, log lines); what looks like a
+key, a login URL or URL credentials is dropped.`,
 		Args:        cobra.NoArgs,
 		Annotations: map[string]string{"agent": "true"}, // needs no instance
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if s.capture != "" {
+				return webCapture(cmd, g, s)
+			}
 			return webPreview(cmd, s)
 		},
 	}
@@ -190,7 +207,78 @@ The controls take the same Origin check as the UI's actions: send
 	cmd.Flags().BoolVar(&s.detach, "detach", false, "serve in the background and return, printing the URL and how to stop it")
 	cmd.Flags().BoolVar(&s.stop, "stop", false, "stop a detached preview started from this checkout")
 	cmd.Flags().DurationVar(&s.ttl, "ttl", previewTTL, "how long a detached preview lives before it exits (0: until stopped)")
+	cmd.Flags().StringVar(&s.capture, "capture", "", "write what the live UI shows now as web/fixtures/NAME.json, instead of serving (owner's main checkout)")
+	cmd.Flags().Int64SliceVar(&s.issues, "issue", nil, "with --capture: add this issue's details and timeline (repeatable)")
+	cmd.Flags().StringSliceVar(&s.logs, "log", nil, "with --capture: add this run's log (repeatable)")
+	cmd.Flags().BoolVar(&s.force, "force", false, "with --capture: replace an existing fixture")
 	return cmd
+}
+
+// webCapture writes what `bottown web ui` would show now as a preview
+// fixture. Like web ui, it needs the owner's key, so it runs only in the
+// main checkout.
+func webCapture(cmd *cobra.Command, g *globals, s previewSettings) error {
+	if s.detach || s.stop || s.watch {
+		return errors.New("--capture writes a fixture and does not serve: drop --detach, --stop and --watch")
+	}
+	top, err := mainCheckout()
+	if err != nil {
+		return fmt.Errorf("--capture reads the live UI with the owner's key: %w", err)
+	}
+	dir := filepath.Join(top, "web", "fixtures")
+	if _, err := os.Stat(filepath.Join(dir, s.capture+".json")); err == nil && !s.force {
+		return fmt.Errorf("%w: %s (--force replaces it)", webui.ErrFixtureExists, filepath.Join(dir, s.capture+".json"))
+	}
+	inst, err := g.loadInstance()
+	if err != nil {
+		return err
+	}
+	repo, ok := repoOnInstance(top, inst)
+	if !ok {
+		return fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
+	}
+	key, err := ownerKey(g)
+	if err != nil {
+		return err
+	}
+	srv, err := webui.NewServer(webui.Config{
+		Instance:       inst,
+		RepoTop:        top,
+		FullRepo:       repo,
+		OwnerKey:       key,
+		CLIVersion:     Version,
+		BottownPath:    selfPath(),
+		HarnessChecker: checkHarnessCurrent,
+	})
+	if err != nil {
+		return err
+	}
+	defer srv.Close()
+	return captureFixture(cmd, srv, dir, s)
+}
+
+// captureFixture captures srv's views into the fixture s.capture in dir.
+func captureFixture(cmd *cobra.Command, srv *webui.Server, dir string, s previewSettings) error {
+	fx, warnings, err := srv.Capture(cmd.Context(), webui.CaptureOptions{Issues: s.issues, Logs: s.logs})
+	if err != nil {
+		return err
+	}
+	b, err := srv.EncodeFixture(fx)
+	if err != nil {
+		return err
+	}
+	path, err := webui.WriteFixture(dir, s.capture, b, s.force)
+	if err != nil {
+		return err
+	}
+	errOut := cmd.ErrOrStderr()
+	for _, w := range warnings {
+		fmt.Fprintln(errOut, "skipped:", w)
+	}
+	fmt.Fprintf(errOut, "captured %s: %s\n", s.capture, fx.Summary())
+	fmt.Fprintf(errOut, "it holds this forge's real data; serve it with `bottown web preview --fixture %s`\n", s.capture)
+	fmt.Fprintln(cmd.OutOrStdout(), path)
+	return nil
 }
 
 // webPreview resolves the checkout and dispatches to stopping, the detached
@@ -198,6 +286,9 @@ The controls take the same Origin check as the UI's actions: send
 func webPreview(cmd *cobra.Command, s previewSettings) error {
 	if s.detach && s.stop {
 		return errors.New("--detach and --stop are mutually exclusive")
+	}
+	if len(s.issues) > 0 || len(s.logs) > 0 || s.force {
+		return errors.New("--issue, --log and --force go with --capture")
 	}
 	top, err := runs.Git(".", nil, "rev-parse", "--show-toplevel")
 	if err != nil {
