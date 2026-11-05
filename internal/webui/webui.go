@@ -74,18 +74,22 @@ type Config struct {
 
 // Server is the local HTTP server for the bottown web UI.
 type Server struct {
-	cfg          Config
-	listener     net.Listener
-	port         int
-	oneTimeToken string
-	tokenUsed    bool
-	sessionToken string
-	cookieName   string
-	mu           sync.Mutex // guards auth state (token/cookie)
-	statusMu     sync.Mutex // guards git fetch and status computation
-	afterPullMu  sync.Mutex // one run of the after-pull steps at a time
-	httpServer   *http.Server
-	lastFetch    time.Time
+	cfg                 Config
+	listener            net.Listener
+	port                int
+	oneTimeToken        string
+	tokenUsed           bool
+	sessionToken        string
+	cookieName          string
+	mu                  sync.Mutex // guards auth state (token/cookie)
+	statusMu            sync.Mutex // guards git fetch and status computation
+	afterPullMu         sync.Mutex // one run of the after-pull steps at a time
+	httpServer          *http.Server
+	lastStatusMu        sync.RWMutex
+	lastStatus          *UIStatusResponse
+	lastFetch           time.Time
+	lastSuccessfulFetch time.Time
+	lastOriginErr       string
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.
@@ -330,7 +334,7 @@ func localRequestAllowed(w http.ResponseWriter, r *http.Request, port int) bool 
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.ComputeStatus(r.Context(), true)
+	st, err := s.ComputeStatus(r.Context(), false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -28,6 +28,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
 )
@@ -377,6 +379,14 @@ func GitCommand(ctx context.Context, dir string, cfg []string, args ...string) *
 	all = append(append(all, cfg...), args...)
 	cmd := exec.CommandContext(ctx, "git", all...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	cmd.WaitDelay = 500 * time.Millisecond
 	return cmd
 }
 

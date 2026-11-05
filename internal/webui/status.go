@@ -131,11 +131,56 @@ func (s *Server) git(ctx context.Context, args ...string) (string, error) {
 	return runs.GitCtx(ctx, s.cfg.RepoTop, nil, args...)
 }
 
+// fetchTimeout bounds a git fetch: status polls and page loads wait on it.
+var fetchTimeout = 5 * time.Second
+
+func (s *Server) snapshot() *UIStatusResponse {
+	s.lastStatusMu.RLock()
+	defer s.lastStatusMu.RUnlock()
+	return s.lastStatus
+}
+
+func (s *Server) setSnapshot(st *UIStatusResponse) {
+	s.lastStatusMu.Lock()
+	defer s.lastStatusMu.Unlock()
+	s.lastStatus = st
+}
+
 // ComputeStatus calculates the Upstream and Health view data.
 func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusResponse, error) {
+	if !forceFetch {
+		if !s.statusMu.TryLock() {
+			if snap := s.snapshot(); snap != nil {
+				return snap, nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			s.statusMu.Lock()
+			if snap := s.snapshot(); snap != nil {
+				s.statusMu.Unlock()
+				return snap, nil
+			}
+			defer s.statusMu.Unlock()
+			return s.computeStatusLocked(ctx, forceFetch)
+		}
+		defer s.statusMu.Unlock()
+		return s.computeStatusLocked(ctx, forceFetch)
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
+	return s.computeStatusLocked(ctx, forceFetch)
+}
 
+func (s *Server) computeStatusLocked(ctx context.Context, forceFetch bool) (*UIStatusResponse, error) {
 	res := &UIStatusResponse{
 		Instance: s.cfg.Instance.Name,
 		Repo:     s.cfg.FullRepo,
@@ -154,13 +199,15 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	res.Forge.ForgeURL = s.cfg.Instance.ForgejoURL()
 
 	base := "main"
-	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
+	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	if b, err := runs.RemoteDefaultBranch(fctx, s.cfg.RepoTop, remote); err == nil && b != "" {
 		base = b
 	}
 	res.Forge.DefaultBranch = base
 
 	// Fetch forge remote
-	_, _ = s.git(ctx, "fetch", "-q", remote)
+	_, _ = s.git(fctx, "fetch", "-q", remote)
+	cancel()
 
 	if checkoutSHA, err := s.git(ctx, "rev-parse", "--short", "HEAD"); err == nil {
 		res.Forge.CheckoutSHA = checkoutSHA
@@ -189,15 +236,26 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 
 		// Fetch origin if forced or never fetched
 		if forceFetch || s.lastFetch.IsZero() {
-			if _, err := s.git(ctx, "fetch", "-q", "origin"); err == nil {
-				now := time.Now()
-				s.lastFetch = now
+			now := time.Now()
+			s.lastFetch = now
+			fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+			if _, err := s.git(fctx, "fetch", "-q", "origin"); err == nil {
+				s.lastSuccessfulFetch = now
+				s.lastOriginErr = ""
 				res.Upstream.FetchedAt = &now
 			} else {
+				s.lastOriginErr = err.Error()
 				res.Upstream.Error = err.Error()
+				if !s.lastSuccessfulFetch.IsZero() {
+					res.Upstream.FetchedAt = &s.lastSuccessfulFetch
+				}
 			}
+			cancel()
 		} else {
-			res.Upstream.FetchedAt = &s.lastFetch
+			if !s.lastSuccessfulFetch.IsZero() {
+				res.Upstream.FetchedAt = &s.lastSuccessfulFetch
+			}
+			res.Upstream.Error = s.lastOriginErr
 		}
 
 		originRef := "refs/remotes/origin/" + base
@@ -327,6 +385,7 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 	// 6. Actors
 	res.Actors = s.fetchActors(ctx)
 
+	s.setSnapshot(res)
 	return res, nil
 }
 
