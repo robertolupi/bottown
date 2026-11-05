@@ -74,8 +74,11 @@ func (f *milestoneFixture) serve(t *testing.T) int {
 			out = paginate(r, f.issues)
 		case strings.HasSuffix(p, "/milestones"):
 			out = paginate(r, f.milestones)
-		case strings.HasSuffix(p, "/pulls"):
-			out = paginate(r, f.prs)
+		case p == "/v1/forge/prs":
+			out = fakePRList{
+				prs: f.prs, reviews: f.reviews,
+				families: familiesOf(f.actors), owner: "rlupi", runs: f.runs, repo: r.URL.Query().Get("repo"),
+			}.items(r)
 		default:
 			http.NotFound(w, r)
 			return

@@ -20,6 +20,7 @@ import (
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 // ActorDetail represents an actor available on the instance.
@@ -233,20 +234,19 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	denials := s.fetchDenials(ctx)
 
 	// 3. Fetch open PRs only if needed
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
-	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	prs, _ := s.pullRequests(ctx, "open")
 
 	// PR by issue index and PR by PR index
-	prByIssue := make(map[int64]*sdk.PullRequest)
-	prByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	prByIssue := make(map[int64]*serverapi.PRItem)
+	prByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	for _, pr := range prs {
-		if pr == nil || pr.Index <= 0 {
+		if pr == nil || pr.Number <= 0 {
 			continue
 		}
-		prByIndex[pr.Index] = pr
-		if pr.Head != nil && strings.HasPrefix(pr.Head.Ref, "issue/") {
+		prByIndex[pr.Number] = pr
+		if strings.HasPrefix(pr.HeadBranch, "issue/") {
 			var issueNum int64
-			if _, err := fmt.Sscanf(pr.Head.Ref, "issue/%d", &issueNum); err == nil {
+			if _, err := fmt.Sscanf(pr.HeadBranch, "issue/%d", &issueNum); err == nil {
 				prByIssue[issueNum] = pr
 			}
 		}
@@ -261,8 +261,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			issueNum = parseIssueRef(sr.Branch)
 		}
 		if issueNum <= 0 && sr.PR > 0 {
-			if pr := prByIndex[sr.PR]; pr != nil && pr.Head != nil {
-				if num := parseIssueRef(pr.Head.Ref); num > 0 {
+			if pr := prByIndex[sr.PR]; pr != nil {
+				if num := parseIssueRef(pr.HeadBranch); num > 0 {
 					issueNum = num
 				}
 			}
@@ -277,11 +277,11 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		if sr.Kind != "implement" && sr.Kind != "verify" {
 			continue
 		}
-		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Index] == nil {
-			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+		if pr := prByIssue[issueNum]; pr != nil && prReviews[pr.Number] == nil {
+			revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Number)
 			revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
 			if err == nil {
-				prReviews[pr.Index] = revs
+				prReviews[pr.Number] = revs
 			}
 		}
 	}
@@ -332,8 +332,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		}
 		if issueNum <= 0 && sr.PR > 0 {
 			for _, pr := range prs {
-				if pr.Index == sr.PR && pr.Head != nil {
-					if num := parseIssueRef(pr.Head.Ref); num > 0 {
+				if pr.Number == sr.PR {
+					if num := parseIssueRef(pr.HeadBranch); num > 0 {
 						issueNum = num
 					}
 					break
@@ -343,7 +343,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		prNum := sr.PR
 		if prNum <= 0 && issueNum > 0 && sr.Kind != "discuss" {
 			if pr := prByIssue[issueNum]; pr != nil {
-				prNum = pr.Index
+				prNum = pr.Number
 			}
 		}
 
@@ -353,7 +353,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 				pr := prByIssue[issueNum]
 				round := 1
 				if pr != nil {
-					for _, r := range prReviews[pr.Index] {
+					for _, r := range prReviews[pr.Number] {
 						// Matching internal/flow countRounds: count all requested changes
 						// including dismissed/stale ones
 						if r.State == sdk.ReviewStateRequestChanges {
@@ -395,14 +395,14 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			prURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prNum)
 			pr := prByIndex[prNum]
 			if pr == nil {
-				if byIss := prByIssue[issueNum]; byIss != nil && byIss.Index == prNum {
+				if byIss := prByIssue[issueNum]; byIss != nil && byIss.Number == prNum {
 					pr = byIss
 				}
 			}
 			if pr != nil {
 				prTitle = pr.Title
-				if milestone == "" && pr.Milestone != nil && pr.Milestone.Title != "" {
-					milestone = pr.Milestone.Title
+				if milestone == "" && pr.Milestone != "" {
+					milestone = pr.Milestone
 				}
 			}
 		}
@@ -503,11 +503,10 @@ func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo)
 
 		// When waiting between runs, compute current round from PR reviews
 		round := 1
-		pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
-		prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+		prs, _ := s.pullRequests(ctx, "open")
 		for _, pr := range prs {
-			if pr.Head != nil && pr.Head.Ref == fmt.Sprintf("issue/%d", issueNum) {
-				revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
+			if pr.HeadBranch == fmt.Sprintf("issue/%d", issueNum) {
+				revsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Number)
 				revs, err := listAll[*sdk.PullReview](ctx, s, revsPath)
 				if err == nil {
 					for _, r := range revs {
@@ -592,14 +591,14 @@ func flowThreadKey(issueNum, prNum int64, runID string) string {
 	}
 }
 
-func isPROpen(pr *sdk.PullRequest) bool {
+func isPROpen(pr *serverapi.PRItem) bool {
 	if pr == nil {
 		return true
 	}
-	if pr.HasMerged || pr.Merged != nil || pr.Closed != nil {
+	if pr.Merged || pr.MergedAt != nil || pr.ClosedAt != nil {
 		return false
 	}
-	return pr.State == "" || pr.State == sdk.StateOpen
+	return pr.State == "" || pr.State == string(sdk.StateOpen)
 }
 
 // resolveRunsMeta maps runs to their flow thread (issue, PR, milestone, thread key, and active state).
@@ -609,7 +608,7 @@ func isPROpen(pr *sdk.PullRequest) bool {
 func (s *Server) resolveRunsMeta(
 	allRuns []secrets.Run,
 	issues []*sdk.Issue,
-	prs []*sdk.PullRequest,
+	prs []*serverapi.PRItem,
 ) (map[string]resolvedRunMeta, map[int64][]int64, map[int64]time.Time) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
@@ -621,17 +620,15 @@ func (s *Server) resolveRunsMeta(
 		}
 	}
 
-	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	prsByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	issueOfPR := make(map[int64]int64)
 	for _, pr := range prs {
-		if pr == nil || pr.Index <= 0 {
+		if pr == nil || pr.Number <= 0 {
 			continue
 		}
-		prsByIndex[pr.Index] = pr
-		if pr.Head != nil {
-			if n := parseIssueRef(pr.Head.Ref); n > 0 {
-				issueOfPR[pr.Index] = n
-			}
+		prsByIndex[pr.Number] = pr
+		if n := parseIssueRef(pr.HeadBranch); n > 0 {
+			issueOfPR[pr.Number] = n
 		}
 	}
 
@@ -700,11 +697,11 @@ func (s *Server) resolveRunsMeta(
 			}
 			var cutoff time.Time
 			if pr != nil {
-				if pr.Merged != nil && pr.Merged.After(cutoff) {
-					cutoff = *pr.Merged
+				if pr.MergedAt != nil && pr.MergedAt.After(cutoff) {
+					cutoff = *pr.MergedAt
 				}
-				if pr.Closed != nil && pr.Closed.After(cutoff) {
-					cutoff = *pr.Closed
+				if pr.ClosedAt != nil && pr.ClosedAt.After(cutoff) {
+					cutoff = *pr.ClosedAt
 				}
 				if cutoff.IsZero() {
 					if pr.Updated != nil && pr.Updated.After(cutoff) {
@@ -803,8 +800,8 @@ func (s *Server) resolveRunsMeta(
 			prURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prNum)
 			if pr := prsByIndex[prNum]; pr != nil {
 				prTitle = pr.Title
-				if milestone == "" && pr.Milestone != nil && pr.Milestone.Title != "" {
-					milestone = pr.Milestone.Title
+				if milestone == "" && pr.Milestone != "" {
+					milestone = pr.Milestone
 				}
 			}
 		}
@@ -863,21 +860,12 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 	}
 	denials := s.fetchDenials(ctx)
 
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
-	prs, pullsErr := listAll[*sdk.PullRequest](ctx, s, pullsPath)
-	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	prs, pullsErr := s.pullRequests(ctx, "all")
+	prsByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	for _, pr := range prs {
-		if pr != nil && pr.Index > 0 {
-			prsByIndex[pr.Index] = pr
+		if pr != nil && pr.Number > 0 {
+			prsByIndex[pr.Number] = pr
 		}
-	}
-
-	ownerLogin := s.resolveOwnerLogin(ctx)
-	actors := actorFamilies(actorMap)
-
-	var assessments map[int64]review.Assessment
-	if pullsErr == nil {
-		assessments = s.assessOpenPullRequests(ctx, repo, prs, ownerLogin, actors, allRuns)
 	}
 
 	issuesPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues?state=all&type=issues", org, repo)
@@ -952,20 +940,19 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 				flowState = "unknown"
 			} else if meta.PR > 0 {
 				if pr := prsByIndex[meta.PR]; pr != nil {
-					if pr.Head != nil {
-						prHead = pr.Head.Sha
-					}
-					prMerged = pr.HasMerged
+					prHead = pr.HeadSHA
+					prMerged = pr.Merged
 					if prMerged {
 						flowState = "merged"
-					} else if pr.State == sdk.StateOpen {
+					} else if pr.State == string(sdk.StateOpen) {
 						m := pr.Mergeable
 						prMergeable = &m
 						if !m {
 							flowState = "needs_intervention"
 						} else if sr.Status == "failed" || sr.Status == "revoked" {
 							flowState = "needs_intervention"
-						} else if a, ok := assessments[meta.PR]; ok {
+						} else if pr.Assessment != nil {
+							a := *pr.Assessment
 							reviewDecision = string(a.Decision)
 							reviewAtHead = a.AtHead(prHead)
 							switch a.Decision {
@@ -982,7 +969,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 							// Review read failed or unavailable
 							flowState = "unknown"
 						}
-					} else if pr.State == sdk.StateClosed {
+					} else if pr.State == string(sdk.StateClosed) {
 						flowState = "needs_intervention"
 					}
 				} else {
@@ -1090,8 +1077,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	}
 
 	// 2. Fetch all PRs and runs to resolve thread membership accurately
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all", org, repo)
-	prs, _ := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	prs, _ := s.pullRequests(ctx, "all")
 
 	var serverRuns []secrets.Run
 	runsPath := "/v1/runs?history=1&repo=" + url.QueryEscape(repo)
@@ -1103,10 +1089,10 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	}
 	metaMap, prsForIssue, prCutoffs := s.resolveRunsMeta(serverRuns, issuesList, prs)
 
-	prsByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	prsByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	for _, pr := range prs {
-		if pr != nil && pr.Index > 0 {
-			prsByIndex[pr.Index] = pr
+		if pr != nil && pr.Number > 0 {
+			prsByIndex[pr.Number] = pr
 		}
 	}
 
@@ -1120,8 +1106,8 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	}
 
 	if issueNum <= 0 && prIndex > 0 {
-		if pr := prsByIndex[prIndex]; pr != nil && pr.Head != nil {
-			issueNum = parseIssueRef(pr.Head.Ref)
+		if pr := prsByIndex[prIndex]; pr != nil {
+			issueNum = parseIssueRef(pr.HeadBranch)
 		}
 		if issueNum > 0 && issue == nil {
 			issuePath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", org, repo, issueNum)
@@ -1138,8 +1124,8 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	var milestone string
 	if issue != nil && issue.Milestone != nil && issue.Milestone.Title != "" {
 		milestone = issue.Milestone.Title
-	} else if matchedPR != nil && matchedPR.Milestone != nil && matchedPR.Milestone.Title != "" {
-		milestone = matchedPR.Milestone.Title
+	} else if matchedPR != nil && matchedPR.Milestone != "" {
+		milestone = matchedPR.Milestone
 	}
 
 	timeline := &IssueTimeline{
@@ -1165,7 +1151,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 		}
 	} else if matchedPR != nil {
 		timeline.Title = matchedPR.Title
-		timeline.State = string(matchedPR.State)
+		timeline.State = matchedPR.State
 		timeline.URL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, prIndex)
 	}
 
@@ -1180,7 +1166,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 					Time:   *matchedPR.Created,
 					Title:  fmt.Sprintf("Pull request !%d opened", prIndex),
 					Detail: matchedPR.Title,
-					Actor:  userLogin(matchedPR.Poster),
+					Actor:  matchedPR.Author,
 					URL:    prURL,
 				})
 			}
@@ -1203,12 +1189,12 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 			}
 
 			// Merge event
-			if matchedPR.HasMerged && matchedPR.Merged != nil {
+			if matchedPR.Merged && matchedPR.MergedAt != nil {
 				timeline.Events = append(timeline.Events, TimelineEvent{
 					Type:   "pr_merged",
-					Time:   *matchedPR.Merged,
+					Time:   *matchedPR.MergedAt,
 					Title:  fmt.Sprintf("Pull request !%d merged into main", prIndex),
-					Actor:  userLogin(matchedPR.MergedBy),
+					Actor:  matchedPR.MergedBy,
 					Status: "merged",
 					URL:    prURL,
 				})

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -324,5 +325,33 @@ func TestForgeCompleteReads(t *testing.T) {
 	prs, err := s.opPRList(ctx, p, PRListIn{Repo: "demo"})
 	if err != nil || len(prs) != 51 || prs[50].HeadBranch != "issue/51" || prs[50].ReviewState != "approved" {
 		t.Fatalf("prs=%v err=%v", prs, err)
+	}
+	// The list carries the whole assessment, not only its decision: the
+	// web UI shows who approved and where.
+	if a := prs[50].Assessment; a == nil || string(a.Decision) != prs[50].ReviewState || a.Review == nil || a.Review.Reviewer != "codex" || a.Review.CommitID != "h" {
+		t.Fatalf("assessment = %+v", a)
+	}
+}
+
+func TestNewPRItem(t *testing.T) {
+	created, merged := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	item := NewPRItem(&sdk.PullRequest{
+		Index: 7, Title: "t", State: sdk.StateClosed, HasMerged: true, Mergeable: true,
+		Poster: &sdk.User{UserName: "claude"}, MergedBy: &sdk.User{UserName: "rlupi"},
+		Head: &sdk.PRBranchInfo{Ref: "issue/7", Sha: "abc"}, Base: &sdk.PRBranchInfo{Ref: "milestone/3"},
+		Milestone: &sdk.Milestone{ID: 3, Title: "Demo"}, HTMLURL: "http://forge/pulls/7",
+		Created: &created, Merged: &merged, Closed: &merged,
+	})
+	want := PRItem{
+		Number: 7, Title: "t", State: "closed", Merged: true, MergedBy: "rlupi", Author: "claude",
+		HeadBranch: "issue/7", HeadSHA: "abc", BaseBranch: "milestone/3", Mergeable: true, Milestone: "Demo",
+		URL: "http://forge/pulls/7", Created: &created, MergedAt: &merged, ClosedAt: &merged,
+	}
+	if !reflect.DeepEqual(item, want) {
+		t.Fatalf("NewPRItem =\n%+v\nwant\n%+v", item, want)
+	}
+	// A PR without branches or a milestone has none of their fields.
+	if item := NewPRItem(&sdk.PullRequest{Index: 8, State: sdk.StateOpen}); item.HeadBranch != "" || item.BaseBranch != "" || item.Milestone != "" || item.MergedBy != "" {
+		t.Fatalf("bare PR item = %+v", item)
 	}
 }

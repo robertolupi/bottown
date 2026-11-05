@@ -268,13 +268,55 @@ type PRItem struct {
 	Number      int64  `json:"number"`
 	Title       string `json:"title"`
 	State       string `json:"state"`
+	Merged      bool   `json:"merged,omitempty"`
+	MergedBy    string `json:"merged_by,omitempty"`
 	Author      string `json:"author"`
 	HeadBranch  string `json:"head_branch,omitempty"`
 	HeadSHA     string `json:"head_sha,omitempty"`
+	BaseBranch  string `json:"base_branch,omitempty"`
+	Mergeable   bool   `json:"mergeable"`
+	Milestone   string `json:"milestone,omitempty"` // the milestone's title
 	ReviewState string `json:"review_state"`
 	// ReviewReason says why, when an approval carried over (internal/review).
 	ReviewReason string `json:"review_reason,omitempty"`
-	URL          string `json:"url"`
+	// Assessment is where the reviews leave an open PR, whose decision is
+	// ReviewState; nil for closed and merged PRs, or when the reviews
+	// could not be read.
+	Assessment *review.Assessment `json:"assessment,omitempty"`
+	URL        string             `json:"url"`
+	Created    *time.Time         `json:"created,omitempty"`
+	Updated    *time.Time         `json:"updated,omitempty"`
+	MergedAt   *time.Time         `json:"merged_at,omitempty"`
+	ClosedAt   *time.Time         `json:"closed_at,omitempty"`
+}
+
+// NewPRItem is pr's list entry without its review state, which needs the
+// reviews (opPRList fills it in).
+func NewPRItem(pr *sdk.PullRequest) PRItem {
+	item := PRItem{
+		Number:    pr.Index,
+		Title:     pr.Title,
+		State:     string(pr.State),
+		Merged:    pr.HasMerged,
+		MergedBy:  login(pr.MergedBy),
+		Author:    login(pr.Poster),
+		Mergeable: pr.Mergeable,
+		URL:       pr.HTMLURL,
+		Created:   pr.Created,
+		Updated:   pr.Updated,
+		MergedAt:  pr.Merged,
+		ClosedAt:  pr.Closed,
+	}
+	if pr.Head != nil {
+		item.HeadBranch, item.HeadSHA = pr.Head.Ref, pr.Head.Sha
+	}
+	if pr.Base != nil {
+		item.BaseBranch = pr.Base.Ref
+	}
+	if pr.Milestone != nil {
+		item.Milestone = pr.Milestone.Title
+	}
+	return item
 }
 
 // CommentIn is the input of comment.
@@ -678,17 +720,7 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 	}
 	out := make([]PRItem, 0, len(prs))
 	for _, pr := range prs {
-		item := PRItem{
-			Number: pr.Index,
-			Title:  pr.Title,
-			State:  string(pr.State),
-			Author: login(pr.Poster),
-			URL:    pr.HTMLURL,
-		}
-		if pr.Head != nil {
-			item.HeadBranch = pr.Head.Ref
-			item.HeadSHA = pr.Head.Sha
-		}
+		item := NewPRItem(pr)
 		if pr.HasMerged {
 			item.ReviewState = "merged"
 		} else if pr.State == sdk.StateClosed {
@@ -699,7 +731,7 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 				item.ReviewState = "unknown"
 			} else {
 				a := assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, s.carryOver(ctx, org, repo, pr, rs))
-				item.ReviewState, item.ReviewReason = string(a.Decision), a.Reason
+				item.ReviewState, item.ReviewReason, item.Assessment = string(a.Decision), a.Reason, &a
 			}
 		}
 		out = append(out, item)

@@ -74,8 +74,12 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 		case p == "/v1/forge/pr/merge-base":
 			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
 			_ = json.NewEncoder(w).Encode(fix.merges[num])
-		case strings.HasSuffix(p, "/pulls"):
-			_ = json.NewEncoder(w).Encode(paginate(r, fix.prs))
+		case p == "/v1/forge/prs":
+			owner, _ := fix.whoami["actor"].(string)
+			_ = json.NewEncoder(w).Encode(fakePRList{
+				prs: fix.prs, reviews: fix.reviews, carries: fix.carries,
+				families: familiesOf(fix.actors), owner: owner, runs: fix.runs, repo: r.URL.Query().Get("repo"),
+			}.items(r))
 		case strings.Contains(p, "/commits/") && strings.HasSuffix(p, "/statuses"):
 			parts := strings.Split(p, "/")
 			sts := fix.statuses[parts[len(parts)-2]]
