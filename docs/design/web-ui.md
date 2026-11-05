@@ -592,8 +592,9 @@ marked interactive, with no usage.
 **Stats** come later: success rate per actor and kind, rounds per issue,
 and usage per issue.
 
-**Retention.** Records and logs stay on the host until `bottown run gc`
-removes them, which also purges the server's records of ended runs older
+**Retention.** Records and logs, the flows' logs included
+([index.md](../index.md) lists what it removes when), stay on the
+host until `bottown run gc` removes them, which also purges the server's records of ended runs older
 than `--older-than`. For history to outlive that, each run gets a
 **digest** at run end: its record's fields, the stop or handover summary,
 and the usage the harness reported. The host posts it to the server, which

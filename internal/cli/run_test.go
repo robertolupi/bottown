@@ -296,13 +296,13 @@ func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
 	}
 }
 
-// A file in the runs directory that is not a run record, such as a check
-// result (<id>.check.json), unmarshals into a record with no id. gc must
-// skip it and warn once naming the file, rather than treat it as a finished
-// run whose empty id is the runs directory itself.
+// A file in the runs directory that is not a run record, such as a stray
+// <id>.notes.json, unmarshals into a record with no id. gc must skip it and
+// warn once naming the file, rather than treat it as a finished run whose
+// empty id is the runs directory itself.
 func TestGCSkipsRecordWithoutID(t *testing.T) {
 	ws := &runs.Workspace{RunsDir: t.TempDir()}
-	stray := filepath.Join(ws.RunsDir, "r-2ecab347.check.json")
+	stray := filepath.Join(ws.RunsDir, "r-2ecab347.notes.json")
 	if err := os.WriteFile(stray, []byte("{\n  \"sha\": \"abc\",\n  \"steps\": []\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestGCSkipsRecordWithoutID(t *testing.T) {
 	if len(recs) != 0 {
 		t.Fatalf("records include a non-run file: %+v", recs)
 	}
-	if got := strings.Count(warn.String(), "r-2ecab347.check.json"); got != 1 {
+	if got := strings.Count(warn.String(), "r-2ecab347.notes.json"); got != 1 {
 		t.Fatalf("warnings naming the file = %d, want 1: %q", got, warn.String())
 	}
 	removed, keep := gcLocal(ws, recs, true, nil, io.Discard, func(runs.Record) error { return nil })
@@ -487,6 +487,8 @@ func TestGCRevokesRunItsLauncherCouldNotEnd(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(secrets.Run{ID: id})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs/purge":
 			_ = json.NewEncoder(w).Encode(map[string][]string{"purged": nil})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls"):
+			_, _ = w.Write([]byte("[]"))
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -734,5 +736,75 @@ func TestGCRemovesLocks(t *testing.T) {
 	locks, _ := filepath.Glob(filepath.Join(ws.RunsDir, "*.lock"))
 	if want := []string{ws.Path("r-f1", ".lock")}; !slices.Equal(locks, want) {
 		t.Fatalf("lock files %v, want %v", locks, want)
+	}
+}
+
+// gc removes the e2e logs of issues with no open PR, and with --older-than
+// old ones of open PRs too, and the web UI's logs of flows not running. A
+// live flow's log, a recent e2e log of an open PR and files that only look
+// like flow logs stay.
+func TestGCFlowLogs(t *testing.T) {
+	dir := t.TempDir()
+	ws := &runs.Workspace{Dir: dir, RunsDir: filepath.Join(dir, "runs")}
+	if err := os.MkdirAll(ws.RunsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	write := func(path string, body string, age time.Duration) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e2e := func(issue int, sha string) string {
+		return filepath.Join(ws.RunsDir, "flow-"+strconv.Itoa(issue)+"-"+sha+".e2e.log")
+	}
+	flowLog := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".log") }
+	flowInfo := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".json") }
+
+	write(e2e(1, "aaaaaaa"), "merged PR", time.Minute)        // no open PR: removed
+	write(e2e(2, "bbbbbbb"), "open PR, recent", time.Minute)  // kept
+	write(e2e(2, "ccccccc"), "open PR, old", 200*time.Hour)   // removed with --older-than
+	write(filepath.Join(ws.RunsDir, "flow-x.e2e.log"), "", 0) // not a flow's: kept
+	write(flowLog(3), "no record", 0)                         // removed
+	write(flowLog(4), "dead flow", 0)                         // removed, with its record
+	write(flowInfo(4), `{"issue": 4, "pid": 999999999}`, 0)
+	write(flowLog(5), "live flow", 0) // kept
+	write(flowInfo(5), `{"issue": 5, "pid": `+strconv.Itoa(os.Getpid())+`}`, 0)
+	write(filepath.Join(dir, "run-implement-6.log"), "", 0) // not a flow log: kept
+
+	if n := gcFlowLogs(ws, map[int64]bool{2: true}, 0, now, io.Discard); n != 3 {
+		t.Errorf("without --older-than removed %d logs, want 3", n)
+	}
+	for _, p := range []string{e2e(1, "aaaaaaa"), flowLog(3), flowLog(4), flowInfo(4)} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survives gc: %v", filepath.Base(p), err)
+		}
+	}
+	for _, p := range []string{e2e(2, "bbbbbbb"), e2e(2, "ccccccc"), flowLog(5), flowInfo(5),
+		filepath.Join(ws.RunsDir, "flow-x.e2e.log"), filepath.Join(dir, "run-implement-6.log")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("gc removed %s: %v", filepath.Base(p), err)
+		}
+	}
+	if n := gcFlowLogs(ws, map[int64]bool{2: true}, 168*time.Hour, now, io.Discard); n != 1 {
+		t.Errorf("with --older-than removed %d logs, want 1", n)
+	}
+	if _, err := os.Stat(e2e(2, "ccccccc")); !os.IsNotExist(err) {
+		t.Errorf("old e2e log of an open PR survives --older-than: %v", err)
+	}
+	if _, err := os.Stat(e2e(2, "bbbbbbb")); err != nil {
+		t.Errorf("--older-than removed a recent e2e log: %v", err)
+	}
+}
+
+func TestIssueBranchNumber(t *testing.T) {
+	for ref, want := range map[string]int64{"issue/278": 278, "issue/0": 0, "issue/x": 0, "feature/3": 0, "3": 0} {
+		if n, ok := issueBranchNumber(ref); ok != (want > 0) || ok && n != want {
+			t.Errorf("issueBranchNumber(%q) = %d, %v; want %d", ref, n, ok, want)
+		}
 	}
 }

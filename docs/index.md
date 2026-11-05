@@ -145,7 +145,8 @@ a branch cannot change what its own checks are.
   (marked `gate` in `--json`); the log is
   `.bottown/runs/flow-<issue>-<sha>.e2e.log`, which the web UI's Live
   Runs and the flow's terminal tail follow while the commands run, as
-  they do a run's. A pass goes into the verify
+  they do a run's, and which `run gc` removes once the issue has no open
+  PR (or, with `--older-than`, once it is that old). A pass goes into the verify
   prompt, which then asks for `bottown check` without `--e2e`; a failure
   starts another implement round with the failure in its prompt
   ([web-ui.md §3.2](design/web-ui.md#32-the-loop)). So implementers need
@@ -164,6 +165,18 @@ temporary directories outside a git checkout can run normally. The launcher
 removes it when the run returns; `run gc` uses the path saved in the local
 record if the launcher died. Older runs' scratch directories beside their
 worktrees are also removed by gc.
+
+What `run gc` removes, besides the server's records of ended runs: each
+finished run's worktree and its `<id>.*` files (succeeded and dead runs;
+failed ones with `--failed`); `bottown flow`'s e2e logs,
+`.bottown/runs/flow-<issue>-<sha>.e2e.log`, once the issue has no open PR
+from `issue/<n>`, or with `--older-than` once the log is that old (while the
+PR is open a resumed flow points to the log rather than checking again);
+and the web UI's flow logs, `.bottown/flow-<issue>.log`, once that flow is
+not running, that is, no `flow-<issue>.json` names a live process. Its
+summary line counts the runs and the flow logs it removed. A run's
+`<id>.check.json` is its own file, removed with it, and listing runs does
+not warn about it.
 
 Runs share the host with each other and with the owner. The implement and
 verify prompts say so: a run must not stop, kill or remove processes,

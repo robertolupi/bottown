@@ -232,7 +232,9 @@ func (w *Workspace) Records(warn io.Writer) ([]Record, error) {
 	var out []Record
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".mcp.json") {
+		// A run's MCP config and check result sit next to its record:
+		// they are its files, not stray ones to warn about.
+		if e.IsDir() || !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".mcp.json") || strings.HasSuffix(name, ".check.json") {
 			continue
 		}
 		r, err := LoadFile(filepath.Join(w.RunsDir, name))
