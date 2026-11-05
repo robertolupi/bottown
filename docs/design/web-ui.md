@@ -635,9 +635,12 @@ upgrades prod.
   HEAD against `main`, clean or dirty, busy with a live run, and its last
   run. Launched runs' own worktrees under `.bottown/runs` are listed too,
   marked with the run's kind and target; a permanent worktree shows as
-  live only for the run it leases.
-- The installed slash commands of each harness are current (what `bottown
-  harness setup` would change), and the CLI and server versions match.
+  live only for the run it leases. Each permanent worktree also shows its
+  fam guide file ([index](../index.md)): current, outdated, missing,
+  foreign or none.
+- The installed slash commands and the bottown skill of each harness are
+  current (what `bottown harness setup` would change), and the CLI and
+  server versions match.
 
 ### 4.4 Repository settings
 
@@ -729,7 +732,7 @@ action only updates the PR's own branch.
 | Issue dependencies, milestones, branches | server | `GET /v1/forge/issue/dependencies`, `/v1/forge/milestones`, `/v1/forge/branch` (§7) |
 | Actors and their families | server | `GET /v1/actors` |
 | Run records and logs of this checkout's runs | host, `.bottown/runs/` | read directly |
-| Actor worktrees | host | `git worktree list` in the checkout, and run records in `.bottown/runs` |
+| Actor worktrees | host | `git worktree list` in the checkout, and run records in `.bottown/runs`; each guide file compared with what `bottown guide` renders |
 | Upstream | host, the checkout's `origin` | `git fetch origin` with the owner's credentials |
 | Harness slash commands | host, each harness's config | compared with what `harness setup` would write |
 | Repository settings | `.bottown.toml` on the forge's `main` | `GET /v1/forge/branch` for `main`'s head, then `GET /v1/forge/file` at it (§4.4) |

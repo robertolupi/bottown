@@ -21,6 +21,7 @@ func TestInstallCommands(t *testing.T) {
 	cmd.SetOut(&out)
 	t.Setenv("KIMI_CODE_HOME", "")
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CRUSH_SKILLS_DIR", "")
 	for _, h := range []string{"claude", "agy", "kimi", "codex", "crush"} {
 		if err := installCommands(cmd, home, h, false); err != nil {
 			t.Fatal(err)
@@ -112,9 +113,32 @@ func TestInstallCommands(t *testing.T) {
 		}
 	}
 
+	// The bottown skill, where the harness loads skills on demand, sends the
+	// agent to `bottown guide`; agy gets the guide from its workspace rules.
+	for h, dir := range map[string]string{
+		"claude": filepath.Join(home, ".claude", "skills"),
+		"kimi":   filepath.Join(home, ".kimi-code", "skills"),
+		"codex":  filepath.Join(home, ".codex", "skills"),
+		"crush":  filepath.Join(home, ".config", "crush", "skills"),
+	} {
+		skill, err := os.ReadFile(filepath.Join(dir, "bottown", "SKILL.md"))
+		if err != nil {
+			t.Errorf("%s: no bottown skill: %v", h, err)
+			continue
+		}
+		for _, want := range []string{"name: bottown\n", "description: ", self + " guide", harnessMarker} {
+			if !strings.Contains(string(skill), want) {
+				t.Errorf("%s bottown skill lacks %q:\n%s", h, want, skill)
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "config", "global_workflows", "bottown.md")); err == nil {
+		t.Error("agy got a bottown skill as a workflow")
+	}
+
 	// Re-running is a no-op; a foreign file is protected unless --force.
 	out.Reset()
-	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != len(harnessKinds) {
+	if err := installCommands(cmd, home, "claude", false); err != nil || strings.Count(out.String(), "up to date") != len(harnessKinds)+1 {
 		t.Errorf("second install: %v %s", err, out.String())
 	}
 	foreign := filepath.Join(home, ".claude", "commands", "bottown-verify.md")

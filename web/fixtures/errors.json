@@ -28,7 +28,29 @@
         "checked": true,
         "protected": false
       },
-      "worktrees": [],
+      "worktrees": [
+        {
+          "actor": "claude",
+          "path": "~/src/fams/demo/claude",
+          "head": "main",
+          "is_dirty": false,
+          "guide": "foreign"
+        },
+        {
+          "actor": "kimi",
+          "path": "~/src/fams/demo/kimi",
+          "head": "main",
+          "is_dirty": false,
+          "guide": "outdated"
+        },
+        {
+          "actor": "agy",
+          "path": "~/src/fams/demo/agy",
+          "head": "main",
+          "is_dirty": false,
+          "guide": "exit status 128: not a git repository"
+        }
+      ],
       "harness_commands": [
         {
           "harness": "claude",

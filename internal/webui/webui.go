@@ -70,6 +70,9 @@ type Config struct {
 	CLIVersion     string
 	BottownPath    string
 	HarnessChecker func(home string) []HarnessCommandInfo
+	// GuideChecker reports the state of the fam guide file in an actor
+	// worktree (runs.GuideStatus), or why it could not tell.
+	GuideChecker func(worktree string) string
 }
 
 // Server is the local HTTP server for the bottown web UI.

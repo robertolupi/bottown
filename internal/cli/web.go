@@ -93,6 +93,7 @@ func newWeb(g *globals) *cobra.Command {
 				CLIVersion:     Version,
 				BottownPath:    selfPath(),
 				HarnessChecker: checkHarnessCurrent,
+				GuideChecker:   guideStatus,
 			})
 			if err != nil {
 				return err
@@ -249,6 +250,7 @@ func webCapture(cmd *cobra.Command, g *globals, s previewSettings) error {
 		CLIVersion:     Version,
 		BottownPath:    selfPath(),
 		HarnessChecker: checkHarnessCurrent,
+		GuideChecker:   guideStatus,
 	})
 	if err != nil {
 		return err

@@ -19,102 +19,28 @@ record in [docs/history/iteration-1.md](docs/history/iteration-1.md), and the
 bootstrap design, including Forgejo quirks we found, in
 [docs/history/bootstrap.md](docs/history/bootstrap.md).
 
-## The fam layout
+## Working in the fam
 
-```
-~/src/fams/bottown/main     the owner's checkout (the real .git)
-~/src/fams/bottown/claude   actor worktree for claude
-~/src/fams/bottown/agy      actor worktree for agy
-~/src/fams/bottown/codex    actor worktree for codex
-~/src/fams/bottown/kimi     actor worktree for kimi
-```
+This repository is developed in a bottown fam, like any project bottown
+hosts. What every fam shares (the layout, the `bottown` remote, how runs
+start, the agent CLI and what is allowed outside a run) is in the fam guide:
+run `bottown guide` in your checkout. Actor worktrees also have it, untracked,
+in the file their harness loads (claude: `CLAUDE.local.md`), and runs get the
+same rules in their goal prompt. The guide's source is
+[internal/runs/prompts/fam.md](internal/runs/prompts/fam.md).
 
-- **`main` is the owner's.** Actors work only in their own worktree, and
-  never edit `main` or another actor's worktree.
-- **The `bottown` remote is the prod forge** in both permanent actor
-  worktrees and ephemeral run worktrees. `main` is protected: only the owner
-  pushes or merges there. Actors push their `issue/<n>` branch during a run.
-- **`origin`, if present, is the external upstream.** Pushes to it are
-  blocked in actor worktrees.
+What is particular to developing bottown itself:
 
-## How actors work
-
-Work happens in runs. In your actor worktree:
-
-```
-bottown run start implement 12      # or: /bottown-implement 12
-bottown run start verify 13         # or: /bottown-verify 13
-bottown run start discuss 12        # or: /bottown-discuss 12 QUESTION
-bottown run start plan 14           # or: /bottown-plan 14
-```
-
-`run start` prints the goal prompt for the run: follow it. Use the bottown
-CLI for the forge; it holds no token, and the server enforces your run's role
-and repository:
-
-```
-bottown whoami                      # actor, run or last run, HEAD vs main
-bottown issue list [--state open|closed|all] [--repo R] [--json]
-bottown issue show [N] [--repo R] [--json] [--download DIR]
-bottown issue create --title T --body-file -
-bottown pr list [--state open|closed|all] [--repo R] [--json]
-bottown pr show [N] [--repo R] [--diff [--full] | --stat | --since-review [--reviewer R]] [--json]
-bottown pr create --title T --body-file -
-bottown comment [N] [--repo R] --body-file -
-bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
-bottown api METHOD PATH [--data JSON]
-bottown check [--e2e | --report] [--json]
-bottown run end [--failed] --summary-file -
-```
-
-- **Implementers** push `issue/<n>` and open a PR. They cannot review or
-  merge.
-- **Verifiers** review exactly the commit the run pinned, with one verdict.
-  They cannot push.
-- **Discuss runs** review and discuss one issue without implementing it: the
-  worktree is detached at the default branch, and the answer goes in a
-  comment on the issue. They cannot push, open PRs or review.
-- **Plan runs** write a milestone plan, `<milestones_dir>/<slug>.md`, for a
-  kickoff issue: they push `issue/<n>` with only that file and open a PR.
-  They cannot file issues, review or merge.
-- **Only the owner edits issues, PRs or milestones:** actors cannot close,
-  reopen, retitle or retarget them, or change milestones.
-- **Anyone can file issues,** in or outside a run (except a plan run):
-  follow-ups found while working, or what the owner asks you to file from
-  a conversation. Outside a run the repository is the one your worktree's
-  `bottown` remote points at. Filing is the one write a read-only key may
-  make.
-- **Issue attachments** (screenshots, logs) are downloaded for a run: the
-  prompt and `issue show` list their local paths, so open them with your
-  own tools. They are removed when the run ends; outside a run,
-  `issue show --download DIR` fetches them.
-- **Cross-family rule:** a verifier must be from another model family than
-  the author. Only the owner can waive it.
-- **If an issue is unclear or you are blocked,** comment on the issue and end
-  the run with `--failed`. Do not guess, and do not work outside the issue.
+- **This fam is `~/src/fams/bottown`:** `main` is the owner's checkout (the
+  real `.git`), and `claude`, `agy`, `codex` and `kimi` are actor worktrees.
 - **Checks:** "the repository's checks" in your prompt means `make check`.
   Implementers need not run `make e2e` before opening a PR (they may run
   the e2e tests their change touches): `bottown flow` runs it itself at
   each new PR head, in a clean worktree, before it starts a verifier, and
   sends a failure back as another implement round. A verifier whose prompt
   says the flow's checks passed at its SHA does not run `make e2e`; one
-  started by hand runs it. Run them with `bottown check` (`--e2e` adds
-  `make e2e`): it keeps the full output in a log, prints a short
-  summary with the first failing lines and their line numbers in the log
-  (read it there instead of re-running), flags changed dependencies, and
-  records the result on your committed, pushed HEAD, which `pr show`
-  lists. `bottown check --report` records the last result after a push.
-- **Review follow-ups** happen in a new implement run on the same issue: it
-  resumes `issue/<n>`. Every new head needs a new verify run; if `review
-  submit` says the PR has moved, stop.
-- **After a run,** your worktree stays where the run left it, often on code
-  that has since merged. Run `bottown whoami`: it shows the last run and how
-  HEAD compares with `main`.
-- **Interrupted actor runs:** retry `bottown run end` after a startup or
-  ending failure. It uses the actor credential to reconcile the recorded
-  run, revoke an interrupted startup, and finish local cleanup even when
-  the run key is already revoked. `run start` also performs this recovery
-  before starting another run; it never replaces a live, prepared run.
+  started by hand runs it. `bottown check --e2e` adds `make e2e` to the
+  checks.
 - **Never run `make install` from an actor worktree.** It replaces the
   shared `~/.local/bin/bottown`, which every actor and the harness commands
   use, with your branch's build, and can upgrade prod. It refuses to run
