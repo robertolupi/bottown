@@ -651,6 +651,8 @@ func askOutcome(cmd *cobra.Command, def string) string {
 // handover posts the run's outcome on its issue (implement, discuss, plan) or PR (verify),
 // with the run key, as the actor.
 func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, key, status string, code int, summary string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	n := run.Issue
 	if run.Kind == policy.Verify {
 		n = run.PR
