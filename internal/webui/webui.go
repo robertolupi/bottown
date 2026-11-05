@@ -334,7 +334,8 @@ func localRequestAllowed(w http.ResponseWriter, r *http.Request, port int) bool 
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
-	st, err := s.ComputeStatus(r.Context(), false)
+	force := r.URL.Query().Get("refresh") == "1"
+	st, err := s.ComputeStatus(r.Context(), force)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

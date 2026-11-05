@@ -368,6 +368,10 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	fetchTimeout = 300 * time.Millisecond
 	defer func() { fetchTimeout = origTimeout }()
 
+	origInterval := originFetchInterval
+	originFetchInterval = 400 * time.Millisecond
+	defer func() { originFetchInterval = origInterval }()
+
 	cfg := Config{
 		Instance: config.Instance{
 			Name: "prod",
@@ -425,19 +429,29 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 		}
 	}
 
-	// 2. Rate-limiting: subsequent status poll does not fetch origin and returns immediately.
+	// 2. Rate-limiting: subsequent status poll within interval does not fetch origin.
 	st, err := srv.ComputeStatus(ctx, false)
 	if err != nil {
 		t.Fatalf("ComputeStatus: %v", err)
 	}
 	if reqs := originRequests.Load(); reqs != 1 {
-		t.Fatalf("expected unforced poll to not fetch origin, got %d attempts (expected 1)", reqs)
+		t.Fatalf("expected unforced poll within interval to not fetch origin, got %d attempts (expected 1)", reqs)
 	}
 	if st.Upstream.Error == "" {
 		t.Errorf("expected Upstream.Error to remain cached on unforced poll")
 	}
 
-	// 3. TryLock and serve snapshot: while a forced refresh is in flight, an unforced
+	// 3. Interval expiry: after originFetchInterval elapses, unforced status poll fetches origin again.
+	time.Sleep(450 * time.Millisecond)
+	st, err = srv.ComputeStatus(ctx, false)
+	if err != nil {
+		t.Fatalf("ComputeStatus after interval: %v", err)
+	}
+	if reqs := originRequests.Load(); reqs != 2 {
+		t.Fatalf("expected unforced poll after interval to fetch origin, got %d attempts (expected 2)", reqs)
+	}
+
+	// 4. TryLock and serve snapshot: while a forced refresh is in flight, an unforced
 	// poll serves the last snapshot immediately without waiting for the fetch.
 	refreshStarted := make(chan struct{})
 	refreshDone := make(chan struct{})
@@ -465,7 +479,24 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	}
 
 	<-refreshDone
-	if reqs := originRequests.Load(); reqs != 2 {
-		t.Fatalf("expected 2 total origin fetch attempts after forced refresh, got %d", reqs)
+	if reqs := originRequests.Load(); reqs != 3 {
+		t.Fatalf("expected 3 total origin fetch attempts after forced refresh, got %d", reqs)
+	}
+
+	// 5. Concurrent forced refreshes: rapid forced refreshes coalesce within 2s and do not queue.
+	const forcedReqs = 3
+	var forcedWg sync.WaitGroup
+	forcedWg.Add(forcedReqs)
+	start = time.Now()
+	for i := 0; i < forcedReqs; i++ {
+		go func() {
+			defer forcedWg.Done()
+			_, _ = srv.ComputeStatus(ctx, true)
+		}()
+	}
+	forcedWg.Wait()
+	forcedElapsed := time.Since(start)
+	if forcedElapsed >= 700*time.Millisecond {
+		t.Fatalf("concurrent forced refreshes queued up: took %v (expected < 700ms for %d requests with 300ms timeout)", forcedElapsed, forcedReqs)
 	}
 }
