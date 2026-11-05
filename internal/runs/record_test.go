@@ -193,8 +193,12 @@ func TestRecordsSkipsNonRunFiles(t *testing.T) {
 	if err := w.Save(Record{ID: "r-1234abcd", Status: StatusSucceeded}); err != nil {
 		t.Fatal(err)
 	}
-	// A check result has no id, so it unmarshals into an empty record.
+	// A check result is the run's own file: skipped without a warning.
 	if err := os.WriteFile(w.Path("r-1234abcd", ".check.json"), []byte("{\n  \"sha\": \"deadbeef\"\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A stray file with no id unmarshals into an empty record.
+	if err := os.WriteFile(filepath.Join(w.RunsDir, "notes.json"), []byte("{\n  \"sha\": \"deadbeef\"\n}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// A record whose id does not match its filename.
@@ -209,10 +213,13 @@ func TestRecordsSkipsNonRunFiles(t *testing.T) {
 	if len(recs) != 1 || recs[0].ID != "r-1234abcd" {
 		t.Fatalf("records: %+v", recs)
 	}
-	for _, name := range []string{"r-1234abcd.check.json", "r-9999.json"} {
+	for _, name := range []string{"notes.json", "r-9999.json"} {
 		if !strings.Contains(warn.String(), name) {
 			t.Errorf("no warning naming %s: %q", name, warn.String())
 		}
+	}
+	if strings.Contains(warn.String(), ".check.json") {
+		t.Errorf("warning for a run's check result: %q", warn.String())
 	}
 }
 

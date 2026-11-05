@@ -3,11 +3,14 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1398,7 +1401,12 @@ the owner started but that have no local record in this checkout, such as
 one whose record a gc removed while the server was down; runs that actors
 started in their own worktrees are left alone. Live runs are never purged;
 --older-than keeps recently ended ones. A run whose local record cannot be read is kept, with a
-warning; run ls lists it as unknown.`,
+warning; run ls lists it as unknown.
+
+gc also removes the logs flows leave: bottown flow's e2e logs
+(.bottown/runs/flow-<issue>-<sha>.e2e.log) once the issue's PR is merged or
+closed, or with --older-than once they are that old, and the web UI's flow
+logs (.bottown/flow-<issue>.log) once that flow is not running.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rc, err := openRunContext(g)
@@ -1410,7 +1418,7 @@ warning; run ls lists it as unknown.`,
 	}
 	cmd.Flags().BoolVar(&failed, "failed", false, "also remove failed runs (kept by default for inspection)")
 	cmd.Flags().BoolVar(&orphans, "orphans", false, "also revoke live runs the owner started that have no local record in this checkout")
-	cmd.Flags().DurationVar(&olderThan, "older-than", 0, "purge only server records of runs that ended at least this long ago (e.g. 168h)")
+	cmd.Flags().DurationVar(&olderThan, "older-than", 0, "purge only server records of runs that ended at least this long ago (e.g. 168h); also remove e2e logs this old")
 	return cmd
 }
 
@@ -1477,9 +1485,98 @@ func gcRuns(cmd *cobra.Command, rc *runContext, failed, orphans bool, olderThan 
 	if orphaned > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "revoked %d orphaned live runs with no local record\n", orphaned)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
-		removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
+	open, err := openPRIssues(cmd.Context(), rc)
+	if err != nil {
+		return fmt.Errorf("removed %d runs, purged %d ended runs from the server; listing open PRs: %w", removed, len(purged.Purged), err)
+	}
+	logs := gcFlowLogs(rc.ws, open, olderThan, time.Now(), cmd.ErrOrStderr())
+	fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server, removed %d flow logs; .bottown is %s\n",
+		removed, len(purged.Purged), logs, humanBytes(runs.DirSize(rc.ws.Dir)))
 	return nil
+}
+
+// openPRIssues is the set of issues of rc's repository with an open PR from
+// their issue/<n> branch.
+func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
+	open := make(map[int64]bool)
+	for page := 1; ; page++ {
+		var prs []struct {
+			Head struct{ Ref string }
+		}
+		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open&limit=50&page=%d", rc.org, rc.repo, page)
+		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &prs); err != nil {
+			return nil, err
+		}
+		for _, pr := range prs {
+			if n, ok := issueBranchNumber(pr.Head.Ref); ok {
+				open[n] = true
+			}
+		}
+		if len(prs) < 50 {
+			return open, nil
+		}
+	}
+}
+
+// issueBranchNumber is n for a branch issue/<n>.
+func issueBranchNumber(ref string) (int64, bool) {
+	n, err := strconv.ParseInt(strings.TrimPrefix(ref, "issue/"), 10, 64)
+	return n, err == nil && n > 0 && strings.HasPrefix(ref, "issue/")
+}
+
+// gcFlowLogs removes the logs flows leave in ws, and returns how many:
+//
+//   - <runs>/flow-<issue>-<sha>.e2e.log, bottown flow's e2e log for one PR
+//     head, once the issue has no open PR (in open), or once it is at least
+//     olderThan old when olderThan is set. While the PR is open the log is
+//     kept: a resumed flow points to it rather than checking again.
+//   - .bottown/flow-<issue>.log, a web UI flow's output, once the flow is
+//     not running: no flow-<issue>.json whose process is alive. A stale
+//     flow-<issue>.json goes with it.
+func gcFlowLogs(ws *runs.Workspace, open map[int64]bool, olderThan time.Duration, now time.Time, warn io.Writer) (removed int) {
+	remove := func(path string) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(warn, "warning: %v\n", err)
+			return
+		}
+		removed++
+	}
+	e2e, _ := filepath.Glob(filepath.Join(ws.RunsDir, "flow-*.e2e.log"))
+	for _, path := range e2e {
+		issue, sha, ok := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "flow-"), ".e2e.log"), "-")
+		n, err := strconv.ParseInt(issue, 10, 64)
+		if !ok || sha == "" || err != nil || n <= 0 {
+			continue
+		}
+		old := false
+		if olderThan > 0 {
+			if fi, err := os.Stat(path); err == nil && now.Sub(fi.ModTime()) >= olderThan {
+				old = true
+			}
+		}
+		if !open[n] || old {
+			remove(path)
+		}
+	}
+	flows, _ := filepath.Glob(filepath.Join(ws.Dir, "flow-*.log"))
+	for _, path := range flows {
+		n, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "flow-"), ".log"), 10, 64)
+		if err != nil || n <= 0 {
+			continue
+		}
+		info := filepath.Join(ws.Dir, fmt.Sprintf("flow-%d.json", n))
+		if b, err := os.ReadFile(info); err == nil {
+			var rec struct {
+				PID int `json:"pid"`
+			}
+			if json.Unmarshal(b, &rec) == nil && runs.ProcessAlive(rec.PID) {
+				continue
+			}
+			_ = os.Remove(info)
+		}
+		remove(path)
+	}
+	return removed
 }
 
 // serverLive is the set of the IDs of the runs in live that have not ended.
