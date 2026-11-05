@@ -1,4 +1,4 @@
-package cli
+package webshot
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,70 @@ import (
 
 	"golang.org/x/net/websocket"
 )
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeCheckout makes a checkout whose web/ has a stand-in for vite that
+// writes the build where it is told to, and returns its top directory.
+func fakeCheckout(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the vite stand-in is a shell script")
+	}
+	top := t.TempDir()
+	if _, err := git(top, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	web := filepath.Join(top, "web")
+	writeFile(t, filepath.Join(web, "package.json"), "{}\n")
+	writeFile(t, filepath.Join(web, "package-lock.json"), "{}\n")
+	writeFile(t, filepath.Join(web, "fixtures", "default.json"), `{"status": {"repo": "demo/app"}}`+"\n")
+	// node_modules newer than the lock file: no npm ci.
+	vite := filepath.Join(web, "node_modules", ".bin", "vite")
+	writeFile(t, vite, `#!/bin/sh
+out=
+while [ $# -gt 0 ]; do
+  case "$1" in --outDir) out="$2"; shift ;; esac
+  shift
+done
+[ -n "$out" ] || { echo "no --outDir" >&2; exit 1; }
+mkdir -p "$out"
+printf '<!doctype html><title>built by the stand-in</title>' > "$out/index.html"
+`)
+	if err := os.Chmod(vite, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(web, "node_modules"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	return top
+}
 
 func TestShotCases(t *testing.T) {
 	cases, err := shotCases([]int{1440, 390}, 900, []string{"light", "dark"})
@@ -186,9 +251,9 @@ while [ ! -e '`+closed+`' ]; do sleep 0.05; done
 	return exe
 }
 
-// TestWebShot runs `web shot` end to end, with stand-ins for vite and for
+// TestShoot runs Shoot end to end, with stand-ins for vite and for
 // the browser.
-func TestWebShot(t *testing.T) {
+func TestShoot(t *testing.T) {
 	top := fakeCheckout(t)
 	t.Chdir(top)
 	t.Setenv("BOTTOWN_INSTANCE", "")
@@ -200,25 +265,30 @@ func TestWebShot(t *testing.T) {
 	t.Setenv(browserEnv, fakeBrowser(t, port, f.closed))
 
 	out := filepath.Join(t.TempDir(), "shot")
-	root := newRoot()
-	stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-	root.SetArgs([]string{"web", "shot", "--out", out, "--width", "800,300", "--scheme", "dark", "--eval", "6*7", "--timeout", "20s"})
+	stderr := &lockedBuffer{}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := root.ExecuteContext(ctx); err != nil {
-		t.Fatalf("web shot: %v\n%s", err, stderr.String())
+	res, err := Shoot(ctx, Options{
+		CheckoutDir: top,
+		Out:         out,
+		Widths:      []int{800, 300},
+		Schemes:     []string{"dark"},
+		Eval:        "6*7",
+		Timeout:     20 * time.Second,
+		ErrOut:      stderr,
+	})
+	if err != nil {
+		t.Fatalf("Shoot: %v\n%s", err, stderr.String())
 	}
 
-	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	paths := res.Paths()
 	want := []string{"metrics.json", "800-dark.png", "800-dark.dom.html", "300-dark.png", "300-dark.dom.html"}
-	if len(lines) != len(want) {
-		t.Fatalf("output:\n%s", stdout.String())
+	if len(paths) != len(want) {
+		t.Fatalf("output:\n%v", paths)
 	}
 	for i, w := range want {
-		if lines[i] != filepath.Join(out, w) {
-			t.Errorf("line %d: %q, want %s", i, lines[i], filepath.Join(out, w))
+		if paths[i] != filepath.Join(out, w) {
+			t.Errorf("line %d: %q, want %s", i, paths[i], filepath.Join(out, w))
 		}
 	}
 	if b, _ := os.ReadFile(filepath.Join(out, "800-dark.png")); string(b) != "PNG" {
@@ -232,7 +302,7 @@ func TestWebShot(t *testing.T) {
 	}
 
 	var report shotReport
-	b, err := os.ReadFile(lines[0])
+	b, err := os.ReadFile(paths[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +314,7 @@ func TestWebShot(t *testing.T) {
 	}
 	c := report.Cases[0]
 	if c.Name != "800-dark" || c.Width != 800 || c.Scheme != "dark" {
-		t.Errorf("case: %+v", c.shotCase)
+		t.Errorf("case: %+v", c.Case)
 	}
 	var metrics bytes.Buffer
 	_ = json.Compact(&metrics, c.Metrics)

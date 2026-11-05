@@ -576,6 +576,17 @@ func npmInstalled(ctx context.Context, webDir string, errOut io.Writer) error {
 	return os.Chtimes(filepath.Join(webDir, "node_modules"), now, now)
 }
 
+// viteBuild builds the web UI in webDir into out, once. It runs vite itself
+// rather than npm run, so that cancelling ctx stops it.
+func viteBuild(ctx context.Context, webDir, out string, errOut io.Writer) error {
+	vite := exec.CommandContext(ctx, filepath.Join(webDir, "node_modules", ".bin", "vite"), "build", "--outDir", out, "--emptyOutDir")
+	vite.Dir, vite.Stdout, vite.Stderr = webDir, errOut, errOut
+	if err := vite.Run(); err != nil {
+		return fmt.Errorf("build the web UI: %w", err)
+	}
+	return nil
+}
+
 // waitForBuild waits for vite --watch's first build to write index.html.
 func waitForBuild(ctx context.Context, index string, exited <-chan struct{}) error {
 	tick := time.NewTicker(200 * time.Millisecond)
