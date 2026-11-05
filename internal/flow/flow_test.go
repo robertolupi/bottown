@@ -335,20 +335,66 @@ func TestFlowSerializeActors(t *testing.T) {
 			}
 			if req.Kind == policy.Implement {
 				attempts++
+				if req.Retry != (attempts > 1) {
+					t.Errorf("implement attempt %d: Retry = %t", attempts, req.Retry)
+				}
 				if attempts <= 3 {
 					return fmt.Errorf("%w: wording the flow does not read", ErrActorBusy)
 				}
 				api.open, api.pr = true, openPR()
 				return nil
 			}
+			if req.Retry {
+				t.Error("the verify run's first try is marked as a retry")
+			}
 			approve(api)
 			return nil
 		})
 		opts := testOptions()
-		opts.SerializeActors = true
+		opts.SerializeActors, opts.ActorWait = true, time.Minute
 		result, err := (&Supervisor{API: api, Runner: runner, RetryDelay: time.Millisecond}).Run(context.Background(), opts)
 		if err != nil || result.Reason != ReadyToMerge || attempts != 4 {
 			t.Fatalf("result = %+v, error = %v, implement attempts = %d", result, err, attempts)
+		}
+	})
+
+	t.Run("back off to a minute, and stop when the wait runs out", func(t *testing.T) {
+		api := &fakeAPI{}
+		clock := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+		var waits []time.Duration
+		fired := make(chan time.Time)
+		close(fired)
+		attempts := 0
+		runner := RunnerFunc(func(context.Context, RunRequest) error {
+			attempts++
+			return fmt.Errorf("%w: actor claude already has a live batch run: r-holder", ErrActorBusy)
+		})
+		s := &Supervisor{API: api, Runner: runner,
+			now:   func() time.Time { return clock },
+			after: func(d time.Duration) <-chan time.Time { waits = append(waits, d); clock = clock.Add(d); return fired }}
+		opts := testOptions()
+		opts.SerializeActors, opts.ActorWait = true, 4*time.Minute
+		result, err := s.Run(context.Background(), opts)
+		var stop *StopError
+		if !errors.As(err, &stop) || result.Reason != ActorBusy || !strings.Contains(result.Detail, "r-holder") || !strings.Contains(result.Detail, "4m0s") {
+			t.Fatalf("result = %+v, error = %v", result, err)
+		}
+		sec := time.Second
+		want := []time.Duration{sec, 2 * sec, 4 * sec, 8 * sec, 16 * sec, 32 * sec, 60 * sec, 60 * sec, 57 * sec}
+		if fmt.Sprint(waits) != fmt.Sprint(want) || attempts != len(want)+1 {
+			t.Fatalf("waits = %v, want %v; attempts = %d", waits, want, attempts)
+		}
+		if len(api.comments) != 1 || !strings.Contains(api.comments[0], "actor busy") || !strings.Contains(api.comments[0], "r-holder") {
+			t.Fatalf("comments = %q", api.comments)
+		}
+	})
+
+	t.Run("a serialising flow needs a wait", func(t *testing.T) {
+		opts := testOptions()
+		opts.SerializeActors = true
+		_, err := (&Supervisor{API: &fakeAPI{}, Runner: RunnerFunc(func(context.Context, RunRequest) error { return nil })}).Run(context.Background(), opts)
+		if err == nil || !strings.Contains(err.Error(), "wait") {
+			t.Fatalf("error = %v", err)
 		}
 	})
 

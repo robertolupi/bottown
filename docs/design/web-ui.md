@@ -104,6 +104,8 @@ bottown flow 51 --implement claude --verify kimi
 - `--serialize-actors`: start each run only when its actor has no other
   live batch run, and wait until then. By default an actor's runs on
   different issues run concurrently (§3.4).
+- `--actor-wait D` (default 2h): with `--serialize-actors`, how long each
+  wait for a busy actor lasts before the flow stops (actor busy).
 - It is an owner command, run from the `main` checkout like `run`. It
   prints one line per step and ends with the stop reason. Exit code 0 means
   "ready to merge"; any other stop is non-zero, so scripts can tell them
@@ -198,6 +200,7 @@ the owner sees it in Forgejo and in the UI:
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | merging `main` into the PR would conflict | read the named files; start an implement run to resolve them |
 | checks failed | the post-implement checks failed at the head and no check rounds remain | read the log the stop names; fix the cause (a flake gets its own issue), then re-run, maybe with more check rounds |
+| actor busy | with `--serialize-actors`, the actor's other batch run, which the stop names, was still live after `--actor-wait` | see why that run has not ended; stop or revoke it, then re-run the flow |
 
 ### 3.3 State and restart
 
@@ -334,7 +337,10 @@ Per-actor serialisation is opt-in: a request with `serialize_actor`
 (`run implement`/`run verify --serialize-actors`) is refused while its
 actor has another live batch run. `flow --serialize-actors` asks for it on
 every run, and when refused waits and tries again, the wait doubling from
-a second to a minute. Checking in each waiting flow instead would race:
+a second to a minute, until `--actor-wait` (default 2h) runs out and the
+flow stops with "actor busy", naming the run that holds the actor. It
+tells the refusal by the server's error code (`actor_busy`), not its
+wording, and fetches the mirror only for the first try of each run. Checking in each waiting flow instead would race:
 two flows started together (side by side in the UI, or by a milestone)
 could both see the actor as free. The server checks and creates the run
 in one update of its store, so neither check can be got round. Interactive

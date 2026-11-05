@@ -37,6 +37,7 @@ type runOpts struct {
 	flowNote        string // implement, verify: bottown flow's note (the post-implement checks)
 	checksPassed    bool   // verify: the flow's post-implement checks passed at sha
 	sha             string // verify: the head the run must be pinned at (bottown flow)
+	synced          bool   // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
 }
 
 // errHeadMoved is a verify run refused because the PR's head is not runOpts.sha.
@@ -281,8 +282,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if spec == "" {
 		spec = rc.inst.ActorModel(actor)
 	}
-	if err := rc.ws.Sync(ctx); err != nil {
-		return err
+	if !o.synced {
+		if err := rc.ws.Sync(ctx); err != nil {
+			return err
+		}
 	}
 
 	if kind == policy.Implement || kind == policy.Plan {
@@ -303,7 +306,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			return fmt.Errorf("%w: %v", errHeadMoved, err)
 		}
 		if errors.Is(err, client.ErrActorBusy) {
-			return fmt.Errorf("%w: %v", errActorBusy, err)
+			return fmt.Errorf("%w: %w", errActorBusy, err)
 		}
 		return err
 	}

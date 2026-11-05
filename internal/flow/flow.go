@@ -33,6 +33,9 @@ const (
 	// ChecksFailed: the post-implement checks failed at the head and no
 	// check rounds remain.
 	ChecksFailed StopReason = "checks failed"
+	// ActorBusy: a flow that serialises actors waited Options.ActorWait
+	// for an actor's other batch run to end, and it is still live.
+	ActorBusy StopReason = "actor busy"
 )
 
 // ErrActorBusy marks a run creation refused because the flow serialises
@@ -69,6 +72,10 @@ type Options struct {
 	// batch run, waiting for it otherwise. By default an actor's runs on
 	// different targets run concurrently.
 	SerializeActors bool
+	// ActorWait bounds each such wait: the flow stops (ActorBusy) when the
+	// actor is still busy after it. It must be positive when
+	// SerializeActors is set.
+	ActorWait time.Duration
 	// Attended flows ask on In before merging a clean, behind base; the
 	// others leave that to the owner inbox.
 	Attended bool
@@ -103,6 +110,10 @@ type RunRequest struct {
 	// SerializeActor asks the server to refuse the run while its actor
 	// has another live batch run; the Runner then fails with ErrActorBusy.
 	SerializeActor bool
+	// Retry marks a try after one the server refused for a busy actor:
+	// the Runner need not repeat what it prepared for that try, such as
+	// fetching the mirror.
+	Retry bool
 	// Note is the flow's own note for the run's prompt: the failed checks
 	// an implement round fixes, or the passed checks a verifier relies on.
 	Note string
@@ -176,7 +187,8 @@ type API interface {
 
 // Supervisor drives one issue. RetryDelay is how long a flow that
 // serialises actors first waits before trying a run whose actor is busy
-// again; the wait doubles up to maxRetryDelay. Zero means one second.
+// again; the wait doubles up to maxRetryDelay, within Options.ActorWait.
+// Zero means one second.
 // Checker, if set, gates each new head on the post-implement checks before
 // a verifier sees it.
 type Supervisor struct {
@@ -188,6 +200,10 @@ type Supervisor struct {
 	RetryDelay time.Duration
 
 	answers *bufio.Reader
+	// now and after, if set, replace time.Now and time.After in the wait
+	// for a busy actor (tests).
+	now   func() time.Time
+	after func(time.Duration) <-chan time.Time
 }
 
 // Run executes or resumes a flow. It returns nil only at ready to merge;
@@ -202,6 +218,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	if opts.Timeout <= 0 {
 		return result, errors.New("timeout must be positive")
+	}
+	if opts.SerializeActors && opts.ActorWait <= 0 {
+		return result, errors.New("the wait for a busy actor must be positive")
 	}
 	if s.Checker != nil && (opts.CheckRounds < 0 || opts.CheckTimeout <= 0) {
 		return result, errors.New("check rounds must not be negative, and the check timeout must be positive")
@@ -628,8 +647,16 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		delay = time.Second
 	}
 	req.SerializeActor = opts.SerializeActors
+	now, after := s.now, s.after
+	if now == nil {
+		now = time.Now
+	}
+	if after == nil {
+		after = time.After
+	}
+	var deadline time.Time // of the wait for a busy actor, once one starts
 	for {
-		if s.Out != nil {
+		if s.Out != nil && !req.Retry {
 			target := fmt.Sprintf("#%d", req.Issue)
 			if req.PR > 0 {
 				target = fmt.Sprintf("!%d", req.PR)
@@ -644,15 +671,23 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 			return nil
 		}
 		if opts.SerializeActors && errors.Is(err, ErrActorBusy) {
-			if s.Out != nil {
-				fmt.Fprintf(s.Out, "flow #%d: waiting for %s's other batch run to end\n", opts.Issue, req.Actor)
+			now := now()
+			if deadline.IsZero() {
+				deadline = now.Add(opts.ActorWait)
+				if s.Out != nil {
+					fmt.Fprintf(s.Out, "flow #%d: waiting up to %s for %s's other batch run to end: %v\n", opts.Issue, opts.ActorWait, req.Actor, err)
+				}
+			}
+			if !now.Before(deadline) {
+				return &actorWaitError{actor: req.Actor, wait: opts.ActorWait, err: err}
 			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(delay):
+			case <-after(min(delay, deadline.Sub(now))):
 			}
 			delay = min(2*delay, max(maxRetryDelay, s.RetryDelay))
+			req.Retry = true
 			continue
 		}
 		if ctx.Err() != nil {
@@ -665,9 +700,28 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 	}
 }
 
+// actorWaitError is a run whose actor was still busy at the end of
+// Options.ActorWait; err is the last refusal, which names the run that
+// holds the actor.
+type actorWaitError struct {
+	actor string
+	wait  time.Duration
+	err   error
+}
+
+func (e *actorWaitError) Error() string {
+	return fmt.Sprintf("%s still has another live batch run after %s: %v", e.actor, e.wait, e.err)
+}
+
+func (e *actorWaitError) Unwrap() error { return e.err }
+
 func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (Result, error) {
 	if ctx.Err() != nil {
 		return result, ctx.Err()
+	}
+	var busy *actorWaitError
+	if errors.As(err, &busy) {
+		return s.stop(ctx, result, ActorBusy, busy.Error()+"; end that run, or re-run the flow when it has ended")
 	}
 	return s.stop(ctx, result, RunFailed, err.Error())
 }
