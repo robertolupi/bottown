@@ -439,7 +439,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 }
 
 // confirmMerge asks the owner whether to merge the base into pr's branch.
-// Anything but y or yes, end of input included, is no.
+// The default is yes: an empty line, y or yes is yes. Anything else is no,
+// and so is end of input with no answer, so a closed stdin never merges.
 func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 	if s.In == nil {
 		return false, nil
@@ -448,17 +449,20 @@ func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 		defer s.Pause()()
 	}
 	if s.Out != nil {
-		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [y/N] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
+		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [Y/n] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
 	}
 	if s.answers == nil {
 		s.answers = bufio.NewReader(s.In)
 	}
 	answer, err := s.answers.ReadString('\n')
+	if errors.Is(err, io.EOF) && answer == "" {
+		return false, nil
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
+	case "", "y", "yes":
 		return true, nil
 	default:
 		return false, nil

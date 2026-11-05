@@ -178,7 +178,7 @@ and does not count it as a round.
 The PR's base can move too. The supervisor tests the merge with `git
 merge-tree --write-tree` on the forge's refs, without a worktree. When the
 branch is behind and the merge is clean, an attended CLI flow asks `Merge
-main into issue/<n> for !N? [y/N]`; the default is no. An unattended flow
+main into issue/<n> for !N? [Y/n]`; the default is yes. An unattended flow
 leaves the choice to an owner-inbox action. On yes, bottown creates a
 two-parent commit saying the merge was automatic and pushes it as the owner.
 The unchanged-patch approval rule below then carries its approval over, and
