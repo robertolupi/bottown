@@ -443,3 +443,12 @@ func TestPreviewStatePath(t *testing.T) {
 		t.Errorf("paths: %q %q", a, b)
 	}
 }
+
+func TestWebShotCmd(t *testing.T) {
+	root := newRoot()
+	root.SetArgs([]string{"web", "shot", "--width", "0"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--width 0: must be positive") {
+		t.Fatalf("expected width error, got %v", err)
+	}
+}
