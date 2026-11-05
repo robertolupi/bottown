@@ -25,3 +25,25 @@ func TestActorBusyRefusal(t *testing.T) {
 		t.Fatalf("refusal = %q, Is ErrActorBusy: %t", got, errors.Is(got, flow.ErrActorBusy))
 	}
 }
+
+// A batch run shows a tail of its own on a terminal, an interactive run
+// does not, and a flow's runs show in the flow's tail or, without one
+// (--unattended), keep the plain output.
+func TestRunTailChoice(t *testing.T) {
+	if !(runOpts{}).ownTail() {
+		t.Error("a batch run does not show its own tail")
+	}
+	if (runOpts{interactive: true}).ownTail() {
+		t.Error("an interactive run shows a tail")
+	}
+	req := flow.RunRequest{Kind: "implement", Issue: 7, Actor: "claude"}
+	unattended := flowRunOpts(req, "", nil)
+	if unattended.ownTail() || !unattended.plain {
+		t.Errorf("a flow run without the flow's tail shows its own: %+v", unattended)
+	}
+	shared := &liveTail{}
+	attended := flowRunOpts(req, "", shared)
+	if attended.ownTail() || attended.tail != shared || attended.plain {
+		t.Errorf("a flow run does not show in the flow's tail: %+v", attended)
+	}
+}

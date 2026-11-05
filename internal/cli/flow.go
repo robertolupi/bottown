@@ -79,8 +79,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				}
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
-				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, serializeActor: req.SerializeActor,
-					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA, synced: req.Retry, tail: tail})
+				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), flowRunOpts(req, message, tail))
 				cmd.SetContext(previous)
 				if errors.Is(err, errActorBusy) {
 					return actorBusyRefusal(err)
@@ -145,3 +144,12 @@ type busyRefusal string
 func (e busyRefusal) Error() string { return string(e) }
 
 func (e busyRefusal) Is(target error) bool { return target == flow.ErrActorBusy }
+
+// flowRunOpts are the options of a run the flow starts for req. Its runs
+// show in the flow's tail; without one (--unattended, or output that is
+// not a terminal) they keep the plain output, rather than each showing a
+// tail of its own.
+func flowRunOpts(req flow.RunRequest, message string, tail *liveTail) runOpts {
+	return runOpts{actor: req.Actor, repo: req.Repo, message: message, serializeActor: req.SerializeActor,
+		flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA, synced: req.Retry, tail: tail, plain: tail == nil}
+}

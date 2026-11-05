@@ -39,7 +39,13 @@ type runOpts struct {
 	sha             string    // verify: the head the run must be pinned at (bottown flow)
 	synced          bool      // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
 	tail            *liveTail // the live tail the run shows in, if bottown flow runs one
+	plain           bool      // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
 }
+
+// ownTail is whether startRun shows a live tail of its own for the run,
+// when its output is a terminal: a batch run that neither shows in a
+// flow's tail nor asks for plain output.
+func (o runOpts) ownTail() bool { return o.tail == nil && !o.interactive && !o.plain }
 
 // errHeadMoved is a verify run refused because the PR's head is not runOpts.sha.
 var errHeadMoved = errors.New(server.HeadMovedMessage)
@@ -239,7 +245,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// flow's for all its runs; its lines and the launcher's go through it.
 	// Closed last, after every deferred line below.
 	tail := o.tail
-	if tail == nil && !o.interactive {
+	if o.ownTail() {
 		if f, ok := terminalOut(cmd); ok {
 			tail = newLiveTail(f)
 			defer tail.Close()
