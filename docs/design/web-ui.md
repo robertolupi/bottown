@@ -330,6 +330,21 @@ off, so the merge gate then agrees. A dismissal with anyone's own message
 stands. The review keeps its old commit and stale flag in Forgejo: what
 carried it over is the assessment's reason, not a new review.
 
+Forgejo processes a push in the background. The API reports the new head
+at once (`head.sha` is the branch), but `refs/pull/N/head`, the stored
+merge base, the `.diff`, `mergeable` and the review dismissals follow
+later, and on a slow host noticeably later. So for an open PR the server
+computes the diff (`pr show --diff`) and the merge base from git at the
+head, in Forgejo's copy of the repository, and reports `syncing` while
+`refs/pull/N/head` is behind the head; the flow waits for that to clear,
+as it waits for the reviews to settle. Creating a verify run and
+`review_submit` wait, up to 30 seconds, for the PR ref to reach the head,
+because an approval Forgejo records before it processes the push of its
+commit is dismissed with the older reviews. If that happens anyway, the
+reconcile step also undismisses an approval at the head itself that
+Forgejo dismissed with its message: it covers the head by definition. The
+flow reconciles when a verify run ends with such an approval (#305).
+
 Only approvals carry over. A request for changes at an older head keeps
 its usual meaning, and a comment at an older head is still no verdict.
 With `required_approvals` above 1 the forge asks for more approvals than

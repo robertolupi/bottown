@@ -222,6 +222,11 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			}
 			run.AllowSameFamily = true
 		}
+		// The verifier reads the PR and submits its review at this head:
+		// let Forgejo finish processing its push first (pushsync.go).
+		if err := s.waitPushSynced(r.Context(), run.Org, run.Repo, req.PR, pr.Head.Sha, "verify run"); err != nil {
+			return run, err
+		}
 		run.PR, run.SHA, run.Branch = req.PR, pr.Head.Sha, pr.Head.Ref
 
 	case policy.Discuss:

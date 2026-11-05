@@ -285,14 +285,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		reconcile := false
-		for _, r := range pr.Reviews {
-			if r.Dismissed && r.Official && r.State == review.StateApproved && carried(pr, r.CommitID) {
-				reconcile = true
-				break
-			}
-		}
-		if reconcile {
+		if autoDismissible(pr) {
 			if err := s.API.ReconcileCarries(ctx, opts.Repo, pr.Number); err != nil {
 				return result, err
 			}
@@ -429,10 +422,18 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			if err != nil {
 				return result, err
 			}
-			if after.HeadSHA == head {
-				if after.Assessment.Decision == review.NeedsReview {
-					return s.stop(ctx, result, VerifierUndecided, "the verify run ended without a verdict")
+			if after.HeadSHA == head && after.Assessment.Decision == review.NeedsReview && autoDismissible(after) {
+				// Forgejo dismisses a verdict with the older reviews when it
+				// processes the push to head after the verdict.
+				if err := s.API.ReconcileCarries(ctx, opts.Repo, after.Number); err != nil {
+					return result, err
 				}
+				if after, err = s.API.PR(ctx, opts.Repo, after.Number); err != nil {
+					return result, err
+				}
+			}
+			if after.HeadSHA == head && after.Assessment.Decision == review.NeedsReview {
+				return s.stop(ctx, result, VerifierUndecided, "the verify run ended without a verdict")
 			}
 		}
 	}
@@ -541,7 +542,7 @@ func failedNote(head string, o CheckOutcome) string {
 // can be dismissed as stale even when it names the new head.
 func (s *Supervisor) waitForPush(ctx context.Context, opts Options, pr server.PROut) (server.PROut, error) {
 	for range 50 {
-		if pr.Mergeable && reviewsSettled(pr) {
+		if pr.Mergeable && !pr.Syncing && reviewsSettled(pr) {
 			return pr, nil
 		}
 		if err := waitForge(ctx); err != nil {
@@ -577,6 +578,18 @@ func reviewsSettled(pr server.PROut) bool {
 	return true
 }
 
+// autoDismissible reports whether pr has a dismissed official approval the
+// reconcile step may undismiss: one that carries over to the head, or one at
+// the head itself.
+func autoDismissible(pr server.PROut) bool {
+	for _, r := range pr.Reviews {
+		if r.Dismissed && r.Official && r.State == review.StateApproved && (r.CommitID == pr.HeadSHA || carried(pr, r.CommitID)) {
+			return true
+		}
+	}
+	return false
+}
+
 // carried reports whether reviews at commit carry over to pr's head.
 func carried(pr server.PROut, commit string) bool {
 	for _, c := range pr.Carries {
@@ -593,7 +606,7 @@ func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64,
 		if err != nil {
 			return pr, err
 		}
-		if pr.HeadSHA != head || pr.Assessment.Decision != review.NeedsReview {
+		if pr.HeadSHA != head || pr.Assessment.Decision != review.NeedsReview || autoDismissible(pr) {
 			return pr, nil
 		}
 		if err := waitForge(ctx); err != nil {
