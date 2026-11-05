@@ -279,6 +279,12 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 
+	if kind == policy.Implement || kind == policy.Plan {
+		if err := rc.ws.PrepareImplement(fmt.Sprintf("issue/%d", n)); err != nil {
+			return err
+		}
+	}
+
 	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, BypassActorLimit: o.bypassActorLimit, Interactive: o.interactive}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
@@ -293,6 +299,10 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	run := created.Run
+	// The launcher's lock (see below) is released last, after the deferred
+	// end below has finished the record.
+	releaseLauncher := func() {}
+	defer func() { releaseLauncher() }()
 	// From here on, always end the run on the server, whatever happens.
 	status := runs.StatusFailed
 	var digest secrets.Digest
@@ -343,11 +353,18 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// even if this process dies before the run is running.
 	attachDir := rc.ws.AttachmentsDir(run.ID)
 	tmpDir := rc.ws.TmpDir(run.ID)
+	// Held while this process lives, so gc and run stop know exactly when
+	// it has died, even if its pid is reused.
+	liveLock, release, err := rc.ws.HoldLauncher(run.ID)
+	if err != nil {
+		return err
+	}
+	releaseLauncher = release
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName, Spec: run.Spec,
-		Status: runs.StatusPreparing, PID: os.Getpid(), Started: time.Now().UTC(),
+		Status: runs.StatusPreparing, PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
 		FlowNote: strings.TrimSpace(o.flowNote), ChecksPassed: o.checksPassed,
@@ -366,7 +383,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	defer func() {
 		// Stop a detached web preview recorded in the scratch directory
 		// before it goes, so the preview does not outlive the run.
-		stopRunPreviews(cmd.ErrOrStderr(), tmpDir)
+		stopRunPreviews(context.WithoutCancel(ctx), cmd.ErrOrStderr(), tmpDir)
 		if e := os.RemoveAll(tmpDir); e != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove tmp dir: %v\n", e)
 		}
@@ -747,11 +764,7 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		b.WriteString("_Interactive run: the owner could steer the agent, so this result is partly the owner's work._\n\n")
 	}
 	if s := cleanSummary(rec, summary); s != "" {
-		const max = 4000
-		if len(s) > max {
-			s = s[:max] + "…"
-		}
-		b.WriteString(s + "\n")
+		b.WriteString(secrets.TruncateUTF8(s, secrets.MaxSummary) + "\n")
 	}
 	return b.String()
 }
@@ -1099,7 +1112,7 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 		}
 		if sr.Summary != "" {
 			first, _, _ := strings.Cut(sr.Summary, "\n")
-			fmt.Fprintf(out, "        summary %s\n", truncate(first, 200))
+			fmt.Fprintf(out, "        summary %s\n", secrets.TruncateUTF8(first, 200))
 		}
 	} else if srErr != nil {
 		fmt.Fprintf(out, "%s %v\n", st.Bold.Render("server:"), srErr)
@@ -1112,7 +1125,7 @@ func printRunShow(out io.Writer, r *lipgloss.Renderer, rec *runs.Record, sr *sec
 			min(len(lines), 20),
 		)
 		for _, l := range lines[max(0, len(lines)-20):] {
-			fmt.Fprintf(out, "  %s\n", truncate(l, 200))
+			fmt.Fprintf(out, "  %s\n", secrets.TruncateUTF8(l, 200))
 		}
 	}
 }
@@ -1154,12 +1167,8 @@ func quoteLines(s string) string {
 	return "\n> " + strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ")
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
+// runStopPoll is how often run stop asks whether the run has ended.
+var runStopPoll = time.Second
 
 func newRunStop(g *globals) *cobra.Command {
 	var grace time.Duration
@@ -1272,7 +1281,7 @@ launcher is still running is refused: stop it without --revoke.`,
 				select {
 				case <-cmd.Context().Done():
 					return cmd.Context().Err()
-				case <-time.After(100 * time.Millisecond):
+				case <-time.After(runStopPoll):
 				}
 			}
 		},
@@ -1494,7 +1503,7 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, live map[strin
 		}
 		// A detached preview recorded in the run's scratch directory ends
 		// with the run, before RemoveFiles removes that directory.
-		stopRunPreviews(warn, r.TmpDir)
+		stopRunPreviews(context.Background(), warn, r.TmpDir)
 		ws.RemoveFiles(r.ID)
 		removed++
 	}

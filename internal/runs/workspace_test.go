@@ -3,6 +3,7 @@ package runs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,12 +118,47 @@ func TestImplementWorktreeRemoteAndUpstream(t *testing.T) {
 	if err := w.Sync(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Remove("r-add1"); err != nil {
+	// A live launcher must keep its branch, even when its record says failed.
+	if err := w.Save(Record{ID: "r-add1", Status: StatusFailed, PID: os.Getpid()}); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.PrepareImplement("issue/7"); err == nil || !strings.Contains(err.Error(), "live run r-add1") {
+		t.Fatalf("live branch holder: %v", err)
+	}
+	if got, err := Git(dir, nil, "symbolic-ref", "--short", "HEAD"); err != nil || got != "issue/7" {
+		t.Fatalf("live worktree branch = %q, %v", got, err)
+	}
+	if err := w.Update("r-add1", func(r *Record) error { r.PID = 0; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// Keep an unpushed commit and dirty files for inspection after retrying.
+	if err := Configure(dir, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Git(dir, nil, "commit", "-q", "--allow-empty", "-m", "unpublished work"); err != nil {
+		t.Fatal(err)
+	}
+	oldHEAD, err := Git(dir, nil, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes"), []byte("kept work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldDir := dir
+
 	dir, err = w.AddImplement("r-beef", "issue/7", "main")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, err := Git(oldDir, nil, "rev-parse", "HEAD"); err != nil || got != oldHEAD {
+		t.Fatalf("kept HEAD = %q, %v; want %s", got, err, oldHEAD)
+	}
+	if got, err := Git(oldDir, nil, "rev-parse", "--abbrev-ref", "HEAD"); err != nil || got != "HEAD" {
+		t.Fatalf("kept worktree is not detached: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(oldDir, "notes")); err != nil || string(got) != "kept work" {
+		t.Fatalf("kept files = %q, %v", got, err)
 	}
 	if got, err := Git(dir, nil, "rev-parse", "--abbrev-ref", "@{upstream}"); err != nil || got != "bottown/issue/7" {
 		t.Fatalf("resumed upstream = %q, %v; want bottown/issue/7", got, err)
