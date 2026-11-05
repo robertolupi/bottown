@@ -177,7 +177,9 @@ covers linux/arm64 on Apple Silicon, where Multipass runs only arm64
 guests; not amd64, and not the real agent harnesses, which e2e replaces
 with `BOTTOWN_HARNESS_CMD` scripts. It is not one of the repository's
 checks, and neither `bottown check --e2e` nor `bottown flow` runs it:
-the owner runs it by hand before pushing `main` to GitHub.
+the owner runs it by hand before pushing `main` to GitHub. Until #305 is fixed,
+two e2e tests usually fail in the VM: the server reads a PR's diff and
+reviews before Forgejo has processed a push, which the slower VM exposes.
 
 A retry on the same issue can reuse `issue/<n>` even when an earlier run
 kept its worktree. Before creating the server run, the launcher detaches
