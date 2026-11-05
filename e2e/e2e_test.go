@@ -2307,13 +2307,13 @@ fi`
 			}
 
 			first, firstLog := startFlow("first.log")
-			waitFor("first.log", "waiting for agy's other batch run to end")
+			waitFor("first.log", "for agy's other batch run to end")
 			_ = first.Process.Kill()
 			_ = first.Wait()
 			_ = firstLog.Close()
 
 			resumed, _ := startFlow("resumed.log")
-			waitFor("resumed.log", "waiting for agy's other batch run to end")
+			waitFor("resumed.log", "for agy's other batch run to end")
 			a.mustCmd(demo, "run", "stop", blockerID)
 			if err := resumed.Wait(); err != nil {
 				b, _ := os.ReadFile(filepath.Join(dir, "resumed.log"))
