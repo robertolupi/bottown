@@ -106,6 +106,11 @@ for each harness (default: all):
   crush   ~/.config/crush/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
           (invoked as /bottown-implement 12)
 
+claude, kimi, codex and crush also get the bottown skill, bottown/SKILL.md in
+their skills directory (claude: ~/.claude/skills). It loads on demand in a
+bottown fam checkout and has the agent run ` + "`bottown guide`" + `, so it costs
+nothing elsewhere.
+
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
 QUESTION starts a discuss run: the agent answers on the issue, without
@@ -138,7 +143,26 @@ other rules. Restart Codex to load them.`,
 	return h
 }
 
-func installCommands(cmd *cobra.Command, home, harness string, force bool) error {
+// harnessSkillDirs are the user skill directories of harnesses that load
+// skills on demand: setup installs the bottown skill there, which sends an
+// agent in a fam checkout to `bottown guide`. It costs nothing outside one,
+// and covers a harness with no per-worktree slot for the guide (codex).
+var harnessSkillDirs = map[string]func(home string) string{
+	"claude": func(h string) string { return filepath.Join(h, ".claude", "skills") },
+	"kimi":   kimiSkillsDir,
+	"codex":  codexSkillsDir,
+	"crush":  crushSkillsDir,
+}
+
+// harnessFile is one file setup installs for a harness.
+type harnessFile struct {
+	path, invoke string // invoke is what the user types, for setup's output
+	content      []byte
+}
+
+// harnessFiles renders the files setup installs for harness: its
+// /bottown-<kind> commands and, where it loads skills, the bottown skill.
+func harnessFiles(home, harness string) ([]harnessFile, error) {
 	hc, ok := harnessCommands[harness]
 	if !ok {
 		names := []string{}
@@ -146,12 +170,14 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 			names = append(names, n)
 		}
 		slices.Sort(names)
-		return fmt.Errorf("unknown harness (known: %s)", strings.Join(names, ", "))
+		return nil, fmt.Errorf("unknown harness (known: %s)", strings.Join(names, ", "))
+	}
+	invoke := "/"
+	if hc.invoke != "" {
+		invoke = hc.invoke
 	}
 	dir := hc.dir(home)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
+	var files []harnessFile
 	for _, c := range harnessKinds {
 		c.Bottown, c.Marker = selfPath(), harnessMarker
 		tmpl := hc.template
@@ -160,34 +186,48 @@ func installCommands(cmd *cobra.Command, home, harness string, force bool) error
 		}
 		var b bytes.Buffer
 		if err := harnessTmpl.ExecuteTemplate(&b, tmpl, c); err != nil {
-			return err
+			return nil, err
 		}
 		path := filepath.Join(dir, "bottown-"+c.Kind+".md")
 		if hc.skillDirs {
 			path = filepath.Join(dir, "bottown-"+c.Kind, "SKILL.md")
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return err
-			}
 		}
-		old, err := os.ReadFile(path)
+		files = append(files, harnessFile{path: path, invoke: invoke + "bottown-" + c.Kind, content: b.Bytes()})
+	}
+	if sd, ok := harnessSkillDirs[harness]; ok {
+		var b bytes.Buffer
+		if err := harnessTmpl.ExecuteTemplate(&b, "skill.md", commandData{Bottown: selfPath(), Marker: harnessMarker}); err != nil {
+			return nil, err
+		}
+		files = append(files, harnessFile{path: filepath.Join(sd(home), "bottown", "SKILL.md"), invoke: "the bottown skill", content: b.Bytes()})
+	}
+	return files, nil
+}
+
+func installCommands(cmd *cobra.Command, home, harness string, force bool) error {
+	files, err := harnessFiles(home, harness)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			return err
+		}
+		old, err := os.ReadFile(f.path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
 			return err
-		case bytes.Equal(old, b.Bytes()):
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: up to date\n", path)
+		case bytes.Equal(old, f.content):
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: up to date\n", f.path)
 			continue
 		case !bytes.Contains(old, []byte(harnessMarker)) && !force:
-			return fmt.Errorf("%s exists and was not written by bottown; use --force to replace it", path)
+			return fmt.Errorf("%s exists and was not written by bottown; use --force to replace it", f.path)
 		}
-		if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+		if err := os.WriteFile(f.path, f.content, 0o644); err != nil {
 			return err
 		}
-		invoke := "/"
-		if hc.invoke != "" {
-			invoke = hc.invoke
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s: installed %sbottown-%s\n", path, invoke, c.Kind)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s: installed %s\n", f.path, f.invoke)
 	}
 	if harness == "codex" {
 		return installCodexRules(cmd, home)
@@ -202,44 +242,24 @@ func checkHarnessCurrent(home string) []webui.HarnessCommandInfo {
 	}
 	var res []webui.HarnessCommandInfo
 	for _, harness := range []string{"claude", "agy", "kimi", "codex", "crush"} {
-		hc, ok := harnessCommands[harness]
-		if !ok {
+		info := webui.HarnessCommandInfo{Harness: harness, Path: harnessCommands[harness].dir(home)}
+		files, err := harnessFiles(home, harness)
+		if err != nil {
+			info.Error = err.Error()
+			res = append(res, info)
 			continue
 		}
-		info := webui.HarnessCommandInfo{Harness: harness}
-		dir := hc.dir(home)
-		info.Path = dir
-
-		allInstalled := true
-		allCurrent := true
-
-		for _, c := range harnessKinds {
-			c.Bottown, c.Marker = selfPath(), harnessMarker
-			tmpl := hc.template
-			if c.Kind == "discuss" {
-				tmpl = hc.discuss
-			}
-			var b bytes.Buffer
-			if err := harnessTmpl.ExecuteTemplate(&b, tmpl, c); err != nil {
-				allCurrent = false
-				continue
-			}
-			path := filepath.Join(dir, "bottown-"+c.Kind+".md")
-			if hc.skillDirs {
-				path = filepath.Join(dir, "bottown-"+c.Kind, "SKILL.md")
-			}
-			old, err := os.ReadFile(path)
+		info.Installed, info.Current = true, true
+		for _, f := range files {
+			old, err := os.ReadFile(f.path)
 			if err != nil {
-				allInstalled = false
-				allCurrent = false
+				info.Installed, info.Current = false, false
 				break
 			}
-			if !bytes.Equal(old, b.Bytes()) {
-				allCurrent = false
+			if !bytes.Equal(old, f.content) {
+				info.Current = false
 			}
 		}
-		info.Installed = allInstalled
-		info.Current = allInstalled && allCurrent
 		res = append(res, info)
 	}
 	return res

@@ -345,6 +345,29 @@ func TestE2E(t *testing.T) {
 		if out, err := push("bottown-" + a.name); err == nil || !strings.Contains(out, "403") {
 			t.Errorf("push to bottown from actor worktree without a run: %v\n%s", err, out)
 		}
+		// Each worktree has the fam guide, untracked, where its harness
+		// loads it, listing both actors (at the paths git reports, with
+		// symlinks resolved); `guide` prints the same text.
+		realFam, err := filepath.EvalSymlinks(fam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for f, want := range map[string]string{
+			filepath.Join(wt, "CLAUDE.local.md"):                        "This worktree is actor **claude**'s.",
+			filepath.Join(fam, "agy", ".agents", "rules", "bottown.md"): "This worktree is actor **agy**'s.",
+		} {
+			b, err := os.ReadFile(f)
+			if err != nil || !strings.Contains(string(b), want) || !strings.Contains(string(b), filepath.Join(realFam, "agy")+"  actor worktree for agy") ||
+				!strings.Contains(string(b), "The `bottown-"+a.name+"` remote is the forge") {
+				t.Errorf("fam guide %s: %v\n%s", f, err, b)
+			}
+		}
+		if st := git(t, wt, "status", "--porcelain"); st != "" {
+			t.Errorf("fam guide shows in git status: %q", st)
+		}
+		if b, _ := os.ReadFile(filepath.Join(wt, "CLAUDE.local.md")); string(b) != a.mustCmd(wt, "guide") {
+			t.Errorf("bottown guide differs from CLAUDE.local.md")
+		}
 		// Re-running repairs, refuses non-actors, and ls lists both.
 		if out := a.mustCmd(demo, "actor", "setup", "claude"); !strings.Contains(out, "repairing claude's worktree") {
 			t.Errorf("second setup:\n%s", out)
@@ -363,9 +386,9 @@ func TestE2E(t *testing.T) {
 
 	t.Run("clone bootstraps a fam", func(t *testing.T) {
 		fam2 := filepath.Join(t.TempDir(), "famtest")
-		out := a.mustCmd("", "clone", demo, fam2, "--actors", "claude,agy")
+		out := a.mustCmd("", "clone", demo, fam2, "--actors", "claude,agy", "--agents-md")
 		main2 := filepath.Join(fam2, "main")
-		for _, want := range []string{"origin https://example.invalid/demo.git", "protected bottown/famtest:main", "created claude's worktree", "created agy's worktree", "is ready"} {
+		for _, want := range []string{"origin https://example.invalid/demo.git", "protected bottown/famtest:main", "created claude's worktree", "created agy's worktree", "committed a pointer to the fam guide", "is ready"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("clone output lacks %q:\n%s", want, out)
 			}
@@ -378,6 +401,14 @@ func TestE2E(t *testing.T) {
 		}
 		if got := git(t, filepath.Join(fam2, "claude"), "config", "--worktree", "--get", "bottown.actor"); got != "claude" {
 			t.Errorf("claude worktree actor = %s", got)
+		}
+		// --agents-md committed the pointer before the first push. The
+		// guides were written after both worktrees existed: each lists both.
+		if got := git(t, main2, "show", "bottown-"+a.name+"/main:AGENTS.md"); !strings.Contains(got, "`bottown guide`") {
+			t.Errorf("AGENTS.md on the forge:\n%s", got)
+		}
+		if b, err := os.ReadFile(filepath.Join(fam2, "claude", "CLAUDE.local.md")); err != nil || !strings.Contains(string(b), "actor worktree for agy") {
+			t.Errorf("claude's fam guide: %v\n%s", err, b)
 		}
 		a.mustAPI(owner, "GET", "/repos/bottown/famtest/branch_protections/main", nil, nil)
 		// Re-running repo add in <fam>/main keeps the same repo (not "main").

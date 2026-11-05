@@ -96,6 +96,10 @@ type ActorWorktreeInfo struct {
 	Ephemeral bool   `json:"ephemeral,omitempty"`
 	Kind      string `json:"kind,omitempty"`
 	Target    string `json:"target,omitempty"`
+	// Guide is the state of the fam guide file in a permanent worktree:
+	// current, outdated, missing, foreign (a file bottown did not write is
+	// in its slot) or none (the harness has no slot), or an error.
+	Guide string `json:"guide,omitempty"`
 }
 
 type HarnessCommandInfo struct {
@@ -463,6 +467,9 @@ func (s *Server) computeWorktrees(ctx context.Context) []ActorWorktreeInfo {
 		}
 		if lastRun != "" && liveRuns[lastRun] {
 			info.ActiveRun = lastRun
+		}
+		if s.cfg.GuideChecker != nil {
+			info.Guide = s.cfg.GuideChecker(path)
 		}
 		wts = append(wts, info)
 	}

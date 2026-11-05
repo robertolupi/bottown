@@ -39,6 +39,9 @@ export interface ActorWorktreeInfo {
   ephemeral?: boolean;
   kind?: string;
   target?: string;
+  // The fam guide file in a permanent worktree: current, outdated,
+  // missing, foreign, none, or an error.
+  guide?: string;
 }
 
 export interface HarnessCommandInfo {

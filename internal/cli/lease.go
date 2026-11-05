@@ -172,6 +172,9 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 				return err
 			}
 		}
+		// After the checkout, which decides whether the repository tracks a
+		// file in the guide's slot. Stdout is the goal prompt: nothing else.
+		writeGuide(nil, cmd.ErrOrStderr(), a.Worktree)
 
 		if _, err := runs.Git(a.Worktree, nil, "config", "--worktree", gitRunKey, run.ID); err != nil {
 			return err

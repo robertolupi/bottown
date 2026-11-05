@@ -45,14 +45,16 @@
           "path": "~/src/fams/demo/claude",
           "head": "issue/42",
           "is_dirty": true,
-          "active_run": "r-1a2b3c4d"
+          "active_run": "r-1a2b3c4d",
+          "guide": "current"
         },
         {
           "actor": "codex",
           "path": "~/src/fams/demo/codex",
           "head": "main",
           "is_dirty": false,
-          "last_run": "r-5e6f7a8b"
+          "last_run": "r-5e6f7a8b",
+          "guide": "none"
         },
         {
           "actor": "kimi",

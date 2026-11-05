@@ -56,6 +56,9 @@ remote other than bottown blocked.`,
 					return fmt.Errorf("%s: %w", a, err)
 				}
 			}
+			if top, err := mainCheckout(); err == nil {
+				refreshGuides(cmd.OutOrStdout(), cmd.ErrOrStderr(), top)
+			}
 			return nil
 		},
 	}

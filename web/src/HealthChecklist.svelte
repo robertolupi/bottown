@@ -4,6 +4,15 @@
   import type { HealthChecklist } from './types';
 
   let { health }: { health: HealthChecklist } = $props();
+
+  // Badge class and explanation of each fam guide state.
+  const guideStates: Record<string, [string, string]> = {
+    current: ['badge-success', 'The fam guide is current'],
+    outdated: ['badge-warning', 'The fam guide is outdated: the next run start or actor setup refreshes it'],
+    missing: ['badge-warning', 'No fam guide yet: the next run start or actor setup writes it'],
+    foreign: ['badge-warning', "A file bottown did not write is in the guide's slot; bottown leaves it alone"],
+    none: ['badge-neutral', 'The harness has no per-worktree slot; it finds the guide through the bottown skill'],
+  };
 </script>
 
 <section class="card">
@@ -98,6 +107,7 @@
                 <th>HEAD</th>
                 <th>Status</th>
                 <th>Run</th>
+                <th title="The fam guide (bottown guide) in the file the actor's harness loads">Guide</th>
                 <th>Path</th>
               </tr>
             </thead>
@@ -123,6 +133,15 @@
                       <span class="text-sm muted">{wt.last_run}</span>
                     {:else}
                       <span class="muted">-</span>
+                    {/if}
+                  </td>
+                  <td>
+                    {#if !wt.guide}
+                      <span class="muted">-</span>
+                    {:else if wt.guide in guideStates}
+                      <span class="badge {guideStates[wt.guide][0]}" title={guideStates[wt.guide][1]}>{wt.guide}</span>
+                    {:else}
+                      <span class="badge badge-error" title={wt.guide}>error</span>
                     {/if}
                   </td>
                   <td class="text-sm muted"><code>{wt.path}</code></td>
