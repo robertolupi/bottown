@@ -436,7 +436,7 @@ func TestFlowRefusesLiveRun(t *testing.T) {
 	called := false
 	runner := RunnerFunc(func(context.Context, RunRequest) error { called = true; return nil })
 	_, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
-	if err == nil || !strings.Contains(err.Error(), "r-live") || called {
+	if err == nil || !strings.Contains(err.Error(), "r-live") || !strings.Contains(err.Error(), "bottown run stop --revoke r-live") || called {
 		t.Fatalf("error = %v, runner called = %v", err, called)
 	}
 }

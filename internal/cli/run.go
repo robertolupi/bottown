@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -1124,13 +1125,19 @@ func truncate(s string, n int) string {
 
 func newRunStop(g *globals) *cobra.Command {
 	var grace time.Duration
+	var revoke bool
 	cmd := &cobra.Command{
 		Use:   "stop ID",
 		Short: "Stop a live batch run started from this checkout",
 		Long: `Stop a live batch run started from this checkout: send its harness's
 process group TERM and, if the harness has not finished within the grace
 period, KILL. The launcher then ends the run as failed and posts the stopped
-handover.`,
+handover.
+
+With --revoke, end a live server run of this repository that no launcher in
+this checkout holds, as revoked, and delete its key: one whose launcher
+died, or whose local record is gone. It signals no process. A run whose
+launcher is still running is refused: stop it without --revoke.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc, err := openRunContext(g)
@@ -1138,6 +1145,9 @@ handover.`,
 				return err
 			}
 			id := args[0]
+			if revoke {
+				return revokeRun(cmd, rc, id)
+			}
 			rec, err := rc.ws.Load(id)
 			if err != nil {
 				return fmt.Errorf("load local run %s: %w", id, err)
@@ -1230,7 +1240,50 @@ handover.`,
 		},
 	}
 	cmd.Flags().DurationVar(&grace, "grace", 10*time.Second, "how long the harness has to finish after TERM before it is killed")
+	cmd.Flags().BoolVar(&revoke, "revoke", false, "end a live run that no launcher in this checkout holds as revoked, signalling nothing")
 	return cmd
+}
+
+// revokeRun is `run stop --revoke ID`: it ends a live server run of this
+// checkout's repository that no local launcher holds, as revoked.
+func revokeRun(cmd *cobra.Command, rc *runContext, id string) error {
+	var serverRun secrets.Run
+	if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs/"+id, nil, &serverRun); err != nil {
+		return err
+	}
+	var local *runs.Record
+	if rec, err := rc.ws.Load(id); err == nil {
+		local = &rec
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load local run %s: %w", id, err)
+	}
+	if err := revokeRefusal(serverRun, local, rc.org, rc.repo); err != nil {
+		return err
+	}
+	end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+		Cause: secrets.FailureInterrupted, Detail: "no launcher held it; revoked by the owner with run stop --revoke"}}}
+	if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
+		return fmt.Errorf("revoke run %s: %w", id, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "run %s revoked\n", id)
+	return nil
+}
+
+// revokeRefusal is why `run stop --revoke` leaves a server run alone, or
+// nil: it must belong to this checkout's repository and be live, and no
+// running launcher in this checkout may hold it (local is its record here,
+// if any), since that launcher ends it itself.
+func revokeRefusal(run secrets.Run, local *runs.Record, org, repo string) error {
+	if run.Org != org || run.Repo != repo {
+		return fmt.Errorf("run %s is not a run of %s/%s", run.ID, org, repo)
+	}
+	if run.Ended != nil {
+		return fmt.Errorf("run %s already ended (%s)", run.ID, run.Status)
+	}
+	if local != nil && local.Ended == nil && (local.Status == runs.StatusPreparing || local.Status == runs.StatusRunning) && local.LauncherAlive() {
+		return fmt.Errorf("run %s's launcher (pid %d) is still running; stop it with `bottown run stop %s`", run.ID, local.PID, run.ID)
+	}
+	return nil
 }
 
 // signalHarness signals a batch harness's process group, which it leads.
@@ -1244,7 +1297,7 @@ func signalHarness(pid int, sig syscall.Signal) error {
 }
 
 func newRunGC(g *globals) *cobra.Command {
-	var failed bool
+	var failed, orphans bool
 	var olderThan time.Duration
 	cmd := &cobra.Command{
 		Use:   "gc",
@@ -1256,8 +1309,13 @@ whose local files are kept keeps its server record too.
 
 A run whose key expired while it was live cannot end itself, since its key
 no longer authenticates: gc ends it as revoked, unless its launcher in this
-checkout is still running. Live runs are never purged; --older-than keeps
-recently ended ones. A run whose local record cannot be read is kept, with a
+checkout is still running. A dead run that cannot be revoked (the server is
+unreachable, say) keeps its local record, with a warning, so a later gc
+retries. With --orphans gc also revokes this repository's live runs that
+the owner started but that have no local record in this checkout, such as
+one whose record a gc removed while the server was down; runs that actors
+started in their own worktrees are left alone. Live runs are never purged;
+--older-than keeps recently ended ones. A run whose local record cannot be read is kept, with a
 warning; run ls lists it as unknown.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -1269,10 +1327,10 @@ warning; run ls lists it as unknown.`,
 			if err != nil {
 				return err
 			}
-			removed, keep := gcLocal(rc.ws, recs, failed, cmd.ErrOrStderr(), func(id string) {
+			removed, keep := gcLocal(rc.ws, recs, failed, cmd.ErrOrStderr(), func(id string) error {
 				end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
 					Cause: secrets.FailureInterrupted, Detail: "its launcher went away before ending it; revoked by run gc"}}}
-				_ = callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil)
+				return callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil)
 			})
 			// A run whose key expired while it was live cannot end itself:
 			// its key no longer authenticates. Revoke it with the owner key.
@@ -1280,15 +1338,31 @@ warning; run ls lists it as unknown.`,
 			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs?state=live&repo="+rc.repo, nil, &live); err != nil {
 				return fmt.Errorf("removed %d runs; listing live server runs: %w", removed, err)
 			}
-			revoked := 0
-			for _, id := range expiredLive(live, recs, time.Now().UTC()) {
-				end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
-					Cause: secrets.FailureExpired, Detail: "its key expired while it was live; revoked by run gc"}}}
-				if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
-					continue
+			now := time.Now().UTC()
+			revokeAll := func(ids []string, f secrets.Failure) (n int) {
+				for _, id := range ids {
+					end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &f}}
+					if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
+						continue
+					}
+					n++
 				}
-				revoked++
+				return n
+			}
+			expired := expiredLive(live, recs, now)
+			revoked := revokeAll(expired, secrets.Failure{
+				Cause: secrets.FailureExpired, Detail: "its key expired while it was live; revoked by run gc"})
+			orphaned := 0
+			if orphans {
+				var ids []string
+				for _, id := range orphanLive(live, recs, now) {
+					if !slices.Contains(expired, id) {
+						ids = append(ids, id)
+					}
+				}
+				orphaned = revokeAll(ids, secrets.Failure{
+					Cause: secrets.FailureInterrupted, Detail: "no launcher in the owner's checkout held it; revoked by run gc --orphans"})
 			}
 			var purged struct {
 				Purged []string `json:"purged"`
@@ -1300,23 +1374,28 @@ warning; run ls lists it as unknown.`,
 			if revoked > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "revoked %d runs whose key expired while live\n", revoked)
 			}
+			if orphaned > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "revoked %d orphaned live runs with no local record\n", orphaned)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
 				removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&failed, "failed", false, "also remove failed runs (kept by default for inspection)")
+	cmd.Flags().BoolVar(&orphans, "orphans", false, "also revoke live runs the owner started that have no local record in this checkout")
 	cmd.Flags().DurationVar(&olderThan, "older-than", 0, "purge only server records of runs that ended at least this long ago (e.g. 168h)")
 	return cmd
 }
 
 // gcLocal removes the worktrees and files of finished local runs: succeeded
 // and dead, and failed ones too with failed. A dead run, including one whose
-// launcher died while preparing, is revoked first. A run whose record is
-// unreadable is kept, with a warning. The lock files of runs whose record
+// launcher died while preparing, is revoked first, and kept, with a
+// warning, if that fails. A run whose record is unreadable is kept, with a
+// warning. The lock files of runs whose record
 // is gone are removed too. keep is the runs it left, whose server records
 // stay.
-func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string)) (removed int, keep []string) {
+func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string) error) (removed int, keep []string) {
 	for _, r := range recs {
 		switch r.Status {
 		case runs.StatusPreparing, runs.StatusRunning:
@@ -1334,8 +1413,14 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer
 				continue
 			}
 		case runs.StatusDead:
-			// Its launcher died: make sure the key is gone too.
-			revoke(r.ID)
+			// Its launcher died: make sure the key is gone too. If that
+			// fails, its record is its only local trace: keep it, so a
+			// later gc retries.
+			if err := revoke(r.ID); err != nil {
+				fmt.Fprintf(warn, "warning: revoke dead run %s: %v; kept, a later gc retries\n", r.ID, err)
+				keep = append(keep, r.ID)
+				continue
+			}
 		}
 		if err := ws.Remove(r.ID); err != nil {
 			fmt.Fprintf(warn, "warning: %s: %v\n", r.ID, err)
@@ -1367,6 +1452,29 @@ func expiredLive(live []secrets.Run, local []runs.Record, now time.Time) []strin
 	var ids []string
 	for _, r := range live {
 		if r.Ended == nil && !r.Expires.IsZero() && !now.Before(r.Expires) && !launched[r.ID] {
+			ids = append(ids, r.ID)
+		}
+	}
+	return ids
+}
+
+// orphanGrace is how old a live server run must be before gc --orphans
+// takes its missing local record as lost: a launcher creates the server run
+// moments before it saves its record.
+const orphanGrace = time.Minute
+
+// orphanLive is the IDs of the server runs gc --orphans revokes: not ended,
+// started by the owner rather than self-started by its actor in an actor
+// worktree (whose record lives there), created at least orphanGrace ago,
+// and with no local record in this checkout.
+func orphanLive(live []secrets.Run, local []runs.Record, now time.Time) []string {
+	recorded := make(map[string]bool)
+	for _, r := range local {
+		recorded[r.ID] = true
+	}
+	var ids []string
+	for _, r := range live {
+		if r.Ended == nil && r.StartedBy != "" && r.StartedBy != r.Actor && now.Sub(r.Created) >= orphanGrace && !recorded[r.ID] {
 			ids = append(ids, r.ID)
 		}
 	}

@@ -418,7 +418,7 @@ be recomputed.
 | Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR or its issue | the owner clicks **Merge main**, the head or base moves, or a run starts |
 | Conflicts with main | an open PR no longer merges cleanly; the description names conflicting files when the trial merge found them | an implement run resolves them, or the PR is closed |
 | Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided), or the flow's post-implement checks failed at the head (§3.2, §3.3) | the flow is re-run, or the issue is closed |
-| Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself) |
+| Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself, and keeps a dead run's record when it cannot revoke it; `run stop --revoke ID`, or `run gc --orphans`, ends a live run that no local launcher holds) |
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
 

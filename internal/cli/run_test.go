@@ -265,7 +265,7 @@ func TestGCRemovesAttachmentsOfLauncherKilledWhilePreparing(t *testing.T) {
 	attach := ws.AttachmentsDir("r-cafe")
 
 	var revoked []string
-	revoke := func(id string) { revoked = append(revoked, id) }
+	revoke := func(id string) error { revoked = append(revoked, id); return nil }
 	recs, err := ws.Records(io.Discard)
 	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusPreparing {
 		t.Fatalf("live launcher: records %+v, %v", recs, err)
@@ -315,7 +315,7 @@ func TestGCSkipsRecordWithoutID(t *testing.T) {
 	if got := strings.Count(warn.String(), "r-2ecab347.check.json"); got != 1 {
 		t.Fatalf("warnings naming the file = %d, want 1: %q", got, warn.String())
 	}
-	removed, keep := gcLocal(ws, recs, true, io.Discard, func(string) {})
+	removed, keep := gcLocal(ws, recs, true, io.Discard, func(string) error { return nil })
 	if removed != 0 || keep != nil {
 		t.Fatalf("gc removed %d, kept %v", removed, keep)
 	}
@@ -357,7 +357,7 @@ func TestUnreadableRecordListedAndKept(t *testing.T) {
 	}
 
 	var warn bytes.Buffer
-	removed, keep := gcLocal(ws, recs, true, &warn, func(id string) { t.Errorf("gc revoked %s", id) })
+	removed, keep := gcLocal(ws, recs, true, &warn, func(id string) error { t.Errorf("gc revoked %s", id); return nil })
 	if removed != 0 || !slices.Equal(keep, []string{"r-bad1"}) {
 		t.Errorf("gc removed %d, kept %v", removed, keep)
 	}
@@ -391,6 +391,81 @@ func TestExpiredLive(t *testing.T) {
 	got := expiredLive(live, local, now)
 	if want := []string{"r-expired", "r-dead-launcher"}; !slices.Equal(got, want) {
 		t.Errorf("expiredLive = %v, want %v", got, want)
+	}
+}
+
+// A dead run whose revoke fails (the server is unreachable, say) keeps its
+// local record, its only trace of a server run that may still be live
+// (#232), and a later gc retries and removes it.
+func TestGCKeepsDeadRunWhenRevokeFails(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	if err := ws.Save(runs.Record{ID: "r-dead", Status: runs.StatusRunning, PID: -1}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ws.Records(io.Discard)
+	if err != nil || len(recs) != 1 || recs[0].Status != runs.StatusDead {
+		t.Fatalf("records %+v, %v", recs, err)
+	}
+	var warn bytes.Buffer
+	removed, keep := gcLocal(ws, recs, true, &warn, func(string) error { return errors.New("connection refused") })
+	if removed != 0 || !slices.Equal(keep, []string{"r-dead"}) {
+		t.Errorf("failed revoke: gc removed %d, kept %v", removed, keep)
+	}
+	if !strings.Contains(warn.String(), "revoke dead run r-dead: connection refused; kept") {
+		t.Errorf("gc warning: %q", warn.String())
+	}
+	if _, err := os.Stat(ws.Path("r-dead", ".json")); err != nil {
+		t.Fatalf("gc removed the record of a run it could not revoke: %v", err)
+	}
+
+	var revoked []string
+	removed, keep = gcLocal(ws, recs, true, io.Discard, func(id string) error { revoked = append(revoked, id); return nil })
+	if removed != 1 || keep != nil || !slices.Equal(revoked, []string{"r-dead"}) {
+		t.Errorf("retry: gc removed %d, kept %v, revoked %v", removed, keep, revoked)
+	}
+}
+
+func TestOrphanLive(t *testing.T) {
+	now := time.Now().UTC()
+	old, fresh := now.Add(-time.Hour), now.Add(-time.Second)
+	ended := now.Add(-time.Minute)
+	live := []secrets.Run{
+		{ID: "r-orphan", Actor: "codex", StartedBy: "owner", Created: old},
+		{ID: "r-fresh", Actor: "codex", StartedBy: "owner", Created: fresh},
+		{ID: "r-recorded", Actor: "codex", StartedBy: "owner", Created: old},
+		{ID: "r-self", Actor: "claude", StartedBy: "claude", Created: old},
+		{ID: "r-unknown", Actor: "codex", Created: old},
+		{ID: "r-ended", Actor: "codex", StartedBy: "owner", Created: old, Ended: &ended},
+	}
+	local := []runs.Record{{ID: "r-recorded", Status: runs.StatusDead}}
+	if got, want := orphanLive(live, local, now), []string{"r-orphan"}; !slices.Equal(got, want) {
+		t.Errorf("orphanLive = %v, want %v", got, want)
+	}
+}
+
+// run stop --revoke ends a live run of this repository that no running
+// launcher holds: one with no local record (#232) or a dead launcher.
+func TestRevokeRefusal(t *testing.T) {
+	ended := time.Now().UTC()
+	live := secrets.Run{ID: "r-1", Org: "bottown", Repo: "demo"}
+	for _, c := range []struct {
+		name  string
+		run   secrets.Run
+		local *runs.Record
+		want  string
+	}{
+		{"no local record", live, nil, ""},
+		{"dead launcher", live, &runs.Record{ID: "r-1", Status: runs.StatusRunning, PID: -1}, ""},
+		{"ended locally", live, &runs.Record{ID: "r-1", Status: runs.StatusFailed, Ended: &ended}, ""},
+		{"live launcher", live, &runs.Record{ID: "r-1", Status: runs.StatusRunning, PID: os.Getpid()}, "`bottown run stop r-1`"},
+		{"preparing launcher", live, &runs.Record{ID: "r-1", Status: runs.StatusPreparing, PID: os.Getpid()}, "still running"},
+		{"other repo", secrets.Run{ID: "r-1", Org: "bottown", Repo: "other"}, nil, "not a run of bottown/demo"},
+		{"ended", secrets.Run{ID: "r-1", Org: "bottown", Repo: "demo", Ended: &ended, Status: "failed"}, nil, "already ended (failed)"},
+	} {
+		err := revokeRefusal(c.run, c.local, "bottown", "demo")
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: revokeRefusal = %v, want %q", c.name, err, c.want)
+		}
 	}
 }
 
@@ -528,7 +603,7 @@ func TestGCRemovesLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed, _ := gcLocal(ws, recs, false, io.Discard, func(string) {}); removed != 1 {
+	if removed, _ := gcLocal(ws, recs, false, io.Discard, func(string) error { return nil }); removed != 1 {
 		t.Fatalf("removed %d runs, want 1", removed)
 	}
 	locks, _ := filepath.Glob(filepath.Join(ws.RunsDir, "*.lock"))
