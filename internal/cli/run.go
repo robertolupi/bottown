@@ -24,22 +24,26 @@ import (
 )
 
 type runOpts struct {
-	actor            string
-	repo             string
-	interactive      bool
-	allowSameFamily  bool
-	bypassActorLimit bool
-	allow            []string
-	keep             bool
-	question         string // discuss: the owner's question for the prompt
-	message          string // implement, verify, plan: the owner's note for the prompt
-	flowNote         string // implement, verify: bottown flow's note (the post-implement checks)
-	checksPassed     bool   // verify: the flow's post-implement checks passed at sha
-	sha              string // verify: the head the run must be pinned at (bottown flow)
+	actor           string
+	repo            string
+	interactive     bool
+	allowSameFamily bool
+	serializeActor  bool // implement, verify: refuse the run while the actor has another live batch run
+	allow           []string
+	keep            bool
+	question        string // discuss: the owner's question for the prompt
+	message         string // implement, verify, plan: the owner's note for the prompt
+	flowNote        string // implement, verify: bottown flow's note (the post-implement checks)
+	checksPassed    bool   // verify: the flow's post-implement checks passed at sha
+	sha             string // verify: the head the run must be pinned at (bottown flow)
 }
 
 // errHeadMoved is a verify run refused because the PR's head is not runOpts.sha.
 var errHeadMoved = errors.New(server.HeadMovedMessage)
+
+// errActorBusy is a run with runOpts.serializeActor refused because its
+// actor has another live batch run.
+var errActorBusy = errors.New(server.ActorBusyMessage)
 
 func newRun(g *globals) *cobra.Command {
 	run := &cobra.Command{
@@ -94,6 +98,7 @@ leaves alone. Without a question, the agent reviews the issue.`,
 	}
 	for _, c := range []*cobra.Command{implement, verify} {
 		messageFlag(c, &o.message)
+		c.Flags().BoolVar(&o.serializeActor, "serialize-actors", false, "refuse the run while the actor has another live batch run (by default an actor's batch runs on different targets run concurrently)")
 	}
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
 
@@ -285,7 +290,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, BypassActorLimit: o.bypassActorLimit, Interactive: o.interactive}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, SerializeActor: o.serializeActor, Interactive: o.interactive}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
 	} else {
@@ -295,6 +300,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if err := callServer(ctx, rc.inst, rc.key, "POST", "/v1/runs", req, &created); err != nil {
 		if req.SHA != "" && strings.Contains(err.Error(), server.HeadMovedMessage) {
 			return fmt.Errorf("%w: %v", errHeadMoved, err)
+		}
+		if req.SerializeActor && strings.Contains(err.Error(), server.ActorBusyMessage) {
+			return fmt.Errorf("%w: %v", errActorBusy, err)
 		}
 		return err
 	}

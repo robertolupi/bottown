@@ -59,7 +59,7 @@ func TestGateHeadMovesDuringChecks(t *testing.T) {
 	}
 }
 
-// A push while the flow waits for the verifier's actor slot: the retry is
+// A push while the flow waits for the verifier's other batch run: the retry is
 // still pinned at the gated head, so it is refused, and the new head is
 // gated.
 func TestGateHeadMovesWhileWaitingForActor(t *testing.T) {
@@ -71,12 +71,12 @@ func TestGateHeadMovesWhileWaitingForActor(t *testing.T) {
 		if req.Kind == policy.Verify && limited {
 			limited = false
 			api.pr.HeadSHA = "h2"
-			return ErrActorLimit
+			return ErrActorBusy
 		}
 		return nil
 	})
 	opts := gateOptions()
-	opts.WaitActors = true
+	opts.SerializeActors = true
 	result, err := (&Supervisor{API: api, Runner: runner, Checker: checker, RetryDelay: time.Millisecond}).Run(context.Background(), opts)
 	if err != nil || result.Reason != ReadyToMerge || kinds(reqs) != "implement,verify" {
 		t.Fatalf("result = %+v, error = %v, runs = %s", result, err, kinds(reqs))

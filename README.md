@@ -207,7 +207,7 @@ has the details.
 
 | Command | What it does |
 |---|---|
-| `flow N --implement ACTOR --verify ACTOR [--rounds N] [--check-rounds N] [--timeout D] [--check-timeout D] [--wait-actors] [-m NOTE]` | Drive one issue through batch implement and cross-family verify runs, stopping at the owner action. Before each verify it runs the repository's e2e commands itself at the PR head (the post-implement checks); a failure starts another implement round, counted against `--check-rounds`. `--message` adds a note to every run's goal prompt. |
+| `flow N --implement ACTOR --verify ACTOR [--rounds N] [--check-rounds N] [--timeout D] [--check-timeout D] [--serialize-actors] [-m NOTE]` | Drive one issue through batch implement and cross-family verify runs, stopping at the owner action. Before each verify it runs the repository's e2e commands itself at the PR head (the post-implement checks); a failure starts another implement round, counted against `--check-rounds`. `--message` adds a note to every run's goal prompt. |
 | `run implement -a ACTOR [-I] [-m NOTE] ISSUE` | An agent implements the issue: pushes `issue/N`, opens a PR. `--message` adds a note to the goal prompt, e.g. "the branch is out of date, rebase it"; `run verify` and `run plan` take it too. |
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
@@ -217,13 +217,16 @@ has the details.
 | `run stop RUN` | Kill a live batch run's harness, end it as failed and post a stopped handover. |
 | `run gc [--failed] [--older-than D]` | Remove finished runs, and revoke runs whose key expired while live. The server keeps their digests: summary and usage. |
 
-Each actor can have one live batch run by default; interactive runs do not
-count. To change this, set `max_batch_runs = N` in the actor's `[[actors]]`
-table in the desired-state `bottown.toml` mounted at
-`/data/bottown/bottown.toml` in the container. Set it to `0` for no limit.
-The server checks and creates runs atomically, so concurrent commands cannot
-exceed the limit. Flows bypass this limit by default; pass `--wait-actors`
-to enforce it and wait for a slot instead.
+An actor's batch runs on different targets run concurrently, each in its own
+worktree. The server refuses a second live run on the same target: an
+implement or plan run on an issue that has one (git checks a branch out in
+one worktree only), or a verify run at a pull request head that has one.
+`run implement` and `run verify` with `--serialize-actors` are refused while
+the actor has another live batch run, and `flow --serialize-actors` waits
+for it to end before each run; interactive runs do not count. The server
+checks and creates runs atomically, so concurrent commands cannot get round
+either check. An old desired-state `bottown.toml` that sets `max_batch_runs`
+on an actor still loads; the setting is ignored.
 
 ### Agent CLI (actors, in their worktree)
 

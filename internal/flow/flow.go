@@ -35,8 +35,13 @@ const (
 	ChecksFailed StopReason = "checks failed"
 )
 
-// ErrActorLimit marks a run creation refused by the per-actor batch limit.
-var ErrActorLimit = errors.New("actor at live batch run limit")
+// ErrActorBusy marks a run creation refused because the flow serialises
+// actors (Options.SerializeActors) and the actor has another live batch
+// run.
+var ErrActorBusy = errors.New("actor has another live batch run")
+
+// maxRetryDelay bounds the wait between tries of a run whose actor is busy.
+const maxRetryDelay = time.Minute
 
 // ErrHeadMoved marks a verify run creation refused because the PR's head is
 // no longer the SHA the flow asked for: what the flow gated is not what the
@@ -60,7 +65,10 @@ type Options struct {
 	CheckRounds  int
 	Timeout      time.Duration
 	CheckTimeout time.Duration
-	WaitActors   bool
+	// SerializeActors starts a run only when its actor has no other live
+	// batch run, waiting for it otherwise. By default an actor's runs on
+	// different targets run concurrently.
+	SerializeActors bool
 	// Attended flows ask on In before merging a clean, behind base; the
 	// others leave that to the owner inbox.
 	Attended bool
@@ -87,12 +95,14 @@ func (e *StopError) Error() string {
 
 // RunRequest is one batch run requested by the supervisor.
 type RunRequest struct {
-	Kind             string
-	Repo             string
-	Actor            string // ACTOR[:SPEC], as given in Options
-	Issue            int64
-	PR               int64
-	BypassActorLimit bool
+	Kind  string
+	Repo  string
+	Actor string // ACTOR[:SPEC], as given in Options
+	Issue int64
+	PR    int64
+	// SerializeActor asks the server to refuse the run while its actor
+	// has another live batch run; the Runner then fails with ErrActorBusy.
+	SerializeActor bool
 	// Note is the flow's own note for the run's prompt: the failed checks
 	// an implement round fixes, or the passed checks a verifier relies on.
 	Note string
@@ -164,8 +174,9 @@ type API interface {
 	MergeBase(context.Context, string, int64, string) (server.PRMergeOut, error)
 }
 
-// Supervisor drives one issue. RetryDelay is how long to wait before trying
-// an actor-limited run again; zero uses a short default suitable for tests.
+// Supervisor drives one issue. RetryDelay is how long a flow that
+// serialises actors first waits before trying a run whose actor is busy
+// again; the wait doubles up to maxRetryDelay. Zero means one second.
 // Checker, if set, gates each new head on the post-implement checks before
 // a verifier sees it.
 type Supervisor struct {
@@ -616,7 +627,7 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 	if delay == 0 {
 		delay = time.Second
 	}
-	req.BypassActorLimit = !opts.WaitActors
+	req.SerializeActor = opts.SerializeActors
 	for {
 		if s.Out != nil {
 			target := fmt.Sprintf("#%d", req.Issue)
@@ -632,15 +643,16 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		if err == nil {
 			return nil
 		}
-		if opts.WaitActors && errors.Is(err, ErrActorLimit) {
+		if opts.SerializeActors && errors.Is(err, ErrActorBusy) {
 			if s.Out != nil {
-				fmt.Fprintf(s.Out, "flow #%d: waiting for %s's actor slot\n", opts.Issue, req.Actor)
+				fmt.Fprintf(s.Out, "flow #%d: waiting for %s's other batch run to end\n", opts.Issue, req.Actor)
 			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(delay):
 			}
+			delay = min(2*delay, max(maxRetryDelay, s.RetryDelay))
 			continue
 		}
 		if ctx.Err() != nil {

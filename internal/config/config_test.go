@@ -17,21 +17,26 @@ func TestDefaultDesiredIsValid(t *testing.T) {
 	if _, ok := d.Actor("manager"); ok {
 		t.Fatal("manager must not be an actor (actors can get API keys)")
 	}
-	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" || a.BatchRunLimit() != 1 {
+	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" {
 		t.Fatalf("claude = %+v", a)
 	}
 }
 
-func TestActorBatchRunLimit(t *testing.T) {
-	zero := 0
-	if got := (Actor{MaxBatchRuns: &zero}).BatchRunLimit(); got != 0 {
-		t.Fatalf("explicit zero = %d", got)
+// A desired file from before batch runs went unlimited still loads; its
+// max_batch_runs is ignored.
+func TestDesiredIgnoresMaxBatchRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bottown.toml")
+	b := append([]byte{}, defaultDesired...)
+	b = append(b, "\n[[actors]]\nname = \"old\"\nfamily = \"oldco\"\nmax_batch_runs = 2\n"...)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	negative := -1
-	d := DefaultDesired()
-	d.Actors[0].MaxBatchRuns = &negative
-	if err := d.validate(); err == nil {
-		t.Fatal("negative max_batch_runs accepted")
+	d, err := LoadDesired(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.Actor("old"); !ok {
+		t.Fatal("actor with max_batch_runs not loaded")
 	}
 }
 

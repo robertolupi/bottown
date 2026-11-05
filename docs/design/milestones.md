@@ -654,9 +654,10 @@ resumes from the current forge state.
 
 - Multiple ready child issues run concurrently in their own goroutines, each
   driving its issue's flow against `milestone/<E>`.
-- The server's atomic per-actor `max_batch_runs` limit ([web UI design](web-ui.md)
-  §3.4) prevents over-committing any actor across all running flows.
-- **Verification before new implementations:** When an actor slot frees up, a
+- With `--serialize-actors`, the server's atomic per-actor check ([web UI
+  design](web-ui.md) §3.4) prevents over-committing any actor across all
+  running flows.
+- **Verification before new implementations:** When an actor becomes free, a
   waiting `verify` step on an already-open child PR takes priority over
   starting a first `implement` run on a newly ready child issue, so open PRs
   merge into `milestone/<E>` and unlock dependents as early as possible.

@@ -59,7 +59,7 @@ func TestPRCreateAlreadyOpen(t *testing.T) {
 	}
 	now := time.Now()
 	run := secrets.Run{ID: "r-follow-up", Kind: policy.Implement, Actor: "claude", Org: "bottown", Repo: "demo", Issue: 4, Branch: "issue/4", Created: now, Expires: now.Add(time.Hour)}
-	if _, err := store.NewRun(run, 1); err != nil {
+	if _, err := store.NewRun(run, false); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{Store: store, Rec: &provision.Reconciler{BaseURL: upstream.URL}, Log: slog.Default()}
@@ -227,7 +227,7 @@ func TestAPIProxyIssueDependencies(t *testing.T) {
 		Issue:   4,
 		Created: now,
 		Expires: now.Add(time.Hour),
-	}, 1)
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

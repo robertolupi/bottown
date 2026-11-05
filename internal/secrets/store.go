@@ -232,21 +232,50 @@ func (s *Store) NewAPIKey(actor, label, scope string) (string, error) {
 	return key, nil
 }
 
-// RunLimitError reports that an actor is at its limit on live batch runs.
-type RunLimitError struct {
+// RunBusyError reports a run refused because other live runs hold what it
+// needs: its target (see sameTarget), or, for a run that asked for its
+// actor to be serialised, the actor's one batch slot.
+type RunBusyError struct {
+	// Actor is set when the actor's batch slot is taken, and empty when
+	// the target is.
 	Actor string
-	Limit int
 	Runs  []string
 }
 
-func (e *RunLimitError) Error() string {
-	return fmt.Sprintf("actor %s is at its limit of %d live batch runs: %s", e.Actor, e.Limit, strings.Join(e.Runs, ", "))
+// ActorBusyMessage is in the message of a RunBusyError for a taken actor
+// slot, so that clients can tell it from other refusals.
+const ActorBusyMessage = "already has a live batch run"
+
+func (e *RunBusyError) Error() string {
+	if e.Actor != "" {
+		return fmt.Sprintf("actor %s %s: %s", e.Actor, ActorBusyMessage, strings.Join(e.Runs, ", "))
+	}
+	return "another live run has the same target: " + strings.Join(e.Runs, ", ")
 }
 
-// NewRun stores run and mints its key in one update. The batch run limit is
-// checked in the same update; zero means no limit, and interactive runs are
-// neither limited nor counted.
-func (s *Store) NewRun(run Run, batchRunLimit int) (string, error) {
+// sameTarget reports whether a and b work the same target: implement or
+// plan runs on the same issue (git checks its branch out in one worktree
+// only), or verify runs at the same pull request head (their verdicts would
+// race). Discuss runs change nothing that another run needs.
+func sameTarget(a, b Run) bool {
+	if a.Org != b.Org || a.Repo != b.Repo {
+		return false
+	}
+	onBranch := func(r Run) bool { return r.Kind == "implement" || r.Kind == "plan" }
+	switch {
+	case onBranch(a) && onBranch(b):
+		return a.Issue == b.Issue
+	case a.Kind == "verify" && b.Kind == "verify":
+		return a.PR == b.PR && a.SHA == b.SHA
+	}
+	return false
+}
+
+// NewRun stores run and mints its key in one update. In the same update it
+// refuses, with a RunBusyError, a run whose target another live run has,
+// and, if serializeActor is set, a batch run whose actor has another live
+// batch run. Interactive runs are neither serialised nor counted for that.
+func (s *Store) NewRun(run Run, serializeActor bool) (string, error) {
 	key := KeyPrefix + RandomString(32)
 	err := s.Update(func(st *State) error {
 		if st.Keys == nil {
@@ -258,18 +287,26 @@ func (s *Store) NewRun(run Run, batchRunLimit int) (string, error) {
 		if _, dup := st.Runs[run.ID]; dup || st.History[run.ID].ID != "" {
 			return fmt.Errorf("run %s exists", run.ID)
 		}
-		if !run.Interactive && batchRunLimit > 0 {
-			now := time.Now().UTC()
-			var live []string
-			for _, existing := range st.Runs {
-				if existing.Actor == run.Actor && !existing.Interactive && existing.Active(now) {
-					live = append(live, existing.ID)
-				}
+		now := time.Now().UTC()
+		var target, actor []string
+		for _, existing := range st.Runs {
+			if !existing.Active(now) {
+				continue
 			}
-			if len(live) >= batchRunLimit {
-				slices.Sort(live)
-				return &RunLimitError{Actor: run.Actor, Limit: batchRunLimit, Runs: live}
+			if sameTarget(run, existing) {
+				target = append(target, existing.ID)
 			}
+			if serializeActor && !run.Interactive && !existing.Interactive && existing.Actor == run.Actor {
+				actor = append(actor, existing.ID)
+			}
+		}
+		if len(target) > 0 {
+			slices.Sort(target)
+			return &RunBusyError{Runs: target}
+		}
+		if len(actor) > 0 {
+			slices.Sort(actor)
+			return &RunBusyError{Actor: run.Actor, Runs: actor}
 		}
 		st.Runs[run.ID] = run
 		st.Keys[HashKey(key)] = APIKey{Actor: run.Actor, Label: "run " + run.ID, RunID: run.ID, Created: run.Created}

@@ -1,7 +1,7 @@
 # Design: the local web UI and the supervisor
 
 Status: **design**, written with the owner in issue #55. Built so far:
-run digests (phase 2, #60), per-actor run limits and `run stop`
+run digests (phase 2, #60), per-actor run serialisation and `run stop`
 (phase 1a, #58), and the single-issue supervisor (phase 1, #59).
 
 ## 1. Goal
@@ -101,8 +101,9 @@ bottown flow 51 --implement claude --verify kimi
   the runs' `--timeout`. Running out is a failure.
 - `--repo R`: as for `run`; defaults to the checkout's repository.
 - `--timeout D` (default 60m): per run (§3.5).
-- `--wait-actors`: enforce each actor's live batch run limit and wait for a
-  slot. By default a flow bypasses the limit (§3.4).
+- `--serialize-actors`: start each run only when its actor has no other
+  live batch run, and wait until then. By default an actor's runs on
+  different issues run concurrently (§3.4).
 - It is an owner command, run from the `main` checkout like `run`. It
   prints one line per step and ends with the stop reason. Exit code 0 means
   "ready to merge"; any other stop is non-zero, so scripts can tell them
@@ -146,7 +147,7 @@ status `bottown/e2e` on H, written by the owner (description ending
   verify run at H (`POST /v1/runs` with `sha`), and the server pins the
   run at the head it reads only if that is H, else refuses it ("the head
   moved"). So a push during the checks, or while the flow waits for the
-  verifier's actor slot, never gives a verifier a head the checks did not
+  verifier's other batch run to end, never gives a verifier a head the checks did not
   pass at: the flow goes round the loop and checks the new head first.
 - **Failed:** no verifier starts. The flow comments on the issue ("checks
   failed", with the description and the log) and starts an implement run
@@ -322,21 +323,28 @@ With `required_approvals` above 1 the forge asks for more approvals than
 
 Batch runs started from `main` use their own run worktrees, so nothing
 stops one actor from working on two issues at once; the subscription's rate
-window is the real limit. Each actor has a **limit on live batch runs**,
-a per-actor `max_batch_runs` setting with a default of 1 (0 means no limit).
+window is the real limit. So an actor's batch runs are not limited by
+default; what the server serialises is the **target**. `POST /v1/runs`
+refuses, with a 409 that names the live run, a second live implement or
+plan run on the same issue (git checks its branch out in one worktree
+only), and a second live verify run at the same pull request head (two
+verdicts would race). Discuss runs change nothing another run needs.
 
-The server enforces it, atomically: `POST /v1/runs` refuses a batch run
-for an actor already at its limit, with an error that says so. An owner's
-request may bypass the limit; actors may not. A flow bypasses it by default.
-With `--wait-actors`, a refused flow waits and tries again. Checking in each
-waiting flow instead would race: two flows started together (side by side in
-the UI, or by a milestone) could both see the actor as free. Because the
-server counts, an enforced limit covers every batch run, whoever starts it.
-Interactive runs do not count.
+Per-actor serialisation is opt-in: a request with `serialize_actor`
+(`run implement`/`run verify --serialize-actors`) is refused while its
+actor has another live batch run. `flow --serialize-actors` asks for it on
+every run, and when refused waits and tries again, the wait doubling from
+a second to a minute. Checking in each waiting flow instead would race:
+two flows started together (side by side in the UI, or by a milestone)
+could both see the actor as free. The server checks and creates the run
+in one update of its store, so neither check can be got round. Interactive
+runs are not serialised and do not count. The `max_batch_runs` actor
+setting of earlier versions is ignored if a desired-state file still sets
+it.
 
 Flows on different issues run in parallel, as separate processes. By default
-there is no actor-slot coordination between them; `--wait-actors` serializes
-each actor's batch runs.
+there is no per-actor coordination between them; `--serialize-actors`
+serialises each actor's batch runs.
 
 ### 3.5 Failures and budgets
 
@@ -386,7 +394,7 @@ the pool: #1 implemented by agy and verified by claude, #2 implemented by
 claude and verified by agy, and so on. Nothing above stands in its way:
 
 - each issue's flow is the single-issue flow of §3.2, with its own worktrees;
-- with `--wait-actors`, the per-actor limit on the server (§3.4) keeps the
+- with `--serialize-actors`, the server's per-actor check (§3.4) keeps the
   pool's actors from being over-committed, whatever the number of flows;
 - its state is the milestone's issues, their labels (§3.6), PRs and
   reviews, so it resumes from the forge like a single flow;
@@ -761,8 +769,9 @@ The UI uses the server's existing API where it can. What changes:
   (RFC 3339) and `limit` (the newest N); entries come oldest first. The
   server keeps them in `audit.jsonl` in its data directory for 14 days,
   and at most the newest 20000.
-- **Per-actor run limits** (§3.4): `POST /v1/runs` refuses a batch run for
-  an actor at its limit; the limit is part of the actor's configuration.
+- **Run concurrency** (§3.4): `POST /v1/runs` refuses a second live run on
+  the same issue or pull request head, and, with `serialize_actor`, a batch
+  run whose actor has another live one.
 - **Later, for the queue:** provisioning creates `implement/<actor>` and
   `verify/<actor>` labels, and an owner-only endpoint sets or clears them.
 
