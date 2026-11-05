@@ -351,6 +351,45 @@
       "step": "waiting for a run slot",
       "label": "#53 · round 1/3 · waiting for a run slot",
       "waiting": true
+    },
+    {
+      "issue": 56,
+      "implement": "claude",
+      "verify": "codex",
+      "round": 1,
+      "max_rounds": 3,
+      "step": "post-implement checks at 7c1d2e3f4a",
+      "label": "#56 · round 1/3 · post-implement checks at 7c1d2e3f4a",
+      "waiting": false
+    }
+  ],
+  "live_checks": [
+    {
+      "id": "flow-56-7c1d2e3f4a.e2e",
+      "issue": 56,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/56",
+      "issue_title": "Compress websocket payloads",
+      "pr": 62,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/62",
+      "sha": "7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d",
+      "commands": ["make e2e"],
+      "created": "2026-11-05T11:52:00Z",
+      "elapsed": "4m 05s",
+      "timeout": "60m",
+      "log_tail": []
+    },
+    {
+      "id": "flow-64-9e8d7c6b5a.e2e",
+      "issue": 64,
+      "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/64",
+      "issue_title": "Started from a terminal: a flow the UI did not start",
+      "pr": 65,
+      "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/65",
+      "sha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+      "commands": ["make e2e-setup", "make e2e"],
+      "created": "2026-11-05T11:54:30Z",
+      "elapsed": "1m 35s",
+      "log_tail": []
     }
   ],
   "history": [
@@ -907,6 +946,26 @@
     }
   ],
   "logs": {
+    "flow-56-7c1d2e3f4a.e2e": [
+      { "kind": "plain", "text": "bottown flow: post-implement checks for #56 (!62) at 7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d, 2026-11-05T12:52:00+01:00" },
+      { "kind": "plain", "text": "==> [e2e] make e2e" },
+      { "kind": "plain", "text": "go test -tags e2e -count=1 -timeout 30m -v ./e2e/" },
+      { "kind": "plain", "text": "=== RUN   TestE2E" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/up_from_nothing,_then_idempotent" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/accounts,_org_and_labels_match_the_spec" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/policy_and_protection_bound_the_bots" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/run_keys:_role,_repo_scope,_family_rule,_lifecycle" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness" },
+      { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness/approve_first_time" }
+    ],
+    "flow-64-9e8d7c6b5a.e2e": [
+      { "kind": "plain", "text": "bottown flow: post-implement checks for #64 (!65) at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d, 2026-11-05T12:54:30+01:00" },
+      { "kind": "plain", "text": "==> [e2e] make e2e-setup" },
+      { "kind": "plain", "text": "docker pull codeberg.org/forgejo/forgejo:13" },
+      { "kind": "plain", "text": "<== passed in 41s (exit 0)" },
+      { "kind": "plain", "text": "==> [e2e] make e2e" },
+      { "kind": "plain", "text": "=== RUN   TestE2E" }
+    ],
     "r-5f6a7b8c": [
       {
         "kind": "status",

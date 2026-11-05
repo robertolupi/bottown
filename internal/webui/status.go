@@ -28,6 +28,7 @@ type UIStatusResponse struct {
 	Inbox       []InboxItem      `json:"inbox"`
 	InboxError  string           `json:"inbox_error,omitempty"`
 	LiveRuns    []LiveRunInfo    `json:"live_runs"`
+	LiveChecks  []LiveCheckInfo  `json:"live_checks"`
 	ActiveFlows []ActiveFlowInfo `json:"active_flows"`
 	Actors      []ActorDetail    `json:"actors"`
 }
@@ -384,6 +385,7 @@ func (s *Server) computeStatusLocked(ctx context.Context, forceFetch bool) (*UIS
 	} else {
 		res.LiveRuns = []LiveRunInfo{}
 	}
+	res.LiveChecks = s.ComputeLiveChecks(ctx)
 	res.ActiveFlows = s.ComputeActiveFlows(ctx, res.LiveRuns)
 
 	// 6. Actors

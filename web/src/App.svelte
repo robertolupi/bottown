@@ -313,13 +313,14 @@
         const res = await fetch('/api/runs?state=live');
         if (res.ok) {
           const data = await res.json();
-          const { liveRuns, activeFlows } = parseLivePollSnapshot(data);
+          const { liveRuns, liveChecks, activeFlows } = parseLivePollSnapshot(data);
 
           if (status) {
             const prevThreads = runHistory.threads(status.live_runs, status.active_flows);
             const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
 
             status.live_runs = liveRuns;
+            status.live_checks = liveChecks;
             status.active_flows = activeFlows;
 
             runHistory.reconcile(prevThreads, runHistory.threads(liveRuns, activeFlows));
@@ -343,7 +344,7 @@
         // Ignore background polling errors
       } finally {
         if (!destroyed) {
-          const delay = nextPollDelayMs(status?.live_runs, status?.active_flows);
+          const delay = nextPollDelayMs(status?.live_runs, status?.active_flows, status?.live_checks);
           pollTimeout = setTimeout(poll, delay);
         }
       }
@@ -390,6 +391,7 @@
     <div class="grid">
       <LiveRuns
         liveRuns={status.live_runs}
+        liveChecks={status.live_checks}
         activeFlows={status.active_flows}
         issuesLink={status.links.issues}
         now={nowTime}

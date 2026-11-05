@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -16,17 +15,24 @@ import (
 // flowChecker runs the post-implement checks for bottown flow: the e2e
 // commands .bottown.toml names on the default branch (default: make e2e),
 // in a clean worktree detached at the PR head, with no agent involved. The
-// log goes next to the run records, <runs>/flow-<issue>-<sha>.e2e.log.
+// log goes next to the run records, <runs>/flow-<issue>-<sha>.e2e.log,
+// written as the commands write it. While they run, a runs.CheckRecord
+// marks the check live for the web UI's Live Runs, and tail, if set (an
+// attended flow on a terminal), follows the log as it does a run's.
 type flowChecker struct {
-	ws *runs.Workspace
+	ws   *runs.Workspace
+	tail *liveTail
 }
 
 func (c flowChecker) name(req flow.CheckRequest) string {
 	return fmt.Sprintf("flow-%d-%s", req.Issue, short(req.SHA))
 }
 
+// id is the check's id among the run records: its log is <id>.log.
+func (c flowChecker) id(req flow.CheckRequest) string { return c.name(req) + ".e2e" }
+
 func (c flowChecker) LogPath(req flow.CheckRequest) string {
-	return filepath.Join(c.ws.RunsDir, c.name(req)+".e2e.log")
+	return filepath.Join(c.ws.RunsDir, c.id(req)+".log")
 }
 
 func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.CheckOutcome, error) {
@@ -69,10 +75,27 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 		return out, err
 	}
 	defer f.Close()
-	bw := bufio.NewWriter(f)
-	defer bw.Flush()
-	l := &checkLog{w: bw}
-	l.line(fmt.Sprintf("bottown flow: post-implement checks for #%d (!%d) at %s, %s", req.Issue, req.PR, req.SHA, time.Now().Format(time.RFC3339)))
+	// Unbuffered: the live tails read the log while the commands run.
+	l := &checkLog{w: f}
+	started := time.Now()
+	l.line(fmt.Sprintf("bottown flow: post-implement checks for #%d (!%d) at %s, %s", req.Issue, req.PR, req.SHA, started.Format(time.RFC3339)))
+	rec := runs.CheckRecord{ID: c.id(req), Repo: req.Repo, Issue: req.Issue, PR: req.PR, SHA: req.SHA, Commands: settings.E2E, Started: started}
+	var limit time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		rec.Expires, limit = deadline, deadline.Sub(started)
+	}
+	if release, err := runs.HoldCheck(c.ws.RunsDir, rec); err == nil {
+		defer release()
+	} else {
+		l.line("bottown flow: the live tails will not show these checks: " + err.Error())
+	}
+	if c.tail != nil {
+		ended := c.tail.Follow(tailRun{
+			ID: rec.ID, Target: fmt.Sprintf("!%d at %s", req.PR, short(req.SHA)),
+			Check: strings.Join(settings.E2E, "; "), Started: started, Limit: limit,
+		}, "", out.Log)
+		defer ended()
+	}
 	specs := make([]checkSpec, len(settings.E2E))
 	for i, cmd := range settings.E2E {
 		specs[i] = checkSpec{"e2e", cmd}
