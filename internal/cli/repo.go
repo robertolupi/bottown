@@ -143,7 +143,11 @@ func repoAdd(ctx context.Context, g *globals, out io.Writer, name, branch string
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s still empty on the forge after push; re-run `bottown repo add`", name)
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 	for _, c := range append(res.Changes, res2.Changes...) {
 		fmt.Fprintf(out, "  - %s\n", c)

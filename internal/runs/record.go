@@ -28,32 +28,35 @@ const (
 
 // Record is the host-side record of a run, written next to its worktree.
 type Record struct {
-	ID              string     `json:"id"`
-	Kind            string     `json:"kind"`
-	Actor           string     `json:"actor"`
-	Family          string     `json:"family"`
-	Instance        string     `json:"instance"`
-	Repo            string     `json:"repo"` // org/name
-	Issue           int64      `json:"issue,omitempty"`
-	PR              int64      `json:"pr,omitempty"`
-	Branch          string     `json:"branch,omitempty"`
-	SHA             string     `json:"sha,omitempty"`
-	Interactive     bool       `json:"interactive,omitempty"`
-	AllowSameFamily bool       `json:"allow_same_family,omitempty"`
-	Question        string     `json:"question,omitempty"` // discuss: the owner's question
-	Message         string     `json:"message,omitempty"`  // the owner's note for the prompt (--message)
-	Harness         string     `json:"harness"`
-	Spec            string     `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
-	Status          string     `json:"status"`
-	StopRequested   bool       `json:"stop_requested,omitempty"`
-	ExitCode        *int       `json:"exit_code,omitempty"`
-	PID             int        `json:"pid,omitempty"`
-	HarnessPID      int        `json:"harness_pid,omitempty"`
-	Started         time.Time  `json:"started"`
-	Ended           *time.Time `json:"ended,omitempty"`
-	Worktree        string     `json:"worktree"`
-	Key             string     `json:"key,omitempty"` // only while the run is live
-	ServerURL       string     `json:"server_url"`
+	ID              string `json:"id"`
+	Kind            string `json:"kind"`
+	Actor           string `json:"actor"`
+	Family          string `json:"family"`
+	Instance        string `json:"instance"`
+	Repo            string `json:"repo"` // org/name
+	Issue           int64  `json:"issue,omitempty"`
+	PR              int64  `json:"pr,omitempty"`
+	Branch          string `json:"branch,omitempty"`
+	SHA             string `json:"sha,omitempty"`
+	Interactive     bool   `json:"interactive,omitempty"`
+	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	Question        string `json:"question,omitempty"` // discuss: the owner's question
+	Message         string `json:"message,omitempty"`  // the owner's note for the prompt (--message)
+	Harness         string `json:"harness"`
+	Spec            string `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
+	Status          string `json:"status"`
+	StopRequested   bool   `json:"stop_requested,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
+	PID             int    `json:"pid,omitempty"`
+	// LauncherLock is the file the launcher holds locked while it lives
+	// (see HoldLauncher); empty for runs started before it existed.
+	LauncherLock string     `json:"launcher_lock,omitempty"`
+	HarnessPID   int        `json:"harness_pid,omitempty"`
+	Started      time.Time  `json:"started"`
+	Ended        *time.Time `json:"ended,omitempty"`
+	Worktree     string     `json:"worktree"`
+	Key          string     `json:"key,omitempty"` // only while the run is live
+	ServerURL    string     `json:"server_url"`
 	// Attachments is the run's directory of issue attachments (see
 	// attachments.go); empty for runs started before it existed.
 	Attachments string `json:"attachments,omitempty"`
@@ -315,7 +318,7 @@ func (w *Workspace) RemoveFiles(id string) {
 	if r, err := w.Load(id); err == nil && r.TmpDir != "" {
 		_ = os.RemoveAll(r.TmpDir)
 	}
-	for _, s := range []string{".json", ".log", LiveTranscriptSuffix, ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md", ".check.log", ".check.json"} {
+	for _, s := range []string{".json", ".log", LiveTranscriptSuffix, ".agy.log", ".kimi-agent.md", ".mcp.json", ".prompt.md", ".check.log", ".check.json", LauncherLockSuffix} {
 		_ = os.Remove(w.Path(id, s))
 	}
 	_ = RemoveAttachments(w.AttachmentsDir(id))
@@ -323,21 +326,6 @@ func (w *Workspace) RemoveFiles(id string) {
 	_ = os.RemoveAll(w.Path(id, ".tmp"))
 	// Last, once the record is gone.
 	_ = w.removeLock(id)
-}
-
-// LauncherAlive reports whether the process that launched the run, and
-// owns its record, is still running.
-func (r Record) LauncherAlive() bool { return alive(r.PID) }
-
-func alive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // DirSize is the total size of regular files under dir.

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,55 @@ func TestAuditLogBoundAndCompaction(t *testing.T) {
 	}
 	if got := a.Query(AuditFilter{Limit: 3}); len(got) != 3 {
 		t.Errorf("Limit 3 returned %d", len(got))
+	}
+}
+
+// Entries recorded while a compaction rewrites the file outside the lock
+// reach the new file, and a second compaction does not start meanwhile.
+func TestAuditLogRecordsDuringCompaction(t *testing.T) {
+	dir := t.TempDir()
+	a, err := OpenAudit(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap []AuditEntry
+	for i := 0; snap == nil; i++ {
+		if i > auditMax+auditSlack+10 {
+			t.Fatal("no compaction became due")
+		}
+		if snap, err = a.append(AuditEntry{Actor: "claude", Op: "api", Decision: "deny", Detail: strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 3 {
+		s, err := a.append(AuditEntry{Actor: "codex", Op: "api", Decision: "deny", Detail: strconv.Itoa(i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s != nil {
+			t.Fatal("a second compaction started while one was under way")
+		}
+	}
+	if err := a.compact(snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Record(AuditEntry{Actor: "kimi", Op: "api", Decision: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := OpenAudit(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := a.Query(AuditFilter{})
+	got := b.Query(AuditFilter{})
+	if len(got) != len(want) || len(got) != auditMax {
+		t.Fatalf("reopened log has %d entries, want %d (%d in memory)", len(got), auditMax, len(want))
+	}
+	if n := len(b.Query(AuditFilter{Actor: "kimi"})); n != 1 {
+		t.Errorf("reopened log has %d entries recorded after the compaction, want 1", n)
+	}
+	if n := len(b.Query(AuditFilter{Actor: "codex"})); n != 3 {
+		t.Errorf("reopened log has %d of the 3 entries recorded during the compaction", n)
 	}
 }
 
