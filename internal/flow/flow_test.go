@@ -359,6 +359,24 @@ func TestFlowImplementWithoutPRFails(t *testing.T) {
 	}
 }
 
+func TestFlowChangesRequestedWithoutPushFails(t *testing.T) {
+	api := &fakeAPI{open: true, pr: openPR()}
+	api.pr.Reviews = []server.ReviewOut{{ID: 1, Reviewer: "agy", Official: true, State: "REQUEST_CHANGES", CommitID: api.pr.HeadSHA}}
+	calls := 0
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if req.Kind != policy.Implement {
+			t.Fatalf("run = %s, want implement", req.Kind)
+		}
+		calls++
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	var stop *StopError
+	if !errors.As(err, &stop) || result.Reason != RunFailed || calls != 1 || !strings.Contains(result.Detail, "implement run ended without pushing a new head") {
+		t.Fatalf("result = %+v, error = %v, calls = %d", result, err, calls)
+	}
+}
+
 func TestFlowRunFailureAndTimeout(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

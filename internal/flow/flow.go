@@ -302,8 +302,16 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			if countRounds(pr.Reviews) >= opts.Rounds {
 				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("%d implement rounds used", countRounds(pr.Reviews)))
 			}
+			head := pr.HeadSHA
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
 				return s.runFailure(ctx, result, err)
+			}
+			after, err := s.API.PR(ctx, opts.Repo, pr.Number)
+			if err != nil {
+				return result, err
+			}
+			if after.HeadSHA == head {
+				return s.stop(ctx, result, RunFailed, "the implement run ended without pushing a new head")
 			}
 			resuming = false
 		case assessment.Decision == review.Commented:
