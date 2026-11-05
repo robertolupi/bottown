@@ -97,6 +97,11 @@ func (c *Client) PR(ctx context.Context, repo string, number int64) (server.PROu
 	return pr, err
 }
 
+func (c *Client) ReconcileCarries(ctx context.Context, repo string, number int64) error {
+	in := server.Target{Repo: repo, Number: number}
+	return c.call(ctx, "POST", "/v1/forge/pr/carries", in, nil)
+}
+
 func (c *Client) PRMergeStatus(ctx context.Context, repo string, number int64) (server.PRMergeStatus, error) {
 	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(number)}}
 	var status server.PRMergeStatus

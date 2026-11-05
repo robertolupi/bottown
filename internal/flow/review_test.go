@@ -74,6 +74,34 @@ func TestFlowCarriedApprovalNotStale(t *testing.T) {
 	}
 }
 
+type reconcilingAPI struct {
+	*fakeAPI
+	reconciled int
+}
+
+func (a *reconcilingAPI) ReconcileCarries(context.Context, string, int64) error {
+	a.reconciled++
+	for i := range a.pr.Reviews {
+		a.pr.Reviews[i].Dismissed = false
+	}
+	return nil
+}
+
+func TestFlowReconcilesDismissedCarriedApproval(t *testing.T) {
+	base := &fakeAPI{open: true, pr: openPR(), carries: []review.Carry{{From: reviewtest.Old, Onto: reviewtest.Base}}}
+	base.pr.Number, base.pr.HeadSHA = reviewtest.PR, reviewtest.Head
+	base.pr.Reviews = []server.ReviewOut{{ID: 1, Reviewer: "agy", State: review.StateApproved, CommitID: reviewtest.Old, Official: true, Dismissed: true}}
+	api := &reconcilingAPI{fakeAPI: base}
+	runner := RunnerFunc(func(context.Context, RunRequest) error {
+		t.Fatal("no run expected")
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge || api.reconciled != 1 {
+		t.Fatalf("result = %+v, reconciled = %d, err = %v; want one reconcile and ready to merge", result, api.reconciled, err)
+	}
+}
+
 // TestFlowCarriedApprovalBesideHeadApproval: an unstale approval that carries
 // over is settled even when a head approval decides the assessment, so the
 // flow does not wait for Forgejo to mark it stale.

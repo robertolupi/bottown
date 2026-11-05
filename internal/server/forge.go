@@ -537,7 +537,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 	if err != nil {
 		return PROut{}, err
 	}
-	carries := s.carryOver(ctx, p, org, repo, pr, rs)
+	carries := s.carryOver(ctx, org, repo, pr, rs)
 	for _, r := range rs {
 		out.Reviews = append(out.Reviews, ReviewOut{
 			ID: r.ID, Reviewer: login(r.Reviewer), State: string(r.State), CommitID: r.CommitID,
@@ -574,7 +574,7 @@ func (s *Server) opPR(ctx context.Context, p secrets.Principal, in Target, withD
 
 // opCarries lists the older heads of an open PR whose approvals carry over
 // to its head (carry.go), for callers that assess reviews themselves (the
-// web UI). Like pr show, it undismisses carried approvals Forgejo dismissed.
+// web UI).
 func (s *Server) opCarries(ctx context.Context, p secrets.Principal, in Target) ([]review.Carry, error) {
 	def := int64(0)
 	if p.Run != nil {
@@ -598,7 +598,7 @@ func (s *Server) opCarries(ctx context.Context, p secrets.Principal, in Target) 
 	if err != nil {
 		return nil, err
 	}
-	carries := s.carryOver(ctx, p, org, repo, pr, rs)
+	carries := s.carryOver(ctx, org, repo, pr, rs)
 	if carries == nil {
 		carries = []review.Carry{}
 	}
@@ -698,7 +698,7 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 			if err != nil {
 				item.ReviewState = "unknown"
 			} else {
-				a := assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, s.carryOver(ctx, p, org, repo, pr, rs))
+				a := assessReviews(s.desired(), s.Owner, runs, repo, pr, rs, s.carryOver(ctx, org, repo, pr, rs))
 				item.ReviewState, item.ReviewReason = string(a.Decision), a.Reason
 			}
 		}

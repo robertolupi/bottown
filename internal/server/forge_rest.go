@@ -14,6 +14,8 @@ import (
 //	GET  /v1/forge/issue/attachment?repo=&number=&id=   (the file's bytes)
 //	POST /v1/forge/issue    {repo, title, body}
 //	GET  /v1/forge/pr?repo=&number=&diff=1
+//	GET  /v1/forge/pr/carries?repo=&number=
+//	POST /v1/forge/pr/carries {repo, number} (the owner: reconcile dismissals)
 //	POST /v1/forge/pr       {title, body}
 //	POST /v1/forge/comment  {repo, number, body}
 //	POST /v1/forge/review   {event, body, commit_id}
@@ -75,6 +77,14 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opCarries(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	})))
+	mux.Handle("POST /v1/forge/pr/carries", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in Target
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opReconcileCarries(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
 	mux.Handle("GET /v1/forge/pr/merge-base", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opPRMergeStatus(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)

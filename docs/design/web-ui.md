@@ -300,17 +300,18 @@ approvals", it marks the reviews stale and dismisses the approvals, with
 the timeline message "New commits pushed, approval review dismissed
 automatically according to repository settings". Forgejo has no setting
 for "same patch": turning dismissal off would let an approval survive any
-push. So whenever the server finds a carry-over (pr show, pr list, the
-carries endpoint) it also undismisses a carried approval that Forgejo
-dismissed with that message, using the owner's token
-(`POST …/reviews/{id}/undismissals`), and records `review_carry_over` in
-the audit log. Forgejo counts an official, undismissed approval even when
-stale, because bottown leaves "ignore stale approvals" off, so the merge
-gate then agrees. A dismissal with anyone's own message stands. The
-review keeps its old commit and stale flag in Forgejo: what carried it
-over is the assessment's reason, not a new review. If Forgejo dismisses
-an approval after the flow has read the PR, the next read (the inbox, `pr
-show`) undismisses it.
+push. Reads never change that state: patch comparisons are cached per
+repository, base, old head and new head, and `pr show`, `pr list` and the
+carries GET only assess what Forgejo reports. When the flow finds a dismissed
+approval whose patch carries over, its explicit reconcile step
+(`POST /v1/forge/pr/carries`, owner only) undismisses one Forgejo dismissed
+with that message, using the owner's token
+(`POST …/reviews/{id}/undismissals`), records `review_carry_over` in the
+audit log, and re-reads the PR. Forgejo counts an official, undismissed
+approval even when stale, because bottown leaves "ignore stale approvals"
+off, so the merge gate then agrees. A dismissal with anyone's own message
+stands. The review keeps its old commit and stale flag in Forgejo: what
+carried it over is the assessment's reason, not a new review.
 
 Only approvals carry over. A request for changes at an older head keeps
 its usual meaning, and a comment at an older head is still no verdict.

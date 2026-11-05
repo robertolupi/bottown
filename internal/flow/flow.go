@@ -148,6 +148,9 @@ type API interface {
 	Actors(context.Context) ([]server.ActorInfo, error)
 	OpenPR(context.Context, string, string) (server.PRItem, bool, error)
 	PR(context.Context, string, int64) (server.PROut, error)
+	// ReconcileCarries undismisses automatically dismissed approvals whose
+	// patches carry over, so the next PR read reflects Forgejo's merge gate.
+	ReconcileCarries(context.Context, string, int64) error
 	LiveRuns(context.Context, string) ([]secrets.Run, error)
 	Comment(context.Context, string, int64, string) error
 	// RecordGate writes the post-implement checks' result at sha as the
@@ -240,6 +243,22 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		pr, err = s.waitForPush(ctx, opts, pr)
 		if err != nil {
 			return result, err
+		}
+		reconcile := false
+		for _, r := range pr.Reviews {
+			if r.Dismissed && r.Official && r.State == review.StateApproved && carried(pr, r.CommitID) {
+				reconcile = true
+				break
+			}
+		}
+		if reconcile {
+			if err := s.API.ReconcileCarries(ctx, opts.Repo, pr.Number); err != nil {
+				return result, err
+			}
+			pr, err = s.API.PR(ctx, opts.Repo, pr.Number)
+			if err != nil {
+				return result, err
+			}
 		}
 		merge, err := s.API.PRMergeStatus(ctx, opts.Repo, pr.Number)
 		if err != nil {
