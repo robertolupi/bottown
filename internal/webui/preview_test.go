@@ -90,11 +90,17 @@ type previewClient struct {
 
 func startPreview(t *testing.T) (*PreviewServer, previewClient) {
 	t.Helper()
+	return startPreviewOf(t, fixturesDir, "default")
+}
+
+// startPreviewOf serves the fixture name in dir.
+func startPreviewOf(t *testing.T, dir, name string) (*PreviewServer, previewClient) {
+	t.Helper()
 	ui := fstest.MapFS{
 		"index.html":    {Data: []byte("<!doctype html><title>preview</title>")},
 		"assets/app.js": {Data: []byte("console.log(1)")},
 	}
-	srv, err := NewPreviewServer(PreviewConfig{UI: ui, FixturesDir: fixturesDir, Fixture: "default"})
+	srv, err := NewPreviewServer(PreviewConfig{UI: ui, FixturesDir: dir, Fixture: name})
 	if err != nil {
 		t.Fatal(err)
 	}

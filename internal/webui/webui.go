@@ -543,17 +543,7 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorMap, _ := s.fetchActorMap(r.Context())
-	harness := ""
-	var serverRun secrets.Run
-	if err := s.callServer(r.Context(), http.MethodGet, "/v1/runs/"+id, nil, &serverRun); err == nil {
-		harness = serverRun.Harness
-		if harness == "" && actorMap[serverRun.Actor] != nil {
-			harness = actorMap[serverRun.Actor].Harness
-		}
-	}
-
-	lines := runs.RenderLog(harness, logBytes)
+	lines := s.renderRunLog(r.Context(), id, logBytes)
 	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
 		if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && len(lines) > n {
 			lines = lines[len(lines)-n:]
@@ -564,6 +554,33 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 		"id":    id,
 		"lines": lines,
 	})
+}
+
+// renderRunLog renders run id's log, read as logBytes, for its harness.
+func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) []runs.LogLine {
+	actorMap, _ := s.fetchActorMap(ctx)
+	harness := ""
+	var serverRun secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &serverRun); err == nil {
+		harness = serverRun.Harness
+		if harness == "" && actorMap[serverRun.Actor] != nil {
+			harness = actorMap[serverRun.Actor].Harness
+		}
+	}
+	return runs.RenderLog(harness, logBytes)
+}
+
+// ComputeRunLog returns run id's rendered log as GET /api/runs/{id}/log
+// does, and whether the run has a log in this checkout.
+func (s *Server) ComputeRunLog(ctx context.Context, id string) ([]runs.LogLine, bool, error) {
+	if !validRunID.MatchString(id) {
+		return nil, false, fmt.Errorf("invalid run ID %q", id)
+	}
+	logBytes, err := runs.ReadLog(filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log"))
+	if err != nil {
+		return []runs.LogLine{}, false, nil
+	}
+	return s.renderRunLog(ctx, id, logBytes), true, nil
 }
 
 func (s *Server) handleGetIssueDetails(w http.ResponseWriter, r *http.Request) {

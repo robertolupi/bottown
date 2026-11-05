@@ -86,6 +86,39 @@ func runPreviewCmd(ctx context.Context, args ...string) (*lockedBuffer, *lockedB
 	return out, errb, done
 }
 
+// TestWebPreviewCaptureRefusals checks what `web preview --capture` refuses
+// before it reads an instance: a run worktree, which has no owner key, an
+// existing fixture without --force, and serving flags.
+func TestWebPreviewCaptureRefusals(t *testing.T) {
+	t.Setenv("BOTTOWN_INSTANCE", "")
+	run := filepath.Join(t.TempDir(), ".bottown", "runs", "r-x")
+	if err := os.MkdirAll(run, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runs.Git(run, nil, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(run)
+	_, _, done := runPreviewCmd(context.Background(), "--capture", "live")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "owner's key") || !strings.Contains(err.Error(), "run worktree") {
+		t.Errorf("in a run worktree: %v", err)
+	}
+
+	t.Chdir(fakeCheckout(t))
+	_, _, done = runPreviewCmd(context.Background(), "--capture", "default")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Errorf("over an existing fixture: %v", err)
+	}
+	_, _, done = runPreviewCmd(context.Background(), "--capture", "live", "--detach")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "does not serve") {
+		t.Errorf("--capture --detach: %v", err)
+	}
+	_, _, done = runPreviewCmd(context.Background(), "--issue", "3")
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "go with --capture") {
+		t.Errorf("--issue without --capture: %v", err)
+	}
+}
+
 // TestWebPreview runs `web preview` in a checkout without an instance, with
 // a stand-in for vite that writes the build where it is told to.
 func TestWebPreview(t *testing.T) {

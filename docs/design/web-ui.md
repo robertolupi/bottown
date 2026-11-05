@@ -922,6 +922,40 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   web ui`. There is no token: it serves only checked-in fixture data, and
   its actions do nothing.
 
+Runs never get a signed-in UI: a second kind of login, and a read-only
+mode on every endpoint, would cost security surface that preview, shot and
+captured fixtures make unnecessary. When a bug depends on what the real
+data looks like, the owner captures it:
+
+```
+bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
+```
+
+- **It runs where `bottown web ui` does:** in the owner's main checkout,
+  with the owner's key. In a run or actor worktree it refuses, saying it
+  needs the owner's key.
+- **It writes what the UI shows now** as `web/fixtures/NAME.json`,
+  computed by the same code as `bottown web ui`'s API: the status, inbox,
+  live runs, active flows, history and milestones. The file loads back
+  strictly, as every fixture does, before it is written. It does not
+  serve.
+- **`--issue N` adds an issue's details and timeline, `--log RUN` a run's
+  rendered log.** An issue or log named this way that cannot be read fails
+  the capture. With neither, it takes the issues, issue-less PR threads
+  and run logs the views link to, live work first, up to a cap (30 issues,
+  20 logs), so popups and log views work in the preview; what it cannot
+  read it skips, saying so. `actions` stays empty: a preview action does
+  nothing.
+- **It refuses to replace a fixture** without `--force`. It prints the
+  path, and on stderr the count per section.
+- **A capture holds real data:** issue titles and bodies, timelines, log
+  lines from this forge. What looks like a secret is dropped: bottown API
+  keys (`btk_…`) and the owner key, the one-time logins of `web ui`
+  (`?token=`) and `web forgejo` (`/v1/web/login/…`), credentials in URLs,
+  and encoded payloads, as in logs. Read it before committing it. The
+  owner commits the fixture, or attaches it to an issue, for a run to
+  serve with `--fixture NAME`.
+
 The implement and verify prompts mention it when the repository's default
 branch has `web/fixtures`.
 
