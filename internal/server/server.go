@@ -46,8 +46,10 @@ type Server struct {
 	UICookie         string
 	web              webState
 
-	mu     sync.Mutex
-	health Health
+	mu         sync.Mutex
+	health     Health
+	carryMu    sync.Mutex
+	carryCache map[carryKey]carryResult
 }
 
 // Health is the /healthz document.

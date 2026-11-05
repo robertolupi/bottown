@@ -61,6 +61,10 @@ func (f *fakeAPI) PR(context.Context, string, int64) (server.PROut, error) {
 	return pr, nil
 }
 
+func (f *fakeAPI) ReconcileCarries(context.Context, string, int64) error {
+	return nil
+}
+
 func (f *fakeAPI) LiveRuns(context.Context, string) ([]secrets.Run, error) {
 	return f.runs, nil
 }

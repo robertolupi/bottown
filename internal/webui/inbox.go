@@ -690,8 +690,6 @@ func (s *Server) assessPullRequest(ctx context.Context, repo string, pr *sdk.Pul
 	if pr == nil {
 		return review.Assessment{}, fmt.Errorf("nil pull request")
 	}
-	// Carries first: the server undismisses carried approvals Forgejo
-	// dismissed, and the reviews should show it.
 	carries := s.prCarries(ctx, repo, pr.Index)
 	org, _ := s.orgAndRepo()
 	revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
