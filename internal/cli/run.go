@@ -227,6 +227,36 @@ func parseNumber(s string) (int64, error) {
 // errNoChange makes a Workspace.Update leave the record as it is.
 var errNoChange = errors.New("record unchanged")
 
+// endRunBudget is how long a launcher keeps trying to end its run on the
+// server, and endRunBackoff the waits between its attempts.
+var (
+	endRunBudget  = 2 * time.Minute
+	endRunBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 30 * time.Second}
+)
+
+// retryEndRun calls end, each attempt bounded to 30s, until it succeeds,
+// endRunBackoff runs out or ctx is done, and returns its last error.
+func retryEndRun(ctx context.Context, end func(context.Context) error) error {
+	attempt := func() error {
+		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return end(actx)
+	}
+	err := attempt()
+	for _, d := range endRunBackoff {
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(d):
+		}
+		err = attempt()
+	}
+	return err
+}
+
 func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (err error) {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -268,7 +298,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	var digest secrets.Digest
 	phase := launchStarting
 	defer func() {
-		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cctx, cancel := context.WithTimeout(context.Background(), endRunBudget)
 		defer cancel()
 		if status != runs.StatusSucceeded {
 			if f := launcherFailure(phase, err); f != nil {
@@ -276,8 +306,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 			}
 		}
 		end := server.EndRunRequest{Status: status, Digest: digest}
-		if e := callServer(cctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil); e != nil && err == nil {
-			err = fmt.Errorf("end run %s: %w", run.ID, e)
+		// The server may be restarting (an upgrade, say): retry for a
+		// while. If it never answers, the next run gc revokes the run.
+		e := retryEndRun(cctx, func(ctx context.Context) error {
+			return callServer(ctx, rc.inst, rc.key, "DELETE", "/v1/runs/"+run.ID, end, nil)
+		})
+		switch {
+		case e != nil && err == nil:
+			err = fmt.Errorf("end run %s: %w; the next `bottown run gc` revokes it", run.ID, e)
+		case e != nil:
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: end run %s: %v; the next `bottown run gc` revokes it\n", run.ID, e)
 		}
 		// A startup that failed before the run was running ends its record too.
 		_ = rc.ws.Update(run.ID, func(current *runs.Record) error {
@@ -1309,7 +1347,9 @@ whose local files are kept keeps its server record too.
 
 A run whose key expired while it was live cannot end itself, since its key
 no longer authenticates: gc ends it as revoked, unless its launcher in this
-checkout is still running. A dead run that cannot be revoked (the server is
+checkout is still running. It also revokes, whatever its expiry, a run
+that ended locally but is still live on the server, whose launcher could
+not end it there (the server was restarting, say). A dead run that cannot be revoked (the server is
 unreachable, say) keeps its local record, with a warning, so a later gc
 retries. With --orphans gc also revokes this repository's live runs that
 the owner started but that have no local record in this checkout, such as
@@ -1323,63 +1363,7 @@ warning; run ls lists it as unknown.`,
 			if err != nil {
 				return err
 			}
-			recs, err := rc.ws.Records(cmd.ErrOrStderr())
-			if err != nil {
-				return err
-			}
-			removed, keep := gcLocal(rc.ws, recs, failed, cmd.ErrOrStderr(), func(id string) error {
-				end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
-					Cause: secrets.FailureInterrupted, Detail: "its launcher went away before ending it; revoked by run gc"}}}
-				return callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil)
-			})
-			// A run whose key expired while it was live cannot end itself:
-			// its key no longer authenticates. Revoke it with the owner key.
-			var live []secrets.Run
-			if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs?state=live&repo="+rc.repo, nil, &live); err != nil {
-				return fmt.Errorf("removed %d runs; listing live server runs: %w", removed, err)
-			}
-			now := time.Now().UTC()
-			revokeAll := func(ids []string, f secrets.Failure) (n int) {
-				for _, id := range ids {
-					end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &f}}
-					if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
-						continue
-					}
-					n++
-				}
-				return n
-			}
-			expired := expiredLive(live, recs, now)
-			revoked := revokeAll(expired, secrets.Failure{
-				Cause: secrets.FailureExpired, Detail: "its key expired while it was live; revoked by run gc"})
-			orphaned := 0
-			if orphans {
-				var ids []string
-				for _, id := range orphanLive(live, recs, now) {
-					if !slices.Contains(expired, id) {
-						ids = append(ids, id)
-					}
-				}
-				orphaned = revokeAll(ids, secrets.Failure{
-					Cause: secrets.FailureInterrupted, Detail: "no launcher in the owner's checkout held it; revoked by run gc --orphans"})
-			}
-			var purged struct {
-				Purged []string `json:"purged"`
-			}
-			req := server.PurgeRequest{Repo: rc.repo, EndedBefore: time.Now().Add(-olderThan), Keep: keep}
-			if err := callServer(cmd.Context(), rc.inst, rc.key, "POST", "/v1/runs/purge", req, &purged); err != nil {
-				return fmt.Errorf("removed %d runs; purging server records: %w", removed, err)
-			}
-			if revoked > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "revoked %d runs whose key expired while live\n", revoked)
-			}
-			if orphaned > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "revoked %d orphaned live runs with no local record\n", orphaned)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
-				removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
-			return nil
+			return gcRuns(cmd, rc, failed, orphans, olderThan)
 		},
 	}
 	cmd.Flags().BoolVar(&failed, "failed", false, "also remove failed runs (kept by default for inspection)")
@@ -1388,14 +1372,95 @@ warning; run ls lists it as unknown.`,
 	return cmd
 }
 
+// gcRuns is `run gc` in the checkout rc.
+func gcRuns(cmd *cobra.Command, rc *runContext, failed, orphans bool, olderThan time.Duration) error {
+	recs, err := rc.ws.Records(cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	// The server's live runs first: a run that ended locally may
+	// still be live there, if its launcher could not end it (#243),
+	// and its record is gc's only trace of it.
+	var live []secrets.Run
+	if err := callServer(cmd.Context(), rc.inst, rc.key, "GET", "/v1/runs?state=live&repo="+rc.repo, nil, &live); err != nil {
+		return fmt.Errorf("listing live server runs: %w", err)
+	}
+	removed, keep := gcLocal(rc.ws, recs, failed, serverLive(live), cmd.ErrOrStderr(), func(r runs.Record) error {
+		detail := "its launcher went away before ending it; revoked by run gc"
+		if r.Status != runs.StatusDead {
+			detail = "it ended locally (" + r.Status + ") but its launcher could not end it on the server; revoked by run gc"
+		}
+		end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &secrets.Failure{
+			Cause: secrets.FailureInterrupted, Detail: detail}}}
+		return callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+r.ID, end, nil)
+	})
+	// A run whose key expired while it was live cannot end itself:
+	// its key no longer authenticates. Revoke it with the owner key.
+	now := time.Now().UTC()
+	revokeAll := func(ids []string, f secrets.Failure) (n int) {
+		for _, id := range ids {
+			end := server.EndRunRequest{Status: "revoked", Digest: secrets.Digest{Failure: &f}}
+			if err := callServer(cmd.Context(), rc.inst, rc.key, "DELETE", "/v1/runs/"+id, end, nil); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: revoke %s: %v\n", id, err)
+				continue
+			}
+			n++
+		}
+		return n
+	}
+	expired := expiredLive(live, recs, now)
+	revoked := revokeAll(expired, secrets.Failure{
+		Cause: secrets.FailureExpired, Detail: "its key expired while it was live; revoked by run gc"})
+	orphaned := 0
+	if orphans {
+		var ids []string
+		for _, id := range orphanLive(live, recs, now) {
+			if !slices.Contains(expired, id) {
+				ids = append(ids, id)
+			}
+		}
+		orphaned = revokeAll(ids, secrets.Failure{
+			Cause: secrets.FailureInterrupted, Detail: "no launcher in the owner's checkout held it; revoked by run gc --orphans"})
+	}
+	var purged struct {
+		Purged []string `json:"purged"`
+	}
+	req := server.PurgeRequest{Repo: rc.repo, EndedBefore: time.Now().Add(-olderThan), Keep: keep}
+	if err := callServer(cmd.Context(), rc.inst, rc.key, "POST", "/v1/runs/purge", req, &purged); err != nil {
+		return fmt.Errorf("removed %d runs; purging server records: %w", removed, err)
+	}
+	if revoked > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "revoked %d runs whose key expired while live\n", revoked)
+	}
+	if orphaned > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "revoked %d orphaned live runs with no local record\n", orphaned)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server; .bottown is %s\n",
+		removed, len(purged.Purged), humanBytes(runs.DirSize(rc.ws.Dir)))
+	return nil
+}
+
+// serverLive is the set of the IDs of the runs in live that have not ended.
+func serverLive(live []secrets.Run) map[string]bool {
+	ids := make(map[string]bool, len(live))
+	for _, r := range live {
+		if r.Ended == nil {
+			ids[r.ID] = true
+		}
+	}
+	return ids
+}
+
 // gcLocal removes the worktrees and files of finished local runs: succeeded
 // and dead, and failed ones too with failed. A dead run, including one whose
-// launcher died while preparing, is revoked first, and kept, with a
-// warning, if that fails. A run whose record is unreadable is kept, with a
-// warning. The lock files of runs whose record
+// launcher died while preparing, is revoked first, and so is a succeeded or
+// failed one that is still in live, the server's live runs, failed or not:
+// its launcher could not end it there (#243). A run whose revoke fails is
+// kept, with a warning, so a later gc retries. A run whose record is
+// unreadable is kept, with a warning. The lock files of runs whose record
 // is gone are removed too. keep is the runs it left, whose server records
 // stay.
-func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer, revoke func(id string) error) (removed int, keep []string) {
+func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, live map[string]bool, warn io.Writer, revoke func(r runs.Record) error) (removed int, keep []string) {
 	for _, r := range recs {
 		switch r.Status {
 		case runs.StatusPreparing, runs.StatusRunning:
@@ -1407,20 +1472,20 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, warn io.Writer
 			fmt.Fprintf(warn, "warning: %s.json: unreadable run record (%s); kept\n", r.ID, r.LoadError)
 			keep = append(keep, r.ID)
 			continue
-		case runs.StatusFailed:
-			if !failed {
+		}
+		// Its launcher died, or ended it here but not on the server: make
+		// sure the key is gone too. If that fails, its record is its only
+		// local trace: keep it, so a later gc retries.
+		if r.Status == runs.StatusDead || live[r.ID] {
+			if err := revoke(r); err != nil {
+				fmt.Fprintf(warn, "warning: revoke %s run %s: %v; kept, a later gc retries\n", r.Status, r.ID, err)
 				keep = append(keep, r.ID)
 				continue
 			}
-		case runs.StatusDead:
-			// Its launcher died: make sure the key is gone too. If that
-			// fails, its record is its only local trace: keep it, so a
-			// later gc retries.
-			if err := revoke(r.ID); err != nil {
-				fmt.Fprintf(warn, "warning: revoke dead run %s: %v; kept, a later gc retries\n", r.ID, err)
-				keep = append(keep, r.ID)
-				continue
-			}
+		}
+		if r.Status == runs.StatusFailed && !failed {
+			keep = append(keep, r.ID)
+			continue
 		}
 		if err := ws.Remove(r.ID); err != nil {
 			fmt.Fprintf(warn, "warning: %s: %v\n", r.ID, err)
