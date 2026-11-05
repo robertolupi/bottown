@@ -1540,18 +1540,25 @@ func TestE2E(t *testing.T) {
 			t.Errorf("owner request for changes: %v", request)
 		}
 		endRun(ver2["id"].(string))
-		// A push makes the request stale, but it stays official and
-		// undismissed, so the forge keeps blocking on it; approvals are
-		// dismissed.
+		// After a push the request is at an older head, but it stays
+		// official and undismissed, so the forge keeps blocking on it;
+		// approvals are dismissed. Its stale flag is not pinned: Forgejo
+		// processes each push in its own task, marking every review stale
+		// and then those at the pushed head not stale, and push 2's task
+		// may finish after push 3's, leaving the request at head 2 not
+		// stale. internal/review tells an older head by its commit instead.
 		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("3\n"), 0o644)
 		git(t, demo, "commit", "-q", "-am", "mcp change 3")
 		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
 			t.Fatalf("push 3: %v\n%s", err, out)
 		}
+		head3 := git(t, demo, "rev-parse", "HEAD")
 		var rs []map[string]any
 		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+			var pr struct{ Head struct{ Sha string } }
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
 			rs = reviews()
-			settled := true
+			settled := pr.Head.Sha == head3
 			for _, r := range rs {
 				if r["state"] == "REQUEST_CHANGES" {
 					request = r
@@ -1560,11 +1567,11 @@ func TestE2E(t *testing.T) {
 					settled = false
 				}
 			}
-			if settled && request["stale"] == true || time.Now().After(deadline) {
+			if settled || time.Now().After(deadline) {
 				break
 			}
 		}
-		if request["stale"] != true || request["official"] != true || request["dismissed"] == true {
+		if request["commit_id"] != ver2["sha"] || request["official"] != true || request["dismissed"] == true {
 			t.Fatalf("request for changes after a push: %v (reviews %v)", request, rs)
 		}
 		ver3 := newRun(map[string]any{"kind": "verify", "actor": "codex", "repo": "demo", "pr": prn})
@@ -2308,7 +2315,7 @@ fi`
 			}
 			waitFor := func(name, want string) {
 				t.Helper()
-				deadline := time.Now().Add(15 * time.Second)
+				deadline := time.Now().Add(30 * time.Second)
 				for {
 					b, _ := os.ReadFile(filepath.Join(dir, name))
 					if strings.Contains(string(b), want) {
@@ -2318,6 +2325,45 @@ fi`
 						t.Fatalf("%s did not contain %q:\n%s", name, want, b)
 					}
 					time.Sleep(100 * time.Millisecond)
+				}
+			}
+
+			// The serialized flow must wait on agy's blocker only: a batch
+			// run of claude's still live from an earlier subtest would hold
+			// the implement step instead. Wait for the server to agree that
+			// the blocker is the only active batch run of either actor.
+			type liveRun struct {
+				ID, Kind, Actor, Repo, Status string
+				Issue, PR                     int64
+				Interactive                   bool
+			}
+			othersLive := func() []liveRun {
+				t.Helper()
+				req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs?state=active", nil)
+				req.Header.Set("Authorization", "Bearer "+owner)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				var all, others []liveRun
+				if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+					t.Fatalf("live runs: %v", err)
+				}
+				for _, r := range all {
+					if !r.Interactive && r.ID != blockerID && (r.Actor == "claude" || r.Actor == "agy") {
+						others = append(others, r)
+					}
+				}
+				return others
+			}
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+				others := othersLive()
+				if len(others) == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("claude or agy still has other live batch runs: %+v", others)
 				}
 			}
 
