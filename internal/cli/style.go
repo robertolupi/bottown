@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"os"
 	"regexp"
 	"strings"
 
@@ -18,9 +19,10 @@ func stripANSI(s string) string {
 
 // colorOut wraps w so styled output is downsampled to what w supports: a
 // terminal keeps the colors, a redirected output or a dumb terminal gets
-// none. Lip Gloss v2 renders full ANSI and downsamples on write.
+// none. Lip Gloss v2 renders full ANSI and downsamples on write, detecting
+// the profile from the environment (NO_COLOR, CLICOLOR, TERM, …).
 func colorOut(w io.Writer) io.Writer {
-	return colorprofile.NewWriter(w, nil)
+	return colorprofile.NewWriter(w, os.Environ())
 }
 
 type tableWriter struct {

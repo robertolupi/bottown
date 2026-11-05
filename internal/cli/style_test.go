@@ -20,6 +20,57 @@ func interactiveOut(buf *bytes.Buffer) io.Writer {
 	return &colorprofile.Writer{Forward: buf, Profile: colorprofile.TrueColor}
 }
 
+// TestColorOut checks that colorOut detects the color profile from the
+// environment: a forced terminal keeps colour, NO_COLOR and a non-terminal
+// strip it.
+func TestColorOut(t *testing.T) {
+	styled := newStyles().Success.Render("colored")
+
+	t.Run("ForcedTTYKeepsColor", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "1")
+		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("NO_COLOR", "")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), "\x1b[32m") {
+			t.Errorf("forced terminal output should keep the green colour: %q", buf.String())
+		}
+		if stripANSI(buf.String()) != "colored" {
+			t.Errorf("forced terminal output should carry the text: %q", buf.String())
+		}
+	})
+
+	t.Run("NoColorStripsColor", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "1")
+		t.Setenv("TERM", "xterm-256color")
+		t.Setenv("NO_COLOR", "1")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(buf.String(), "\x1b[32m") {
+			t.Errorf("NO_COLOR output should have no colour: %q", buf.String())
+		}
+		if stripANSI(buf.String()) != "colored" {
+			t.Errorf("NO_COLOR output should carry the text: %q", buf.String())
+		}
+	})
+
+	t.Run("NoTTYStrips", func(t *testing.T) {
+		t.Setenv("TTY_FORCE", "")
+		t.Setenv("TERM", "")
+		var buf bytes.Buffer
+		if _, err := io.WriteString(colorOut(&buf), styled); err != nil {
+			t.Fatal(err)
+		}
+		if buf.String() != "colored" {
+			t.Errorf("non-terminal output should be plain: %q", buf.String())
+		}
+	})
+}
+
 func TestPrintWhoami(t *testing.T) {
 	t.Run("NonInteractiveNoRun", func(t *testing.T) {
 		var buf bytes.Buffer
