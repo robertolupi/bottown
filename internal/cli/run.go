@@ -32,13 +32,20 @@ type runOpts struct {
 	serializeActor  bool // implement, verify: refuse the run while the actor has another live batch run
 	allow           []string
 	keep            bool
-	question        string // discuss: the owner's question for the prompt
-	message         string // implement, verify, plan: the owner's note for the prompt
-	flowNote        string // implement, verify: bottown flow's note (the post-implement checks)
-	checksPassed    bool   // verify: the flow's post-implement checks passed at sha
-	sha             string // verify: the head the run must be pinned at (bottown flow)
-	synced          bool   // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
+	question        string    // discuss: the owner's question for the prompt
+	message         string    // implement, verify, plan: the owner's note for the prompt
+	flowNote        string    // implement, verify: bottown flow's note (the post-implement checks)
+	checksPassed    bool      // verify: the flow's post-implement checks passed at sha
+	sha             string    // verify: the head the run must be pinned at (bottown flow)
+	synced          bool      // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
+	tail            *liveTail // the live tail the run shows in, if bottown flow runs one
+	plain           bool      // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
 }
+
+// ownTail is whether startRun shows a live tail of its own for the run,
+// when its output is a terminal: a batch run that neither shows in a
+// flow's tail nor asks for plain output.
+func (o runOpts) ownTail() bool { return o.tail == nil && !o.interactive && !o.plain }
 
 // errHeadMoved is a verify run refused because the PR's head is not runOpts.sha.
 var errHeadMoved = errors.New(server.HeadMovedMessage)
@@ -233,7 +240,20 @@ func parseNumber(s string) (int64, error) {
 
 func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (err error) {
 	ctx := cmd.Context()
-	out := cmd.OutOrStdout()
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	// A batch run on a terminal shows its live tail there (tail.go), a
+	// flow's for all its runs; its lines and the launcher's go through it.
+	// Closed last, after every deferred line below.
+	tail := o.tail
+	if o.ownTail() {
+		if f, ok := terminalOut(cmd); ok {
+			tail = newLiveTail(f)
+			defer tail.Close()
+		}
+	}
+	if tail != nil {
+		out, errOut = tail, tail
+	}
 	n, err := parseNumber(target)
 	if err != nil {
 		return err
@@ -299,7 +319,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		case e != nil && err == nil:
 			err = e
 		case e != nil:
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", e)
+			fmt.Fprintf(errOut, "warning: %v\n", e)
 		}
 	}()
 
@@ -336,15 +356,15 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 	defer func() {
 		if e := runs.RemoveAttachments(attachDir); e != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove attachments: %v\n", e)
+			fmt.Fprintf(errOut, "warning: remove attachments: %v\n", e)
 		}
 	}()
 	defer func() {
 		// Stop a detached web preview recorded in the scratch directory
 		// before it goes, so the preview does not outlive the run.
-		stopRunPreviews(context.WithoutCancel(ctx), cmd.ErrOrStderr(), tmpDir)
+		stopRunPreviews(context.WithoutCancel(ctx), errOut, tmpDir)
 		if e := os.RemoveAll(tmpDir); e != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove tmp dir: %v\n", e)
+			fmt.Fprintf(errOut, "warning: remove tmp dir: %v\n", e)
 		}
 	}()
 	recPath := rc.ws.Path(run.ID, ".json")
@@ -401,7 +421,8 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 	fmt.Fprintf(out, "run %s: %s %s as %s (%s, %s%s) in %s\n", run.ID, kind, rec.Target(), run.Actor, run.Family, rec.Mode(), modelNote(", ", rec.Spec), dir)
 
-	logf, err := os.OpenFile(rc.ws.Path(run.ID, ".log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logPath := rc.ws.Path(run.ID, ".log")
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -416,7 +437,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		// Through a pipe, a tool process the harness left behind could
 		// hold the log open, and Wait with it.
 		c.WaitDelay = 10 * time.Second
-		fmt.Fprintf(out, "  log: %s\n", rc.ws.Path(run.ID, ".log"))
+		fmt.Fprintf(out, "  log: %s\n", logPath)
 		// A batch harness leads its own process group, so run stop and a
 		// cancelled launcher reach its MCP servers and tool shells too.
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -434,6 +455,19 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		_ = c.Process.Kill()
 		_ = c.Wait()
 		return err
+	}
+	tailEnded := func() {}
+	if tail != nil {
+		// The run's limit: the flow's timeout, else its key's lifetime.
+		limit := run.Expires.Sub(started)
+		if deadline, ok := ctx.Deadline(); ok {
+			limit = deadline.Sub(started)
+		}
+		tailEnded = tail.Follow(tailRun{
+			ID: run.ID, Kind: kind, Target: rec.Target(), Actor: run.Actor, Family: run.Family,
+			Started: started, Limit: limit,
+		}, harnessName, logPath)
+		defer tailEnded()
 	}
 	t, transcribes := h.(runs.Transcriber)
 	transcribes = transcribes && !o.interactive
@@ -457,14 +491,16 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		// bounded, so a stuck export cannot hold the run open.
 		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		if err := t.Transcript(tctx, l, started, logw); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: run transcript: %v\n", err)
+			fmt.Fprintf(errOut, "warning: run transcript: %v\n", err)
 			fmt.Fprintf(logw, "\nbottown: no transcript: %v\n", err)
 		}
 		cancel()
 	}
 	if err := logw.Close(); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: write log: %v\n", err)
+		fmt.Fprintf(errOut, "warning: write log: %v\n", err)
 	}
+	// The log is complete: its last lines go to the scrollback.
+	tailEnded()
 	code := 0
 	if c.ProcessState != nil {
 		code = c.ProcessState.ExitCode()
@@ -483,7 +519,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		status = askOutcome(cmd, status)
 	}
 
-	logBytes, _ := os.ReadFile(rc.ws.Path(run.ID, ".log"))
+	logBytes, _ := os.ReadFile(logPath)
 	summary := h.Summary(logBytes)
 
 	if rec, err = lc.Finished(func(current *runs.Record) {
@@ -502,13 +538,13 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	// returns for a failed run is its outcome, not a launcher failure.
 	phase = launchFinalized
 	if err := handover(ctx, rc, run, rec, created.Key, status, code, summary); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: handover comment failed: %v\n", err)
+		fmt.Fprintf(errOut, "warning: handover comment failed: %v\n", err)
 	}
 
-	st := newStyles(lipgloss.NewRenderer(out))
+	st := newStyles(lipgloss.NewRenderer(cmd.OutOrStdout()))
 	if status == runs.StatusSucceeded && !o.keep {
 		if err := rc.ws.Remove(run.ID); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: remove worktree: %v\n", err)
+			fmt.Fprintf(errOut, "warning: remove worktree: %v\n", err)
 		}
 		fmt.Fprintf(out, "run %s %s (worktree removed)\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status))
 	} else {

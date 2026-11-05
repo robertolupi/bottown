@@ -79,6 +79,8 @@ type Options struct {
 	// Attended flows ask on In before merging a clean, behind base; the
 	// others leave that to the owner inbox.
 	Attended bool
+
+	round int // the review round the PR is in, for RunRequest.Round
 }
 
 // Result is the flow's final position.
@@ -124,6 +126,10 @@ type RunRequest struct {
 	// must be pinned there: the Runner fails with ErrHeadMoved if the PR's
 	// head is another commit when the server creates the run.
 	SHA string
+	// Round and Rounds are where the flow stands, for display: the run's
+	// review round, one more than the PR's requests for changes so far,
+	// as the web UI counts it, out of Options.Rounds.
+	Round, Rounds int
 }
 
 // CheckRequest is the post-implement checks at one PR head.
@@ -192,11 +198,15 @@ type API interface {
 // Checker, if set, gates each new head on the post-implement checks before
 // a verifier sees it.
 type Supervisor struct {
-	API        API
-	Runner     Runner
-	Checker    Checker
-	In         io.Reader // the owner's answers, for an attended flow
-	Out        io.Writer
+	API     API
+	Runner  Runner
+	Checker Checker
+	In      io.Reader // the owner's answers, for an attended flow
+	Out     io.Writer
+	// Pause, if set, is called before a prompt that reads In, and the
+	// function it returns after the answer: a live terminal tail gives
+	// the terminal back for the prompt (internal/cli).
+	Pause      func() (resume func())
 	RetryDelay time.Duration
 
 	answers *bufio.Reader
@@ -252,6 +262,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			}
 			result.PR = pr.Number
 		}
+		opts.round = 1 + server.ChangesRequested(pr.Reviews)
 		if err := s.checkLiveRuns(ctx, opts, pr.Number); err != nil {
 			return result, err
 		}
@@ -432,6 +443,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 	if s.In == nil {
 		return false, nil
+	}
+	if s.Pause != nil {
+		defer s.Pause()()
 	}
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [y/N] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
@@ -647,6 +661,7 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		delay = time.Second
 	}
 	req.SerializeActor = opts.SerializeActors
+	req.Round, req.Rounds = opts.round, opts.Rounds
 	now, after := s.now, s.after
 	if now == nil {
 		now = time.Now
