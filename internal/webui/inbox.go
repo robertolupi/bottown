@@ -136,29 +136,19 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		}
 	}
 
-	// 5. Open PRs from Forgejo
-	pullsPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=open", org, repo)
-	prs, err := listAll[*sdk.PullRequest](ctx, s, pullsPath)
+	// 5. Open PRs, with where their reviews leave them, from the server
+	prs, err := s.pullRequests(ctx, "open")
 	if err != nil {
 		return nil, fmt.Errorf("fetch open pull requests: %w", err)
 	}
-
-	// Assess each open PR's reviews as the server does for the flow and
-	// the PR list (internal/review). Owner overrides come from every run
-	// record, purged ones included.
-	var allRuns []secrets.Run
-	if err := s.callServer(ctx, http.MethodGet, runsPath+"&history=1", nil, &allRuns); err != nil {
-		return nil, fmt.Errorf("fetch run history: %w", err)
-	}
-	assessments := s.assessOpenPullRequests(ctx, repo, prs, ownerLogin, actors, allRuns)
 	mergeStates := make(map[int64]serverapi.PRMergeStatus)
 	for _, pr := range prs {
-		if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
+		if !isPROpen(pr) {
 			continue
 		}
-		status, err := s.prMergeStatus(ctx, repo, pr.Index)
+		status, err := s.prMergeStatus(ctx, repo, pr.Number)
 		if err == nil {
-			mergeStates[pr.Index] = status
+			mergeStates[pr.Number] = status
 		}
 	}
 
@@ -173,11 +163,8 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	for _, issue := range issues {
 		issuesByIndex[issue.Index] = issue
 	}
-	issueForPR := func(pr *sdk.PullRequest) (int64, string) {
-		if pr.Head == nil {
-			return 0, ""
-		}
-		issueNum := parseIssueRef(pr.Head.Ref)
+	issueForPR := func(pr *serverapi.PRItem) (int64, string) {
+		issueNum := parseIssueRef(pr.HeadBranch)
 		if issue := issuesByIndex[issueNum]; issue != nil {
 			return issueNum, issue.Title
 		}
@@ -191,39 +178,35 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Open PR, mergeable, and its reviews assess as approved
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if pr.State != sdk.StateOpen || pr.HasMerged {
+		if !isPROpen(pr) {
 			continue
 		}
-		if !pr.Mergeable || mergeStates[pr.Index].Behind {
+		if !pr.Mergeable || mergeStates[pr.Number].Behind {
 			continue
 		}
-		if a := assessments[pr.Index]; a.Decision == review.Approved {
+		if a := assessment(pr); a.Decision == review.Approved && a.Review != nil {
 			approval := a.Review
 			approver := actors[approval.Reviewer]
 			switch {
 			case approval.Reviewer == ownerLogin:
 				approver = "owner"
-			case approver == actors[userLogin(pr.Poster)]:
+			case approver == actors[pr.Author]:
 				approver += ", same-family override"
 			}
-			prURL := pr.HTMLURL
+			prURL := pr.URL
 			if prURL == "" {
-				prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
-			}
-			headSHA := ""
-			if pr.Head != nil {
-				headSHA = pr.Head.Sha
+				prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Number)
 			}
 			created := approval.Submitted
 			if created.IsZero() && pr.Created != nil {
 				created = *pr.Created
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("ready-to-merge-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("ready-to-merge-pr-%d", pr.Number),
 				Kind:        InboxReadyToMerge,
-				Title:       fmt.Sprintf("PR !%d is ready to merge", pr.Index),
-				Description: approvedDescription(a, headSHA, approver),
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Title:       fmt.Sprintf("PR !%d is ready to merge", pr.Number),
+				Description: approvedDescription(a, pr.HeadSHA, approver),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     created,
 			})
@@ -234,16 +217,16 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Item 2: Merge base, or report conflicts (§4.1)
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if pr.State != sdk.StateOpen || pr.HasMerged {
+		if !isPROpen(pr) {
 			continue
 		}
-		merge := mergeStates[pr.Index]
+		merge := mergeStates[pr.Number]
 		if !merge.Behind && pr.Mergeable {
 			continue
 		}
-		prURL := pr.HTMLURL
+		prURL := pr.URL
 		if prURL == "" {
-			prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
+			prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Number)
 		}
 		created := time.Now()
 		if pr.Updated != nil {
@@ -251,31 +234,28 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		} else if pr.Created != nil {
 			created = *pr.Created
 		}
-		base, head := "main", ""
-		if pr.Base != nil {
-			base = pr.Base.Ref
-		}
-		if pr.Head != nil {
-			head = pr.Head.Ref
+		base, head := "main", pr.HeadBranch
+		if pr.BaseBranch != "" {
+			base = pr.BaseBranch
 		}
 		if merge.Clean {
 			// An implement run on the PR's issue records the issue and
 			// branch, not the PR: merging under it would move the branch
 			// its checkout pushes to.
-			if issueNum, _ := issueForPR(pr); activeByPR[pr.Index] || activeByIssue[issueNum] {
+			if issueNum, _ := issueForPR(pr); activeByPR[pr.Number] || activeByIssue[issueNum] {
 				continue
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("merge-base-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("merge-base-pr-%d", pr.Number),
 				Kind:        InboxMergeBase,
-				Title:       fmt.Sprintf("Merge %s into %s for !%d", base, head, pr.Index),
+				Title:       fmt.Sprintf("Merge %s into %s for !%d", base, head, pr.Number),
 				Description: "The branch is behind and the merge is clean",
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				HeadSHA:     merge.HeadSHA,
 				Action: &InboxAction{
 					Label:   "Merge " + base,
-					Command: fmt.Sprintf("bottown flow merge-base !%d", pr.Index),
+					Command: fmt.Sprintf("bottown flow merge-base !%d", pr.Number),
 				},
 				Created: created,
 			})
@@ -286,11 +266,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 			description = "Conflicting files: " + strings.Join(merge.Conflicts, ", ")
 		}
 		items = append(items, InboxItem{
-			ID:          fmt.Sprintf("conflicts-pr-%d", pr.Index),
+			ID:          fmt.Sprintf("conflicts-pr-%d", pr.Number),
 			Kind:        InboxConflictsWithMain,
-			Title:       fmt.Sprintf("PR !%d conflicts with %s", pr.Index, base),
+			Title:       fmt.Sprintf("PR !%d conflicts with %s", pr.Number, base),
 			Description: description,
-			Target:      fmt.Sprintf("!%d", pr.Index),
+			Target:      fmt.Sprintf("!%d", pr.Number),
 			TargetURL:   prURL,
 			Created:     created,
 		})
@@ -303,68 +283,68 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// request) and verifier undecided
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if pr.State != sdk.StateOpen || pr.HasMerged {
+		if !isPROpen(pr) {
 			continue
 		}
-		if activeByPR[pr.Index] {
+		if activeByPR[pr.Number] {
 			continue
 		}
 
-		a := assessments[pr.Index]
+		a := assessment(pr)
 
 		// Check server runs for this PR
 		var latestRun *secrets.Run
 		for i := range serverRuns {
 			sr := &serverRuns[i]
-			if sr.PR == pr.Index {
+			if sr.PR == pr.Number {
 				if latestRun == nil || sr.Created.After(latestRun.Created) {
 					latestRun = sr
 				}
 			}
 		}
 
-		prURL := pr.HTMLURL
+		prURL := pr.URL
 		if prURL == "" {
-			prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Index)
+			prURL = fmt.Sprintf("%s/%s/pulls/%d", forgeURL, s.cfg.FullRepo, pr.Number)
 		}
 
 		if latestRun != nil && latestRun.Status == "failed" {
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("stopped-flow-run-failed-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("stopped-flow-run-failed-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on !%d: run failed", pr.Index),
+				Title:       fmt.Sprintf("Flow stopped on !%d: run failed", pr.Number),
 				Description: fmt.Sprintf("Run %s (%s by %s) failed", latestRun.ID, latestRun.Kind, latestRun.Actor),
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     latestRun.Created,
 			})
-		} else if a.Decision == review.Commented {
+		} else if a.Decision == review.Commented && a.Review != nil {
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("stopped-flow-undecided-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("stopped-flow-undecided-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on !%d: verifier undecided", pr.Index),
+				Title:       fmt.Sprintf("Flow stopped on !%d: verifier undecided", pr.Number),
 				Description: fmt.Sprintf("Verifier %s ended review with COMMENT at %s", a.Review.Reviewer, shortSHA(a.Review.CommitID)),
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     a.Review.Submitted,
 			})
-		} else if a.Decision == review.ChangesRequested {
+		} else if a.Decision == review.ChangesRequested && a.Review != nil {
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("stopped-flow-rounds-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("stopped-flow-rounds-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on !%d: changes requested", pr.Index),
+				Title:       fmt.Sprintf("Flow stopped on !%d: changes requested", pr.Number),
 				Description: fmt.Sprintf("Changes requested at %s by %s", shortSHA(a.Review.CommitID), a.Review.Reviewer),
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     a.Review.Submitted,
 			})
-		} else if st, ok := s.flowChecksFailed(ctx, org, repo, pr, ownerLogin); ok && !activeByIssue[parseIssueRef(pr.Head.Ref)] {
+		} else if st, ok := s.flowChecksFailed(ctx, org, repo, pr, ownerLogin); ok && !activeByIssue[parseIssueRef(pr.HeadBranch)] {
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("stopped-flow-checks-pr-%d", pr.Index),
+				ID:          fmt.Sprintf("stopped-flow-checks-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
-				Title:       fmt.Sprintf("Flow stopped on !%d: checks failed", pr.Index),
-				Description: fmt.Sprintf("Post-implement checks failed at %s: %s", shortSHA(pr.Head.Sha), st.Description),
-				Target:      fmt.Sprintf("!%d", pr.Index),
+				Title:       fmt.Sprintf("Flow stopped on !%d: checks failed", pr.Number),
+				Description: fmt.Sprintf("Post-implement checks failed at %s: %s", shortSHA(pr.HeadSHA), st.Description),
+				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     st.Created,
 			})
@@ -598,9 +578,9 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		})
 	}
 
-	prByIndex := make(map[int64]*sdk.PullRequest, len(prs))
+	prByIndex := make(map[int64]*serverapi.PRItem, len(prs))
 	for _, pr := range prs {
-		prByIndex[pr.Index] = pr
+		prByIndex[pr.Number] = pr
 	}
 	for i := range items {
 		var targetNum int64
@@ -629,11 +609,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 // flowChecksFailed returns the flow's latest post-implement check at the
 // PR's head (the owner's bottown/e2e status) if it failed. Statuses that
 // cannot be read show nothing.
-func (s *Server) flowChecksFailed(ctx context.Context, org, repo string, pr *sdk.PullRequest, ownerLogin string) (*sdk.Status, bool) {
-	if pr.Head == nil || pr.Head.Sha == "" || ownerLogin == "" {
+func (s *Server) flowChecksFailed(ctx context.Context, org, repo string, pr *serverapi.PRItem, ownerLogin string) (*sdk.Status, bool) {
+	if pr.HeadSHA == "" || ownerLogin == "" {
 		return nil, false
 	}
-	sts, err := listAll[*sdk.Status](ctx, s, fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/commits/%s/statuses?sort=newest", org, repo, pr.Head.Sha))
+	sts, err := listAll[*sdk.Status](ctx, s, fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/commits/%s/statuses?sort=newest", org, repo, pr.HeadSHA))
 	if err != nil {
 		return nil, false
 	}
@@ -686,43 +666,26 @@ func actorFamilies(actorMap map[string]*ActorDetail) map[string]string {
 	return families
 }
 
-func (s *Server) assessPullRequest(ctx context.Context, repo string, pr *sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) (review.Assessment, error) {
-	if pr == nil {
-		return review.Assessment{}, fmt.Errorf("nil pull request")
+// pullRequests lists the repository's PRs in state (open, closed or all)
+// from the server, which also assesses each open PR's reviews: the web UI
+// shows that assessment rather than making its own (internal/review).
+func (s *Server) pullRequests(ctx context.Context, state string) ([]*serverapi.PRItem, error) {
+	_, repo := s.orgAndRepo()
+	q := url.Values{"repo": {repo}, "state": {state}}
+	var prs []*serverapi.PRItem
+	if err := s.callServer(ctx, http.MethodGet, "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
+		return nil, err
 	}
-	carries := s.prCarries(ctx, repo, pr.Index)
-	org, _ := s.orgAndRepo()
-	revPath := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/reviews", org, repo, pr.Index)
-	revs, err := listAll[*sdk.PullReview](ctx, s, revPath)
-	if err != nil {
-		return review.Assessment{}, err
-	}
-	head := ""
-	if pr.Head != nil {
-		head = pr.Head.Sha
-	}
-	return review.Assess(head, review.FromForge(revs), review.Policy{
-		Author:   userLogin(pr.Poster),
-		Owner:    ownerLogin,
-		Families: families,
-		Grants:   review.Grants(allRuns, repo, pr.Index),
-		Carries:  carries,
-	}), nil
+	return prs, nil
 }
 
-func (s *Server) assessOpenPullRequests(ctx context.Context, repo string, prs []*sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) map[int64]review.Assessment {
-	assessments := make(map[int64]review.Assessment)
-	for _, pr := range prs {
-		if pr == nil || pr.State != sdk.StateOpen || pr.HasMerged {
-			continue
-		}
-		a, err := s.assessPullRequest(ctx, repo, pr, ownerLogin, families, allRuns)
-		if err != nil {
-			continue
-		}
-		assessments[pr.Index] = a
+// assessment is where the reviews leave pr, as the server assessed them;
+// a PR whose reviews it could not read needs review.
+func assessment(pr *serverapi.PRItem) review.Assessment {
+	if pr == nil || pr.Assessment == nil {
+		return review.Assessment{Decision: review.NeedsReview}
 	}
-	return assessments
+	return *pr.Assessment
 }
 
 // approvedDescription says who approved a ready PR, and why an approval at
@@ -733,18 +696,6 @@ func approvedDescription(a review.Assessment, head, approver string) string {
 		d += ": " + a.Reason
 	}
 	return d
-}
-
-// prCarries asks the server which older heads' approvals carry over to the
-// head of PR n (internal/review): the web UI has no git to compare
-// patches. An error leaves none, which only withholds the carry-over.
-func (s *Server) prCarries(ctx context.Context, repo string, n int64) []review.Carry {
-	var carries []review.Carry
-	path := fmt.Sprintf("/v1/forge/pr/carries?repo=%s&number=%d", url.QueryEscape(repo), n)
-	if err := s.callServer(ctx, http.MethodGet, path, nil, &carries); err != nil {
-		return nil
-	}
-	return carries
 }
 
 func (s *Server) prMergeStatus(ctx context.Context, repo string, n int64) (serverapi.PRMergeStatus, error) {

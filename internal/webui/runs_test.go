@@ -93,12 +93,19 @@ func newRunsFixtureServer(t *testing.T, fix *runsFixture) (*httptest.Server, int
 				}
 			}
 			http.NotFound(w, r)
-		case strings.HasSuffix(p, "/pulls"):
+		case p == "/v1/forge/prs":
 			if fix.pullsErr > 0 {
 				http.Error(w, "pulls error", fix.pullsErr)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(fix.prs)
+			families := map[string]string{}
+			for _, a := range fix.actors {
+				families[a.Name] = a.Family
+			}
+			_ = json.NewEncoder(w).Encode(fakePRList{
+				prs: fix.prs, reviews: fix.reviews, reviewsErr: fix.reviewsErr,
+				families: families, owner: "rlupi", runs: fix.runs, repo: r.URL.Query().Get("repo"),
+			}.items(r))
 		case strings.Contains(p, "/pulls/") && strings.HasSuffix(p, "/reviews"):
 			parts := strings.Split(p, "/")
 			num, _ := strconv.ParseInt(parts[len(parts)-2], 10, 64)

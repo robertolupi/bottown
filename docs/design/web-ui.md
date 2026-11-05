@@ -233,7 +233,9 @@ again:
 **Review assessment.** One function, `review.Assess` (`internal/review`),
 decides where a PR's reviews leave it, and the flow, the PR list's review
 state and the owner inbox all use it; the server computes it for `pr show`
-(`assessment`) and `pr list` (`review_state`). It follows the forge's
+(`assessment`) and `pr list` (`review_state`, and the whole `assessment`
+of each open PR). The web UI never assesses reviews itself: the inbox,
+Milestones and History show the assessment from `pr list`. It follows the forge's
 branch protection (one approval from the allow-list, dismiss stale
 approvals, block on rejected reviews) and adds the cross-family rule; it
 never counts a review the forge would not:
@@ -288,8 +290,8 @@ next to the PR's) is a change, and so is any conflict resolution. The
 server runs it in the container, on Forgejo's copy of the repository
 (`BOTTOWN_GIT_ROOT`, default `/data/git/repositories`), for each official
 approval at an older head of an open PR, and passes the matches to
-`review.Assess` as `Policy.Carries`. The web UI, which has no git, asks
-`GET /v1/forge/pr/carries?repo=R&number=N`. The flow's ready-to-merge
+`review.Assess` as `Policy.Carries`; `GET
+/v1/forge/pr/carries?repo=R&number=N` returns them for one PR. The flow's ready-to-merge
 comment, `pr show` and `pr list` and the inbox give the reason. `pr show`
 also lists every carried commit (`carries`), whichever approval decides:
 after a push the flow waits for Forgejo to mark reviews at older heads
@@ -672,7 +674,8 @@ action only updates the PR's own branch.
 |---|---|---|
 | Runs: live and ended, with digests | server | `GET /v1/runs` (§7) |
 | Policy decisions (allow/deny per forge write) | server | `GET /v1/audit` (new, §7) |
-| Issues, PRs, reviews, comments, labels, milestones | Forgejo | the server's API proxy, as the owner |
+| PRs, with where their reviews leave each open one | server | `GET /v1/forge/prs?state=open\|all` (`pr list`): each item carries the PR's branches, mergeability, milestone, dates and its `assessment` |
+| Issues, review bodies, comments, labels, milestones | Forgejo | the server's API proxy, as the owner |
 | Actors and their families | server | `GET /v1/actors` |
 | Run records and logs of this checkout's runs | host, `.bottown/runs/` | read directly |
 | Actor worktrees | host | `git worktree list` in the checkout, and run records in `.bottown/runs` |
@@ -775,15 +778,24 @@ The UI uses the server's existing API where it can. What changes:
   (RFC 3339) and `limit` (the newest N); entries come oldest first. The
   server keeps them in `audit.jsonl` in its data directory for 14 days,
   and at most the newest 20000.
+- **PR lists with their review state.** `GET /v1/forge/prs` (`pr list`)
+  returns, for each PR, its branches (`head_branch`, `head_sha`,
+  `base_branch`), `merged` and `merged_by`, `mergeable`, `milestone` (the
+  title), `created`, `updated`, `merged_at` and `closed_at`, its
+  `review_state`, and, for an open PR whose reviews could be read, the
+  whole `assessment` (decision, deciding review, carry-over). The UI
+  lists PRs only through it, so the review assessment is made in one
+  place, the server.
 - **Run concurrency** (§3.4): `POST /v1/runs` refuses a second live run on
   the same issue or pull request head, and, with `serialize_actor`, a batch
   run whose actor has another live one.
 - **Later, for the queue:** provisioning creates `implement/<actor>` and
   `verify/<actor>` labels, and an owner-only endpoint sets or clears them.
 
-Forge data (reviews at a head, who commented since, issues filed by
-actors) needs no new endpoints: the UI reads it as the owner through the
-API proxy.
+Other forge data (review bodies for a flow's timeline, who commented
+since, issues filed by actors) the UI still reads as the owner through
+the API proxy; moving those reads to the server, too, is #249's next
+steps.
 
 ## 8. Security
 

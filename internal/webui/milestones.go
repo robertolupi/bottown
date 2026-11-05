@@ -14,6 +14,7 @@ import (
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/secrets"
+	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 // Node statuses in the Milestones view (docs/design/milestones.md §2.7).
@@ -144,12 +145,6 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	repoWeb := fmt.Sprintf("%s/%s/%s", forgeURL, org, repo)
 
 	ownerLogin := s.resolveOwnerLogin(ctx)
-	actorMap, err := s.fetchActorMap(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch actors: %w", err)
-	}
-	families := actorFamilies(actorMap)
-
 	issues, err := listAll[*sdk.Issue](ctx, s, repoAPI+"/issues?state=all&type=issues")
 	if err != nil {
 		return nil, fmt.Errorf("fetch issues: %w", err)
@@ -158,7 +153,7 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	if err != nil {
 		return nil, fmt.Errorf("fetch milestones: %w", err)
 	}
-	prs, err := listAll[*sdk.PullRequest](ctx, s, repoAPI+"/pulls?state=all")
+	prs, err := s.pullRequests(ctx, "all")
 	if err != nil {
 		return nil, fmt.Errorf("fetch pull requests: %w", err)
 	}
@@ -309,29 +304,29 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 	}
 
 	// Pull requests by issue: the open one, else the newest merged one.
-	prByIssue := map[int64]*sdk.PullRequest{}
+	prByIssue := map[int64]*serverapi.PRItem{}
 	for _, pr := range prs {
-		if pr == nil || pr.Head == nil {
+		if pr == nil {
 			continue
 		}
-		n := parseIssueRef(pr.Head.Ref)
+		n := parseIssueRef(pr.HeadBranch)
 		if n <= 0 {
 			continue
 		}
 		cur := prByIssue[n]
 		switch {
 		case isPROpen(pr):
-			if cur == nil || !isPROpen(cur) || pr.Index > cur.Index {
+			if cur == nil || !isPROpen(cur) || pr.Number > cur.Number {
 				prByIssue[n] = pr
 			}
-		case pr.HasMerged && (cur == nil || (!isPROpen(cur) && pr.Index > cur.Index)):
+		case pr.Merged && (cur == nil || (!isPROpen(cur) && pr.Number > cur.Number)):
 			prByIssue[n] = pr
 		}
 	}
 
 	now := time.Now()
 	for _, g := range groups {
-		s.buildGraph(ctx, g, byNumber, depsOf, ref, prByIssue, allRuns, families, ownerLogin, repo, repoAPI, repoWeb, now)
+		s.buildGraph(ctx, g, byNumber, depsOf, ref, prByIssue, allRuns, ownerLogin, repoAPI, repoWeb, now)
 	}
 
 	out := make([]MilestoneGroup, 0, len(groups))
@@ -376,10 +371,9 @@ func (s *Server) buildGraph(
 	byNumber map[int64]*sdk.Issue,
 	depsOf func(int64) ([]int64, error),
 	ref func(*sdk.Issue) IssueRef,
-	prByIssue map[int64]*sdk.PullRequest,
+	prByIssue map[int64]*serverapi.PRItem,
 	allRuns []secrets.Run,
-	families map[string]string,
-	ownerLogin, repo, repoAPI, repoWeb string,
+	ownerLogin, repoAPI, repoWeb string,
 	now time.Time,
 ) {
 	g.Nodes, g.Edges = []MilestoneNode{}, []MilestoneEdge{}
@@ -422,13 +416,13 @@ func (s *Server) buildGraph(
 	}
 
 	// Runs by issue and by PR, oldest first.
-	runsFor := func(issue int64, pr *sdk.PullRequest) []secrets.Run {
+	runsFor := func(issue int64, pr *serverapi.PRItem) []secrets.Run {
 		var out []secrets.Run
 		for _, r := range allRuns {
 			if r.Kind != "implement" && r.Kind != "verify" {
 				continue
 			}
-			if r.Issue == issue || parseIssueRef(r.Branch) == issue || (pr != nil && r.PR == pr.Index) {
+			if r.Issue == issue || parseIssueRef(r.Branch) == issue || (pr != nil && r.PR == pr.Number) {
 				out = append(out, r)
 			}
 		}
@@ -467,14 +461,14 @@ func (s *Server) buildGraph(
 			switch {
 			case isPROpen(pr):
 				state = "open"
-			case pr.HasMerged:
+			case pr.Merged:
 				state = "merged"
 			}
-			u := pr.HTMLURL
+			u := pr.URL
 			if u == "" {
-				u = fmt.Sprintf("%s/pulls/%d", repoWeb, pr.Index)
+				u = fmt.Sprintf("%s/pulls/%d", repoWeb, pr.Number)
 			}
-			node.PR = &NodePR{Number: pr.Index, Title: pr.Title, URL: u, State: state}
+			node.PR = &NodePR{Number: pr.Number, Title: pr.Title, URL: u, State: state}
 		}
 
 		runs := runsFor(n, pr)
@@ -527,7 +521,7 @@ func (s *Server) buildGraph(
 			reason, at := s.lastFlowStop(ctx, repoAPI, n, ownerLogin)
 			var decision review.Decision
 			if node.PR != nil && node.PR.State == "open" {
-				decision = s.assessPR(ctx, repoAPI, repo, pr, ownerLogin, families, allRuns)
+				decision = assessment(pr).Decision
 				node.PR.Review = string(decision)
 			}
 			switch {
@@ -602,15 +596,6 @@ func (s *Server) lastFlowStop(ctx context.Context, repoAPI string, issue int64, 
 		}
 	}
 	return reason, at
-}
-
-// assessPR assesses an open PR's reviews as the inbox does.
-func (s *Server) assessPR(ctx context.Context, repoAPI, repo string, pr *sdk.PullRequest, ownerLogin string, families map[string]string, allRuns []secrets.Run) review.Decision {
-	a, err := s.assessPullRequest(ctx, repo, pr, ownerLogin, families, allRuns)
-	if err != nil {
-		return review.NeedsReview
-	}
-	return a.Decision
 }
 
 // layerize assigns each node its longest distance from a root, following
