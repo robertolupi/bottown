@@ -229,16 +229,26 @@ func fakePreviewServer(t *testing.T, pid int) string {
 	return srv.URL
 }
 
-// TestStopPreviewStopsPreview stops the process the state file names when
-// it is still the preview serving there.
-func TestStopPreviewStopsPreview(t *testing.T) {
+// startSleeper starts a long sleep for a test to point a state file at, and
+// kills it when the test ends. One goroutine reaps it as soon as it dies, so
+// ProcessAlive does not see a zombie; nothing else calls Wait, since
+// concurrent calls to Cmd.Wait race.
+func startSleeper(t *testing.T) *exec.Cmd {
+	t.Helper()
 	sleeper := exec.Command("sleep", "30")
 	if err := sleeper.Start(); err != nil {
 		t.Skipf("cannot start a sleeper: %v", err)
 	}
-	// Reap it as soon as it dies, so processAlive does not read the zombie.
-	go func() { _ = sleeper.Wait() }()
-	defer sleeper.Process.Kill()
+	reaped := make(chan struct{})
+	go func() { _ = sleeper.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); <-reaped })
+	return sleeper
+}
+
+// TestStopPreviewStopsPreview stops the process the state file names when
+// it is still the preview serving there.
+func TestStopPreviewStopsPreview(t *testing.T) {
+	sleeper := startSleeper(t)
 
 	state := filepath.Join(t.TempDir(), "state.json")
 	logPath := state + ".log"
@@ -277,12 +287,7 @@ func TestStopPreviewStopsPreview(t *testing.T) {
 // TestStopPreviewLeavesReusedPID stops nothing when the pid a stale state
 // file names is now an unrelated process, not the preview.
 func TestStopPreviewLeavesReusedPID(t *testing.T) {
-	sleeper := exec.Command("sleep", "30")
-	if err := sleeper.Start(); err != nil {
-		t.Skipf("cannot start a sleeper: %v", err)
-	}
-	go func() { _ = sleeper.Wait() }()
-	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+	sleeper := startSleeper(t)
 
 	state := filepath.Join(t.TempDir(), "state.json")
 	st := previewState{PID: sleeper.Process.Pid}
@@ -312,12 +317,7 @@ func TestStopPreviewLeavesReusedPID(t *testing.T) {
 // TestStopPreviewLeavesUnrelatedPID stops nothing when the state file's
 // URL answers nothing: the pid is not a preview.
 func TestStopPreviewLeavesUnrelatedPID(t *testing.T) {
-	sleeper := exec.Command("sleep", "30")
-	if err := sleeper.Start(); err != nil {
-		t.Skipf("cannot start a sleeper: %v", err)
-	}
-	go func() { _ = sleeper.Wait() }()
-	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+	sleeper := startSleeper(t)
 
 	state := filepath.Join(t.TempDir(), "state.json")
 	if err := savePreviewState(state, previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1"}); err != nil {
@@ -336,11 +336,7 @@ func TestStopPreviewLeavesUnrelatedPID(t *testing.T) {
 
 // TestDetachPreviewRefusesWhenRunning leaves a live preview in place alone.
 func TestDetachPreviewRefusesWhenRunning(t *testing.T) {
-	sleeper := exec.Command("sleep", "30")
-	if err := sleeper.Start(); err != nil {
-		t.Skipf("cannot start a sleeper: %v", err)
-	}
-	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+	sleeper := startSleeper(t)
 
 	state := filepath.Join(t.TempDir(), "state.json")
 	st := previewState{PID: sleeper.Process.Pid, URL: fakePreviewServer(t, sleeper.Process.Pid)}
@@ -362,12 +358,7 @@ func TestPreviewAlive(t *testing.T) {
 	if previewAlive(previewState{PID: 0, URL: "http://127.0.0.1:1"}) {
 		t.Errorf("pid 0 reported alive")
 	}
-	sleeper := exec.Command("sleep", "30")
-	if err := sleeper.Start(); err != nil {
-		t.Skipf("cannot start a sleeper: %v", err)
-	}
-	go func() { _ = sleeper.Wait() }()
-	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+	sleeper := startSleeper(t)
 
 	if previewAlive(previewState{PID: sleeper.Process.Pid, URL: "http://127.0.0.1:1"}) {
 		t.Errorf("a process with no preview at its URL reported alive")
@@ -401,12 +392,7 @@ func TestLockPreviewExcludes(t *testing.T) {
 
 // TestStopRunPreviews stops previews recorded in a run's scratch directory.
 func TestStopRunPreviews(t *testing.T) {
-	sleeper := exec.Command("sleep", "30")
-	if err := sleeper.Start(); err != nil {
-		t.Skipf("cannot start a sleeper: %v", err)
-	}
-	go func() { _ = sleeper.Wait() }()
-	defer func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() }()
+	sleeper := startSleeper(t)
 
 	dir := t.TempDir()
 	state := filepath.Join(dir, "bottown-preview-abc.json")
