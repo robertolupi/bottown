@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/policy"
 )
 
 func newFlow(g *globals) *cobra.Command {
@@ -55,15 +57,30 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				In:      cmd.InOrStdin(),
 				Out:     cmd.OutOrStdout(),
 			}
+			// An attended flow on a terminal shows its runs' live tail,
+			// under the flow's state; its own lines and prompts go through
+			// it. --unattended keeps the plain output.
+			var tail *liveTail
+			if f, ok := terminalOut(cmd); ok && !unattended {
+				tail = newLiveTail(f)
+				defer tail.Close()
+				supervisor.Out, supervisor.Pause = tail, tail.Pause
+				tail.setFlow(fmt.Sprintf("#%d", issue))
+			}
 			supervisor.Runner = flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {
 				target := req.Issue
 				if req.PR > 0 {
 					target = req.PR
 				}
+				if tail != nil {
+					round := fmt.Sprintf("#%d · round %d/%d", issue, req.Round, req.Rounds)
+					tail.setFlow(round + " · " + flowStep(req))
+					defer tail.setFlow(round)
+				}
 				previous := cmd.Context()
 				cmd.SetContext(ctx)
 				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), runOpts{actor: req.Actor, repo: req.Repo, message: message, serializeActor: req.SerializeActor,
-					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA, synced: req.Retry})
+					flowNote: req.Note, checksPassed: req.ChecksPassed, sha: req.SHA, synced: req.Retry, tail: tail})
 				cmd.SetContext(previous)
 				if errors.Is(err, errActorBusy) {
 					return actorBusyRefusal(err)
@@ -79,7 +96,7 @@ rounds count against --check-rounds, not --rounds. A repository whose
 				Attended: !unattended,
 			})
 			if err == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "flow #%d stopped: %s\n", result.Issue, result.Reason)
+				fmt.Fprintf(supervisor.Out, "flow #%d stopped: %s\n", result.Issue, result.Reason)
 			}
 			return err
 		},
@@ -99,6 +116,16 @@ rounds count against --check-rounds, not --rounds. A repository whose
 	_ = cmd.MarkFlagRequired("implement")
 	_ = cmd.MarkFlagRequired("verify")
 	return cmd
+}
+
+// flowStep is what a flow's run does, as the web UI groups it:
+// "implementing with claude", "verifying with kimi".
+func flowStep(req flow.RunRequest) string {
+	actor, _, _ := strings.Cut(req.Actor, ":")
+	if req.Kind == policy.Verify {
+		return "verifying with " + actor
+	}
+	return "implementing with " + actor
 }
 
 // actorBusyRefusal is flow.ErrActorBusy carrying the server's refusal of a

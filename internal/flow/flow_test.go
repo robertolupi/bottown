@@ -162,7 +162,9 @@ func TestFlowFollowUpAndOutOfRounds(t *testing.T) {
 			opts := testOptions()
 			opts.Rounds = tc.rounds
 			implements, verifies := 0, 0
+			var rounds []string
 			runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+				rounds = append(rounds, fmt.Sprintf("%s %d/%d", req.Kind, req.Round, req.Rounds))
 				if req.Kind == policy.Implement {
 					implements++
 					// A push makes earlier reviews stale; Forgejo does not
@@ -191,6 +193,10 @@ func TestFlowFollowUpAndOutOfRounds(t *testing.T) {
 			result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
 			if result.Reason != tc.wantReason || implements+verifies != tc.wantCalls {
 				t.Fatalf("result = %+v, error = %v, calls = %d/%d", result, err, implements, verifies)
+			}
+			// A run's round is one more than the requests for changes so far.
+			if want := fmt.Sprintf("implement 1/%[1]d,verify 1/%[1]d,implement 2/%[1]d,verify 2/%[1]d", tc.rounds); strings.Join(rounds, ",") != want {
+				t.Fatalf("rounds = %v, want %s", rounds, want)
 			}
 			if tc.wantReason == ReadyToMerge && err != nil {
 				t.Fatal(err)
@@ -577,9 +583,18 @@ func TestFlowMergeBaseCleanApproved(t *testing.T) {
 		t.Fatal("an unchanged approval should not cost another run")
 		return nil
 	})
-	result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader("y\n"), Out: &out}).Run(context.Background(), opts)
+	// The prompt is asked, and answered, between Pause and its resume.
+	var paused []string
+	pause := func() func() {
+		paused = append(paused, "pause:"+out.String())
+		return func() { paused = append(paused, "resume:"+out.String()) }
+	}
+	result, err := (&Supervisor{API: api, Runner: runner, In: strings.NewReader("y\n"), Out: &out, Pause: pause}).Run(context.Background(), opts)
 	if err != nil || result.Reason != ReadyToMerge {
 		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if len(paused) != 2 || paused[0] != "pause:" || paused[1] != "resume:Merge main into issue/9 for !12? [y/N] " {
+		t.Fatalf("pause = %q, want the prompt inside it", paused)
 	}
 	if len(api.mergeCalls) != 1 || api.mergeCalls[0] != "h1" {
 		t.Fatalf("merge calls = %v, want the offered head", api.mergeCalls)

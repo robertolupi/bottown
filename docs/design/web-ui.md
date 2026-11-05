@@ -109,7 +109,8 @@ bottown flow 51 --implement claude --verify kimi
 - It is an owner command, run from the `main` checkout like `run`. It
   prints one line per step and ends with the stop reason. Exit code 0 means
   "ready to merge"; any other stop is non-zero, so scripts can tell them
-  apart.
+  apart. On a terminal, the steps print above a live tail of the current
+  run (§4.2, terminal tail).
 
 ### 3.2 The loop
 
@@ -469,6 +470,30 @@ color lines by kind and tool names by class, with a legend in the tail's
 header. Both also link to `GET /api/runs/{id}/log?raw=1`, which serves the
 complete original log as redacted plain text for diagnosis. Encoded
 attachment payloads are elided from both the rendered and raw views.
+
+**Terminal tail.** `bottown flow`, and a batch `bottown run implement`,
+`verify`, `discuss` or `plan`, show the same tail in the terminal when
+their output is one. A bubbletea program in the normal screen keeps a view
+at the bottom: the flow's state ("flow #51 · round 2/3 · verifying with
+kimi"), the run's header (id, kind and target, actor and family, elapsed
+time against its limit: the flow's `--timeout`, else the run key's
+lifetime), and the lines still live, a running call with a spinner. Every
+other line goes to the terminal's scrollback, once, as it becomes final:
+`runs.LogFollower` re-reads the log and the live transcript about once a
+second, re-rendering only when either file changed, and
+`runs.LineTracker` hands out a line once it is not a running call and not
+the last line, which the next write may still extend, matching lines by
+position. When the run ends every line left is printed, so the whole log,
+a failed run's included, stays readable in the scrollback, after the
+`log:` line that names the file; nothing is only in the view. Assistant
+messages and errors are printed whole, in the colours of the legend above
+in the terminal's ANSI palette, without escape sequences from the log. The
+launcher's and the flow's own lines print above the view too. An attended
+flow's merge prompt pauses the program and gives the terminal back for
+the answer. Ctrl+C interrupts the command as without the tail. Output that
+is not a terminal (piped, redirected, the web UI's background flows),
+`TERM=dumb`, interactive runs, and `bottown flow --unattended` keep the
+plain output: one line per step and the `log:` path.
 
 Issue references in Live Runs, Run History and Owner Inbox show the issue
 title and Markdown description in a popup on hover or keyboard focus. The
