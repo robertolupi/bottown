@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +22,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -30,6 +35,36 @@ func TestStoppedHandover(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("handover lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestHandoverAfterRunCancellation(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/forgejo/api/v1/repos/bottown/bottown/issues/236/comments" {
+			t.Errorf("handover request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer run-key" {
+			t.Errorf("handover authorization: %q", r.Header.Get("Authorization"))
+		}
+		var comment map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&comment); err != nil {
+			t.Error(err)
+		}
+		body = comment["body"]
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // The launcher is cancelled before its harness exits.
+	rc := &runContext{inst: config.Instance{ServerPort: srv.Listener.Addr().(*net.TCPAddr).Port}}
+	run := secrets.Run{Kind: policy.Discuss, Org: "bottown", Repo: "bottown", Issue: 236}
+	rec := runs.Record{ID: "r-cancel", Kind: policy.Discuss, Actor: "claude", Family: "anthropic", SHA: "abc123"}
+	if err := handover(ctx, rc, run, rec, "run-key", runs.StatusFailed, -1, "interrupted"); err != nil {
+		t.Fatalf("handover after cancellation: %v", err)
+	}
+	if !strings.Contains(body, "interrupted") {
+		t.Errorf("handover body: %q", body)
 	}
 }
 
