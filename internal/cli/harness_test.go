@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -32,7 +31,7 @@ func TestInstallCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	self := selfPath()
-	for _, want := range []string{"!`" + self + " run start implement '$ARGUMENTS'`", "allowed-tools: Bash(" + self + ":*)", harnessMarker, "argument-hint: <issue number>"} {
+	for _, want := range []string{self + " run start implement <number>", "\n> $ARGUMENTS\n", "allowed-tools: Bash(" + self + ":*)", harnessMarker, "argument-hint: <issue number> [note]"} {
 		if !strings.Contains(string(impl), want) {
 			t.Errorf("claude implement command lacks %q:\n%s", want, impl)
 		}
@@ -61,7 +60,7 @@ func TestInstallCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"!`" + self + " run start plan '$ARGUMENTS'`", "argument-hint: <kickoff issue number>", harnessMarker} {
+	for _, want := range []string{self + " run start plan <number>", "\n> $ARGUMENTS\n", "argument-hint: <kickoff issue number> [note]", harnessMarker} {
 		if !strings.Contains(string(plan), want) {
 			t.Errorf("claude plan command lacks %q:\n%s", want, plan)
 		}
@@ -131,48 +130,35 @@ func TestInstallCommands(t *testing.T) {
 	}
 }
 
-// The claude command's !`...` line runs in a shell after Claude Code pastes
-// the user's words over $ARGUMENTS. Run it with a fake bottown that prints
-// its arguments, and parse them as run start does: an unquoted #2 would be
-// a shell comment (#5).
-func TestClaudeCommandPassesArguments(t *testing.T) {
+// The claude commands used to paste $ARGUMENTS into a !`run start` line, so
+// a note after the number ("296 investigate why", or on the next line) made
+// run start fail, and a quote or # in it would break the shell (#5, #299).
+// Every claude command shows the request as text instead, and the agent runs
+// `run start` with the number only. (A positional $0 would not do: Claude
+// Code splits arguments shell-style, so an apostrophe in the note could break
+// it, and "pr #2" would pass "pr".)
+func TestClaudeCommandsKeepTheRequestOutOfTheShell(t *testing.T) {
 	home := t.TempDir()
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	if err := installCommands(cmd, home, "claude", false); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-verify.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := regexp.MustCompile("(?m)^!`(.*)`$").FindStringSubmatch(string(b))
-	if m == nil {
-		t.Fatalf("no !`...` line in:\n%s", b)
-	}
-	fake := filepath.Join(t.TempDir(), "bottown")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	line := strings.Replace(m[1], selfPath(), fake, 1)
-	for typed, want := range map[string]int64{"2": 2, "#2": 2, "!2": 2, "pr #2": 2, "pull request !2": 2, "PR 2": 2} {
-		out, err := exec.Command("sh", "-c", strings.ReplaceAll(line, "$ARGUMENTS", typed)).Output()
+	for _, k := range harnessKinds {
+		kind := k.Kind
+		b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-"+kind+".md"))
 		if err != nil {
-			t.Fatalf("%q: %v", typed, err)
+			t.Fatal(err)
 		}
-		args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-		if len(args) < 3 || args[0] != "run" || args[1] != "start" || args[2] != "verify" {
-			t.Fatalf("%q: args %q", typed, args)
+		if regexp.MustCompile("(?m)^!`").Match(b) {
+			t.Errorf("%s command runs a shell line itself:\n%s", kind, b)
 		}
-		if n, err := runTarget("verify", args[3:]); err != nil || n != want {
-			t.Errorf("%q: got %d, %v; want %d", typed, n, err, want)
+		if strings.Count(string(b), "$ARGUMENTS") != 1 || !strings.Contains(string(b), "\n> $ARGUMENTS\n") {
+			t.Errorf("%s: $ARGUMENTS must appear once, as quoted text:\n%s", kind, b)
 		}
-	}
-	// Nothing typed reaches run start as no number, not as a parse error.
-	out, _ := exec.Command("sh", "-c", strings.ReplaceAll(line, "$ARGUMENTS", "")).Output()
-	args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-	if _, err := runTarget("verify", args[3:]); err == nil || !strings.Contains(err.Error(), "give one issue or pull request number") {
-		t.Errorf("empty: %v", err)
+		if !strings.Contains(string(b), selfPath()+" run start "+kind+" <number>") {
+			t.Errorf("%s command does not say how to start the run:\n%s", kind, b)
+		}
 	}
 }
 
@@ -202,32 +188,6 @@ func TestRunTarget(t *testing.T) {
 		if err != nil || n != tc.want {
 			t.Errorf("%q: got %d, %v; want %d", tc.args, n, err, tc.want)
 		}
-	}
-}
-
-// /bottown-discuss takes free text, so none of it may reach a shell: the
-// command shows the request as text and the agent runs `run start discuss`
-// with the number only. (Claude Code splits $0, $1, ... shell-style, so an
-// apostrophe in the question could break even a positional argument.)
-func TestClaudeDiscussKeepsTheQuestionOutOfTheShell(t *testing.T) {
-	home := t.TempDir()
-	cmd := &cobra.Command{}
-	cmd.SetOut(&bytes.Buffer{})
-	if err := installCommands(cmd, home, "claude", false); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-discuss.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if regexp.MustCompile("(?m)^!`").Match(b) {
-		t.Errorf("discuss command runs a shell line itself:\n%s", b)
-	}
-	if strings.Count(string(b), "$ARGUMENTS") != 1 || !strings.Contains(string(b), "\n> $ARGUMENTS\n") {
-		t.Errorf("$ARGUMENTS must appear once, as quoted text:\n%s", b)
-	}
-	if !strings.Contains(string(b), selfPath()+" run start discuss <number>") {
-		t.Errorf("discuss command does not say how to start the run:\n%s", b)
 	}
 }
 

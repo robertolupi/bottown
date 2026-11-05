@@ -180,21 +180,23 @@ func sinceReview(ctx context.Context, dir, remote, baseBranch, mergeBase, old, n
 func patchID(ctx context.Context, dir, base, head string) (string, error) {
 	diff := runs.GitCommand(ctx, dir, nil, "diff", "--no-color", "--no-ext-diff", base, head)
 	id := runs.GitCommand(ctx, dir, nil, "patch-id", "--verbatim")
-	var out, errb bytes.Buffer
+	// One stderr buffer each: os/exec copies a non-file Stderr in its own
+	// goroutine per process, so a shared buffer would be written concurrently.
+	var out, diffErr, idErr bytes.Buffer
 	pipe, err := diff.StdoutPipe()
 	if err != nil {
 		return "", err
 	}
-	id.Stdin, id.Stdout, diff.Stderr, id.Stderr = pipe, &out, &errb, &errb
+	id.Stdin, id.Stdout, diff.Stderr, id.Stderr = pipe, &out, &diffErr, &idErr
 	if err := diff.Start(); err != nil {
 		return "", err
 	}
 	if err := id.Run(); err != nil {
 		_ = diff.Wait()
-		return "", fmt.Errorf("git patch-id: %w: %s", err, strings.TrimSpace(errb.String()))
+		return "", fmt.Errorf("git patch-id: %w: %s", err, strings.TrimSpace(idErr.String()))
 	}
 	if err := diff.Wait(); err != nil {
-		return "", fmt.Errorf("git diff %s %s: %w: %s", short(base), short(head), err, strings.TrimSpace(errb.String()))
+		return "", fmt.Errorf("git diff %s %s: %w: %s", short(base), short(head), err, strings.TrimSpace(diffErr.String()))
 	}
 	// "<patch-id> <commit-id>": the commit is all zeros for a diff.
 	f := strings.Fields(out.String())
