@@ -61,6 +61,10 @@ browser ──localhost, one-time token──▶ bottown web ui   (host, owner's
   host's git, and the views that combine them.
 - **The supervisor is a CLI command and Go package first.** The UI calls the
   same package; it stays scriptable and testable without a browser.
+- **The frontend is tested without a browser.** `npm test` (part of `make
+  check`) runs plain tests of `web/src`'s logic and component tests that
+  mount Svelte components in jsdom; [web/README.md](../../web/README.md)
+  says how to write one.
 
 ## 3. The supervisor
 
