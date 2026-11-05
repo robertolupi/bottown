@@ -174,6 +174,22 @@ func (in *instance) api(key, method, path string, body any) (int, []byte) {
 	return resp.StatusCode, b
 }
 
+// waitPRHead waits until Forgejo reports sha as the head of the PR at path:
+// it updates a PR from a push asynchronously, later on a slower host.
+func (in *instance) waitPRHead(key, path, sha string) {
+	in.t.Helper()
+	var pr struct{ Head struct{ Sha string } }
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		in.mustAPI(key, "GET", path, nil, &pr)
+		if pr.Head.Sha == sha {
+			return
+		}
+		if time.Now().After(deadline) {
+			in.t.Fatalf("%s: head %s, want %s after 30s", path, pr.Head.Sha, sha)
+		}
+	}
+}
+
 func (in *instance) mustAPI(key, method, path string, body, out any) {
 	in.t.Helper()
 	code, b := in.api(key, method, path, body)
@@ -1105,6 +1121,9 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("push the fix: %v %s", err, out)
 		}
 		followUpSHA := git(t, cw, "rev-parse", "HEAD")
+		// pr show --since-review without an earlier review reads the diff
+		// from Forgejo, which moves the PR to a pushed head asynchronously.
+		a.waitPRHead(owner, fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn), followUpSHA)
 		out = must(cw, "replacement description", "pr", "create", "--title", "replacement title", "--body-file", "-")
 		wantExisting := fmt.Sprintf("!%d already open for issue/%s; the push updated it (head %s)", prn, n, followUpSHA)
 		if !strings.Contains(out, wantExisting) || !strings.Contains(out, "Title and description were left unchanged.") {
