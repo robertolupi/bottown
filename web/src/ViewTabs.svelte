@@ -1,27 +1,28 @@
 <script lang="ts">
-  // The tabs between the UI's views: the overview and Milestones.
-  type View = 'overview' | 'milestones';
+  // The tabs between the UI's views: the overview, Milestones and the
+  // Timeline.
+  type View = 'overview' | 'milestones' | 'timeline';
 
   let { view, onSelect }: { view: View; onSelect: (view: View) => void } = $props();
+
+  const tabs: { view: View; label: string }[] = [
+    { view: 'overview', label: 'Inbox · Runs · Health' },
+    { view: 'milestones', label: 'Milestones' },
+    { view: 'timeline', label: 'Timeline' },
+  ];
 </script>
 
 <div class="tabs" role="tablist">
-  <button
-    class="tab"
-    class:tab-active={view === 'overview'}
-    role="tab"
-    aria-selected={view === 'overview'}
-    onclick={() => onSelect('overview')}
-  >Inbox · Runs · Health</button>
-  <button
-    class="tab"
-    class:tab-active={view === 'milestones'}
-    role="tab"
-    aria-selected={view === 'milestones'}
-    onclick={() => onSelect('milestones')}
-  >Milestones</button>
+  {#each tabs as tab (tab.view)}
+    <button
+      class="tab"
+      class:tab-active={view === tab.view}
+      role="tab"
+      aria-selected={view === tab.view}
+      onclick={() => onSelect(tab.view)}
+    >{tab.label}</button>
+  {/each}
 </div>
-
 <style>
   .tabs {
     display: flex;

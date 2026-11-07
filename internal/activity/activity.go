@@ -66,6 +66,8 @@ type Run struct {
 	Issue     int64      `json:"issue,omitempty"`
 	PR        int64      `json:"pr,omitempty"`
 	ThreadKey string     `json:"thread_key"`
+	// Interactive runs are steered by the owner in the harness's TUI.
+	Interactive bool `json:"interactive,omitempty"`
 	// Usage is what the harness reported, nil when it reported nothing;
 	// a figure it did not report is nil, never zero.
 	Usage *secrets.Usage `json:"usage,omitempty"`
@@ -98,9 +100,11 @@ func usageReported(u *secrets.Usage) bool {
 
 // Thread is one flow thread: an issue's work on one PR, or before any.
 type Thread struct {
-	Key       string     `json:"key"`
-	Issue     int64      `json:"issue,omitempty"`
-	PR        int64      `json:"pr,omitempty"`
+	Key   string `json:"key"`
+	Issue int64  `json:"issue,omitempty"`
+	PR    int64  `json:"pr,omitempty"`
+	// Title is the issue's title, else the PR's.
+	Title     string     `json:"title,omitempty"`
 	PRCreated *time.Time `json:"pr_created,omitempty"`
 	PRMerged  *time.Time `json:"pr_merged,omitempty"`
 	PRClosed  *time.Time `json:"pr_closed,omitempty"`
@@ -395,7 +399,7 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 		a.Runs = append(a.Runs, Run{
 			ID: r.ID, Kind: r.Kind, Actor: r.Actor, Family: r.Family, Harness: r.Harness, Spec: r.Spec,
 			State: r.State, Status: r.Status, Outcome: r.Outcome, Created: r.Created, Ended: r.Ended, Purged: r.Purged,
-			Issue: rt.Issue, PR: rt.PR, ThreadKey: rt.Key,
+			Issue: rt.Issue, PR: rt.PR, ThreadKey: rt.Key, Interactive: r.Interactive,
 			Usage: r.Digest.Usage, UsageReported: usageReported(r.Digest.Usage),
 		})
 	}
@@ -408,10 +412,15 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 		}
 	}
 	issueClosed := map[int64]*time.Time{}
+	issueTitle := map[int64]string{}
 	for _, is := range f.IssueList {
-		if is != nil && is.Closed != nil {
+		if is == nil {
+			continue
+		}
+		if is.Closed != nil {
 			issueClosed[is.Number] = is.Closed
 		}
+		issueTitle[is.Number] = is.Title
 	}
 	// The threads to derive: the window's, and every thread with a stop,
 	// which is kept only when a stop or an owner wait meets the window.
@@ -455,8 +464,12 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 			}
 		}
 		pr := prs[t.PR]
+		t.Title = issueTitle[t.Issue]
 		if pr != nil {
 			t.PRCreated, t.PRMerged, t.PRClosed = pr.Created, pr.MergedAt, pr.ClosedAt
+			if t.Title == "" {
+				t.Title = pr.Title
+			}
 		}
 		if out := f.Reviews[t.PR]; out != nil {
 			t.ImplementRounds = server.ChangesRequested(out.Reviews)

@@ -102,6 +102,27 @@ func runByID(t *testing.T, a *Activity, id string) Run {
 	return Run{}
 }
 
+func TestThreadTitleAndInteractive(t *testing.T) {
+	impl := run("r-impl", "implement", 7, 0, 1, 2)
+	impl.Interactive = true
+	pre := run("r-pre", "implement", 0, 9, 3, 4)
+	titled := listed(7, 0, 2)
+	titled.Title = "the issue"
+	p := pr(9, 0, 3)
+	p.Title = "the PR"
+	a := Derive(week, Facts{Runs: []server.RunItem{impl, pre}, PRs: []*server.PRItem{p}, IssueList: []*server.IssueItem{titled}}, week.Until)
+	if r := runByID(t, a, "r-impl"); !r.Interactive {
+		t.Errorf("interactive run = %+v", r)
+	}
+	if th := thread(t, a, "flow:issue:7"); th.Title != "the issue" {
+		t.Errorf("issue thread title = %q", th.Title)
+	}
+	// A PR without an issue is titled by the PR.
+	if th := thread(t, a, "flow:pr:9"); th.Title != "the PR" {
+		t.Errorf("PR thread title = %q", th.Title)
+	}
+}
+
 func TestRunsPurgedThreadlessAndUsage(t *testing.T) {
 	purged := run("r-purged", "implement", 5, 0, 1, 2)
 	purged.Purged = true

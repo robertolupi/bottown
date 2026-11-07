@@ -1,10 +1,9 @@
 <script lang="ts">
   // A run's recorded outcome (approved, changes requested, …) as an
   // outlined badge with a glyph, or "—" when it has none.
-  import type { HistoryRunInfo } from './types';
   import { runOutcome } from './state';
 
-  let { run }: { run: HistoryRunInfo | undefined } = $props();
+  let { run }: { run: { status?: string; outcome?: string; ended?: string } | undefined } = $props();
 
   let o = $derived(run ? runOutcome(run) : null);
 </script>

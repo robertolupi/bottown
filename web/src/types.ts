@@ -487,3 +487,70 @@ export interface MilestoneGroup {
   layers: number;
   error?: string;
 }
+
+// GET /api/timeline (internal/webui/timeline.go): the window's runs laid
+// out in lanes by actor and by flow thread. Every interval is clipped to
+// the window; times are RFC 3339.
+export interface TimelineRun {
+  id: string;
+  kind: string;
+  actor: string;
+  family?: string;
+  state: string;
+  status?: string;
+  outcome?: string;
+  created: string;
+  ended?: string;
+  purged: boolean;
+  issue?: number;
+  pr?: number;
+  thread_key: string;
+  interactive?: boolean;
+}
+
+export interface TimelineActorLane {
+  actor: string;
+  rows: string[][]; // run IDs, packed so no two in a row overlap
+  runs: number;
+  busy: number; // seconds
+}
+
+export type TimelineSegmentKind = 'run' | 'e2e' | 'owner_wait' | 'overhead';
+
+export interface TimelineSegment {
+  kind: TimelineSegmentKind;
+  start: string;
+  end: string;
+  live?: boolean;
+  run_id?: string;
+  state?: string;
+  sha?: string;
+  description?: string;
+  derived?: boolean;
+  reason?: string;
+  ended_by?: string;
+}
+
+export interface TimelineFlowLane {
+  key: string;
+  issue?: number;
+  pr?: number;
+  title?: string;
+  segments: TimelineSegment[];
+  runs: number;
+  agent: number; // seconds
+  e2e: number;
+  owner_wait: number;
+  overhead: number;
+}
+
+export interface TimelineData {
+  window: { since: string; until: string };
+  now: string;
+  open: boolean;
+  runs: TimelineRun[];
+  actors: TimelineActorLane[];
+  flows: TimelineFlowLane[];
+  concurrency: { steps: { t: string; n: number }[]; peak: number; mean: number };
+  incomplete?: string[];
+}

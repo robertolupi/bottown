@@ -5,7 +5,8 @@
 //     left out), and .svelte.ts/.svelte.js modules with compileModule,
 //     stripping TypeScript types first;
 //   - resolve extensionless relative imports (`from './state'`) from web/src
-//     to the .ts or .svelte.ts file, as Vite's resolver does;
+//     to the .ts or .svelte.ts file, and `./name.svelte` with no such
+//     file to name.svelte.ts, as Vite's resolver does;
 //   - resolve `svelte` with the browser condition, so that mount and
 //     flushSync are the client's, not the server's.
 //
@@ -33,6 +34,14 @@ registerHooks({
         } catch {
           // Try the next extension.
         }
+      }
+    }
+    // A rune module imported as `./name.svelte` (reload.svelte.ts).
+    if (parent.startsWith(src) && specifier.startsWith('.') && specifier.endsWith('.svelte')) {
+      try {
+        return nextResolve(specifier, context);
+      } catch {
+        return nextResolve(specifier + '.ts', context);
       }
     }
     return nextResolve(specifier, context);

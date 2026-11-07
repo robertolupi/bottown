@@ -3,7 +3,7 @@
   // runs, holds the state the views and dialogs share, and posts the
   // owner's actions. The views and dialogs are their own components.
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, IssueTimeline } from './types';
+  import type { UIStatusResponse, IssueTimeline, TimelineFlowLane, TimelineRun } from './types';
   import { lifecycleChange } from './lifecycle';
   import { postAction, type FlowForm, type RunForm } from './actions';
   import { RunHistoryState } from './history.svelte';
@@ -19,7 +19,9 @@
   import RunHistory from './RunHistory.svelte';
   import RunModal from './RunModal.svelte';
   import StopModal from './StopModal.svelte';
+  import Timeline from './Timeline.svelte';
   import TimelineModal from './TimelineModal.svelte';
+  import TimelineRunModal from './TimelineRunModal.svelte';
   import UpstreamForge from './UpstreamForge.svelte';
   import ViewTabs from './ViewTabs.svelte';
   import {
@@ -75,14 +77,19 @@
 
   let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowForm.implement, flowForm.verify));
 
-  // Views: the overview (inbox, runs, health) and Milestones, kept in the
-  // URL's fragment so a reload stays on the same one.
-  let view = $state<'overview' | 'milestones'>(location.hash === '#milestones' ? 'milestones' : 'overview');
+  // Views: the overview (inbox, runs, health), Milestones and the
+  // Timeline, kept in the URL's fragment so a reload stays on the same one.
+  type View = 'overview' | 'milestones' | 'timeline';
+  const hashView = location.hash.slice(1);
+  let view = $state<View>(hashView === 'milestones' || hashView === 'timeline' ? hashView : 'overview');
   let milestonesRefresh = $state<number>(0);
+  // Bumped when a run or flow starts or ends, to reload the Timeline.
+  let timelineRefresh = $state<number>(0);
+  let timelineRun = $state<TimelineRun | null>(null);
 
-  function selectView(next: 'overview' | 'milestones') {
+  function selectView(next: View) {
     view = next;
-    history.replaceState(null, '', next === 'milestones' ? '#milestones' : location.pathname + location.search);
+    history.replaceState(null, '', next === 'overview' ? location.pathname + location.search : `#${next}`);
   }
 
   // The Milestones view starts flows and runs on an issue with the same
@@ -270,15 +277,18 @@
       await loadHistory();
     });
 
-  async function openTimeline(issueNum: number) {
+  // Open an issue's timeline; with pr, that flow thread's (pr 0: before
+  // any PR).
+  async function openTimeline(issueNum: number, pr?: number) {
     timelineLoading = true;
     timelineData = null;
     showTimelineModal = true;
 
     try {
-      const res = await fetch(`/api/issues/${issueNum}/timeline`);
+      const prParam = pr !== undefined ? `?pr=${pr}` : '';
+      const res = await fetch(`/api/issues/${issueNum}/timeline${prParam}`);
       if (!res.ok) {
-        throw new Error(`Failed to load timeline for #${issueNum}`);
+        throw new Error(`Failed to load timeline for ${issueNum > 0 ? `#${issueNum}` : `!${pr}`}`);
       }
       timelineData = await res.json();
     } catch (e: any) {
@@ -287,6 +297,10 @@
     } finally {
       timelineLoading = false;
     }
+  }
+
+  function openFlowTimeline(lane: TimelineFlowLane) {
+    openTimeline(lane.issue ?? 0, lane.pr ?? 0);
   }
 
   function extractIssueAndOpenTimeline(target: string) {
@@ -328,7 +342,10 @@
             // A run or flow started or ended: refresh status and history
             // in the background without altering the expanded flow selection.
             if (change.status) await loadStatus(true);
-            if (change.status || change.history) await loadHistory(true);
+            if (change.status || change.history) {
+              timelineRefresh++;
+              await loadHistory(true);
+            }
 
             // Live-update the selected active flow's timeline.
             if (runHistory.expandedThreadKey) {
@@ -385,6 +402,8 @@
 
   {#if view === 'milestones'}
     <Milestones refreshKey={milestonesRefresh} onFlow={openFlowFor} onRun={openRunFor} />
+  {:else if view === 'timeline'}
+    <Timeline refreshKey={timelineRefresh} now={nowTime} onRun={(run) => (timelineRun = run)} onFlow={openFlowTimeline} />
   {:else if loading && !status}
     <div class="loading-state">Loading status...</div>
   {:else if status}
@@ -474,6 +493,10 @@
 
 {#if showTimelineModal}
   <TimelineModal timeline={timelineData} loading={timelineLoading} onclose={() => (showTimelineModal = false)} />
+{/if}
+
+{#if timelineRun}
+  <TimelineRunModal run={timelineRun} now={nowTime} onclose={() => (timelineRun = null)} />
 {/if}
 
 {#if showAfterPullModal}

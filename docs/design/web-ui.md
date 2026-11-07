@@ -453,7 +453,8 @@ and when a milestone flow is done.
 The first phases build three views: the owner inbox, runs (live and
 history), and upstream and repository health, on one tab. A second tab,
 Milestones, shows each Implementation Epic's dependency DAG
-([milestones design](milestones.md) §2.7). A run detail view with the
+([milestones design](milestones.md) §2.7), and a third, Timeline, the
+runs of a time window in lanes (§4.6). A run detail view with the
 transcript comes later.
 
 ### 4.1 Owner inbox
@@ -714,6 +715,40 @@ verify prompt; a failing one sends the PR back to the implementer, and
 shows in the inbox when the flow stops on it. Outside a flow (runs started
 by hand) nothing runs the checks but the agents.
 
+### 4.6 Timeline
+
+A third tab, **Timeline** (`#timeline`), shows where time went in a
+window: every run on one time scale, from `GET /api/timeline`
+([reference](../reference.md#activity)), drawn as plain SVG.
+
+- **Range.** Last 6 hours (the default), today, 7 days, or a custom from
+  and to. A preset ends now: the view grows the window, and live bars, with
+  the clock, and reloads every 30 seconds and when a run or flow starts or
+  ends. A custom range is fixed.
+- **Lanes by actor** (the default): one lane per actor, which grows a
+  sub-row for each run that overlaps another, so concurrent batch runs
+  all show. Its number is busy % (the union of its runs over the window,
+  interactive runs included: the actor is occupied while the owner steers
+  it) and its runs.
+- **Lanes by flow**: one per flow thread (as History groups them), ordered
+  by when its activity in the window began. Between its run bars, its
+  post-implement checks (**e2e**, a mark at the end when the status gives
+  no duration, and a live check growing), **waiting on owner** from each
+  flow stop until the thread's next run, merge, close or next stop,
+  labelled with the stop reason, and **flow overhead**, a dashed line, for
+  any other gap between them. Its numbers are the window's share spent on
+  agents, e2e and waiting on the owner. Its label opens the thread's
+  timeline dialog.
+- **Bars** are colored by kind (implement, verify, discuss, plan, other),
+  with the outcome glyph at the end; failed and revoked runs are outlined,
+  interactive ones hatched, so the bars read without color. A bar opens a
+  dialog with the run's details and log.
+- **Concurrency strip**, above the lanes: how many batch runs were live at
+  each moment, with the peak and the mean over the window.
+
+Every interval and number comes from the server; the view draws them and
+derives nothing.
+
 ## 5. Actions
 
 Each action is a CLI command, and the UI calls the same Go code with the
@@ -953,7 +988,9 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
   `default`): the status, inbox, live runs and checks with their logs, active flows,
-  history, milestones, issue details and timelines, in the API's own JSON.
+  history, milestones, issue details and timelines, and the Timeline
+  view's answer (`timeline`, served for any window; without it, an empty
+  one), in the API's own JSON.
   A fixture is decoded strictly into the Go types the API uses, and a test
   loads every one, so a renamed field fails the tests instead of showing
   as a blank. `default` exercises every view; `empty` is a repository with
