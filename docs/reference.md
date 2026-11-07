@@ -201,7 +201,12 @@ Before the agent starts, the launcher gathers that evidence with the owner
 key, since a run key may not list runs or read the audit log, into
 `$TMPDIR/retro/` in the run's scratch directory:
 
-- `README.md`: the runs, oldest first, at a glance.
+- `README.md`: the runs, oldest first, at a glance. When the evidence
+  visibly lacks runs, it starts with a warning that the evidence looks
+  partial, which the prompt repeats: verify runs but no implement or plan
+  run, or a pull request whose own last commit (its head, or the first
+  parent below the merges, such as the flow's "Merge main into" commits)
+  is by an author with no implement or plan run in the evidence.
 - `runs.json`: each run's server record and digest (summary, usage,
   observed failure), the launcher's local record if this checkout launched
   it (exit code, stop request, notes, handover; never the key), and its

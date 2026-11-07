@@ -50,12 +50,12 @@ func TestGatherRetro(t *testing.T) {
 		{Run: "r-4d", Op: "api", Decision: "deny"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	n, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-3c", ws, list, audit, nil)
+	n, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-3c", ws, list, audit, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Errorf("gatherRetro found %d runs, want 2", n)
+	if n != 2 || gaps != nil {
+		t.Errorf("gatherRetro found %d runs, gaps %q; want 2 and none", n, gaps)
 	}
 
 	b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
@@ -113,7 +113,7 @@ func TestGatherRetro(t *testing.T) {
 	}
 
 	// A flow bottown never ran still gets its (empty) evidence.
-	n, err = gatherRetro(dir, server.NewRetroFlow(99, false, ""), "r-3c", ws, list, audit, nil)
+	n, _, err = gatherRetro(dir, server.NewRetroFlow(99, false, ""), "r-3c", ws, list, audit, nil, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("gatherRetro(99) = %d, %v", n, err)
 	}
@@ -146,7 +146,7 @@ func TestGatherRetroPRDiscussions(t *testing.T) {
 		{Run: secrets.Run{ID: "r-7g", Kind: policy.Discuss, Actor: "kimi", Issue: 13, Created: t0.Add(7 * time.Minute)}, State: "ended"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	if _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{13}); err != nil {
+	if _, _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{13}, nil); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
@@ -186,7 +186,7 @@ func TestGatherRetroOnPR(t *testing.T) {
 		t.Helper()
 		flow, prs := retroFlowOf(n, heads)
 		dir := filepath.Join(t.TempDir(), retroDir)
-		if _, err := gatherRetro(dir, flow, "r-self", ws, list, nil, prs); err != nil {
+		if _, _, err := gatherRetro(dir, flow, "r-self", ws, list, nil, prs, nil); err != nil {
 			t.Fatal(err)
 		}
 		var got []retroRun
@@ -215,6 +215,57 @@ func TestGatherRetroOnPR(t *testing.T) {
 	ids, readme = gather(20)
 	if strings.Join(ids, " ") != "r-6f" || !strings.Contains(readme, "# Evidence for the retro of !20\n") {
 		t.Errorf("retro on !20 = %v, want r-6f:\n%s", ids, readme)
+	}
+}
+
+// Evidence that visibly lacks runs says so at the top of its README: verify
+// runs with no implement or plan run, and a pull request whose own last
+// commit no implementer in the evidence wrote. Whole evidence has no
+// warning.
+func TestGatherRetroGaps(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	verifies := []server.RunItem{
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", PR: 9, Branch: "issue/7", SHA: "0123456789abcdef", Created: t0.Add(time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Verify, Actor: "agy", PR: 9, Branch: "issue/7", SHA: "0123456789abcdef", Created: t0.Add(2 * time.Minute)}, State: "ended"},
+	}
+	impl := server.RunItem{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: t0}, State: "ended"}
+	gather := func(list []server.RunItem, tips []prTip) ([]string, string) {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), retroDir)
+		_, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{9}, tips)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gaps, string(readme)
+	}
+
+	gaps, readme := gather(verifies, nil)
+	const noImpl = "The evidence has 2 verify run(s) but no implement or plan run: the runs that wrote the code are missing from it."
+	if len(gaps) != 1 || gaps[0] != noImpl {
+		t.Errorf("gaps without an implement run = %q", gaps)
+	}
+	if !strings.HasPrefix(readme, "# Evidence for the retro of #7\n\n> [!WARNING]\n> **The evidence looks partial.** Say so in the retro,") ||
+		!strings.Contains(readme, "> - "+noImpl+"\n\nThe runs that worked") {
+		t.Errorf("README without an implement run:\n%s", readme)
+	}
+
+	// The head merges main in; below it, the PR's own last commit is by
+	// kimi, who has no run in the evidence, though claude does.
+	tip := prTip{PR: 9, Head: "fedcba9876543210", SHA: "0123456789abcdef", Author: "kimi"}
+	gaps, readme = gather(append([]server.RunItem{impl}, verifies...), []prTip{tip})
+	const byHand = "Pull request !9's head `fedcba9876` (its own last commit, below the merges, is `0123456789`) is by `kimi`, who has no implement or plan run in the evidence: no run in it pushed that head."
+	if len(gaps) != 1 || !strings.HasPrefix(gaps[0], byHand) || !strings.Contains(readme, "> - "+byHand) {
+		t.Errorf("gaps with a head no run pushed = %q:\n%s", gaps, readme)
+	}
+
+	tip.Author = "claude"
+	if gaps, readme = gather(append([]server.RunItem{impl}, verifies...), []prTip{tip}); gaps != nil || strings.Contains(readme, "WARNING") {
+		t.Errorf("whole evidence warns: %q:\n%s", gaps, readme)
 	}
 }
 

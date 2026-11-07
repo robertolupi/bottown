@@ -45,10 +45,12 @@ type PromptData struct {
 	WebPreview                 bool   // implement, verify: the repository has fixtures for `bottown web preview`
 	Reviewed                   bool   // verify: the PR already has reviews, so `pr show --since-review` applies
 	// Retro: the directory of the flow's evidence and how many runs it
-	// holds, or why it could not be gathered.
+	// holds, or why it could not be gathered; EvidenceGaps are what it
+	// visibly lacks, such as verify runs with no implement run.
 	Evidence      string
 	EvidenceRuns  int
 	EvidenceError string
+	EvidenceGaps  []string
 	// Retro: the flow it looks back on. RetroPR is the target when it is a
 	// pull request, from branch RetroBranch; RetroIssue is the issue whose
 	// flow it is (the target, or the issue of an issue/<m> branch), or 0
