@@ -1,8 +1,8 @@
 <script lang="ts">
   // A standalone thread (a discuss or retro run) in the run history: its one run's row and, when
-  // expanded, that run's log.
+  // expanded, that run's log. A windowed retro's target is its window, linking its wiki page.
   import type { HistoryThread, RunLogState } from './types';
-  import { describeRunFailure, formatThreadMainLine } from './state';
+  import { describeRunFailure, formatThreadMainLine, retroWindowTitle } from './state';
   import { formatTime, formatUsage } from './format';
   import FailureReason from './FailureReason.svelte';
   import IssueReference from './IssueReference.svelte';
@@ -35,7 +35,10 @@
           title={mainLine.issueTitle}
         />
       {:else}
-        <TargetLink href={h.target_url} label={h.target} />
+        <TargetLink href={h.target_url} label={h.target} title={retroWindowTitle(h.window)} />
+        {#if h.window}
+          <span class="badge instance-badge" title="The window's start, as the owner gave it">since {h.window.since}</span>
+        {/if}
       {/if}
       {#if mainLine.milestone}
         <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>

@@ -1,19 +1,21 @@
 <script lang="ts">
-  // A run's or inbox item's target (#issue, !PR, run ID) as a monospace
-  // link into Forgejo. stopPropagation keeps a click from also reaching a
-  // clickable row around it.
+  // A run's or inbox item's target (#issue, !PR, run ID, a windowed
+  // retro's window) as a monospace link into Forgejo. stopPropagation keeps
+  // a click from also reaching a clickable row around it.
   interface Props {
     href: string | undefined;
     label: string | undefined;
+    title?: string;
     stopPropagation?: boolean;
   }
 
-  let { href, label, stopPropagation = false }: Props = $props();
+  let { href, label, title, stopPropagation = false }: Props = $props();
 </script>
 
 <a
   class="pr-badge"
   {href}
+  {title}
   target="_blank"
   rel="noreferrer"
   onclick={stopPropagation ? (e) => e.stopPropagation() : undefined}

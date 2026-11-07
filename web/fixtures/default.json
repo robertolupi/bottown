@@ -710,6 +710,29 @@
       "denials": []
     },
     {
+      "id": "r-3e4f5a6b",
+      "target": "4b5c6d7e8f..9a0b1c2d3e",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/wiki/20261101-9a0b1c2-retrospective",
+      "window": {
+        "since": "last",
+        "base": "4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
+        "page": "20261101-9a0b1c2-retrospective"
+      },
+      "thread_key": "retro:r-3e4f5a6b",
+      "kind": "retro",
+      "actor": "claude",
+      "family": "anthropic",
+      "harness": "claude",
+      "mode": "batch",
+      "status": "succeeded",
+      "created": "2026-11-01T17:10:00Z",
+      "ended": "2026-11-01T17:24:00Z",
+      "duration": "14m 0s",
+      "summary": "Wrote the retro of 6 merged pull requests to 20261101-9a0b1c2-retrospective.",
+      "purged": true,
+      "denials": []
+    },
+    {
       "id": "r-0a1b2c3d",
       "target": "#44",
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",

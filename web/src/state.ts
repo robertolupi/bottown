@@ -13,6 +13,7 @@ import type {
   LiveCheckInfo,
   LiveRunInfo,
   LogLine,
+  RetroWindow,
   RunFailure,
   TimelineEvent,
   UsageInfo,
@@ -299,6 +300,14 @@ export function resolveInboxAction(item: Pick<InboxItem, 'target' | 'action' | '
 export function parseIssueNumber(target: string): number | null {
   const num = parseInt(target.replace(/^[#!]/, ''), 10);
   return !isNaN(num) && num > 0 ? num : null;
+}
+
+// The tooltip of a windowed retro's target (its label is <base>..<head>,
+// its link the wiki page): where the window starts, as the owner gave it,
+// and the page. Undefined for other runs.
+export function retroWindowTitle(window: RetroWindow | undefined): string | undefined {
+  if (!window) return undefined;
+  return `Windowed retro: --since ${window.since}, after ${window.base}. Writes the wiki page ${window.page}.`;
 }
 
 function parseDurationStringMs(dur: string | undefined): number {
@@ -661,6 +670,7 @@ function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
     id: lr.id,
     target: lr.target || (pr ? `!${pr}` : issue ? `#${issue}` : ''),
     target_url: lr.target_url || lr.pr_url || lr.issue_url || '',
+    window: lr.window,
     issue,
     issue_url: lr.issue_url || (lr.target?.startsWith('#') ? lr.target_url : undefined),
     issue_title: lr.issue_title,

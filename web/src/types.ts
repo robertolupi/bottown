@@ -153,10 +153,21 @@ export interface LogLine {
   output?: string;
 }
 
+// A windowed retro's window (secrets.RetroWindow): what landed on the
+// default branch after base, up to the run's head, and the wiki page the
+// retro writes. Its run is on no issue; its target is <base>..<head>,
+// linking the page.
+export interface RetroWindow {
+  since: string; // as the owner gave it: git:<ref>, last, a date or an age
+  base: string;
+  page: string;
+}
+
 export interface LiveRunInfo {
   id: string;
   target: string;
   target_url: string;
+  window?: RetroWindow;
   issue?: number;
   issue_url?: string;
   issue_title?: string;
@@ -260,6 +271,7 @@ export interface HistoryRunInfo {
   id: string;
   target: string;
   target_url: string;
+  window?: RetroWindow;
   issue?: number;
   issue_url?: string;
   issue_title?: string;
