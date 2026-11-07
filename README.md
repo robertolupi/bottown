@@ -6,7 +6,8 @@ you file issues there, coding agents ("actors") work them in runs that
 bottown scopes and records, a verifier from another model family reviews
 each pull request at the exact commit, and you merge.
 
-What bottown is for and how it is designed is in [docs/](docs/index.md);
+What bottown is for and how it is designed is in [docs/](docs/index.md),
+how it behaves today in [docs/reference.md](docs/reference.md);
 instructions for agents working on this repository are in
 [AGENTS.md](AGENTS.md).
 
