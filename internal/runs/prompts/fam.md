@@ -66,6 +66,9 @@ bottown run end [--failed] --summary-file -
 - **Discuss runs** review and discuss one issue without implementing it: the
   worktree is detached at the default branch, and the answer goes in a
   comment on the issue. They cannot push, open PRs or review.
+- **Retro runs** write a blameless retrospective of one issue's flow from
+  bottown's records, posted as a comment on the issue. Like discuss runs,
+  they cannot push, open PRs or review; they may file follow-up issues.
 - **Plan runs** write a milestone plan for a kickoff issue: they push
   `issue/<n>` with only that file and open a PR. They cannot file issues,
   review or merge.

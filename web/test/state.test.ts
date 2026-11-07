@@ -497,6 +497,26 @@ test('groupHistoryThreads groups implement/verify loops by (issue, pr), separate
   assert.equal(pr11Thread.duration, '50m0s');
 });
 
+test('groupHistoryThreads keeps retro runs standalone, and the kind filter finds them', () => {
+  const base = { target: '#10', target_url: 'http://forge/issues/10', issue: 10, family: 'openai', status: 'succeeded', denials: [] };
+  const runs = [
+    { ...base, id: 'r-imp', pr: 11, kind: 'implement', actor: 'claude', family: 'anthropic', created: '2026-11-01T10:00:00Z', ended: '2026-11-01T10:20:00Z' },
+    { ...base, id: 'r-retro', kind: 'retro', actor: 'codex', created: '2026-11-02T10:00:00Z', ended: '2026-11-02T10:10:00Z', thread_key: 'retro:r-retro' },
+  ] as any[];
+  const threads = groupHistoryThreads(runs);
+  assert.equal(threads.length, 2);
+  const retro = threads.find((t) => t.key === 'retro:r-retro');
+  assert.ok(retro);
+  assert.equal(retro.kind, 'discuss');
+  assert.deepEqual(retro.runs.map((r) => r.id), ['r-retro']);
+  assert.deepEqual(threads.find((t) => t.kind === 'flow')?.runs.map((r) => r.id), ['r-imp']);
+
+  const now = Date.parse('2026-11-03T00:00:00Z');
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'retro' }, now).map((t) => t.key), ['retro:r-retro']);
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'discuss' }, now), []);
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'implement' }, now).map((t) => t.kind), ['flow']);
+});
+
 test('pre-PR runs group under issue before PR exists and preserve membership + selection when PR is created', () => {
   const prePRHistory = [
     {

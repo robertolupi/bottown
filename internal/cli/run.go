@@ -104,16 +104,42 @@ leaves alone. Without a question, the agent reviews the issue.`,
 		},
 	}
 	discuss.Flags().StringVar(&questionFile, "question-file", "", "read the question from a file, or - for stdin")
-	for _, c := range []*cobra.Command{implement, verify, discuss} {
+	retro := &cobra.Command{
+		Use:   "retro -a ACTOR [-I] [--allow-same-family] ISSUE",
+		Short: "Write a blameless retrospective of an issue's flow from bottown's records",
+		Long: `Write a blameless retrospective of an issue's flow: every implement, verify
+and discuss run on the issue and its pull requests. Before the agent starts,
+bottown gathers what it recorded of those runs (the server's records and
+digests, the launcher's records, the policy denials, the goal prompts, and each
+log as a transcript in one format for every harness) into the run's scratch
+directory. The agent reads them with the issue and PR threads, and posts the
+retro as a comment on the issue; it may file follow-up issues.
+
+The worktree is detached at the default branch's head, and the run cannot push,
+open pull requests or review. Drafts the agent writes there (a design note, a
+proposal) keep the worktree, whatever the outcome. Run it with -I to discuss
+the findings before the comment is posted.
+
+As with verify, the retro should come from another model family than the
+issue's implementers: an actor of an implementer's family needs
+--allow-same-family.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return startRun(cmd, g, policy.Retro, args[0], o)
+		},
+	}
+	for _, c := range []*cobra.Command{implement, verify, discuss, retro} {
 		runFlags(c, &o)
 	}
 	for _, c := range []*cobra.Command{implement, verify} {
 		messageFlag(c, &o.message)
 		c.Flags().BoolVar(&o.serializeActor, "serialize-actors", false, "refuse the run while the actor has another live batch run (by default an actor's batch runs on different targets run concurrently)")
 	}
+	messageFlag(retro, &o.message)
 	verify.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a verifier of the author's model family (recorded on the review)")
+	retro.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a retro by an actor of an implementer's model family (recorded on the run)")
 
-	run.AddCommand(implement, verify, discuss, newRunPlan(g), newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
+	run.AddCommand(implement, verify, discuss, retro, newRunPlan(g), newRunLs(g), newRunShow(g), newRunStop(g), newRunGC(g))
 	run.AddCommand(agentCmds(newRunStart(), newRunEnd())...)
 	return run
 }
@@ -554,7 +580,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	}
 
 	st := newStyles()
-	if status == runs.StatusSucceeded && !o.keep {
+	if status == runs.StatusSucceeded && !o.keep && !keepRetroDrafts(kind, dir) {
 		if err := rc.ws.Remove(run.ID); err != nil {
 			fmt.Fprintf(errOut, "warning: remove worktree: %v\n", err)
 		}
@@ -577,6 +603,17 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 	return failed
+}
+
+// keepRetroDrafts is whether a retro run's worktree in dir holds drafts the
+// agent wrote (a design note, a proposal): it cannot push them, so the
+// worktree stays for the owner.
+func keepRetroDrafts(kind, dir string) bool {
+	if kind != policy.Retro {
+		return false
+	}
+	st, err := runs.Git(dir, nil, "status", "--porcelain")
+	return err != nil || st != ""
 }
 
 // launchedLifecycle is the lifecycle of a run this process launches, just
@@ -663,6 +700,16 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message,
 		FlowNote: rec.FlowNote, ChecksPassed: rec.ChecksPassed,
 	}
+	if run.Kind == policy.Retro {
+		// Like attachments, missing evidence does not stop the run: the
+		// prompt says why, and the forge's threads are still there.
+		d.Evidence = filepath.Join(rec.TmpDir, retroDir)
+		n, err := collectRetro(ctx, rc, run, d.Evidence)
+		if err != nil {
+			d.Evidence, d.EvidenceError = "", err.Error()
+		}
+		d.EvidenceRuns = n
+	}
 	// Attachments never stop a launched run: a failure is in the prompt
 	// instead.
 	var is server.IssueOut
@@ -748,7 +795,7 @@ func askOutcome(cmd *cobra.Command, def string) string {
 	return def
 }
 
-// handover posts the run's outcome on its issue (implement, discuss, plan) or PR (verify),
+// handover posts the run's outcome on its issue (implement, discuss, plan, retro) or PR (verify),
 // with the run key, as the actor.
 func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, key, status string, code int, summary string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -790,6 +837,8 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		if head, err := runs.Git(rec.Worktree, nil, "rev-parse", "--short", "HEAD"); err == nil {
 			fmt.Fprintf(&b, "Branch `%s` at `%s`.\n\n", rec.Branch, head)
 		}
+	case policy.Retro:
+		fmt.Fprintf(&b, "Retrospective against `%s`, the default branch's head.\n\n", rec.SHA)
 	case policy.Discuss:
 		fmt.Fprintf(&b, "Discussed against `%s`, the default branch's head.\n\n", rec.SHA)
 		if rec.Question != "" {

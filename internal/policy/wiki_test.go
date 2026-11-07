@@ -14,7 +14,7 @@ func TestWikiOnlyThroughStore(t *testing.T) {
 			if d := p.Decide("rlupi", m, path); !d.Allow {
 				t.Errorf("owner %s %s = %+v, want allowed", m, path, d)
 			}
-			for _, role := range []string{Implement, Verify, Discuss, Plan} {
+			for _, role := range []string{Implement, Verify, Discuss, Plan, Retro} {
 				s := RunScope{Org: "bottown", Repo: "demo", Role: role}
 				if d := s.DecideAPI(m, path); d.Allow || d.Rule != "wiki-via-store" {
 					t.Errorf("%s run %s %s = %+v, want wiki-via-store", role, m, path, d)
@@ -22,7 +22,7 @@ func TestWikiOnlyThroughStore(t *testing.T) {
 			}
 		}
 	}
-	for _, role := range []string{Implement, Verify, Discuss, Plan} {
+	for _, role := range []string{Implement, Verify, Discuss, Plan, Retro} {
 		s := RunScope{Org: "bottown", Repo: "demo", Role: role}
 		for _, c := range []struct{ path, service string }{
 			{"/bottown/demo.wiki.git/info/refs", "git-upload-pack"},
@@ -58,6 +58,8 @@ func TestDecideWiki(t *testing.T) {
 		{Verify, true, "Idea.md", false, "wiki-read"},
 		{Discuss, true, "reviews/1-x/r1-claude.md", false, "wiki-read"},
 		{Plan, false, "Idea.md", true, "wiki-read"},
+		{Retro, false, "Idea.md", true, "wiki-read"},
+		{Retro, true, "Idea.md", false, "wiki-read"},
 		{"garden", false, "Idea.md", false, "wiki-default"},
 	}
 	for _, c := range cases {

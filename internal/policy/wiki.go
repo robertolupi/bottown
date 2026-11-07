@@ -44,7 +44,7 @@ type WikiRule struct {
 // before the defaults.
 var WikiRules = []WikiRule{
 	{Name: "wiki-owner", Who: []string{WikiOwner}, Pattern: "/**", Read: true, Write: true},
-	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan}, Pattern: "/**", Read: true},
+	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro}, Pattern: "/**", Read: true},
 }
 
 // DecideWiki decides a wiki store access by who (WikiOwner, WikiActor or a

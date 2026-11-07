@@ -189,7 +189,7 @@ func TestImplementPromptFollowUp(t *testing.T) {
 }
 
 func TestPromptsNameForgeRemote(t *testing.T) {
-	for _, kind := range []string{"implement", "verify", "discuss", "plan"} {
+	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro"} {
 		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Remote: "bottown-test"})
 		if err != nil {
 			t.Fatal(err)

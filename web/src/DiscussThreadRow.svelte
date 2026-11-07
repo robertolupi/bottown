@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A discuss thread in the run history: its one run's row and, when
+  // A standalone thread (a discuss or retro run) in the run history: its one run's row and, when
   // expanded, that run's log.
   import type { HistoryThread, RunLogState } from './types';
   import { describeRunFailure, formatThreadMainLine } from './state';
@@ -42,7 +42,7 @@
       {/if}
     </div>
   </td>
-  <td><span class="badge badge-neutral">discuss</span></td>
+  <td><span class="badge badge-neutral">{h.kind}</span></td>
   <td><span class="badge repo-badge">{h.actor} ({h.family})</span></td>
   <td>
     {#if thread.active}
