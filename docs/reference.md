@@ -59,6 +59,20 @@ External links are not listed. The files belong to the run:
   by bottown]`. The Live Runs tail applies the same rule when it renders a
   log, including logs written before this change.
 
+## Closing keywords on pull requests
+
+`pr create` ends the description with `Closes #N`, or `Part of #N` with
+`--part`. Forgejo reads a `close`/`fix`/`resolve` or `reopen` keyword
+before an issue reference (`#N`, `owner/repo#N`, or a link to an issue) in
+a PR's description, comments or reviews as what merging the PR does to
+that issue, and applies only the latest one per issue (quirk 8 in
+[bootstrap.md](history/bootstrap.md)). So the server refuses, with 400 and
+the matched words, a `comment` on a pull request and a `review submit`
+whose body holds one outside code spans and fenced blocks; on an issue,
+where the keywords do nothing, `comment` posts it. The implement and
+verify prompts say so. Writes through `bottown api` are not checked, and
+the flow's own round and stop comments go on the issue.
+
 ## Checks
 
 Runs check their work with `bottown check [--e2e]`, which runs the
