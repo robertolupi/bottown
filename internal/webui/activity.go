@@ -13,8 +13,10 @@ import (
 
 // ComputeActivity is the repository's activity in w (internal/activity):
 // the one derivation the timeline and the statistics views both serve.
+// Issues' comments are kept in memory between calls, by their updated
+// time, so a load reads only the issues that changed.
 func (s *Server) ComputeActivity(ctx context.Context, w activity.Window) (*activity.Activity, error) {
-	return activity.Load(ctx, activitySource{s}, w, time.Now())
+	return activity.Load(ctx, activitySource{s}, &s.activityIssues, w, time.Now())
 }
 
 // activitySource reads activity's facts through the server, as the UI's

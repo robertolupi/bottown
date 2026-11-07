@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -93,6 +94,7 @@ type Server struct {
 	lastFetch           time.Time
 	lastSuccessfulFetch time.Time
 	lastOriginErr       string
+	activityIssues      activity.IssueCache // ComputeActivity's issue reads
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.

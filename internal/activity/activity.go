@@ -7,7 +7,8 @@
 // derives none of it.
 //
 // Nothing here is a store of its own: every fact is read again from the
-// forge and the server's run records on each Load.
+// forge and the server's run records on each Load, except the issues an
+// optional IssueCache keeps while their updated time holds.
 package activity
 
 import (
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/flow"
@@ -187,24 +189,23 @@ type Facts struct {
 	Gates   map[int64]server.GateOut
 }
 
-// Load reads the facts for w from src and derives its activity.
+// Load reads the facts for w from src and derives its activity. A non-nil
+// cache keeps issues' comments between Loads; it holds nothing the forge
+// does not, and an empty one only costs reads.
 //
-// Its reads are bounded by what happened in the window, whatever its
-// length: one run list (the server's own records, all of them, so threads
-// group as History groups them and a wait that began before the window ends
-// where it did), one PR list and one issue list; then one issue read (its
-// comments, where the stops are) per issue of the window's threads, per
-// issue updated in the window (a new stop updates its issue), and per open
-// issue with flow runs but no PR yet (its wait may have begun before the
-// window and still go on); and one PR read and one gate read per PR of the
-// window's threads. For 7 days that is 3 + issues + 2 × PRs reads, each
-// issue and PR read once. A read that fails leaves its facts out and is
-// named in Incomplete.
-//
-// Not read: an open issue whose flow stopped before it ever ran (its actor
-// busy at the start) and that has not changed since the window began; that
-// wait is missing from the window.
-func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, error) {
+// Its reads are bounded whatever the window's length: one run list (the
+// server's own records, all of them, so threads group as History groups
+// them and a wait that began before the window ends where it did), one PR
+// list and one issue list; then one issue read (its comments, where the
+// stops are) per issue of the window's threads, per issue updated in the
+// window (a new stop updates its issue) and per open issue (a stop made
+// before the window, even one before any run, may still keep it waiting);
+// and one PR read and one gate read per PR of the window's threads. For 7
+// days that is 3 + issues + 2 × PRs reads, each issue and PR read once;
+// with a cache, an issue is read again only when its updated time has
+// changed since the cache read it. A read that fails leaves its facts out
+// and is named in Incomplete.
+func Load(ctx context.Context, src Source, cache *IssueCache, w Window, now time.Time) (*Activity, error) {
 	w = w.resolve(now)
 	runs, err := src.Runs(ctx)
 	if err != nil {
@@ -220,8 +221,18 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 	}
 	f := Facts{Runs: runs, PRs: prs, IssueList: issues, Issues: map[int64]*server.IssueOut{}, Reviews: map[int64]*server.PROut{}, Gates: map[int64]server.GateOut{}}
 	var incomplete []string
+	updated := map[int64]time.Time{}
+	for _, is := range issues {
+		if is != nil {
+			updated[is.Number] = is.Updated
+		}
+	}
 	readIssue := func(n int64) {
 		if n <= 0 || f.Issues[n] != nil {
+			return
+		}
+		if is := cache.get(n, updated[n]); is != nil {
+			f.Issues[n] = is
 			return
 		}
 		is, err := src.Issue(ctx, n)
@@ -229,6 +240,8 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 			incomplete = append(incomplete, fmt.Sprintf("issue #%d: %v", n, err))
 			// Read each issue once, even when it fails.
 			is = &server.IssueOut{Number: n}
+		} else {
+			cache.put(n, updated[n], is)
 		}
 		f.Issues[n] = is
 	}
@@ -250,7 +263,7 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 			}
 		}
 	}
-	for _, n := range stopIssues(w, g, runs, issues) {
+	for _, n := range stopIssues(w, issues) {
 		readIssue(n)
 	}
 	a := Derive(w, f, now)
@@ -260,35 +273,59 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 
 // stopIssues are the issues whose comments may hold a stop in w or the
 // start of an owner wait that overlaps it, beyond the issues of the
-// window's threads, by number: those updated in w, and the open ones with
-// flow runs before any PR.
-func stopIssues(w Window, g Grouping, runs []server.RunItem, issues []*server.IssueItem) []int64 {
-	byNumber := map[int64]*server.IssueItem{}
-	set := map[int64]bool{}
+// window's threads, by number: those created before w ends that were
+// updated in w or are still open. A closed issue not updated in w was
+// closed before it, and so were the waits of its flow without a PR.
+func stopIssues(w Window, issues []*server.IssueItem) []int64 {
+	var out []int64
 	for _, is := range issues {
-		if is == nil || is.Number <= 0 || is.PullRequest {
+		if is == nil || is.Number <= 0 || is.PullRequest || !is.Created.Before(w.Until) {
 			continue
 		}
-		byNumber[is.Number] = is
-		if !is.Updated.Before(w.Since) && is.Created.Before(w.Until) {
-			set[is.Number] = true
+		if !is.Updated.Before(w.Since) || (is.Closed == nil && is.State != "closed") {
+			out = append(out, is.Number)
 		}
-	}
-	for _, r := range runs {
-		rt := g.Runs[r.ID]
-		if Standalone(r.Kind) || rt.Issue <= 0 || rt.PR > 0 {
-			continue
-		}
-		if is := byNumber[rt.Issue]; is != nil && is.Closed == nil && is.State != "closed" && is.Created.Before(w.Until) {
-			set[rt.Issue] = true
-		}
-	}
-	out := make([]int64, 0, len(set))
-	for n := range set {
-		out = append(out, n)
 	}
 	slices.Sort(out)
-	return out
+	return slices.Compact(out)
+}
+
+// IssueCache keeps issues with their comments between Loads, each as of
+// its updated time, so an unchanged issue is not read again. It is safe
+// for concurrent use, and to drop: it only saves reads.
+type IssueCache struct {
+	mu     sync.Mutex
+	issues map[int64]cachedIssue
+}
+
+type cachedIssue struct {
+	updated time.Time
+	issue   *server.IssueOut
+}
+
+// get is issue n as of updated, or nil when c does not hold it.
+func (c *IssueCache) get(n int64, updated time.Time) *server.IssueOut {
+	if c == nil || updated.IsZero() {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.issues[n]; ok && e.updated.Equal(updated) {
+		return e.issue
+	}
+	return nil
+}
+
+func (c *IssueCache) put(n int64, updated time.Time, is *server.IssueOut) {
+	if c == nil || updated.IsZero() || is == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.issues == nil {
+		c.issues = map[int64]cachedIssue{}
+	}
+	c.issues[n] = cachedIssue{updated: updated, issue: is}
 }
 
 func (w Window) resolve(now time.Time) Window {

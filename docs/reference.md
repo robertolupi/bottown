@@ -425,7 +425,7 @@ window, for the web UI's timeline and statistics views: both call
 `activity.Load` (through `webui.Server.ComputeActivity`) rather than each
 deriving on its own, and the browser shows what it returns. It keeps no
 store: every fact is read again from the server's run records and the
-forge.
+forge, apart from an in-memory cache of issues (see Reads below).
 
 - **Runs** that overlap the window, purged ones included, each with its
   thread key and its usage. A run's usage is reported when the harness
@@ -460,9 +460,9 @@ the PR list and the issue list once. It then reads each PR of the window's
 threads once and its gate once, and, once each, the comments of the
 issues that can hold a stop or a wait in the window: those of the window's
 threads, those updated in the window (a new stop updates its issue), and
-the open ones with flow runs but no PR yet, whose wait may have begun
-before the window. That is 3 + issues + 2 × PRs calls, for a 7-day window
-or any other. Not read, so missing: the wait of an open issue whose flow
-stopped before it ever ran and that has not changed since the window
-began. A failed issue or PR read leaves its facts out and is named in
-`incomplete`.
+every open one, whose wait may have begun before the window, even before
+the flow's first run. That is 3 + issues + 2 × PRs calls, for a 7-day
+window or any other. The web UI keeps the issues it read in memory, each as
+of its `updated` time, and reads one again only when that has changed;
+the cache only saves reads, and a restart empties it. A failed issue or PR
+read leaves its facts out and is named in `incomplete`.
