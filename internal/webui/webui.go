@@ -522,10 +522,11 @@ func (s *Server) handleGetRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 // validRunID matches the ids GET /api/runs/{id}/log serves: runs', and
-// a flow's post-implement checks', flow-<issue>-<sha>.e2e (validCheckID).
+// a flow's post-implement checks', flow-<issue>-<sha>-<check>.e2e, or
+// flow-<issue>-<sha>.e2e before checks had ids (validCheckID).
 var (
-	validRunID   = regexp.MustCompile(`^(?:[a-zA-Z0-9_-]+|flow-[0-9]+-[0-9a-f]+\.e2e)$`)
-	validCheckID = regexp.MustCompile(`^flow-[0-9]+-[0-9a-f]+\.e2e$`)
+	validRunID   = regexp.MustCompile(`^(?:[a-zA-Z0-9_-]+|flow-[0-9]+-[0-9a-f]+(?:-[0-9a-f]+)?\.e2e)$`)
+	validCheckID = regexp.MustCompile(`^flow-[0-9]+-[0-9a-f]+(?:-[0-9a-f]+)?\.e2e$`)
 )
 
 func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {

@@ -13,7 +13,7 @@ import (
 // A flow's post-implement checks (bottown flow's e2e commands) are not a
 // run, but the live tail shows them like one. While they run, the flow
 // holds a flock on <id>.check, a CheckRecord in JSON, next to their log,
-// <id>.log; the id is flow-<issue>-<sha>.e2e. The lock, not a pid, marks
+// <id>.log; the id is flow-<issue>-<sha>-<check>.e2e. The lock, not a pid, marks
 // them live, so a check whose flow died is not "running", and the file
 // that is left only goes stale.
 
@@ -22,7 +22,7 @@ const CheckRecordSuffix = ".check"
 
 // CheckRecord is what the live tail shows of a flow's running checks.
 type CheckRecord struct {
-	ID       string    `json:"id"` // flow-<issue>-<sha>.e2e: the log is <id>.log
+	ID       string    `json:"id"` // flow-<issue>-<sha>-<check>.e2e: the log is <id>.log
 	Repo     string    `json:"repo"`
 	Issue    int64     `json:"issue"`
 	PR       int64     `json:"pr"`

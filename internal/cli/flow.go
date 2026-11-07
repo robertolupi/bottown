@@ -33,7 +33,7 @@ After each implement run, before a verifier sees a new head, the flow runs
 the post-implement checks itself: the e2e commands .bottown.toml names on
 the default branch (default: make e2e), in a clean worktree detached at the
 head, with no agent involved. The log goes next to the run records
-(.bottown/runs/flow-<issue>-<sha>.e2e.log); while the commands run, the
+(.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log); while the commands run, the
 web UI's Live Runs and the terminal tail follow it. The result is the commit
 status bottown/e2e on the head, written by the owner. If they pass, the
 verify run's prompt says so and names the log; if they fail, the flow

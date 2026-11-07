@@ -110,6 +110,117 @@ func TestFlowChecker(t *testing.T) {
 	}
 }
 
+// Two checks at the same head (overlapping flows) get a worktree and a log
+// each: the one that ends first removes only its own worktree, and the
+// other one's commands still run in theirs. A check's cleanup removes the
+// worktrees whose check is no longer live, and keeps the live ones.
+func TestFlowCheckerOverlap(t *testing.T) {
+	remote, top, sync := t.TempDir(), t.TempDir(), t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// Each check names its files in sync after its worktree, writes
+	// started-<dir> and waits for release-<dir>; then a second command must
+	// still find the worktree.
+	toml := fmt.Sprintf("e2e = ['n=$(basename \"$PWD\"); echo \"check $n\"; touch %[1]s/started-$n; while [ ! -f %[1]s/release-$n ]; do sleep 0.05; done', 'test -f .bottown.toml']\n", sync)
+	if err := os.WriteFile(filepath.Join(remote, ".bottown.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(remote, "init", "-q", "-b", "main")
+	git(remote, "add", ".")
+	git(remote, "commit", "-q", "-m", "init")
+	head := git(remote, "rev-parse", "HEAD")
+	git(top, "init", "-q")
+	ws, err := runs.Open(top, "bottown", remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What an interrupted check left: no record, so no longer live.
+	leftover := filepath.Join(ws.RunsDir, "flow-9-"+head[:10]+"-deadbeef")
+	if err := os.MkdirAll(leftover, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := flowChecker{ws: ws}
+	req := flow.CheckRequest{Repo: "demo", Issue: 9, PR: 12, SHA: head}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	type result struct {
+		out flow.CheckOutcome
+		err error
+	}
+	start := func(seen map[string]bool) (string, chan result) {
+		t.Helper()
+		done := make(chan result, 1)
+		go func() {
+			out, err := c.Check(ctx, req)
+			done <- result{out, err}
+		}()
+		for {
+			names, _ := filepath.Glob(filepath.Join(sync, "started-*"))
+			for _, n := range names {
+				if name := strings.TrimPrefix(filepath.Base(n), "started-"); !seen[name] {
+					seen[name] = true
+					return name, done
+				}
+			}
+			select {
+			case r := <-done:
+				t.Fatalf("check ended early: %+v, %v", r.out, r.err)
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+	seen := map[string]bool{}
+	first, firstDone := start(seen)
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("leftover worktree kept: %v", err)
+	}
+	second, secondDone := start(seen)
+	if first == second || !strings.HasPrefix(first, "flow-9-"+head[:10]+"-") || !strings.HasPrefix(second, "flow-9-"+head[:10]+"-") {
+		t.Fatalf("check worktrees %q and %q", first, second)
+	}
+	// The second check's cleanup kept the first one's live worktree.
+	if _, err := os.Stat(filepath.Join(ws.RunsDir, first)); err != nil {
+		t.Fatalf("first check's worktree: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(sync, "release-"+first), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r1 := <-firstDone
+	if r1.err != nil || !r1.out.Passed || filepath.Base(r1.out.Log) != first+".e2e.log" {
+		t.Fatalf("first check: %+v, %v", r1.out, r1.err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.RunsDir, second)); err != nil {
+		t.Fatalf("the first check removed the second one's worktree: %v", err)
+	}
+	// While the second runs, a resumed flow cites the finished check's log.
+	if got := c.LogPath(req); got != r1.out.Log {
+		t.Errorf("LogPath while the second runs = %q, want %q", got, r1.out.Log)
+	}
+	if err := os.WriteFile(filepath.Join(sync, "release-"+second), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r2 := <-secondDone
+	if r2.err != nil || !r2.out.Passed || r2.out.Log == r1.out.Log || filepath.Base(r2.out.Log) != second+".e2e.log" {
+		t.Fatalf("second check: %+v, %v", r2.out, r2.err)
+	}
+	for _, r := range []struct{ log, name string }{{r1.out.Log, first}, {r2.out.Log, second}} {
+		if log, _ := os.ReadFile(r.log); !strings.Contains(string(log), "check "+r.name) {
+			t.Errorf("log %s:\n%s", r.log, log)
+		}
+	}
+	if wts := git(ws.Mirror, "worktree", "list"); strings.Contains(wts, "flow-9-") {
+		t.Errorf("check worktrees left behind:\n%s", wts)
+	}
+}
+
 // While the checks run, their log has what the commands wrote so far, and
 // a check record marks them live, with the flow's time limit; both live
 // tails read them. The record goes when the checks end.

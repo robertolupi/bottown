@@ -765,12 +765,12 @@ func TestGCFlowLogs(t *testing.T) {
 	flowLog := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".log") }
 	flowInfo := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".json") }
 
-	write(e2e(1, "aaaaaaa"), "merged PR", time.Minute)        // no open PR: removed
-	write(e2e(2, "bbbbbbb"), "open PR, recent", time.Minute)  // kept
-	write(e2e(2, "ccccccc"), "open PR, old", 200*time.Hour)   // removed with --older-than
-	write(filepath.Join(ws.RunsDir, "flow-x.e2e.log"), "", 0) // not a flow's: kept
-	write(flowLog(3), "no record", 0)                         // removed
-	write(flowLog(4), "dead flow", 0)                         // removed, with its record
+	write(e2e(1, "aaaaaaa-0a1b2c3d"), "merged PR", time.Minute)       // no open PR: removed
+	write(e2e(2, "bbbbbbb-1a2b3c4d"), "open PR, recent", time.Minute) // kept
+	write(e2e(2, "ccccccc"), "open PR, old", 200*time.Hour)           // before check ids; removed with --older-than
+	write(filepath.Join(ws.RunsDir, "flow-x.e2e.log"), "", 0)         // not a flow's: kept
+	write(flowLog(3), "no record", 0)                                 // removed
+	write(flowLog(4), "dead flow", 0)                                 // removed, with its record
 	write(flowInfo(4), `{"issue": 4, "pid": 999999999}`, 0)
 	write(flowLog(5), "live flow", 0) // kept
 	write(flowInfo(5), `{"issue": 5, "pid": `+strconv.Itoa(os.Getpid())+`}`, 0)
@@ -779,12 +779,12 @@ func TestGCFlowLogs(t *testing.T) {
 	if n := gcFlowLogs(ws, map[int64]bool{2: true}, 0, now, io.Discard); n != 3 {
 		t.Errorf("without --older-than removed %d logs, want 3", n)
 	}
-	for _, p := range []string{e2e(1, "aaaaaaa"), flowLog(3), flowLog(4), flowInfo(4)} {
+	for _, p := range []string{e2e(1, "aaaaaaa-0a1b2c3d"), flowLog(3), flowLog(4), flowInfo(4)} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s survives gc: %v", filepath.Base(p), err)
 		}
 	}
-	for _, p := range []string{e2e(2, "bbbbbbb"), e2e(2, "ccccccc"), flowLog(5), flowInfo(5),
+	for _, p := range []string{e2e(2, "bbbbbbb-1a2b3c4d"), e2e(2, "ccccccc"), flowLog(5), flowInfo(5),
 		filepath.Join(ws.RunsDir, "flow-x.e2e.log"), filepath.Join(dir, "run-implement-6.log")} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("gc removed %s: %v", filepath.Base(p), err)
@@ -796,7 +796,7 @@ func TestGCFlowLogs(t *testing.T) {
 	if _, err := os.Stat(e2e(2, "ccccccc")); !os.IsNotExist(err) {
 		t.Errorf("old e2e log of an open PR survives --older-than: %v", err)
 	}
-	if _, err := os.Stat(e2e(2, "bbbbbbb")); err != nil {
+	if _, err := os.Stat(e2e(2, "bbbbbbb-1a2b3c4d")); err != nil {
 		t.Errorf("--older-than removed a recent e2e log: %v", err)
 	}
 }
