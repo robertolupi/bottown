@@ -2,7 +2,7 @@
   // One live run: its target, kind, actor, model and mode, elapsed time,
   // a stop button, the live log tail (batch runs) and policy denials.
   import type { LiveRunInfo } from './types';
-  import { parseIssueNumber } from './state';
+  import { parseIssueNumber, retroWindowTitle } from './state';
   import { formatElapsed } from './format';
   import DenialList from './DenialList.svelte';
   import IssueReference from './IssueReference.svelte';
@@ -31,7 +31,10 @@
           showTitle
         />
       {:else}
-        <TargetLink href={run.target_url} label={run.target} />
+        <TargetLink href={run.target_url} label={run.target} title={retroWindowTitle(run.window)} />
+        {#if run.window}
+          <span class="badge instance-badge" title="The window's start, as the owner gave it">since {run.window.since}</span>
+        {/if}
       {/if}
       <span class="badge badge-neutral">{run.kind}</span>
       <span class="badge repo-badge">{run.actor} ({run.family})</span>

@@ -27,6 +27,7 @@ import {
   parseLivePollSnapshot,
   reconcileExpandedThread,
   resolveInboxAction,
+  retroWindowTitle,
   runOutcome,
   selectDefaultActors,
   standaloneLiveChecks,
@@ -515,6 +516,37 @@ test('groupHistoryThreads keeps retro runs standalone, and the kind filter finds
   assert.deepEqual(filterHistoryThreads(threads, { kind: 'retro' }, now).map((t) => t.key), ['retro:r-retro']);
   assert.deepEqual(filterHistoryThreads(threads, { kind: 'discuss' }, now), []);
   assert.deepEqual(filterHistoryThreads(threads, { kind: 'implement' }, now).map((t) => t.kind), ['flow']);
+});
+
+test('a windowed retro is on no issue: its thread keeps its window, live or ended, and no #0', () => {
+  const window = { since: 'last', base: '4b5c6d7e8f9a', page: '20261101-9a0b1c2-retrospective' };
+  const run = {
+    id: 'r-win',
+    target: '4b5c6d7e8f..9a0b1c2d3e',
+    target_url: 'http://forge/bottown/demo/wiki/20261101-9a0b1c2-retrospective',
+    window,
+    thread_key: 'retro:r-win',
+    kind: 'retro',
+    actor: 'claude',
+    family: 'anthropic',
+    created: '2026-11-02T10:00:00Z',
+    denials: [],
+  };
+  const ended = groupHistoryThreads([{ ...run, status: 'succeeded', ended: '2026-11-02T10:10:00Z' }] as any[]);
+  const live = groupHistoryThreads([], [{ ...run, interactive: false, log_tail: [] }] as any[]);
+  for (const threads of [ended, live]) {
+    assert.equal(threads.length, 1);
+    const [t] = threads;
+    assert.equal(t.issue, undefined);
+    assert.equal(t.runs[0].target, '4b5c6d7e8f..9a0b1c2d3e');
+    assert.deepEqual(t.runs[0].window, window);
+    assert.equal(formatThreadMainLine(t).issueLabel, undefined);
+  }
+  assert.equal(
+    retroWindowTitle(window),
+    'Windowed retro: --since last, after 4b5c6d7e8f9a. Writes the wiki page 20261101-9a0b1c2-retrospective.',
+  );
+  assert.equal(retroWindowTitle(undefined), undefined);
 });
 
 test('pre-PR runs group under issue before PR exists and preserve membership + selection when PR is created', () => {
