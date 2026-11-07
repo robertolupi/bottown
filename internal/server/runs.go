@@ -25,7 +25,7 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind  string `json:"kind"` // implement | verify | discuss | plan | retro
+	Kind  string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate
 	Actor string `json:"actor"`
 	Spec  string `json:"spec,omitempty"` // the harness's model, recorded as given
 	Repo  string `json:"repo"`           // name within the org
@@ -46,6 +46,9 @@ type RunRequest struct {
 	SerializeActor bool  `json:"serialize_actor,omitempty"`
 	Interactive    bool  `json:"interactive,omitempty"`
 	TTLSeconds     int64 `json:"ttl_seconds,omitempty"`
+	// Debate puts a discuss run in a debate round; a consolidate run needs
+	// it, to name the debate (debate.go).
+	Debate *DebateRequest `json:"debate,omitempty"`
 }
 
 // ActorBusyMessage is in the error for a SerializeActor run refused
@@ -111,8 +114,18 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 			// its model; bottown launches nothing that could use a spec.
 			writeError(w, http.StatusForbidden, "only the owner's launched runs choose a model")
 			return
+		case req.Debate != nil || req.Kind == policy.Consolidate:
+			// Rounds start when the owner asks (bottown debate).
+			writeError(w, http.StatusForbidden, "only the owner starts a debate's runs")
+			return
 		}
 		req.Actor = p.Actor
+	}
+	if req.Debate != nil || req.Kind == policy.Consolidate {
+		// A debate's runs are placed in rounds from the runs recorded so
+		// far: one at a time, until each is recorded.
+		s.debateMu.Lock()
+		defer s.debateMu.Unlock()
 	}
 	run, err := s.newRun(r, req)
 	if err != nil {
@@ -153,6 +166,12 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	}
 	if err := runs.ValidSpec(req.Spec); err != nil {
 		return run, runErr(http.StatusBadRequest, "%v", err)
+	}
+	switch {
+	case req.Kind == policy.Consolidate && req.Debate == nil:
+		return run, runErr(http.StatusBadRequest, "consolidate runs need a debate")
+	case req.Debate != nil && req.Kind != policy.Discuss && req.Kind != policy.Consolidate:
+		return run, runErr(http.StatusBadRequest, "only discuss and consolidate runs take a debate")
 	}
 	ttl := defaultRunTTL
 	if req.TTLSeconds > 0 {
@@ -241,11 +260,11 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		}
 		run.PR, run.SHA, run.Branch = req.PR, pr.Head.Sha, pr.Head.Ref
 
-	case policy.Discuss, policy.Retro:
+	case policy.Discuss, policy.Retro, policy.Consolidate:
 		// Any issue or pull request, open or closed: discussing changes
-		// nothing but the comments, and a retro looks back at finished
-		// work. The run reads the default branch's current code, recorded
-		// as its SHA.
+		// nothing but the comments (a debate's, the wiki), and a retro
+		// looks back at finished work. The run reads the default branch's
+		// current code, recorded as its SHA.
 		if req.Issue <= 0 {
 			return run, runErr(http.StatusBadRequest, "%s runs need an issue or pull request number", req.Kind)
 		}
@@ -279,6 +298,11 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 				run.AllowSameFamily = true
 			}
 		}
+		if req.Debate != nil {
+			if err := s.placeInDebate(r.Context(), &run, req, is.Title); err != nil {
+				return run, err
+			}
+		}
 		if req.Kind == policy.Retro {
 			// The cross-family rule, as for verify: a model looking back on
 			// its own family's work is the weakest reviewer of it.
@@ -310,7 +334,7 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		}
 
 	default:
-		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan, policy.Retro)
+		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan, policy.Retro, policy.Consolidate)
 	}
 	return run, nil
 }

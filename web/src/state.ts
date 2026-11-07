@@ -687,9 +687,9 @@ function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
 }
 
 // Whether runs of kind stand alone, one thread each, outside the flows:
-// discuss and retro runs look at an issue without working it.
+// discuss, retro and consolidate runs look at an issue without working it.
 export function isStandaloneKind(kind: string | undefined): boolean {
-  return kind === 'discuss' || kind === 'retro';
+  return kind === 'discuss' || kind === 'retro' || kind === 'consolidate';
 }
 
 // Group history runs into flow-centric threads (grouping implement & verify runs

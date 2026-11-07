@@ -63,10 +63,24 @@ type PromptData struct {
 	AttachmentsOf    int64
 	Attachments      []Attachment
 	AttachmentsError string
+	// Debate is the round a debate's discuss run answers in or its
+	// consolidate run merges (#315); nil outside a debate.
+	Debate *DebatePrompt
+}
+
+// DebatePrompt is a debate round as its runs' prompts show it.
+type DebatePrompt struct {
+	Round    int
+	Question string
+	File     string   // the one file the run writes: its answer, or the consolidation
+	Page     string   // the debate's page, which bottown rewrites per round
+	Answers  []string // consolidate: the round's answers
+	Earlier  []string // earlier rounds' files the run may read
 }
 
 // Prompt renders the goal prompt for kind (a run role: "implement",
-// "verify", "discuss", "plan" or "retro").
+// "verify", "discuss", "plan", "retro" or "consolidate"; or "debate", a
+// discuss run in a debate round).
 func Prompt(kind string, d PromptData) (string, error) {
 	var b bytes.Buffer
 	if err := prompts.ExecuteTemplate(&b, kind+".md", d); err != nil {

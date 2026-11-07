@@ -68,7 +68,10 @@ bottown run end [--failed] --summary-file -
   comment on the issue. They cannot push, open PRs or review. A critical
   one (`run start discuss --critical 12`, or `/bottown-discuss-critical 12
   FOCUS`) red-teams the issue's design, and must be from another model
-  family than the issue's author; only the owner can waive that.
+  family than the issue's author; only the owner can waive that. In a
+  **debate** round (`bottown debate`, the owner's), each answers the same
+  question in its own wiki file instead, and may not comment or file
+  issues until a **consolidate run** has merged the round's answers.
 - **Retro runs** write a blameless retrospective of one issue's flow from
   bottown's records, posted as a comment on the issue. Like discuss runs,
   they cannot push, open PRs or review; they may file follow-up issues.

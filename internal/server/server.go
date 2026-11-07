@@ -54,6 +54,7 @@ type Server struct {
 	// The wiki store (wiki.go) serialises its own writes; the push and
 	// create hooks replace Forgejo in tests.
 	wikiMu       sync.Mutex
+	debateMu     sync.Mutex // places runs in debate rounds one at a time (debate.go)
 	wikiPushFn   func(ctx context.Context, gitDir, branch, old, commit string) error
 	wikiCreateFn func(ctx context.Context, org, repo string) error
 }
@@ -408,7 +409,7 @@ func (s *Server) proxy(path string, auth func(*http.Request)) *httputil.ReverseP
 }
 
 func runScope(run *secrets.Run) policy.RunScope {
-	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind}
+	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind, Debate: inDebateRound(run)}
 }
 
 // audit logs a proxy decision, and stores it unless it is an allowed read:

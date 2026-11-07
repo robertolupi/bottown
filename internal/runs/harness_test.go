@@ -212,6 +212,40 @@ func TestPromptsNameForgeRemote(t *testing.T) {
 	}
 }
 
+// A debate's runs write their one file through the wiki store, and a
+// round's discuss runs are told they cannot comment.
+func TestDebatePrompts(t *testing.T) {
+	base := PromptData{RunID: "r-1", Actor: "claude", Family: "anthropic", Repo: "o/r", Issue: 7, Title: "T", SHA: "abc", Base: "main", Bottown: "/b", Remote: "bottown"}
+	d := base
+	d.Debate = &DebatePrompt{Round: 2, Question: "Which store?", File: "reviews/7-t/r2-claude.md", Page: "Review-7-t",
+		Earlier: []string{"reviews/7-t/r1-consolidated.md"}}
+	p, err := Prompt("debate", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"round 2 of a debate", "Which store?", "/b wiki put reviews/7-t/r2-claude.md", "`reviews/7-t/r1-consolidated.md`",
+		"may not comment on the issue or file issues", "`bottown` is the bottown forge"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("debate prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "comment --body-file") {
+		t.Errorf("debate prompt tells the run to comment:\n%s", p)
+	}
+	c := base
+	c.Debate = &DebatePrompt{Round: 1, File: "reviews/7-t/r1-consolidated.md", Page: "Review-7-t",
+		Answers: []string{"reviews/7-t/r1-claude.md", "reviews/7-t/r1-codex.md"}}
+	p, err = Prompt("consolidate", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"consolidator", "`reviews/7-t/r1-codex.md`", "/b wiki put reviews/7-t/r1-consolidated.md", "`Review-7-t`", "Review the issue"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("consolidate prompt lacks %q:\n%s", want, p)
+		}
+	}
+}
+
 // Runs share the host: implement and verify prompts say not to touch what
 // another run started, nor the shared instances.
 func TestPromptsSayRunsShareTheHost(t *testing.T) {

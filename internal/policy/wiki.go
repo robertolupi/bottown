@@ -3,6 +3,8 @@ package policy
 import (
 	"slices"
 	"strings"
+
+	"github.com/robertolupi/bottown/internal/wiki"
 )
 
 // The wiki is reached only through bottown's wiki store (`bottown wiki`,
@@ -40,11 +42,66 @@ type WikiRule struct {
 }
 
 // WikiRules are the store's rules, the first match wins; a path no rule
-// matches is denied. #311 (garden runs) and #315 (round files) add theirs
-// before the defaults.
+// matches is denied. #311 (garden runs) adds its rules before the defaults;
+// debate round files are decided by DecideWikiRound before these.
 var WikiRules = []WikiRule{
 	{Name: "wiki-owner", Who: []string{WikiOwner}, Pattern: "/**", Read: true, Write: true},
-	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro}, Pattern: "/**", Read: true},
+	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro, Consolidate}, Pattern: "/**", Read: true},
+}
+
+// WikiRound is a run's place in a debate round, for the round file rules.
+type WikiRound struct {
+	Debate      string // the debate's name (wiki.Debate.Name)
+	Round       int
+	Actor       string
+	Raw         bool // earlier rounds' answers are readable, not only their consolidations
+	Consolidate bool // the round's consolidate run, not one of its discuss runs
+}
+
+// DecideWikiRound decides an access to a debate's round file
+// (reviews/<debate>/r<N>-<author>.md), ahead of WikiRules; ok is false for
+// any other path, which WikiRules decide. in is the run's round, nil
+// outside a debate; consolidated reports whether a debate's round n has
+// its consolidation.
+//
+// Rounds are independent: a discuss run writes only its own answer and
+// reads, of its debate, only its own answer and earlier rounds'
+// consolidations (their answers too when the round allows), never another
+// actor's answer in its round. Its consolidate run writes only the
+// round's consolidation and reads the round and those before it. Nobody
+// else but the owner writes round files, and they read a round only once
+// it is consolidated.
+func DecideWikiRound(who string, in *WikiRound, write bool, p string, consolidated func(debate string, n int) bool) (d Decision, ok bool) {
+	r, isRound := wiki.ParseRound(p)
+	if !isRound {
+		return Decision{}, false
+	}
+	if who == WikiOwner {
+		return Decision{Allow: true, Rule: "wiki-owner"}, true
+	}
+	own := in != nil && r.Debate == in.Debate
+	if write {
+		switch {
+		case own && in.Consolidate && r.N == in.Round && r.Author == wiki.Consolidated:
+			return Decision{Allow: true, Rule: "wiki-round-consolidate"}, true
+		case own && !in.Consolidate && r.N == in.Round && r.Author == in.Actor:
+			return Decision{Allow: true, Rule: "wiki-round-answer"}, true
+		}
+		return Decision{Allow: false, Rule: "wiki-round-write"}, true
+	}
+	switch {
+	case own && in.Consolidate:
+		return Decision{Allow: r.N <= in.Round, Rule: "wiki-round-consolidate"}, true
+	case own && r.N == in.Round && r.Author == in.Actor:
+		return Decision{Allow: true, Rule: "wiki-round-answer"}, true
+	case own && r.N < in.Round && (r.Author == wiki.Consolidated || in.Raw):
+		return Decision{Allow: true, Rule: "wiki-round-earlier"}, true
+	case own:
+		return Decision{Allow: false, Rule: "wiki-round-independent"}, true
+	case consolidated(r.Debate, r.N):
+		return Decision{Allow: true, Rule: "wiki-round-closed"}, true
+	}
+	return Decision{Allow: false, Rule: "wiki-round-open"}, true
 }
 
 // DecideWiki decides a wiki store access by who (WikiOwner, WikiActor or a
