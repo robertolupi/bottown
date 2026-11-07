@@ -193,8 +193,14 @@ leaves the choice to an owner-inbox action. On yes, bottown creates a
 two-parent commit saying the merge was automatic and pushes it as the owner.
 The unchanged-patch approval rule below then carries its approval over, and
 the flow continues at the new head. When the merge would conflict, the flow
-stops as "conflicts with main" and reports the conflicting files; the owner
-starts an implement run to resolve them.
+comments on the issue with the conflicting files and starts an implement
+round whose prompt names them and asks the implementer to merge the base,
+resolve them, run the checks and push; the flow then gates and verifies the
+new head as usual. These conflict rounds are counted by the flow itself,
+apart from the review rounds, up to `--rounds` per flow command. The flow
+stops as "conflicts with main", reporting the conflicting files, when they
+are used or when one pushes no new commit; the owner then resolves them or
+starts an implement run.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
 action (the UI offers it); a flow never starts one.
@@ -209,7 +215,7 @@ the owner sees it in Forgejo and in the UI:
 | run failed | a run failed, crashed or timed out | read its handover, and the run log and the harness's last error line that the stop names; fix the issue text or the environment, then re-run the flow (with another actor, if the run ended before the agent did anything because its actor is out of quota or signed out) |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
-| conflicts with main | merging `main` into the PR would conflict | read the named files; start an implement run to resolve them |
+| conflicts with main | merging `main` into the PR would still conflict after the flow's conflict rounds, or one pushed nothing | read the named files; start an implement run to resolve them, or re-run the flow |
 | checks failed | the post-implement checks failed at the head and no check rounds remain | read the log the stop names; fix the cause (a flake gets its own issue), then re-run, maybe with more check rounds |
 | actor busy | with `--serialize-actors`, the actor's other batch run, which the stop names, was still live after `--actor-wait` | see why that run has not ended; stop or revoke it, then re-run the flow |
 
@@ -226,7 +232,9 @@ again:
 2. No open PR from `issue/<n>` → implement.
 3. An open PR at head H, by its review assessment (below):
    - the PR is behind and a trial merge is clean → offer to merge the base;
-   - the trial merge conflicts → stop with the conflicting files;
+   - the trial merge conflicts → an implement run to resolve them, if
+     this flow's conflict rounds are left, else stop with the conflicting
+     files;
    - approved → stop: ready to merge;
    - changes requested at H → a follow-up implement run, if rounds are
      left;

@@ -678,18 +678,81 @@ func TestFlowMergeBaseNoAndUnattended(t *testing.T) {
 	}
 }
 
-func TestFlowMergeBaseConflictReportsFiles(t *testing.T) {
+func TestFlowMergeBaseConflictStartsImplementRound(t *testing.T) {
 	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt", "b.txt"}}}
-	runner := RunnerFunc(func(context.Context, RunRequest) error {
-		t.Fatal("a conflict must not start an automatic run")
+	var calls []RunRequest
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		calls = append(calls, req)
+		switch req.Kind {
+		case policy.Implement:
+			// The round merges the base and pushes a clean head.
+			api.pr.HeadSHA = "h2"
+			api.merge = server.PRMergeStatus{}
+		case policy.Verify:
+			approve(api)
+		}
+		return nil
+	})
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if len(calls) != 2 || calls[0].Kind != policy.Implement || calls[1].Kind != policy.Verify || calls[1].SHA != "h2" {
+		t.Fatalf("runs = %+v, want implement then verify at h2", calls)
+	}
+	note := calls[0].Note
+	for _, want := range []string{"resolve merge conflicts", "`a.txt`, `b.txt`", "git merge bottown/main", "!12"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note = %q, want %q in it", note, want)
+		}
+	}
+	if len(api.comments) == 0 || !strings.Contains(api.comments[0], "conflicts with main") || !strings.Contains(api.comments[0], "a.txt, b.txt") {
+		t.Fatalf("comments = %v, want the conflict announced on the issue", api.comments)
+	}
+	if len(api.mergeCalls) != 0 {
+		t.Fatalf("merges = %v", api.mergeCalls)
+	}
+}
+
+func TestFlowMergeBaseConflictRoundPushesNothing(t *testing.T) {
+	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt"}}}
+	implements := 0
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if req.Kind != policy.Implement {
+			t.Fatalf("run = %s, want implement", req.Kind)
+		}
+		implements++
 		return nil
 	})
 	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
 	var stop *StopError
-	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain {
-		t.Fatalf("result = %+v, err = %v", result, err)
+	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain || implements != 1 {
+		t.Fatalf("result = %+v, err = %v, implements = %d", result, err, implements)
 	}
-	if !strings.Contains(result.Detail, "a.txt, b.txt") || len(api.mergeCalls) != 0 {
-		t.Fatalf("detail = %q, merges = %v", result.Detail, api.mergeCalls)
+	if !strings.Contains(result.Detail, "pushed no new commit") || !strings.Contains(result.Detail, "a.txt") {
+		t.Fatalf("detail = %q", result.Detail)
+	}
+}
+
+func TestFlowMergeBaseConflictOutOfRounds(t *testing.T) {
+	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt", "b.txt"}}}
+	implements := 0
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		if req.Kind != policy.Implement {
+			t.Fatalf("run = %s, want implement", req.Kind)
+		}
+		// Each round pushes, but the base keeps conflicting.
+		implements++
+		api.pr.HeadSHA = fmt.Sprintf("h%d", implements+1)
+		return nil
+	})
+	opts := testOptions()
+	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
+	var stop *StopError
+	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain || implements != opts.Rounds {
+		t.Fatalf("result = %+v, err = %v, implements = %d", result, err, implements)
+	}
+	if !strings.Contains(result.Detail, "a.txt, b.txt") || !strings.Contains(result.Detail, "3 conflict rounds are used") {
+		t.Fatalf("detail = %q", result.Detail)
 	}
 }

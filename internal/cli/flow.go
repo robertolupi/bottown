@@ -36,7 +36,14 @@ status bottown/e2e on the head, written by the owner. If they pass, the
 verify run's prompt says so and names the log; if they fail, the flow
 starts another implement round with the failure in its prompt. Those
 rounds count against --check-rounds, not --rounds. A repository whose
-.bottown.toml sets e2e = [] has no post-implement checks.`,
+.bottown.toml sets e2e = [] has no post-implement checks.
+
+When the PR's base has moved and merging it into the branch would conflict,
+the flow starts an implement round with the conflicting files in its
+prompt, asking the implementer to merge the base and resolve them. Up to
+--rounds such rounds run in one flow, apart from the review rounds; the
+flow stops (conflicts with main) when they are used, or when one pushes
+nothing.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := parseNumber(args[0])
