@@ -15,7 +15,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -310,12 +309,20 @@ func TestE2E(t *testing.T) {
 		if bp.RequiredApprovals != 1 || !bp.DismissStaleApprovals || !bp.EnableMergeWhitelist {
 			t.Fatalf("protection = %+v", bp)
 		}
-		var mp struct {
+		// The proxy refuses encoded paths, so the rule is read from the list.
+		type rule struct {
+			RuleName                string   `json:"rule_name"`
 			EnablePushWhitelist     bool     `json:"enable_push_whitelist"`
 			PushWhitelistUsernames  []string `json:"push_whitelist_usernames"`
 			MergeWhitelistUsernames []string `json:"merge_whitelist_usernames"`
 		}
-		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections/"+url.PathEscape("milestone/*"), nil, &mp)
+		var rules []rule
+		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections", nil, &rules)
+		i := slices.IndexFunc(rules, func(r rule) bool { return r.RuleName == "milestone/*" })
+		if i < 0 {
+			t.Fatalf("no milestone/* rule in %+v", rules)
+		}
+		mp := rules[i]
 		slices.Sort(mp.PushWhitelistUsernames)
 		slices.Sort(mp.MergeWhitelistUsernames)
 		if !mp.EnablePushWhitelist || !slices.Equal(mp.PushWhitelistUsernames, []string{"manager", "owner"}) ||
@@ -516,7 +523,7 @@ func TestE2E(t *testing.T) {
 		if out, err := a.pushAs(demo, "claude", impl, "main:refs/heads/milestone/x"); err == nil {
 			t.Errorf("implementer push to milestone/x succeeded:\n%s", out)
 		}
-		if code, _ := a.api(owner, "GET", "/repos/bottown/demo/branches/milestone%2Fx", nil); code != 404 {
+		if code, _ := a.api(owner, "GET", "/repos/bottown/demo/branches/milestone/x", nil); code != 404 {
 			t.Errorf("milestone/x exists after a refused push: %d", code)
 		}
 		var me struct{ Login string }
