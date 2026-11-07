@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1207,6 +1208,84 @@ func TestE2E(t *testing.T) {
 		}
 		if out := must(cw, "", "run", "end", "--summary", "planned demo"); !strings.Contains(out, "succeeded; key revoked") {
 			t.Errorf("plan run end: %s", out)
+		}
+	})
+
+	t.Run("wiki store: put, owner edits, generate", func(t *testing.T) {
+		cw := filepath.Join(fam, "claude")
+		files := t.TempDir()
+		write := func(name, content string) string {
+			f := filepath.Join(files, name)
+			if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return f
+		}
+		agent := func(args ...string) (string, error) {
+			c := exec.Command(bin, args...)
+			for _, e := range a.env() {
+				if !strings.HasPrefix(e, "BOTTOWN_INSTANCE=") {
+					c.Env = append(c.Env, e)
+				}
+			}
+			c.Dir = cw
+			b, err := c.CombinedOutput()
+			return string(b), err
+		}
+		// The owner's first put creates the wiki through Forgejo.
+		out := a.mustCmd(demo, "wiki", "put", "Idea", "--file", write("idea.md", "# Idea\n\nBack to [[Home]].\n"))
+		if !strings.Contains(out, "wrote Idea.md") || !strings.Contains(out, "Wiki-Health.md") {
+			t.Fatalf("first put: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "list"); strings.Contains(out, "Home.md") || !strings.Contains(out, "Idea.md") {
+			t.Fatalf("list after the first put (the creation's placeholder must go): %s", out)
+		}
+		// Agents read through the store, and nothing else.
+		out, err := agent("wiki", "read", "Idea", "--json")
+		var idea struct{ SHA, Content string }
+		if err != nil || json.Unmarshal([]byte(out), &idea) != nil || !strings.Contains(idea.Content, "<!-- bottown:backlinks:generated -->") {
+			t.Fatalf("agent read: %v %s", err, out)
+		}
+		if out, err := agent("wiki", "put", "Idea", "--base", idea.SHA, "--file", write("x.md", "x\n")); err == nil || !strings.Contains(out, "read-only") && !strings.Contains(out, "wiki-read") {
+			t.Errorf("agent put outside a run: %v %s", err, out)
+		}
+		if out, err := agent("api", "GET", "/repos/bottown/demo/wiki/pages"); err == nil || !strings.Contains(out, "wiki-via-store") {
+			t.Errorf("agent wiki API: %v %s", err, out)
+		}
+		if out, err := exec.Command("git", "-C", cw, "ls-remote", a.cfg.ServerURL()+"/git/bottown/demo.wiki.git").CombinedOutput(); err == nil {
+			t.Errorf("agent wiki git: %s", out)
+		}
+		// The owner edits Idea and adds a page through Forgejo's API, as the
+		// web UI would; generated blocks are not refreshed by that.
+		if code, b := a.api(owner, "PATCH", "/repos/bottown/demo/wiki/page/Idea", map[string]string{
+			"title": "Idea", "content_base64": base64.StdEncoding.EncodeToString([]byte(idea.Content + "\nOwner's line.\n")), "message": "owner edits",
+		}); code != http.StatusOK {
+			t.Fatalf("owner wiki edit: %d %s", code, b)
+		}
+		if code, b := a.api(owner, "POST", "/repos/bottown/demo/wiki/new", map[string]string{
+			"title": "Owner Note", "content_base64": base64.StdEncoding.EncodeToString([]byte("See [[Idea]].\n")), "message": "owner adds a page",
+		}); code != http.StatusCreated {
+			t.Fatalf("owner wiki page: %d %s", code, b)
+		}
+		// A put at the blob read before the owner's edit is a conflict.
+		if out, err := a.cmd(demo, "wiki", "put", "Idea", "--base", idea.SHA, "--file", write("lost.md", "lost\n")); err == nil || !strings.Contains(out, "changed since") {
+			t.Errorf("stale put: %v %s", err, out)
+		}
+		if out, err := a.cmd(demo, "wiki", "generate", "--check"); err == nil || !strings.Contains(out, "stale: Idea.md backlinks") || !strings.Contains(out, "stale: Owner-Note.md backlinks") {
+			t.Errorf("check after the owner's edits: %v %s", err, out)
+		}
+		if out := a.mustCmd(demo, "wiki", "generate"); !strings.Contains(out, "regenerated") {
+			t.Errorf("generate: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "generate", "--check"); !strings.Contains(out, "no stale generated blocks") {
+			t.Errorf("check after generate: %s", out)
+		}
+		out, err = agent("wiki", "read", "Idea")
+		if err != nil || !strings.Contains(out, "Owner's line.") || !strings.Contains(out, "**Linked from:** [Owner Note](Owner-Note)") {
+			t.Errorf("Idea after generate: %v %s", err, out)
+		}
+		if out := a.mustCmd(demo, "wiki", "generate"); !strings.Contains(out, "nothing to regenerate") {
+			t.Errorf("second generate: %s", out)
 		}
 	})
 

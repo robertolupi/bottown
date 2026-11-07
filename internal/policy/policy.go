@@ -3,7 +3,7 @@
 // bot can do, so the default is allow; the rules deny the policy-carrying
 // writes that bottown performs itself (merge, commit status, protection,
 // labels, dependencies, issue and PR edits, milestones, repository and org
-// administration).
+// administration), and the wiki, which the wiki store fronts (wiki.go).
 package policy
 
 import (
@@ -65,6 +65,7 @@ func Default(owner string) Policy {
 			{Name: "user-tokens", Pattern: "/users/*/tokens/**"},
 			{Name: "orgs", Methods: writes, Pattern: "/orgs/**"},
 			{Name: "teams", Methods: writes, Pattern: "/teams/**"},
+			wikiAPI,
 		},
 	}
 }

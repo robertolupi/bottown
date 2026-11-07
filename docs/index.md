@@ -16,8 +16,9 @@ full, then only the document, or section, your work needs.
   [Linux e2e](reference.md#linux-e2e) (`make e2e-linux`),
   [runs](reference.md#runs) (issue branches, scratch directories,
   `run gc`, sharing the host),
-  [harness models](reference.md#harness-models) and
-  [the fam guide](reference.md#the-fam-guide).
+  [harness models](reference.md#harness-models),
+  [the fam guide](reference.md#the-fam-guide) and
+  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`).
 - [Local web UI and supervisor](design/web-ui.md): read for `bottown flow`
   (implement and cross-family verify), `bottown web ui` (runs, the inbox,
   host state) and `.bottown.toml`. Built: Phases 3–7 (host UI and health,

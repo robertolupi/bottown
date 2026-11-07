@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -221,4 +222,16 @@ func (c *Client) AllIssueDependencies(owner, repo string, index int64) ([]*sdk.I
 			return all, nil
 		}
 	}
+}
+
+// CreateWikiPage creates a wiki page through the API, which is how a
+// repository's wiki comes to exist: a git push to a wiki Forgejo has not
+// created is refused.
+func (c *Client) CreateWikiPage(owner, repo, title, content, message string) error {
+	in := map[string]string{
+		"title":          title,
+		"content_base64": base64.StdEncoding.EncodeToString([]byte(content)),
+		"message":        message,
+	}
+	return c.do("POST", fmt.Sprintf("/repos/%s/%s/wiki/new", url.PathEscape(owner), url.PathEscape(repo)), in, nil)
 }
