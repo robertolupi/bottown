@@ -216,3 +216,52 @@ test('Stats shows a spinner while it loads, and while it refreshes', async () =>
     view.unmount();
   }
 });
+
+test('Stats: a range change during a load aborts it and shows the new range (#355)', async () => {
+  // Each fetch waits until the test answers it; an answer to an aborted
+  // request still arrives, as from a server that ignores the abort.
+  const pending: Array<{ url: string; signal: AbortSignal; answer: (body: unknown) => void }> = [];
+  globalThis.fetch = ((url: string, init?: RequestInit) => new Promise<Response>((resolve) => {
+    pending.push({ url, signal: init!.signal!, answer: (body) => resolve(new Response(JSON.stringify(body), { status: 200 })) });
+  })) as typeof fetch;
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      flushSync();
+    }
+  };
+  const props = reactiveProps({ refreshKey: 0, issuesLink: '', pullsLink: '' });
+  const view = render(Stats, props);
+  try {
+    await settle();
+    assert.equal(pending.length, 1, 'the 30-day load');
+    const old = pending[0];
+
+    // A refresh of the same range while it loads does not start another.
+    props.refreshKey = 1;
+    await settle();
+    assert.equal(pending.length, 1, 'a refresh joins the running load');
+    assert.equal(old.signal.aborted, false);
+
+    const select = view.target.querySelector('.stats-range select') as HTMLSelectElement;
+    select.value = '7d';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    assert.equal(pending.length, 2, 'the new range loads at once');
+    assert.ok(old.signal.aborted, "the old range's load is aborted");
+    const since = (url: string) => Date.parse(new URLSearchParams(url.split('?')[1]).get('since')!);
+    assert.ok(since(pending[1].url) > since(old.url), 'the second load asks for the shorter range');
+
+    old.answer(data({ issues: [], breakdowns: [], milestones: [] }));
+    await settle();
+    assert.doesNotMatch(view.target.textContent!, /No issue or PR had activity/, "the old range's answer is dropped");
+    assert.ok(view.target.querySelector('.stats-loading'), 'still loading the new range');
+
+    pending[1].answer(data());
+    await settle();
+    assert.equal(view.target.querySelector('.stats-loading'), null);
+    assert.match(view.target.textContent!, /1 issue, 1 merged/);
+  } finally {
+    view.unmount();
+  }
+});

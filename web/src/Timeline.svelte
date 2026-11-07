@@ -7,6 +7,7 @@
   import type { TimelineData, TimelineFlowLane, TimelineRun, TimelineSegment } from './types';
   import { runOutcome } from './state';
   import { reloadOn } from './reload.svelte';
+  import { LatestLoad } from './latest';
   import {
     LANE_PAD,
     RANGE_PRESETS,
@@ -58,20 +59,30 @@
   // worked out again at each load, so it moves with the clock.
   let customQuery = $derived(preset === 'custom' ? timelineQuery(preset, new Date(), customFrom, customTo) : '');
 
+  // A range change during a load aborts it and loads the new range (#355).
+  const latest = new LatestLoad();
+
   async function load() {
     const query = timelineQuery(preset, new Date(), customFrom, customTo);
-    if (loading || query === null) return;
+    if (query === null) {
+      if (latest.cancel()) loading = false;
+      return;
+    }
+    const signal = latest.start(`${preset} ${customQuery}`);
+    if (!signal) return;
     loading = true;
     try {
-      const res = await fetch(`/api/timeline?${query}`);
+      const res = await fetch(`/api/timeline?${query}`, { signal });
       const body = await res.json();
+      if (signal.aborted) return;
       if (!res.ok) throw new Error(body?.error || `Failed to load the timeline: ${res.statusText}`);
       data = body;
       loadError = null;
     } catch (e: any) {
+      if (signal.aborted) return;
       loadError = e.message || 'Failed to load the timeline';
     } finally {
-      loading = false;
+      if (latest.finish(signal)) loading = false;
     }
   }
 

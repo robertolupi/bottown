@@ -7,6 +7,7 @@
   import type { StatsCell, StatsData, StatsIssue, StatsMilestone } from './types';
   import { formatSpan } from './timeline';
   import { reloadOn } from './reload.svelte';
+  import { LatestLoad } from './latest';
   import {
     BREAKDOWN_LABELS,
     STATS_RANGE_PRESETS,
@@ -42,20 +43,30 @@
 
   let customQuery = $derived(preset === 'custom' ? statsQuery(preset, new Date(), customFrom, customTo) : '');
 
+  // A range change during a load aborts it and loads the new range (#355).
+  const latest = new LatestLoad();
+
   async function load() {
     const query = statsQuery(preset, new Date(), customFrom, customTo);
-    if (loading || query === null) return;
+    if (query === null) {
+      if (latest.cancel()) loading = false;
+      return;
+    }
+    const signal = latest.start(`${preset} ${customQuery}`);
+    if (!signal) return;
     loading = true;
     try {
-      const res = await fetch(`/api/stats?${query}`);
+      const res = await fetch(`/api/stats?${query}`, { signal });
       const body = await res.json();
+      if (signal.aborted) return;
       if (!res.ok) throw new Error(body?.error || `Failed to load the stats: ${res.statusText}`);
       data = body;
       loadError = null;
     } catch (e: any) {
+      if (signal.aborted) return;
       loadError = e.message || 'Failed to load the stats';
     } finally {
-      loading = false;
+      if (latest.finish(signal)) loading = false;
     }
   }
 
