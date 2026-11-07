@@ -14,10 +14,19 @@ import (
 
 // ComputeActivity is the repository's activity in w (internal/activity):
 // the one derivation the timeline and the statistics views both serve.
-// Issues' comments are kept in memory between calls, by their updated
-// time, so a load reads only the issues that changed.
+// Issues' comments, and merged or closed PRs' reviews and gates, are kept
+// in memory between calls, by their updated time, so a load reads only the
+// issues and PRs that changed, and the open PRs.
 func (s *Server) ComputeActivity(ctx context.Context, w activity.Window) (*activity.Activity, error) {
-	return activity.Load(ctx, activitySource{s}, &s.activityIssues, w, time.Now())
+	a, _, err := s.computeActivity(ctx, w)
+	return a, err
+}
+
+// computeActivity is ComputeActivity, with the issue list it read.
+func (s *Server) computeActivity(ctx context.Context, w activity.Window) (*activity.Activity, []*serverapi.IssueItem, error) {
+	src := &activitySource{s: s}
+	a, err := activity.Load(ctx, src, &s.activityCache, w, time.Now())
+	return a, src.issues, err
 }
 
 // window is the window a request asks for: since and until as RFC 3339,
@@ -48,30 +57,36 @@ func window(r *http.Request, now time.Time, def time.Duration) (activity.Window,
 }
 
 // activitySource reads activity's facts through the server, as the UI's
-// other reads do (forge.go).
-type activitySource struct{ s *Server }
+// other reads do (forge.go). It keeps the issue list it read, which the
+// statistics use too.
+type activitySource struct {
+	s      *Server
+	issues []*serverapi.IssueItem
+}
 
-func (a activitySource) Runs(ctx context.Context) ([]serverapi.RunItem, error) {
+func (a *activitySource) Runs(ctx context.Context) ([]serverapi.RunItem, error) {
 	return a.s.serverRuns(ctx, "", true)
 }
 
-func (a activitySource) PullRequests(ctx context.Context) ([]*serverapi.PRItem, error) {
+func (a *activitySource) PullRequests(ctx context.Context) ([]*serverapi.PRItem, error) {
 	return a.s.pullRequests(ctx, "all", false)
 }
 
-func (a activitySource) Issues(ctx context.Context) ([]*serverapi.IssueItem, error) {
-	return a.s.issues(ctx, "all", false)
+func (a *activitySource) Issues(ctx context.Context) ([]*serverapi.IssueItem, error) {
+	issues, err := a.s.issues(ctx, "all", false)
+	a.issues = issues
+	return issues, err
 }
 
-func (a activitySource) PullRequest(ctx context.Context, n int64) (*serverapi.PROut, error) {
+func (a *activitySource) PullRequest(ctx context.Context, n int64) (*serverapi.PROut, error) {
 	return a.s.pullRequest(ctx, n)
 }
 
-func (a activitySource) Issue(ctx context.Context, n int64) (*serverapi.IssueOut, error) {
+func (a *activitySource) Issue(ctx context.Context, n int64) (*serverapi.IssueOut, error) {
 	return a.s.issue(ctx, n, true)
 }
 
-func (a activitySource) Gate(ctx context.Context, n int64) (serverapi.GateOut, error) {
+func (a *activitySource) Gate(ctx context.Context, n int64) (serverapi.GateOut, error) {
 	_, repo := a.s.orgAndRepo()
 	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(n)}}
 	var out serverapi.GateOut
