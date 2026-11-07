@@ -243,17 +243,28 @@ func TestStopReasons(t *testing.T) {
 		t.Fatalf("stops = %v, want %v", got, flow.StopReasons)
 	}
 	// Back-to-back stops with no run between: each wait ends at the next
-	// stop, and the last one still waits.
-	if n := len(th.OwnerWaits); n != len(flow.StopReasons) {
-		t.Fatalf("waits = %+v", th.OwnerWaits)
-	}
-	for i, w := range th.OwnerWaits[:len(th.OwnerWaits)-1] {
-		if w.EndedBy != EndedByStop || !w.End.Equal(th.Stops[i+1].Time) || w.Reason != th.Stops[i].Reason {
-			t.Errorf("wait %d = %+v", i, w)
+	// stop, and the last one still waits. A merged stop leaves none.
+	var waiting []Stop
+	for _, st := range th.Stops {
+		if st.Reason != flow.Merged {
+			waiting = append(waiting, st)
 		}
 	}
-	if last := th.OwnerWaits[len(th.OwnerWaits)-1]; last.End != nil || last.EndedBy != "" {
-		t.Errorf("last wait = %+v, want still waiting", last)
+	if len(th.OwnerWaits) != len(waiting) {
+		t.Fatalf("waits = %+v", th.OwnerWaits)
+	}
+	for i, w := range th.OwnerWaits {
+		if w.Reason != waiting[i].Reason || !w.Start.Equal(waiting[i].Time) {
+			t.Errorf("wait %d = %+v, want from %+v", i, w, waiting[i])
+		}
+		next := slices.IndexFunc(th.Stops, func(st Stop) bool { return st.Time.After(w.Start) })
+		if next < 0 {
+			if w.End != nil || w.EndedBy != "" {
+				t.Errorf("last wait = %+v, want still waiting", w)
+			}
+		} else if w.EndedBy != EndedByStop || !w.End.Equal(th.Stops[next].Time) {
+			t.Errorf("wait %d = %+v, want ended by the stop at %v", i, w, th.Stops[next].Time)
+		}
 	}
 }
 
@@ -504,6 +515,16 @@ func TestLoadStopWithoutRuns(t *testing.T) {
 				t.Errorf("wait = %+v, want from hour %v and still going", w, tc.stop)
 			}
 		})
+	}
+}
+
+// A merged stop, which the flow writes after the owner merged its PR mid-flow,
+// leaves the owner no wait; the stop before it still ends at the merge.
+func TestOwnerWaitsMergedStop(t *testing.T) {
+	stops := []Stop{{Time: at(1), Reason: flow.ChecksFailed}, {Time: at(3), Reason: flow.Merged}}
+	waits := ownerWaits(stops, nil, &server.PRItem{MergedAt: ptr(at(2))}, ptr(at(2)))
+	if len(waits) != 1 || waits[0].Reason != flow.ChecksFailed || waits[0].End == nil || !waits[0].End.Equal(at(2)) || waits[0].EndedBy != EndedByMerge {
+		t.Fatalf("waits = %+v", waits)
 	}
 }
 

@@ -30,6 +30,13 @@ func (c *Client) Actors(ctx context.Context) ([]server.ActorInfo, error) {
 	return actors, err
 }
 
+func (c *Client) Issue(ctx context.Context, repo string, number int64) (server.IssueOut, error) {
+	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(number)}, "comments": {"0"}}
+	var is server.IssueOut
+	err := c.call(ctx, "GET", "/v1/forge/issue?"+q.Encode(), nil, &is)
+	return is, err
+}
+
 func (c *Client) OpenPR(ctx context.Context, repo, branch string) (server.PRItem, bool, error) {
 	q := url.Values{"repo": {repo}, "state": {"open"}}
 	var prs []server.PRItem

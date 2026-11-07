@@ -36,12 +36,20 @@ const (
 	// ActorBusy: a flow that serialises actors waited Options.ActorWait
 	// for an actor's other batch run to end, and it is still live.
 	ActorBusy StopReason = "actor busy"
+	// Merged: the PR was merged, or the issue closed, while the flow ran;
+	// the work has landed and nothing is left to do.
+	Merged StopReason = "merged"
 )
 
 // ErrActorBusy marks a run creation refused because the flow serialises
 // actors (Options.SerializeActors) and the actor has another live batch
 // run.
 var ErrActorBusy = errors.New("actor has another live batch run")
+
+// ErrIssueClosed marks an implement run creation refused because the issue
+// is closed: the PR was merged, or the issue closed, after the flow last
+// read them.
+var ErrIssueClosed = errors.New("issue is closed")
 
 // maxRetryDelay bounds the wait between tries of a run whose actor is busy.
 const maxRetryDelay = time.Minute
@@ -80,7 +88,8 @@ type Options struct {
 	// others leave that to the owner inbox.
 	Attended bool
 
-	round int // the review round the PR is in, for RunRequest.Round
+	round int   // the review round the PR is in, for RunRequest.Round
+	pr    int64 // the flow's PR, once it has one, for landed
 }
 
 // Result is the flow's final position.
@@ -173,6 +182,8 @@ func (f RunnerFunc) Run(ctx context.Context, req RunRequest) error { return f(ct
 // API is the owner-authenticated state the supervisor reads and writes.
 type API interface {
 	Actors(context.Context) ([]server.ActorInfo, error)
+	// Issue reads the issue alone, without its discussion.
+	Issue(context.Context, string, int64) (server.IssueOut, error)
 	OpenPR(context.Context, string, string) (server.PRItem, bool, error)
 	PR(context.Context, string, int64) (server.PROut, error)
 	// ReconcileCarries undismisses automatically dismissed approvals whose
@@ -278,6 +289,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			result.PR = pr.Number
 		}
 		opts.round = 1 + server.ChangesRequested(pr.Reviews)
+		opts.pr = result.PR
 		if err := s.checkLiveRuns(ctx, opts, pr.Number); err != nil {
 			return result, err
 		}
@@ -291,6 +303,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return result, err
 			}
 			if !open {
+				if detail, ok, err := s.landed(ctx, opts); err != nil {
+					return result, err
+				} else if ok {
+					return s.stop(ctx, result, Merged, detail)
+				}
 				return s.stop(ctx, result, RunFailed, "the implement run ended without opening a PR")
 			}
 			continue
@@ -399,6 +416,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			if err != nil {
 				return result, err
 			}
+			if after.Merged {
+				return s.stop(ctx, result, Merged, mergedDetail(after))
+			}
 			if after.HeadSHA == head {
 				return s.stop(ctx, result, RunFailed, "the implement run ended without pushing a new head")
 			}
@@ -457,6 +477,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			after, err := s.waitReview(ctx, opts, pr.Number, head)
 			if err != nil {
 				return result, err
+			}
+			if after.Merged {
+				return s.stop(ctx, result, Merged, mergedDetail(after))
 			}
 			if after.HeadSHA == head && after.Assessment.Decision == review.NeedsReview && autoDismissible(after) {
 				// Forgejo dismisses a verdict with the older reviews when it
@@ -651,7 +674,7 @@ func (s *Supervisor) waitReview(ctx context.Context, opts Options, number int64,
 		if err != nil {
 			return pr, err
 		}
-		if pr.HeadSHA != head || pr.Assessment.Decision != review.NeedsReview || autoDismissible(pr) {
+		if pr.Merged || pr.HeadSHA != head || pr.Assessment.Decision != review.NeedsReview || autoDismissible(pr) {
 			return pr, nil
 		}
 		if err := waitForge(ctx); err != nil {
@@ -733,6 +756,13 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 	}
 	var deadline time.Time // of the wait for a busy actor, once one starts
 	for {
+		// The owner may merge the PR while a run, or the wait for a busy
+		// actor, goes on: then no run is left to start.
+		if detail, ok, err := s.landed(ctx, opts); err != nil {
+			return err
+		} else if ok {
+			return &landedError{detail: detail}
+		}
 		if s.Out != nil && !req.Retry {
 			target := fmt.Sprintf("#%d", req.Issue)
 			if req.PR > 0 {
@@ -792,9 +822,55 @@ func (e *actorWaitError) Error() string {
 
 func (e *actorWaitError) Unwrap() error { return e.err }
 
+// landedError is a run step not started because the work has landed;
+// detail says how, for the Merged stop.
+type landedError struct{ detail string }
+
+func (e *landedError) Error() string { return e.detail }
+
+// landed reports whether the work has landed, so no run is left to start:
+// the flow's PR is merged, or the issue is closed. detail says which.
+func (s *Supervisor) landed(ctx context.Context, opts Options) (detail string, ok bool, err error) {
+	if opts.pr > 0 {
+		pr, err := s.API.PR(ctx, opts.Repo, opts.pr)
+		if err != nil {
+			return "", false, err
+		}
+		if pr.Merged {
+			return mergedDetail(pr), true, nil
+		}
+	}
+	is, err := s.API.Issue(ctx, opts.Repo, opts.Issue)
+	if err != nil {
+		return "", false, err
+	}
+	if is.State != "open" {
+		return fmt.Sprintf("issue #%d is %s; nothing left to do", opts.Issue, is.State), true, nil
+	}
+	return "", false, nil
+}
+
+func mergedDetail(pr server.PROut) string {
+	return fmt.Sprintf("!%d was merged at %s; nothing left to do", pr.Number, shortSHA(pr.HeadSHA))
+}
+
 func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (Result, error) {
 	if ctx.Err() != nil {
 		return result, ctx.Err()
+	}
+	var landed *landedError
+	if errors.As(err, &landed) {
+		return s.stop(ctx, result, Merged, landed.detail)
+	}
+	if errors.Is(err, ErrIssueClosed) {
+		// Closed between landed's read and the run's creation.
+		detail := fmt.Sprintf("issue #%d was closed before the run started; nothing left to do", result.Issue)
+		if result.PR > 0 {
+			if pr, perr := s.API.PR(ctx, result.Repo, result.PR); perr == nil && pr.Merged {
+				detail = mergedDetail(pr)
+			}
+		}
+		return s.stop(ctx, result, Merged, detail)
 	}
 	var busy *actorWaitError
 	if errors.As(err, &busy) {
