@@ -65,7 +65,10 @@ bottown run end [--failed] --summary-file -
   author; only the owner can waive that.
 - **Discuss runs** review and discuss one issue without implementing it: the
   worktree is detached at the default branch, and the answer goes in a
-  comment on the issue. They cannot push, open PRs or review.
+  comment on the issue. They cannot push, open PRs or review. In a
+  **debate** round (`bottown debate`, the owner's), each answers the same
+  question in its own wiki file instead, and may not comment or file
+  issues until a **consolidate run** has merged the round's answers.
 - **Retro runs** write a blameless retrospective of one issue's flow from
   bottown's records, posted as a comment on the issue. Like discuss runs,
   they cannot push, open PRs or review; they may file follow-up issues.

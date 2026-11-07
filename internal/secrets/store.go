@@ -53,7 +53,7 @@ type APIKey struct {
 // the forge holds.
 type Run struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"` // implement | verify | discuss | plan | retro
+	Kind    string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate
 	Actor   string `json:"actor"`
 	Family  string `json:"family"`
 	Harness string `json:"harness,omitempty"` // which CLI runs the actor
@@ -86,6 +86,20 @@ type Run struct {
 	Outcome string `json:"outcome,omitempty"`
 	// Purged runs were dropped by PurgeRuns: only their digest is kept.
 	Purged bool `json:"purged,omitempty"`
+	// Debate is the round a debate's discuss run answers in, or a
+	// consolidate run merges (#315); nil for other runs.
+	Debate *Debate `json:"debate,omitempty"`
+}
+
+// Debate is a run's place in a debate: the debate's name in the wiki
+// ([<date>-]<issue>[-<slug>], internal/wiki), its round, whether the round
+// may read earlier rounds' answers as well as their consolidations, and
+// the round's question.
+type Debate struct {
+	Name     string `json:"name"`
+	Round    int    `json:"round"`
+	Raw      bool   `json:"raw,omitempty"`
+	Question string `json:"question,omitempty"`
 }
 
 // Digest is what is known of a run's outcome once it ends: the agent's

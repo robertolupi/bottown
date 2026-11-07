@@ -21,16 +21,28 @@ const (
 	// bottown's records: like a discuss run, they read and comment, and
 	// cannot push, open pull requests or review.
 	Retro = "retro"
+	// Consolidate runs merge one debate round's independent answers into
+	// one, in the wiki (#315): like a discuss run they read and comment,
+	// and cannot push, open pull requests or review.
+	Consolidate = "consolidate"
 )
 
 // RunScope confines a run key to one repository and to its role. It applies
 // after the base Policy: a request must pass both.
 type RunScope struct {
 	Org, Repo string
-	Role      string // Implement | Verify | Discuss | Plan | Retro
+	Role      string // Implement | Verify | Discuss | Plan | Retro | Consolidate
+	// Debate is a discuss run answering in a debate round (#315): it may
+	// not comment or react while the round is open, since every other
+	// participant could read it.
+	Debate bool
 }
 
-// verifyWrites are the only API writes a verify, discuss or retro run may make
+// DebateQuiet is the rule that keeps a debate round's discuss runs off the
+// issue's thread.
+const DebateQuiet = "role-debate-no-comment"
+
+// verifyWrites are the only API writes a verify, discuss, retro or consolidate run may make
 // directly inside its repository: commenting. Reviews go through the review_submit
 // MCP tool, which pins them to the run's commit; everything else that
 // changes the repository (pushes, PRs, issues, files, branches, releases) is
@@ -75,12 +87,15 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 		return Decision{Allow: true, Rule: "run-read"}
 	}
 	switch s.Role {
-	case Verify, Discuss, Retro:
+	case Verify, Discuss, Retro, Consolidate:
 		if slices.Contains(reviewWrites.Methods, method) && match(split(reviewWrites.Pattern), segs) {
 			return Decision{Allow: false, Rule: reviewWrites.Name}
 		}
 		for _, r := range verifyWrites {
 			if slices.Contains(r.Methods, method) && match(split(r.Pattern), segs) {
+				if s.Debate {
+					return Decision{Allow: false, Rule: DebateQuiet}
+				}
 				return Decision{Allow: true, Rule: "run-" + s.Role + "-" + r.Name}
 			}
 		}

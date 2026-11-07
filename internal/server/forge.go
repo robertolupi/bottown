@@ -569,6 +569,11 @@ func (s *Server) opIssueCreate(ctx context.Context, p secrets.Principal, in Issu
 		s.toolAudit(p, "", "issue_create", "deny", "role-plan-no-issues")
 		return IssueCreateOut{}, ferr(http.StatusForbidden, "plan runs may not create issues")
 	}
+	if inDebateRound(p.Run) {
+		// An issue filed now would be read by the round's other runs.
+		s.toolAudit(p, "", "issue_create", "deny", policy.DebateQuiet)
+		return IssueCreateOut{}, errDebateQuiet
+	}
 	if strings.TrimSpace(in.Title) == "" {
 		return IssueCreateOut{}, ferr(http.StatusBadRequest, "title is required")
 	}
@@ -913,6 +918,10 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 	if err := requireWrite(p); err != nil {
 		s.toolAudit(p, "", "comment", "deny", err.Error())
 		return CommentOut{}, err
+	}
+	if inDebateRound(p.Run) {
+		s.toolAudit(p, "", "comment", "deny", policy.DebateQuiet)
+		return CommentOut{}, errDebateQuiet
 	}
 	org, repo, n, err := s.resolve(p, in.Target, runDefault(p))
 	if err != nil {

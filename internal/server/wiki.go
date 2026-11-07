@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
@@ -168,9 +169,19 @@ func (s *Server) wikiWho(p secrets.Principal) string {
 	return policy.WikiActor
 }
 
+// wikiDecide applies the wiki rules to one file of the wiki st: a debate's
+// round files by their rounds, the rest by WikiRules.
+func (s *Server) wikiDecide(p secrets.Principal, st *wikiState, write bool, file string) policy.Decision {
+	who := s.wikiWho(p)
+	if d, ok := policy.DecideWikiRound(who, wikiRound(p), write, file, st.consolidated); ok {
+		return d
+	}
+	return policy.DecideWiki(who, write, file)
+}
+
 // wikiAllow applies the wiki rules to one file, auditing refusals.
-func (s *Server) wikiAllow(p secrets.Principal, repo, op string, write bool, file string) error {
-	d := policy.DecideWiki(s.wikiWho(p), write, file)
+func (s *Server) wikiAllow(p secrets.Principal, st *wikiState, repo, op string, write bool, file string) error {
+	d := s.wikiDecide(p, st, write, file)
 	if d.Allow && write {
 		if err := requireWrite(p); err != nil {
 			d = policy.Decision{Rule: "read-only-key"}
@@ -219,6 +230,12 @@ type wikiState struct {
 }
 
 func (st *wikiState) files() []string { return st.tree.Files() }
+
+// consolidated reports whether round n of debate has its consolidation.
+func (st *wikiState) consolidated(debate string, n int) bool {
+	_, ok := st.tree[wiki.Round{Debate: debate, N: n, Author: wiki.Consolidated}.File()]
+	return ok
+}
 
 func (s *Server) wikiGitDir(org, repo string) string {
 	return s.repoGitDir(org, repo+".wiki")
@@ -344,7 +361,7 @@ func (s *Server) opWikiList(ctx context.Context, p secrets.Principal, repoName s
 	}
 	out := WikiListOut{Repo: org + "/" + repo, Head: st.head, Files: []WikiFile{}}
 	for _, f := range st.files() {
-		if policy.DecideWiki(s.wikiWho(p), false, f).Allow {
+		if s.wikiDecide(p, st, false, f).Allow {
 			wf := WikiFile{Path: f, SHA: st.blobs[f], Page: wiki.IsPage(f)}
 			if wf.Page {
 				wf.WebPath = wiki.WebPath(f)
@@ -368,7 +385,7 @@ func (s *Server) opWikiRead(ctx context.Context, p secrets.Principal, repoName, 
 		return WikiReadOut{}, err
 	}
 	f, ok := wiki.Resolve(st.files(), file)
-	if err := s.wikiAllow(p, org+"/"+repo, "wiki_read", false, f); err != nil {
+	if err := s.wikiAllow(p, st, org+"/"+repo, "wiki_read", false, f); err != nil {
 		return WikiReadOut{}, err
 	}
 	if !ok {
@@ -416,10 +433,18 @@ func (s *Server) opWikiPut(ctx context.Context, p secrets.Principal, in WikiPutI
 		if !strings.HasSuffix(f, ".md") {
 			return nil, ferr(http.StatusBadRequest, "wiki files are markdown: %s does not end in .md", f)
 		}
-		if err := s.wikiAllow(p, full, "wiki_put", true, f); err != nil {
+		if err := s.wikiAllow(p, st, full, "wiki_put", true, f); err != nil {
 			return nil, err
 		}
 		out.Path = f
+		body := []byte(content)
+		round, isRound := wiki.ParseRound(f)
+		if isRound {
+			if err := roundConflict(st, round, exists); err != nil {
+				return nil, err
+			}
+			body = []byte(stampRound(p, round, content, time.Now()))
+		}
 		cur := st.blobs[f]
 		switch {
 		case in.Base == "" && exists:
@@ -433,8 +458,16 @@ func (s *Server) opWikiPut(ctx context.Context, p secrets.Principal, in WikiPutI
 				return nil, &wikiConflict{fmt.Sprintf("%s changed since blob %s (now %s): read it again and re-apply your edit", f, shortCommit(in.Base), shortCommit(cur))}
 			}
 		}
-		tree[f] = []byte(content)
-		files := map[string][]byte{f: []byte(content)}
+		tree[f] = body
+		files := map[string][]byte{f: body}
+		if isRound && round.Author == wiki.Consolidated {
+			// The debate's page shows the round just consolidated, in the
+			// same commit, so its history has one revision per round.
+			d, _ := wiki.ParseDebate(round.Debate)
+			if page, ok := wiki.ReviewPage(tree, round.Debate, s.wikiOptions(org, repo)); ok {
+				tree[d.Page()], files[d.Page()] = page, page
+			}
+		}
 		for gp, b := range wiki.Generate(tree, s.wikiOptions(org, repo)).Changed {
 			files[gp] = b
 		}
@@ -507,8 +540,13 @@ func (s *Server) opWikiRm(ctx context.Context, p secrets.Principal, in WikiRmIn)
 	out := WikiRmOut{Repo: full}
 	commit, changed, err := s.wikiCommit(ctx, p, org, repo, false, func(st *wikiState) (*wikiChange, error) {
 		f, exists := wiki.Resolve(st.files(), file)
-		if err := s.wikiAllow(p, full, "wiki_rm", true, f); err != nil {
+		if err := s.wikiAllow(p, st, full, "wiki_rm", true, f); err != nil {
 			return nil, err
+		}
+		if _, isRound := wiki.ParseRound(f); isRound && s.wikiWho(p) != policy.WikiOwner {
+			// Round files are written once: only the owner deletes one.
+			s.record(AuditEntry{Actor: p.Actor, Run: runID(p), Repo: full, Op: "wiki_rm", Path: f, Decision: "deny", Rule: "wiki-round-write"})
+			return nil, ferr(http.StatusForbidden, "may not delete wiki file %s: round files are written once (bottown policy rule wiki-round-write)", f)
 		}
 		if !exists {
 			return nil, ferr(http.StatusNotFound, "wiki file %s not found in %s", file, full)
@@ -573,7 +611,7 @@ func (s *Server) opWikiGenerate(ctx context.Context, p secrets.Principal, in Wik
 		if err != nil {
 			return out, err
 		}
-		if err := s.wikiAllow(p, full, "wiki_generate", false, "/"); err != nil {
+		if err := s.wikiAllow(p, st, full, "wiki_generate", false, "/"); err != nil {
 			return out, err
 		}
 		if st.head == "" {

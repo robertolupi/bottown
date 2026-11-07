@@ -36,16 +36,19 @@ func ThreadKey(issue, pr int64, runID string) string {
 }
 
 // Standalone is whether runs of kind stand alone, one thread each, outside
-// the flows: discuss and retro runs look at an issue without working it,
-// so they neither join its flow nor keep it active.
-func Standalone(kind string) bool { return kind == "discuss" || kind == "retro" }
+// the flows: discuss, retro and consolidate runs look at an issue without
+// working it, so they neither join its flow nor keep it active.
+func Standalone(kind string) bool { return slices.Contains(standaloneKinds, kind) }
+
+var standaloneKinds = []string{"discuss", "retro", "consolidate"}
 
 // StandaloneKey is the thread of a standalone run.
 func StandaloneKey(kind, runID string) string { return kind + ":" + runID }
 
 // IsStandaloneKey is whether key is a standalone run's thread.
 func IsStandaloneKey(key string) bool {
-	return strings.HasPrefix(key, "discuss:") || strings.HasPrefix(key, "retro:")
+	kind, _, ok := strings.Cut(key, ":")
+	return ok && Standalone(kind)
 }
 
 // BranchIssue is the issue an issue/<n> branch works, or 0.
@@ -221,7 +224,7 @@ func Group(runs []server.RunItem, prs []*server.PRItem) Grouping {
 		var issueNum, prNum int64
 		var key string
 		switch sr.Kind {
-		case "discuss", "retro":
+		case "discuss", "retro", "consolidate":
 			issueNum, prNum = sr.Issue, sr.PR
 			key = StandaloneKey(sr.Kind, sr.ID)
 		case "verify":
