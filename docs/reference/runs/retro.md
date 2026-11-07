@@ -23,9 +23,11 @@ key, since a run key may not list runs or read the audit log, into
 - `README.md`: the runs, oldest first, at a glance. When the evidence
   visibly lacks runs, it starts with a warning that the evidence looks
   partial, which the prompt repeats: verify runs but no implement or plan
-  run, or a pull request whose own last commit (its head, or the first
-  parent below the merges, such as the flow's "Merge main into" commits)
-  is by an author with no implement or plan run in the evidence, or
+  run (in a windowed retro, a merged pull request whose flow has no
+  implement or plan run), or a pull request whose own last commit (its
+  head, or the first parent below the merges, such as the flow's "Merge
+  main into" commits) is by an author with no implement or plan run in
+  that pull request's flow, or
   commit statuses it could not read. Each run counts its policy denials
   and, apart, its harness denials: the transcript's `error` lines that
   start with `denied:`, tool calls the harness refused before the policy
@@ -96,7 +98,11 @@ The evidence is that of a retro, for every flow in the window: the pull
 requests that the window's first-parent commits merged (by their merge
 commit), each standing for its flow (`server.RetroFlow`, so a pull request
 from `issue/M` brings issue M's whole flow, its other pull requests
-included), each flow once. The README starts with the window and those
+included), each flow once. A merged pull request's head branch is
+usually deleted, and Forgejo then reports `refs/pull/N/head` as its head:
+such a pull request stands for the issue of the `issue/M` branch its
+verify runs record or, failing that, of the last `(#M)` in its title, and
+the README shows that flow (`!N of #M`). The README starts with the window and those
 pull requests, oldest first, then the runs and commit statuses as for a
 retro. Pull requests that have not merged are outside the window: they are
 not yet a lesson.
