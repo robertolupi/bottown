@@ -17,16 +17,20 @@ const (
 	// like an implement run that may not file issues: the plan's issues are
 	// created by the owner's `milestone apply`, never by the planner.
 	Plan = "plan"
+	// Retro runs write a blameless retrospective of finished work from
+	// bottown's records: like a discuss run, they read and comment, and
+	// cannot push, open pull requests or review.
+	Retro = "retro"
 )
 
 // RunScope confines a run key to one repository and to its role. It applies
 // after the base Policy: a request must pass both.
 type RunScope struct {
 	Org, Repo string
-	Role      string // Implement | Verify | Discuss | Plan
+	Role      string // Implement | Verify | Discuss | Plan | Retro
 }
 
-// verifyWrites are the only API writes a verify or discuss run may make
+// verifyWrites are the only API writes a verify, discuss or retro run may make
 // directly inside its repository: commenting. Reviews go through the review_submit
 // MCP tool, which pins them to the run's commit; everything else that
 // changes the repository (pushes, PRs, issues, files, branches, releases) is
@@ -68,7 +72,7 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 		return Decision{Allow: true, Rule: "run-read"}
 	}
 	switch s.Role {
-	case Verify, Discuss:
+	case Verify, Discuss, Retro:
 		if slices.Contains(reviewWrites.Methods, method) && match(split(reviewWrites.Pattern), segs) {
 			return Decision{Allow: false, Rule: reviewWrites.Name}
 		}

@@ -728,6 +728,12 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 			Issue: 50, Created: t0.Add(50 * time.Minute), Ended: end(55 * time.Minute),
 			Status: "succeeded", Digest: secrets.Digest{Summary: "Discussed new design"},
 		},
+		// Standalone retro run on #50, while its flow is on !52
+		{
+			ID: "r-50-retro", Kind: "retro", Actor: "kimi", Family: "moonshot", Repo: "bottown",
+			Issue: 50, Created: t0.Add(56 * time.Minute), Ended: end(58 * time.Minute),
+			Status: "succeeded", Digest: secrets.Digest{Summary: "Posted the retro"},
+		},
 		// PR 52 runs: pre-PR implement after !51 closed, implement opening !52, verify round 1, implement round 2, verify round 2
 		{
 			ID: "r-52-pre", Kind: "implement", Actor: "claude", Family: "anthropic", Repo: "bottown",
@@ -847,6 +853,10 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 	disc := byID["r-50-discuss"]
 	if disc.ThreadKey != "discuss:r-50-discuss" || disc.Active {
 		t.Fatalf("discuss run should have standalone thread key and not be flow-active, got %+v", disc)
+	}
+	// So is a retro run, and it has no flow state of its own.
+	if retro := byID["r-50-retro"]; retro.ThreadKey != "retro:r-50-retro" || retro.Active || retro.PR != 0 || retro.FlowState != "" {
+		t.Fatalf("retro run should have standalone thread key, no PR and no flow state, got %+v", retro)
 	}
 
 	// 4. Pre-PR run on issue #60 (no PR, no milestone)

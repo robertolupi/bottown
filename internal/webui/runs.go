@@ -345,7 +345,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			}
 		}
 		prNum := sr.PR
-		if prNum <= 0 && issueNum > 0 && sr.Kind != "discuss" {
+		if prNum <= 0 && issueNum > 0 && !standaloneKind(sr.Kind) {
 			if pr := prByIssue[issueNum]; pr != nil {
 				prNum = pr.Number
 			}
@@ -405,8 +405,8 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 				}
 			}
 		}
-		if sr.Kind == "discuss" {
-			threadKey = "discuss:" + sr.ID
+		if standaloneKind(sr.Kind) {
+			threadKey = standaloneThreadKey(sr.Kind, sr.ID)
 		} else {
 			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
 		}
@@ -627,6 +627,19 @@ func parseSummaryPR(summary string) int64 {
 	return 0
 }
 
+// standaloneKind is whether runs of kind stand alone, one thread each,
+// outside the flows: discuss and retro runs look at an issue without
+// working it, so they neither join its flow nor keep it active.
+func standaloneKind(kind string) bool { return kind == "discuss" || kind == "retro" }
+
+// standaloneThreadKey is the thread of a standalone run.
+func standaloneThreadKey(kind, runID string) string { return kind + ":" + runID }
+
+// standaloneThread is whether key is a standalone run's thread.
+func standaloneThread(key string) bool {
+	return strings.HasPrefix(key, "discuss:") || strings.HasPrefix(key, "retro:")
+}
+
 func flowThreadKey(issueNum, prNum int64, runID string) string {
 	switch {
 	case issueNum > 0 && prNum > 0:
@@ -762,7 +775,7 @@ func (s *Server) resolveRunsMeta(
 				}
 			}
 			for _, r := range allRuns {
-				if r.Kind == "discuss" {
+				if standaloneKind(r.Kind) {
 					continue
 				}
 				if r.PR == prIdx || (r.Kind == "implement" && parseSummaryPR(r.Digest.Summary) == prIdx) {
@@ -787,10 +800,10 @@ func (s *Server) resolveRunsMeta(
 		var threadKey string
 
 		switch sr.Kind {
-		case "discuss":
+		case "discuss", "retro":
 			issueNum = sr.Issue
 			prNum = sr.PR
-			threadKey = "discuss:" + sr.ID
+			threadKey = standaloneThreadKey(sr.Kind, sr.ID)
 		case "verify":
 			prNum = sr.PR
 			issueNum = sr.Issue
@@ -885,7 +898,7 @@ func (s *Server) resolveRunsMeta(
 	}
 
 	for id, m := range meta {
-		if !strings.HasPrefix(m.ThreadKey, "discuss:") {
+		if !standaloneThread(m.ThreadKey) {
 			m.Active = activeThreads[m.ThreadKey]
 			meta[id] = m
 		}
@@ -977,7 +990,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		var reviewAtHead bool
 		flowState := ""
 
-		if sr.Kind != "discuss" {
+		if !standaloneKind(sr.Kind) {
 			flowState = "unknown"
 			if meta.Active {
 				flowState = "in_progress"
@@ -1242,7 +1255,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 
 	// 3. Runs belonging specifically to this flow thread (excluding discuss runs and other PR threads)
 	for _, sr := range serverRuns {
-		if sr.Kind == "discuss" {
+		if standaloneKind(sr.Kind) {
 			continue
 		}
 		m := metaMap[sr.ID]

@@ -686,10 +686,16 @@ function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
   };
 }
 
+// Whether runs of kind stand alone, one thread each, outside the flows:
+// discuss and retro runs look at an issue without working it.
+export function isStandaloneKind(kind: string | undefined): boolean {
+  return kind === 'discuss' || kind === 'retro';
+}
+
 // Group history runs into flow-centric threads (grouping implement & verify runs
 // for the same issue and PR, preserving pre-PR implementation runs when their PR
 // is created, separating distinct PRs into separate threads, and keeping discuss
-// runs as standalone entries).
+// and retro runs as standalone entries).
 export function groupHistoryThreads(
   historyRuns: HistoryRunInfo[],
   liveRuns?: LiveRunInfo[] | null,
@@ -826,7 +832,7 @@ export function groupHistoryThreads(
   };
 
   for (const item of chronological) {
-    if (item.run.kind !== 'discuss' && item.issue && item.pr) {
+    if (!isStandaloneKind(item.run.kind) && item.issue && item.pr) {
       recordPRWindow(
         item.issue,
         item.pr,
@@ -839,7 +845,7 @@ export function groupHistoryThreads(
     }
   }
   for (const lr of live) {
-    if (lr.kind === 'discuss') continue;
+    if (isStandaloneKind(lr.kind)) continue;
     const issue = lr.issue || lr.flow?.issue || (lr.target?.startsWith('#') ? parseIssueNumber(lr.target) ?? undefined : undefined);
     const pr = lr.pr || (lr.target?.startsWith('!') ? parseIssueNumber(lr.target) ?? undefined : undefined);
     if (issue && pr) {
@@ -885,8 +891,8 @@ export function groupHistoryThreads(
     let issue_title = r.issue_title;
     let milestone = r.milestone || undefined;
 
-    if (r.kind === 'discuss') {
-      const key = r.thread_key || `discuss:${r.id}`;
+    if (isStandaloneKind(r.kind)) {
+      const key = r.thread_key || `${r.kind}:${r.id}`;
       const normalizedRun: HistoryRunInfo = {
         ...r,
         issue,
@@ -1013,7 +1019,7 @@ export function groupHistoryThreads(
 
     if (tb.kind === 'flow') {
       const matchingLiveRun = live.find((lr) => {
-        if (lr.kind === 'discuss') return false;
+        if (isStandaloneKind(lr.kind)) return false;
         if (lr.thread_key && lr.thread_key === tb.key) return true;
         const lrIssue = lr.issue || lr.flow?.issue || (lr.target?.startsWith('#') ? parseIssueNumber(lr.target) ?? undefined : undefined);
         const lrPR = lr.pr || (lr.target?.startsWith('!') ? parseIssueNumber(lr.target) ?? undefined : undefined);
@@ -1128,8 +1134,9 @@ export function filterHistoryThreads(
       return false;
     }
     if (kind) {
-      if (kind === 'discuss' && t.kind !== 'discuss') return false;
-      if (kind !== 'discuss' && (t.kind !== 'flow' || !t.runs.some((r) => r.kind === kind))) {
+      // Standalone threads (thread kind 'discuss') hold one discuss or retro run.
+      const threadKind = isStandaloneKind(kind) ? 'discuss' : 'flow';
+      if (t.kind !== threadKind || !t.runs.some((r) => r.kind === kind)) {
         return false;
       }
     }

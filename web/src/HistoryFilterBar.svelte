@@ -33,6 +33,7 @@
     <option value="verify">Verify</option>
     <option value="discuss">Discuss</option>
     <option value="plan">Plan</option>
+    <option value="retro">Retro</option>
   </select>
   <select class="input input-sm select-sm" bind:value={filters.status}>
     <option value="">All Statuses</option>

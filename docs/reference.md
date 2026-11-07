@@ -179,6 +179,48 @@ summary line counts the runs and the flow logs it removed. A run's
 `<id>.check.json` is its own file, removed with it, and listing runs does
 not warn about it.
 
+### Retro runs
+
+`bottown run retro -a ACTOR [-I] ISSUE` starts a run that writes a
+blameless retrospective of an issue's flow from bottown's records. The flow
+is every run whose issue is N, whose pull request is N, or whose branch is
+`issue/N`, and every run on one of the issue's pull requests (those Forgejo
+has from `issue/N`, open or closed, or that a run's record ties to that
+branch), such as a discuss run on the PR: its implement, plan, discuss and
+verify runs, live or ended, purged runs' digests included; earlier retros
+too, but not the retro itself.
+
+Before the agent starts, the launcher gathers that evidence with the owner
+key, since a run key may not list runs or read the audit log, into
+`$TMPDIR/retro/` in the run's scratch directory:
+
+- `README.md`: the runs, oldest first, at a glance.
+- `runs.json`: each run's server record and digest (summary, usage,
+  observed failure), the launcher's local record if this checkout launched
+  it (exit code, stop request, notes, handover; never the key), and its
+  policy denials and rejections.
+- `transcripts/<id>.jsonl`: the run's log, as one `runs.LogLine` JSON line
+  per message, tool call, tool output or status event, the format the web
+  UI's log view uses for every harness, with each text field cut at 4000
+  bytes. Interactive runs have no log, so they have no transcript.
+- `prompts/<id>.md`: the run's goal prompt.
+
+If gathering fails, the prompt says why, and the run works from the forge.
+The agent reads the issue, the PR threads, reviews and commit statuses with
+the agent CLI, and posts the retro as a comment on the issue. It may file
+follow-up issues. Like a discuss run, it cannot push, open pull requests or
+review, and its worktree is detached at the default branch's head. Unlike a
+discuss run, its file edits are not refused: it may draft a design note or
+a proposal in the worktree, and the launcher keeps a retro's worktree when
+it has uncommitted changes, even if the run succeeded. In the web UI's run
+history a retro is a standalone row, as a discuss run is.
+
+As with verify, the server refuses a retro by an actor of the same family
+as one of the issue's implement or plan runs unless `--allow-same-family`
+is given, and records the override on the run. Retros start only from
+the main checkout: `run start` in an actor worktree does not take them,
+since the actor's credential cannot gather the evidence.
+
 ### Sharing the host
 
 Runs share the host with each other and with the owner. The implement and
