@@ -34,7 +34,8 @@ full, then only the document, or section, your work needs.
   UI), then run on a protected `milestone/<epic>` branch that auto-merges
   verified child PRs. Built: Phases 1–3 (the plan format, `milestones_dir`
   and `milestone check`; the `plan` run kind and owner-only issue edits;
-  `milestone apply`).
+  `milestone apply`; `milestone branch` and `milestone finish`, run by
+  hand).
 - History, not kept current; read only for how something came to be:
   [Iteration 1](history/iteration-1.md) (the first issue through runs,
   actors as forge identities, permanent actor worktrees, in-harness runs),

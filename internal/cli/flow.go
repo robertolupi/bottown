@@ -130,7 +130,7 @@ nothing.`,
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "review rounds: the flow stops at this many requests for changes, so at most this many implement runs answer reviews, the first included")
 	cmd.Flags().IntVar(&checkRounds, "check-rounds", 2, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
-	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", time.Hour, "time limit for the post-implement checks at each head; running out is a failure")
+	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", defaultCheckTimeout, "time limit for the post-implement checks at each head; running out is a failure")
 	cmd.Flags().BoolVar(&serializeActors, "serialize-actors", false, "start each run only when its actor has no other live batch run, waiting until then (by default an actor's runs on different issues run concurrently)")
 	cmd.Flags().DurationVar(&actorWait, "actor-wait", 2*time.Hour, "with --serialize-actors, how long to wait for an actor's other batch run to end before stopping (actor busy)")
 	cmd.Flags().BoolVar(&unattended, "unattended", false, "leave clean base merges to the owner inbox")

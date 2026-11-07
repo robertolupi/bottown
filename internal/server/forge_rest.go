@@ -28,6 +28,7 @@ import (
 //	POST /v1/forge/status   {sha, check, state, description}   (bottown check)
 //	                        {repo, sha, ...} as the owner: the flow's gate
 //	GET  /v1/forge/pr/gate?repo=&number=   (the owner: the flow's gate failures and statuses)
+//	POST /v1/forge/milestone/{branch,merge-base,pr}   (the owner: milestone.go)
 //
 // repo and number default to the run's.
 
@@ -127,6 +128,30 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 			return
 		}
 		out, err := s.opPRMerge(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
+	mux.Handle("POST /v1/forge/milestone/branch", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in MilestoneIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opMilestoneBranch(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
+	mux.Handle("POST /v1/forge/milestone/merge-base", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in MilestoneIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opMilestoneMergeBase(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
+	mux.Handle("POST /v1/forge/milestone/pr", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in MilestonePRIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opMilestonePR(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
