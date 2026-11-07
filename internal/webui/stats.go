@@ -2,10 +2,10 @@ package webui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/activity"
@@ -33,7 +33,7 @@ func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.St
 		if th.PR <= 0 || th.PRMerged == nil {
 			continue
 		}
-		diff, err := s.pullRequestDiff(ctx, th.PR)
+		diff, err := s.diffs.get(ctx, th.PR, s.pullRequestDiff)
 		if err != nil {
 			incomplete = append(incomplete, fmt.Sprintf("diff of !%d: %v", th.PR, err))
 			continue
@@ -43,6 +43,36 @@ func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.St
 	st := stats.Compute(a, f, time.Now())
 	st.Incomplete = append(st.Incomplete, incomplete...)
 	return st, nil
+}
+
+// diffCache remembers merged PRs' diffs between requests. A merged PR does
+// not change, so its diff is read once; the tab's refresh on every status or
+// history event then costs no forge reads. Like activity.IssueCache it is
+// safe for concurrent use and to drop: it only saves reads.
+type diffCache struct {
+	mu    sync.Mutex
+	diffs map[int64]string
+}
+
+// get is n's diff from the cache, reading it once with read on a miss.
+func (c *diffCache) get(ctx context.Context, n int64, read func(context.Context, int64) (string, error)) (string, error) {
+	c.mu.Lock()
+	if d, ok := c.diffs[n]; ok {
+		c.mu.Unlock()
+		return d, nil
+	}
+	c.mu.Unlock()
+	d, err := read(ctx, n)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	if c.diffs == nil {
+		c.diffs = map[int64]string{}
+	}
+	c.diffs[n] = d
+	c.mu.Unlock()
+	return d, nil
 }
 
 // pullRequestDiff reads PR n's unified diff (GET /v1/forge/pr?diff=1).
@@ -72,27 +102,8 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// statsWindow is the window a statistics request asks for.
+// statsWindow is the window a statistics request asks for: thirty days to
+// now, unless the request gives since or until.
 func statsWindow(r *http.Request, now time.Time) (activity.Window, error) {
-	q := r.URL.Query()
-	w := activity.Window{Until: now.UTC()}
-	if v := q.Get("until"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return w, fmt.Errorf("until: %w", err)
-		}
-		w.Until = t
-	}
-	w.Since = w.Until.Add(-30 * 24 * time.Hour)
-	if v := q.Get("since"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return w, fmt.Errorf("since: %w", err)
-		}
-		w.Since = t
-	}
-	if !w.Since.Before(w.Until) {
-		return w, errors.New("since must be before until")
-	}
-	return w, nil
+	return window(r, now, 30*24*time.Hour)
 }

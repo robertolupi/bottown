@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,6 +18,33 @@ import (
 // time, so a load reads only the issues that changed.
 func (s *Server) ComputeActivity(ctx context.Context, w activity.Window) (*activity.Activity, error) {
 	return activity.Load(ctx, activitySource{s}, &s.activityIssues, w, time.Now())
+}
+
+// window is the window a request asks for: since and until as RFC 3339,
+// until defaulting to now and since to def before it, so the timeline and
+// the statistics views read the same control.
+func window(r *http.Request, now time.Time, def time.Duration) (activity.Window, error) {
+	q := r.URL.Query()
+	w := activity.Window{Until: now.UTC()}
+	if v := q.Get("until"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return w, fmt.Errorf("until: %w", err)
+		}
+		w.Until = t
+	}
+	w.Since = w.Until.Add(-def)
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return w, fmt.Errorf("since: %w", err)
+		}
+		w.Since = t
+	}
+	if !w.Since.Before(w.Until) {
+		return w, errors.New("since must be before until")
+	}
+	return w, nil
 }
 
 // activitySource reads activity's facts through the server, as the UI's

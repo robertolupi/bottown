@@ -2,8 +2,6 @@ package webui
 
 import (
 	"cmp"
-	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -339,27 +337,8 @@ func (s *Server) handleGetTimeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tl)
 }
 
-// timelineWindow is the window a timeline request asks for.
+// timelineWindow is the window a timeline request asks for: six hours to
+// now, unless the request gives since or until.
 func timelineWindow(r *http.Request, now time.Time) (activity.Window, error) {
-	q := r.URL.Query()
-	w := activity.Window{Until: now.UTC()}
-	if v := q.Get("until"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return w, fmt.Errorf("until: %w", err)
-		}
-		w.Until = t
-	}
-	w.Since = w.Until.Add(-6 * time.Hour)
-	if v := q.Get("since"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return w, fmt.Errorf("since: %w", err)
-		}
-		w.Since = t
-	}
-	if !w.Since.Before(w.Until) {
-		return w, errors.New("since must be before until")
-	}
-	return w, nil
+	return window(r, now, 6*time.Hour)
 }

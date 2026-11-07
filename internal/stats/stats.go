@@ -213,9 +213,6 @@ func issueVector(th activity.Thread, runs []activity.Run, m issueMeta, diff stri
 		Runs: len(runs), ImplementRounds: th.ImplementRounds, CheckRounds: th.CheckRounds,
 		Stops: len(th.Stops),
 	}
-	if v.Created == nil {
-		v.Created = m.created
-	}
 
 	var first *time.Time
 	for _, r := range runs {

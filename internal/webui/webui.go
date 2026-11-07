@@ -95,6 +95,7 @@ type Server struct {
 	lastSuccessfulFetch time.Time
 	lastOriginErr       string
 	activityIssues      activity.IssueCache // ComputeActivity's issue reads
+	diffs               diffCache           // ComputeStats' merged-PR diff reads
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.

@@ -229,8 +229,7 @@ func withPlan(src string) *fakeForge {
 	return f
 }
 
-func TestApplySetsSizeLabel(t *testing.T) {
-	const sized = `+++
+const sizedPlan = `+++
 title = "Demo epic"
 kickoff = 1
 design = "docs/d.md"
@@ -247,7 +246,9 @@ size = "L"
 
 Body of a.
 `
-	f := withPlan(sized)
+
+func TestApplySetsSizeLabel(t *testing.T) {
+	f := withPlan(sizedPlan)
 	_, out := mustApply(t, f, nil)
 	if got := f.issues[3].Labels; !slices.Equal(got, []string{"size/L"}) {
 		t.Errorf("#3 labels = %v, want [size/L]\n%s", got, out)
@@ -257,6 +258,32 @@ Body of a.
 	mustApply(t, f, nil)
 	if after := f.writes[before:]; slices.ContainsFunc(after, func(w string) bool { return strings.HasPrefix(w, "label") }) {
 		t.Errorf("second apply wrote labels again: %v", after)
+	}
+	// The owner's own size label is never overwritten: the size/* set is an
+	// exclusive set, so the write would drop it. It is flagged instead.
+	f.issues[3].Labels = []string{"size/M"}
+	before = len(f.writes)
+	rep, out := mustApply(t, f, nil)
+	if got := f.issues[3].Labels; !slices.Equal(got, []string{"size/M"}) {
+		t.Errorf("#3 labels = %v after the owner set size/M, want it left alone\n%s", got, out)
+	}
+	if after := f.writes[before:]; slices.ContainsFunc(after, func(w string) bool { return strings.HasPrefix(w, "label") }) {
+		t.Errorf("apply rewrote the owner's size label: %v", after)
+	}
+	if !slices.ContainsFunc(rep.Flags, func(s string) bool { return strings.Contains(s, "size/M") && strings.Contains(s, "size/L") }) {
+		t.Errorf("apply did not flag the owner's size/M against the plan's size/L: %v", rep.Flags)
+	}
+}
+
+func TestApplyPlansSizeLabel(t *testing.T) {
+	// A dry run lists the size label write and writes nothing.
+	f := withPlan(sizedPlan)
+	rep, out := mustApply(t, f, func(o *ApplyOptions) { o.DryRun = true })
+	if !slices.ContainsFunc(rep.Changes, func(s string) bool { return strings.Contains(s, "size/L") }) {
+		t.Errorf("dry run changes %v do not list the size label write\n%s", rep.Changes, out)
+	}
+	if _, ok := f.issues[3]; ok {
+		t.Errorf("dry run created #3: %+v", f.issues[3])
 	}
 }
 
