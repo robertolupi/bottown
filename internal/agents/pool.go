@@ -4,6 +4,7 @@ package agents
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -143,6 +144,24 @@ func (p *Pool) Next(live map[string]int) (Pair, bool) {
 		}
 	}
 	return Pair{}, false
+}
+
+// Lookup returns actor's entry, unless it is not in the pool or was
+// removed.
+func (p *Pool) Lookup(actor string) (Entry, bool) {
+	for _, entry := range p.entries {
+		if entry.Actor == actor && !p.removed[actor] {
+			return entry, true
+		}
+	}
+	return Entry{}, false
+}
+
+// Spare reports whether actor's entry is in the pool, not removed, and
+// below its limit given live.
+func (p *Pool) Spare(actor string, live map[string]int) bool {
+	i := slices.IndexFunc(p.entries, func(e Entry) bool { return e.Actor == actor })
+	return i >= 0 && p.available(i, live)
 }
 
 func (p *Pool) available(index int, live map[string]int) bool {

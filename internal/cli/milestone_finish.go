@@ -139,6 +139,14 @@ func milestoneFinish(ctx context.Context, w io.Writer, api milestoneAPI, checker
 		verb = "opened"
 	}
 	fmt.Fprintf(w, "%s !%d from %s into %s: %s\n", verb, pr.Number, m.Branch, m.Base, pr.URL)
+	if !pr.Created {
+		// A merge since the last finish told the PR its head was not
+		// gated (bottown milestone run); say that it is now.
+		body := fmt.Sprintf("**bottown milestone finish:** the e2e gate passed at `%s`: the head is gated. The description lists the merged child issues.", m.HeadSHA)
+		if err := api.Comment(ctx, repo, pr.Number, body); err != nil {
+			return fmt.Errorf("updated !%d at a gated head, but commenting on it failed: %w", pr.Number, err)
+		}
+	}
 	return nil
 }
 

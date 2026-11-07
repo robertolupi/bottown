@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 )
@@ -22,6 +23,8 @@ func TestExitCode(t *testing.T) {
 		{fmt.Errorf("flow: %w", stop(flow.AgentDidNothing)), ExitAgentDidNothing},
 		{stop(flow.RunFailed), 1},
 		{stop(flow.OutOfRounds), 1},
+		{&milestone.UnfinishedError{Report: &milestone.RunReport{PoolRemoved: []milestone.RemovedEntry{{Entry: "agy", Issue: 3}}}}, ExitAgentDidNothing},
+		{&milestone.UnfinishedError{Report: &milestone.RunReport{}}, 1},
 		{errors.New("boom"), 1},
 	} {
 		if got := exitCode(tc.err); got != tc.want {

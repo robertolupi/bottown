@@ -25,22 +25,28 @@ var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, AgentDidNot
 // bases, in the stops flows wrote then.
 const legacyConflictsWithMain StopReason = "conflicts with main"
 
-// stopBody is the issue comment for a stop.
-func stopBody(reason StopReason, detail string, pr int64) string {
+// stopBody is the issue comment for a stop; actor is an AgentDidNothing
+// stop's idle actor, "" for the others.
+func stopBody(reason StopReason, detail string, pr int64, actor string) string {
 	body := commentPrefix + string(reason) + "**\n\n" + detail
 	if pr > 0 {
 		body += "\n\nPull request: !" + strconv.FormatInt(pr, 10)
 	}
-	return body + "\n\n" + stopMarker(reason)
+	return body + "\n\n" + stopMarker(reason, actor)
 }
 
 // stopMarker is a stop comment's last line, hidden when rendered:
-// <!-- bottown:flow-stop v=1 reason="agent did nothing" -->.
-func stopMarker(reason StopReason) string {
+// <!-- bottown:flow-stop v=1 reason="run failed" -->, and for an agent
+// that did nothing, naming the actor whose run it was:
+// <!-- bottown:flow-stop v=1 reason="agent did nothing" actor="agy" -->.
+func stopMarker(reason StopReason, actor string) string {
+	if actor != "" {
+		return fmt.Sprintf("<!-- bottown:flow-stop v=1 reason=%q actor=%q -->", string(reason), actor)
+	}
 	return fmt.Sprintf("<!-- bottown:flow-stop v=1 reason=%q -->", string(reason))
 }
 
-var stopMarkerRE = regexp.MustCompile(`\n*<!-- bottown:flow-stop v=1 reason="([a-z ]+)" -->\s*$`)
+var stopMarkerRE = regexp.MustCompile(`\n*<!-- bottown:flow-stop v=1 reason="([a-z ]+)"(?: actor="([A-Za-z0-9._-]+)")? -->\s*$`)
 
 // roundBody is the issue comment announcing a round the flow starts.
 func roundBody(head, text string) string {
@@ -54,6 +60,9 @@ type Stop struct {
 	Reason StopReason
 	// PR is the pull request the flow stopped on, 0 when it had none.
 	PR int64
+	// Actor is the actor whose agent did nothing, from the marker; set for
+	// AgentDidNothing alone.
+	Actor string
 }
 
 // ParseStop reads a stop comment that the flow wrote. It reports false for
@@ -76,7 +85,10 @@ func ParseStop(body string) (Stop, bool) {
 		return Stop{}, false
 	}
 	stop := Stop{Reason: reason}
-	if loc := stopMarkerRE.FindStringIndex(tail); loc != nil {
+	if loc := stopMarkerRE.FindStringSubmatchIndex(tail); loc != nil {
+		if reason == AgentDidNothing && loc[4] >= 0 {
+			stop.Actor = tail[loc[4]:loc[5]]
+		}
 		tail = tail[:loc[0]]
 	}
 	if m := stopPR.FindStringSubmatch(tail); m != nil {

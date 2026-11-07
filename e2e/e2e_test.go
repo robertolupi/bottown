@@ -271,7 +271,7 @@ func TestE2E(t *testing.T) {
 		for _, l := range labels {
 			got[l.Name] = true
 		}
-		for _, l := range []string{"mode/ask", "mode/auto", "needs/human"} {
+		for _, l := range []string{"mode/ask", "mode/auto", "needs/human", "implement/claude", "verify/kimi"} {
 			if !got[l] {
 				t.Errorf("missing label %s", l)
 			}
@@ -2597,7 +2597,7 @@ fi`
 			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
 			stop := comments[len(comments)-1].Body
 			for _, want := range []string{"log: " + logLine[1], "last error: " + quota, "the implement run r-", "by kimi failed without a tool call", "`--implement`/`--verify`",
-				`<!-- bottown:flow-stop v=1 reason="agent did nothing" -->`} {
+				`<!-- bottown:flow-stop v=1 reason="agent did nothing" actor="kimi" -->`} {
 				if !strings.Contains(stop, want) {
 					t.Errorf("stop comment lacks %q:\n%s", want, stop)
 				}

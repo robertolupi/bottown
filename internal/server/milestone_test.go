@@ -394,3 +394,63 @@ func TestMilestonePR(t *testing.T) {
 		t.Errorf("body lists issues that are not active children:\n%s", body)
 	}
 }
+
+// After the final PR merged, restart merges the default branch into the
+// milestone branch once, open children notwithstanding; with no final PR,
+// or one open, it does nothing.
+func TestMilestoneRestart(t *testing.T) {
+	f, do, ownerKey, actorKey := newMilestoneServer(t)
+	restart := func(key string) (MilestoneRestartOut, int) {
+		t.Helper()
+		w := do(key, "POST", "/v1/forge/milestone/restart", `{"repo":"demo","slug":"demo"}`)
+		var out MilestoneRestartOut
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out, w.Code
+	}
+	if _, code := restart(actorKey); code != http.StatusForbidden {
+		t.Errorf("by an actor: %d, want 403", code)
+	}
+	if w := do(ownerKey, "POST", "/v1/forge/milestone/branch", `{"repo":"demo","slug":"demo"}`); w.Code != http.StatusOK {
+		t.Fatalf("branch: %d (%s)", w.Code, w.Body.String())
+	}
+	f.git(f.work, "fetch", "-q", f.gitDir, "milestone/demo:milestone/demo")
+	f.commit("milestone/demo", "a.txt", "child a\n")
+	f.writes = nil
+	if out, code := restart(ownerKey); code != http.StatusOK || out.Merged || out.Final != 0 {
+		t.Errorf("no final PR: %d %+v", code, out)
+	}
+
+	// The owner merges the final PR !40, and main moves on.
+	f.prs = append(f.prs, map[string]any{"number": int64(40), "state": "open",
+		"head": map[string]string{"ref": "milestone/demo"}, "base": map[string]string{"ref": "main"}})
+	if out, code := restart(ownerKey); code != http.StatusOK || out.Merged || out.Final != 40 {
+		t.Errorf("open final PR: %d %+v", code, out)
+	}
+	f.git(f.work, "checkout", "-q", "main")
+	f.git(f.work, "merge", "-q", "--no-ff", "-m", "Merge !40", "milestone/demo")
+	f.git(f.work, "push", "-q", f.gitDir, "main")
+	mergeCommit := f.git(f.work, "rev-parse", "HEAD")
+	f.prs[0]["state"], f.prs[0]["merged"], f.prs[0]["merge_commit_sha"] = "closed", true, mergeCommit
+	main := f.commit("main", "m.txt", "main\n")
+	if len(f.writes) != 0 {
+		t.Fatalf("writes %v", f.writes)
+	}
+
+	// #4 is open: a child of the new round.
+	out, code := restart(ownerKey)
+	now, _ := f.ref("milestone/demo")
+	if code != http.StatusOK || !out.Merged || out.Final != 40 || out.HeadSHA != now {
+		t.Fatalf("after the merge: %d %+v", code, out)
+	}
+	if parents := f.git(f.gitDir, "log", "-1", "--format=%P %an", now); !strings.HasSuffix(parents, " "+main+" manager") {
+		t.Errorf("merge commit: %q", parents)
+	}
+	// Again: the branch contains the final PR's merge.
+	f.commit("main", "n.txt", "more\n")
+	if out, code := restart(ownerKey); code != http.StatusOK || out.Merged {
+		t.Errorf("second restart: %d %+v", code, out)
+	}
+	if after, _ := f.ref("milestone/demo"); after != now {
+		t.Errorf("second restart moved the branch to %s", after)
+	}
+}
