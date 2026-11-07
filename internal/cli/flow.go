@@ -57,11 +57,14 @@ nothing.`,
 			if err != nil {
 				return err
 			}
-			if repo == "" {
-				repo = rc.repo
-			} else if rc, err = openRunContextRepo(g, repo); err != nil {
-				return err
+			if repo != "" {
+				if rc, err = openRunContextRepo(g, repo); err != nil {
+					return err
+				}
 			}
+			// The resolved name, not the flag: --repo ORG/NAME and NAME
+			// are one repository, and share its flows' lock.
+			repo = rc.repo
 			supervisor := &flow.Supervisor{
 				API:     flow.NewClient(rc.inst, rc.key),
 				Checker: flowChecker{ws: rc.ws},
