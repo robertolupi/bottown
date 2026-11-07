@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,7 +248,7 @@ func gatherRetroScope(dir string, scope retroScope, self string, ws *runs.Worksp
 	if err := os.WriteFile(filepath.Join(dir, "runs.json"), append(b, '\n'), 0o600); err != nil {
 		return 0, nil, err
 	}
-	gaps := append(retroGaps(out, tips), sts.Errors...)
+	gaps := append(retroGaps(scope, prs, out, tips), sts.Errors...)
 	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(scope, out, gaps, sts.Statuses)), 0o600)
 }
 
@@ -279,28 +281,54 @@ type prTip struct {
 	Author string
 }
 
-// retroGaps is what the evidence of runs rs visibly lacks: missing runs
-// otherwise look like a short flow. A verify run with no implement or plan
-// run means the runs that wrote the code are not in it; a pull request
-// whose own last commit (tips) is by an actor with no implement or plan
-// run in rs was pushed by no run in it.
-func retroGaps(rs []retroRun, tips []prTip) []string {
+// retroGaps is what the evidence of runs rs, of scope's flows (whose pull
+// requests are prs), visibly lacks: missing runs otherwise look like a
+// short flow. It looks at each flow apart, since one flow's runs say
+// nothing of another's. A flow with verify runs and no implement or plan
+// run (in a window, a merged pull request's flow with none) means the runs
+// that wrote its code are not in it; a pull request whose own last commit
+// (tips) is by an actor with no implement or plan run in its flow was
+// pushed by no run in it.
+func retroGaps(scope retroScope, prs []map[int64]bool, rs []retroRun, tips []prTip) []string {
 	var gaps []string
-	writers := map[string]bool{}
-	verifies := 0
-	for _, r := range rs {
-		switch r.Kind {
-		case policy.Implement, policy.Plan:
-			writers[r.Actor] = true
-		case policy.Verify:
-			verifies++
+	writers := make([]map[string]bool, len(scope.Flows))
+	for i, f := range scope.Flows {
+		writers[i] = map[string]bool{}
+		verifies := 0
+		for _, r := range rs {
+			if !f.Flow.Has(secrets.Run{Issue: r.Issue, PR: r.PR, Branch: r.Branch}, prs[i]) {
+				continue
+			}
+			switch r.Kind {
+			case policy.Implement, policy.Plan:
+				writers[i][r.Actor] = true
+			case policy.Verify:
+				verifies++
+			}
+		}
+		switch {
+		case len(writers[i]) > 0:
+		case scope.Window != nil:
+			var merged []string
+			for _, pr := range scope.Merged {
+				if prs[i][pr.Number] {
+					merged = append(merged, fmt.Sprintf("!%d", pr.Number))
+				}
+			}
+			gaps = append(gaps, fmt.Sprintf("Merged pull request %s (flow %s) has %d verify run(s) but no implement or plan run in the evidence: the runs that wrote its code are missing from it.", strings.Join(merged, ", "), f.Flow, verifies))
+		case verifies > 0:
+			gaps = append(gaps, fmt.Sprintf("The evidence has %d verify run(s) but no implement or plan run: the runs that wrote the code are missing from it.", verifies))
 		}
 	}
-	if verifies > 0 && len(writers) == 0 {
-		gaps = append(gaps, fmt.Sprintf("The evidence has %d verify run(s) but no implement or plan run: the runs that wrote the code are missing from it.", verifies))
-	}
 	for _, t := range tips {
-		if t.Author == "" || writers[t.Author] {
+		if t.Author == "" {
+			continue
+		}
+		wrote := false
+		for i := range scope.Flows {
+			wrote = wrote || (prs[i][t.PR] && writers[i][t.Author])
+		}
+		if wrote {
 			continue
 		}
 		at := "`" + short(t.Head) + "`"
@@ -435,6 +463,9 @@ func writeWindow(b *strings.Builder, scope retroScope) {
 	b.WriteString("| pull request | title | branch | merge commit | flow |\n|---|---|---|---|---|\n")
 	for _, pr := range scope.Merged {
 		flow, _ := retroFlowOf(pr.Number, []prHead{pr})
+		if flow.Issue == 0 {
+			flow.Issue = pr.Issue // recovered: its branch is gone
+		}
 		fmt.Fprintf(b, "| !%d | %s | `%s` | `%s` | %s |\n", pr.Number, strings.ReplaceAll(pr.Title, "|", `\|`),
 			pr.Head.Ref, short(pr.MergeCommit), flow)
 	}
@@ -556,11 +587,11 @@ func collectRetroWindow(ctx context.Context, rc *runContext, run secrets.Run, gi
 	if err != nil {
 		return scope, 0, nil, fmt.Errorf("list pull requests: %w", err)
 	}
-	scope.Merged, scope.Flows = windowFlows(strings.Fields(revs), heads)
 	var list []server.RunItem
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?history=1&repo="+run.Repo, nil, &list); err != nil {
 		return scope, 0, nil, fmt.Errorf("list runs: %w", err)
 	}
+	scope.Merged, scope.Flows = windowFlows(strings.Fields(revs), heads, list)
 	var audit []server.AuditEntry
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/audit?decision=deny,reject", nil, &audit); err != nil {
 		return scope, 0, nil, fmt.Errorf("read the audit log: %w", err)
@@ -583,8 +614,11 @@ func collectRetroWindow(ctx context.Context, rc *runContext, run secrets.Run, gi
 // windowFlows is the pull requests that the window's first-parent
 // commits revs (oldest first) merged, in that order, and their flows,
 // each once: an issue/<m> pull request stands for issue m's flow, with
-// every pull request from its branch (heads).
-func windowFlows(revs []string, heads []prHead) ([]prHead, []retroFlowPRs) {
+// every pull request from its branch (heads). A merged pull request whose
+// head branch is gone (most are, deleted after the merge) stands for the
+// issue prIssue recovers from the runs in list or its title, and records it
+// as its Issue.
+func windowFlows(revs []string, heads []prHead, list []server.RunItem) ([]prHead, []retroFlowPRs) {
 	at := map[string]int{}
 	for i, r := range revs {
 		at[r] = i
@@ -597,17 +631,33 @@ func windowFlows(revs []string, heads []prHead) ([]prHead, []retroFlowPRs) {
 	}
 	slices.SortStableFunc(merged, func(a, b prHead) int { return cmp.Compare(at[a.MergeCommit], at[b.MergeCommit]) })
 	var flows []retroFlowPRs
-	seen := map[string]bool{}
-	for _, pr := range merged {
+	seen := map[string]int{}
+	for i, pr := range merged {
 		flow, prs := retroFlowOf(pr.Number, heads)
+		if flow.Issue == 0 && branchGone(pr) {
+			if m := prIssue(pr, list); m > 0 {
+				merged[i].Issue = m
+				flow, prs = server.NewRetroFlow(m, false, ""), []int64{pr.Number}
+				for _, h := range heads {
+					if h.Head.Ref == flow.Branch {
+						prs = append(prs, h.Number)
+					}
+				}
+			}
+		}
 		if flow.Issue > 0 {
 			// The issue's flow, whichever of its pull requests merged.
 			flow = server.NewRetroFlow(flow.Issue, false, "")
 		}
-		if k := flow.String(); !seen[k] {
-			seen[k] = true
-			flows = append(flows, retroFlowPRs{Flow: flow, ForgePRs: prs})
+		k := flow.String()
+		if j, ok := seen[k]; ok {
+			if !slices.Contains(flows[j].ForgePRs, pr.Number) {
+				flows[j].ForgePRs = append(flows[j].ForgePRs, pr.Number)
+			}
+			continue
 		}
+		seen[k] = len(flows)
+		flows = append(flows, retroFlowPRs{Flow: flow, ForgePRs: prs})
 	}
 	return merged, flows
 }
@@ -708,6 +758,38 @@ type prHead struct {
 	Head        struct{ Ref, Sha string }
 	Merged      bool
 	MergeCommit string `json:"merge_commit_sha"`
+	// Issue is the issue windowFlows recovered for a pull request whose
+	// head branch is gone (prIssue); not Forgejo's.
+	Issue int64 `json:"-"`
+}
+
+// branchGone is whether Forgejo no longer has h's head branch: it then
+// reports the pull request's own ref, refs/pull/N/head, as the head.
+func branchGone(h prHead) bool {
+	return h.Head.Ref == "" || strings.HasPrefix(h.Head.Ref, "refs/pull/")
+}
+
+// titleIssue matches the "(#N)" that names a pull request's issue in its
+// title.
+var titleIssue = regexp.MustCompile(`\(#([1-9][0-9]*)\)`)
+
+// prIssue is the issue of pull request h, whose head branch is gone: the
+// issue/<m> branch its runs (verify runs) record, or else the last "(#m)"
+// in its title; 0 when neither names one.
+func prIssue(h prHead, list []server.RunItem) int64 {
+	for _, it := range list {
+		if it.Run.PR == h.Number {
+			if m, ok := server.IssueBranchNumber(it.Run.Branch); ok {
+				return m
+			}
+		}
+	}
+	if ms := titleIssue.FindAllStringSubmatch(h.Title, -1); len(ms) > 0 {
+		if m, err := strconv.ParseInt(ms[len(ms)-1][1], 10, 64); err == nil {
+			return m
+		}
+	}
+	return 0
 }
 
 // maxTipMerges bounds how many merge commits prTipOf walks down.
