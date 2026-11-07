@@ -45,6 +45,8 @@ type MilestoneGroup struct {
 	Edges     []MilestoneEdge `json:"edges"`
 	Layers    int             `json:"layers"`
 	Error     string          `json:"error,omitempty"`
+	// Scheduler is the plan's milestone run the UI started, while it runs.
+	Scheduler *MilestoneScheduler `json:"scheduler,omitempty"`
 	members   []int64
 	deps      map[int64][]int64
 }
@@ -324,6 +326,9 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 
 	now := time.Now()
 	for _, g := range groups {
+		if g.Epic != nil {
+			g.Scheduler = s.milestoneScheduler(g.Plan, now)
+		}
 		s.buildGraph(ctx, g, byNumber, depsOf, ref, prByIssue, allRuns, ownerLogin, repoWeb, now)
 	}
 

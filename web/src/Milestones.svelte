@@ -6,16 +6,19 @@
   import { onMount } from 'svelte';
   import type { MilestoneGroup, MilestoneNode } from './types';
   import IssueReference from './IssueReference.svelte';
-  import { actorPair, canOpenFlow, canStart, layoutDag, statusBadge } from './milestones';
+  import { actorPair, canOpenFlow, canStart, canStartMilestoneRun, layoutDag, schedulerFlows, statusBadge } from './milestones';
   import { reloadOn } from './reload.svelte';
 
   interface Props {
     refreshKey: number;
     onFlow: (issue: number) => void;
     onRun: (issue: number) => void;
+    // Start a milestone run for a plan slug; stop one by its id.
+    onMilestoneRun: (slug: string) => void;
+    onMilestoneStop: (id: string) => void;
   }
 
-  let { refreshKey, onFlow, onRun }: Props = $props();
+  let { refreshKey, onFlow, onRun, onMilestoneRun, onMilestoneStop }: Props = $props();
 
   let groups = $state<MilestoneGroup[]>([]);
   let loading = $state(false);
@@ -121,6 +124,15 @@
         {/if}
       </div>
       <div class="card-header-right">
+        {#if g.scheduler}
+          <span class="badge badge-accent">milestone run · running</span>
+        {:else if canStartMilestoneRun(g)}
+          <button
+            class="btn btn-sm btn-primary ms-run-start"
+            title="Start bottown milestone run {g.plan}"
+            onclick={() => onMilestoneRun(g.plan!)}
+          >Run milestone</button>
+        {/if}
         <span class="badge badge-neutral ms-base" title="Base branch for this milestone's issues">base: {g.base}</span>
       </div>
     </div>
@@ -155,6 +167,38 @@
         <span class="badge badge-warning">{g.counts.blocked} blocked</span>
         <span class="badge badge-error">{g.counts.stopped} stopped</span>
       </div>
+
+      {#if g.scheduler}
+        {@const sc = g.scheduler}
+        {@const flows = schedulerFlows(g)}
+        <div class="ms-scheduler" data-scheduler={sc.id}>
+          <div class="ms-scheduler-head">
+            <strong>Milestone run</strong>
+            <span class="muted">running {sc.elapsed} · parallel {sc.parallel}</span>
+            <button class="btn btn-xs btn-danger ms-run-stop" onclick={() => onMilestoneStop(sc.id)}>Stop</button>
+          </div>
+          <div class="ms-scheduler-row">
+            <span class="muted">Pool</span>
+            {#each sc.pool as entry}
+              <code class="ms-pool-entry">{entry}</code>
+            {/each}
+          </div>
+          <div class="ms-scheduler-row">
+            <span class="muted">Flows</span>
+            {#if flows.length === 0}
+              <span class="muted">none in flight</span>
+            {:else}
+              {#each flows as n (n.number)}
+                <span class="ms-flow">
+                  <IssueReference number={n.number} href={n.url} label={`#${n.number}`} title={n.title} />
+                  <span>{n.flow!.implement} → {n.flow!.verify}</span>
+                </span>
+              {/each}
+            {/if}
+          </div>
+          <div class="ms-scheduler-row muted text-sm">Log <code>{sc.log}</code></div>
+        </div>
+      {/if}
 
       {#if g.error}
         <div class="banner banner-error"><span>{g.error}</span></div>
@@ -319,6 +363,41 @@
 
   .ms-removed {
     margin-bottom: 12px;
+  }
+
+  .ms-scheduler {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .ms-scheduler-head,
+  .ms-scheduler-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    min-width: 0;
+  }
+
+  .ms-scheduler-head .ms-run-stop {
+    margin-left: auto;
+  }
+
+  .ms-scheduler-row code {
+    overflow-wrap: anywhere;
+  }
+
+  .ms-flow {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .banner-warning {

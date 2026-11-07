@@ -152,3 +152,14 @@ export function actorPair(node: MilestoneNode): string {
   if (node.verify) parts.push(`verify/${node.verify}`);
   return parts.join(' · ');
 }
+
+// canStartMilestoneRun: an open epic with a plan, and no milestone run the
+// UI started running for it.
+export function canStartMilestoneRun(group: MilestoneGroup): boolean {
+  return !!group.epic && group.epic.state !== 'closed' && !!group.plan && !group.scheduler;
+}
+
+// schedulerFlows are a group's child flows: its nodes a flow drives.
+export function schedulerFlows(group: Pick<MilestoneGroup, 'nodes'>): MilestoneNode[] {
+  return group.nodes.filter((n) => !n.external && n.flow);
+}

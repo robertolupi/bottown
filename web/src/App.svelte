@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
   import type { UIStatusResponse, IssueTimeline, TimelineFlowLane, TimelineRun } from './types';
   import { lifecycleChange } from './lifecycle';
-  import { postAction, type FlowForm, type RunForm } from './actions';
+  import { buildMilestoneRunPayload, postAction, type FlowForm, type MilestoneRunForm, type RunForm } from './actions';
   import { RunHistoryState } from './history.svelte';
   import AfterPullModal from './AfterPullModal.svelte';
   import AppHeader from './AppHeader.svelte';
@@ -14,6 +14,7 @@
   import HealthChecklist from './HealthChecklist.svelte';
   import LiveRuns from './LiveRuns.svelte';
   import Milestones from './Milestones.svelte';
+  import MilestoneRunModal from './MilestoneRunModal.svelte';
   import OwnerInbox from './OwnerInbox.svelte';
   import PushModal from './PushModal.svelte';
   import RunHistory from './RunHistory.svelte';
@@ -47,6 +48,7 @@
   let showRunModal = $state<boolean>(false);
   let showStopModal = $state<boolean>(false);
   let showGCModal = $state<boolean>(false);
+  let showMilestoneRunModal = $state<boolean>(false);
   let showTimelineModal = $state<boolean>(false);
   // After-pull confirmation modal (§4.4): the steps from main's .bottown.toml
   let showAfterPullModal = $state<boolean>(false);
@@ -62,6 +64,9 @@
   // The flow and run forms' values, kept between openings
   let flowForm = $state<FlowForm>({ issue: '', implement: '', implementModel: '', verify: '', verifyModel: '', rounds: 3, timeout: '60m' });
   let runForm = $state<RunForm>({ kind: 'implement', target: '', actor: '', model: '', question: '', allowSameFamily: false });
+  // The milestone run form, and the server's refusal shown in it
+  let milestoneRunForm = $state<MilestoneRunForm>({ slug: '', agents: '', parallel: 2 });
+  let milestoneRunError = $state<string | null>(null);
 
   // Timer & Polling
   let nowTime = $state<number>(Date.now());
@@ -106,6 +111,12 @@
     runForm.kind = 'implement';
     runForm.target = issue;
     showRunModal = true;
+  }
+
+  function openMilestoneRunFor(slug: string) {
+    milestoneRunForm.slug = slug;
+    milestoneRunError = null;
+    showMilestoneRunModal = true;
   }
 
   function openStop(id: string) {
@@ -261,12 +272,31 @@
       await loadHistory();
     });
 
+  // A refused pool or parallelism stays in the dialog, with the parser's
+  // message, for the owner to correct.
+  const handleStartMilestoneRun = () =>
+    act(async () => {
+      milestoneRunError = null;
+      let data;
+      try {
+        data = await postAction('/api/actions/milestone-run', buildMilestoneRunPayload(milestoneRunForm), 'Start milestone run failed');
+      } catch (e: any) {
+        milestoneRunError = e.message;
+        return;
+      }
+      actionMessage = { type: 'success', text: data.output };
+      showMilestoneRunModal = false;
+      milestonesRefresh++;
+      await loadStatus(true);
+    });
+
   function handleConfirmStop() {
     if (!stopRunId) return;
     return act(async () => {
       const data = await postAction('/api/actions/stop', { id: stopRunId }, 'Stop run failed');
       actionMessage = { type: 'success', text: data.output || `Run ${stopRunId} stopped` };
       showStopModal = false;
+      milestonesRefresh++;
       await loadStatus(true);
       await loadHistory();
     });
@@ -406,7 +436,13 @@
   <ViewTabs {view} onSelect={selectView} />
 
   {#if view === 'milestones'}
-    <Milestones refreshKey={milestonesRefresh} onFlow={openFlowFor} onRun={openRunFor} />
+    <Milestones
+      refreshKey={milestonesRefresh}
+      onFlow={openFlowFor}
+      onRun={openRunFor}
+      onMilestoneRun={openMilestoneRunFor}
+      onMilestoneStop={openStop}
+    />
   {:else if view === 'timeline'}
     <Timeline refreshKey={timelineRefresh} now={nowTime} onRun={(run) => (timelineRun = run)} onFlow={openFlowTimeline} />
   {:else if view === 'stats'}
@@ -482,6 +518,17 @@
     {actionLoading}
     onsubmit={handleStartRun}
     onclose={() => (showRunModal = false)}
+  />
+{/if}
+
+{#if showMilestoneRunModal}
+  <MilestoneRunModal
+    actors={status?.actors}
+    bind:form={milestoneRunForm}
+    error={milestoneRunError}
+    {actionLoading}
+    onsubmit={handleStartMilestoneRun}
+    onclose={() => (showMilestoneRunModal = false)}
   />
 {/if}
 

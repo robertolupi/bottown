@@ -196,6 +196,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/actions/after-pull", s.handleActionAfterPull)
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
 	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
+	mux.HandleFunc("POST /api/actions/milestone-run", s.handleActionMilestoneRun)
 	mux.HandleFunc("POST /api/actions/merge-base", s.handleActionMergeBase)
 	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
 	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
@@ -647,6 +648,20 @@ func (s *Server) handleActionFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.ExecuteFlow(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
+}
+
+func (s *Server) handleActionMilestoneRun(w http.ResponseWriter, r *http.Request) {
+	var req MilestoneRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
+		return
+	}
+	out, err := s.ExecuteMilestoneRun(r.Context(), req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
 		return

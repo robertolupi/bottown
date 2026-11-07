@@ -59,7 +59,7 @@ type Fixture struct {
 	// number, or by "!N" for a PR without an issue (?pr=N).
 	Timelines map[string]IssueTimeline `json:"timelines"`
 	// Actions are the answers to POST /api/actions/{name}, by name (pull,
-	// push, after-pull, flow, run, stop, gc). An action without one
+	// push, after-pull, flow, milestone-run, run, stop, gc). An action without one
 	// succeeds, doing nothing.
 	Actions map[string]ActionResult `json:"actions"`
 }
