@@ -88,7 +88,7 @@ path, opens no pull request and exits non-zero.`,
 // milestoneAPI is the server's side of finish: the owner's milestone
 // operations, and a comment on the epic.
 type milestoneAPI interface {
-	MergeBase(ctx context.Context, in server.MilestoneIn) (server.MilestoneMergeOut, error)
+	MergeBase(ctx context.Context, in server.MilestoneIn) (server.MilestoneMergeBaseOut, error)
 	FinalPR(ctx context.Context, in server.MilestonePRIn) (server.MilestonePROut, error)
 	Comment(ctx context.Context, repo string, n int64, body string) error
 }
@@ -156,7 +156,7 @@ func (m milestoneClient) call(ctx context.Context, op string, in, out any) error
 	return err
 }
 
-func (m milestoneClient) MergeBase(ctx context.Context, in server.MilestoneIn) (out server.MilestoneMergeOut, err error) {
+func (m milestoneClient) MergeBase(ctx context.Context, in server.MilestoneIn) (out server.MilestoneMergeBaseOut, err error) {
 	return out, m.call(ctx, "merge-base", in, &out)
 }
 

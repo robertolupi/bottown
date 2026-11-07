@@ -154,6 +154,14 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opMilestonePR(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
+	mux.Handle("POST /v1/forge/pr/merge", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in MilestoneMergeIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opMilestoneMerge(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
 	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opGate(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)

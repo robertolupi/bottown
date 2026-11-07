@@ -12,13 +12,13 @@ import (
 )
 
 type fakeMilestoneAPI struct {
-	merge    server.MilestoneMergeOut
+	merge    server.MilestoneMergeBaseOut
 	mergeErr error
 	prs      []server.MilestonePRIn
 	comments []string
 }
 
-func (f *fakeMilestoneAPI) MergeBase(_ context.Context, in server.MilestoneIn) (server.MilestoneMergeOut, error) {
+func (f *fakeMilestoneAPI) MergeBase(_ context.Context, in server.MilestoneIn) (server.MilestoneMergeBaseOut, error) {
 	return f.merge, f.mergeErr
 }
 
@@ -47,7 +47,7 @@ func (c *fakeChecker) LogPath(flow.CheckRequest) string { return "" }
 const finishHead = "abcdef0123456789abcdef0123456789abcdef01"
 
 func newFinishAPI() *fakeMilestoneAPI {
-	return &fakeMilestoneAPI{merge: server.MilestoneMergeOut{Branch: "milestone/demo", Base: "main", HeadSHA: finishHead, Epic: 7, Merged: true}}
+	return &fakeMilestoneAPI{merge: server.MilestoneMergeBaseOut{Branch: "milestone/demo", Base: "main", HeadSHA: finishHead, Epic: 7, Merged: true}}
 }
 
 // The checks run at the merged head, as the epic's; a failure comments on

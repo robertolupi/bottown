@@ -42,9 +42,9 @@ type MilestoneBranchOut struct {
 	Created bool   `json:"created"`
 }
 
-// MilestoneMergeOut is the milestone branch after the default branch was
+// MilestoneMergeBaseOut is the milestone branch after the default branch was
 // merged into it. Merged is false when the branch already contained it.
-type MilestoneMergeOut struct {
+type MilestoneMergeBaseOut struct {
 	Branch  string `json:"branch"`
 	Base    string `json:"base"`
 	HeadSHA string `json:"head_sha"`
@@ -147,22 +147,22 @@ func (s *Server) opMilestoneBranch(ctx context.Context, p secrets.Principal, in 
 // opMilestoneMergeBase merges the default branch into the milestone
 // branch, as the manager, once every active child is closed. A conflict
 // leaves the branch as it was.
-func (s *Server) opMilestoneMergeBase(ctx context.Context, p secrets.Principal, in MilestoneIn) (MilestoneMergeOut, error) {
+func (s *Server) opMilestoneMergeBase(ctx context.Context, p secrets.Principal, in MilestoneIn) (MilestoneMergeBaseOut, error) {
 	if s.GitRoot == "" {
-		return MilestoneMergeOut{}, ferr(http.StatusNotImplemented, "forge git repositories are not available")
+		return MilestoneMergeBaseOut{}, ferr(http.StatusNotImplemented, "forge git repositories are not available")
 	}
 	m, err := s.milestoneOp(ctx, p, in)
 	if err != nil {
-		return MilestoneMergeOut{}, err
+		return MilestoneMergeBaseOut{}, err
 	}
 	if err := m.refuseOpen(); err != nil {
-		return MilestoneMergeOut{}, err
+		return MilestoneMergeBaseOut{}, err
 	}
 	r, _, err := m.c.GetRepo(m.org, m.repo)
 	if err != nil {
-		return MilestoneMergeOut{}, err
+		return MilestoneMergeBaseOut{}, err
 	}
-	out := MilestoneMergeOut{Branch: m.branch, Base: r.DefaultBranch, Epic: m.st.Epic.Number}
+	out := MilestoneMergeBaseOut{Branch: m.branch, Base: r.DefaultBranch, Epic: m.st.Epic.Number}
 	gitDir := filepath.Join(s.GitRoot, strings.ToLower(m.org), strings.ToLower(m.repo)+".git")
 	head, err := mergeGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "refs/heads/"+m.branch+"^{commit}")
 	if err != nil {

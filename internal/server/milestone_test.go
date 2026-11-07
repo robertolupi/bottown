@@ -312,7 +312,7 @@ func TestMilestoneMergeBase(t *testing.T) {
 	// Up to date: nothing to merge.
 	head, _ := f.ref("milestone/demo")
 	w = mergeBase()
-	var out MilestoneMergeOut
+	var out MilestoneMergeBaseOut
 	if err := json.Unmarshal(w.Body.Bytes(), &out); w.Code != http.StatusOK || err != nil {
 		t.Fatalf("up to date: %d (%s)", w.Code, w.Body.String())
 	}
