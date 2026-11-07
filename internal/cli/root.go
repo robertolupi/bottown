@@ -83,6 +83,6 @@ func newRoot() *cobra.Command {
 			Run:   func(cmd *cobra.Command, _ []string) { fmt.Fprintln(cmd.OutOrStdout(), Version) },
 		},
 	)
-	root.AddCommand(agentCmds(newWhoami(), newIssue(), newPR(), newComment(), newReview(), newAPI(), newCheck(), newMilestone(g))...)
+	root.AddCommand(agentCmds(newWhoami(), newIssue(), newPR(), newComment(), newReview(), newAPI(), newCheck(), newMilestone(g), newWiki(g))...)
 	return root
 }

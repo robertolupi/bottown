@@ -50,6 +50,12 @@ type Server struct {
 	health     Health
 	carryMu    sync.Mutex
 	carryCache map[carryKey]carryResult
+
+	// The wiki store (wiki.go) serialises its own writes; the push and
+	// create hooks replace Forgejo in tests.
+	wikiMu       sync.Mutex
+	wikiPushFn   func(ctx context.Context, gitDir, branch, old, commit string) error
+	wikiCreateFn func(ctx context.Context, org, repo string) error
 }
 
 // Health is the /healthz document.
@@ -102,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/runs/purge", s.authed(s.ownerOnly(http.HandlerFunc(s.purgeRuns))))
 	mux.Handle("GET /v1/audit", s.authed(s.ownerOnly(http.HandlerFunc(s.listAudit))))
 	s.forgeRoutes(mux)
+	s.wikiRoutes(mux)
 	mux.Handle("PUT /v1/repos/{name}", s.authed(s.ownerOnly(http.HandlerFunc(s.putRepo))))
 	mcpH := s.ready(s.mcpHandler())
 	mux.Handle("/mcp", mcpH)
@@ -349,6 +356,11 @@ func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
 	if !ok || r.URL.RawPath != "" {
 		s.audit(p, "git", r.Method, r.URL.Path, "", "reject", "unclean-path", http.StatusBadRequest)
 		writeError(w, http.StatusBadRequest, "path must be clean and unencoded")
+		return
+	}
+	if policy.IsWikiGit(gitPath) && (p.Actor != s.Owner || p.Run != nil) {
+		s.audit(p, "git", r.Method, gitPath, gitRepo(gitPath), "deny", "wiki-via-store", http.StatusForbidden)
+		writeError(w, http.StatusForbidden, "the wiki is reached through `bottown wiki`, not git")
 		return
 	}
 	if p.ReadOnly && p.Run == nil &&
