@@ -313,7 +313,8 @@ as the owner (`--repo` outside a checkout).
   commit, carrying a `Bottown-Run:` trailer when made in a run. A wiki that
   does not exist yet is created through Forgejo's API on its first write
   (a push to it would be refused). The creation's placeholder `Home` page
-  does not survive that write.
+  does not survive that write, unless the owner edited it in between; pages
+  the owner added in between stay too.
 - **Puts are compare-and-swap.** `read` prints the file's blob SHA, and
   `put --base SHA` commits only if the file's text is unchanged since.
   Otherwise it fails with a conflict (`wiki_conflict`): read again and
@@ -343,7 +344,10 @@ as the owner (`--repo` outside a checkout).
     `[[Page Name]]` (spaces become dashes) and `[[Text|Page]]`. A link to
     `Name` does not reach a page stored as `Name.-.md`: health reports it
     as broken and names the link that works. Files in subdirectories are
-    not pages: Forgejo serves them only under `/wiki/raw/`.
+    not pages: Forgejo serves them only under `/wiki/raw/`. Their links
+    are not read and they get no default blocks, but a block placed in one
+    is filled and kept current like a page's, and their markers are
+    checked.
 - **`generate`.** It walks the whole wiki and regenerates every stale
   block, committing only the files that change, as bottown. Every put does
   the same in its own commit. The owner runs it after editing in the web UI,

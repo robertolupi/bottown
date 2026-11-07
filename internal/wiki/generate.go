@@ -81,41 +81,52 @@ type Problem struct {
 // problems. It is built from page text outside generated blocks.
 type Index struct {
 	Pages     []string            // page files, sorted
+	Files     []string            // every markdown file, pages included, sorted: where blocks may be
 	Links     map[string][]string // page -> pages it links to, sorted, resolved only
 	Backlinks map[string][]string // page -> pages linking to it, sorted
 	Problems  []Problem           // sorted by page, kind, message
 	segs      map[string][]Segment
 }
 
-// NewIndex reads a tree. A page with mangled markers is indexed by its
-// whole text and reported; its blocks are left alone.
+// NewIndex reads a tree. A file with mangled markers is indexed by its
+// whole text and reported; its blocks are left alone. Every markdown file
+// is checked for blocks, but only pages are indexed for links: files in
+// subdirectories are not pages, and a link cannot name one.
 func NewIndex(t Tree, o Options) *Index {
 	ix := &Index{Links: map[string][]string{}, Backlinks: map[string][]string{}, segs: map[string][]Segment{}}
-	files := t.Files()
-	for _, p := range files {
+	for _, p := range t.Files() {
 		if IsPage(p) {
 			ix.Pages = append(ix.Pages, p)
+		}
+		if strings.HasSuffix(p, ".md") {
+			ix.Files = append(ix.Files, p)
 		}
 	}
 	if !slices.Contains(ix.Pages, HealthPage) {
 		ix.Pages = append(ix.Pages, HealthPage)
 		sort.Strings(ix.Pages)
+		ix.Files = append(ix.Files, HealthPage)
+		sort.Strings(ix.Files)
 	}
-	for _, p := range ix.Pages {
+	texts := map[string]string{}
+	for _, p := range ix.Files {
 		content := string(t[p])
 		segs, err := Parse(content)
-		text := content
+		texts[p] = content
 		if err != nil {
 			ix.Problems = append(ix.Problems, Problem{Page: p, Kind: "mangled", Msg: err.Error()})
-		} else {
-			ix.segs[p] = segs
-			text = Text(segs)
-			for _, s := range segs {
-				if s.Block != "" && Lookup(s.Block) == nil {
-					ix.Problems = append(ix.Problems, Problem{Page: p, Kind: "unknown-block", Msg: fmt.Sprintf("unknown generated block %q", s.Block)})
-				}
+			continue
+		}
+		ix.segs[p] = segs
+		texts[p] = Text(segs)
+		for _, s := range segs {
+			if s.Block != "" && Lookup(s.Block) == nil {
+				ix.Problems = append(ix.Problems, Problem{Page: p, Kind: "unknown-block", Msg: fmt.Sprintf("unknown generated block %q", s.Block)})
 			}
 		}
+	}
+	for _, p := range ix.Pages {
+		text := texts[p]
 		if IsDashPage(p) {
 			ix.Problems = append(ix.Problems, Problem{Page: p, Kind: "dash-page", Msg: fmt.Sprintf(
 				"stored as %s (a hyphenated title made in the web UI or API): its URL is %s, and links to %s do not reach it",
@@ -160,7 +171,14 @@ func NewIndex(t Tree, o Options) *Index {
 	return ix
 }
 
-func pageLink(p string) string { return fmt.Sprintf("[%s](%s)", Title(p), WebPath(p)) }
+// pageLink links to a page; a file in a subdirectory, which has no page
+// URL, is named instead.
+func pageLink(p string) string {
+	if !IsPage(p) {
+		return "`" + p + "`"
+	}
+	return fmt.Sprintf("[%s](%s)", Title(p), WebPath(p))
+}
 
 func renderBacklinks(ix *Index, p string) string {
 	bl := ix.Backlinks[p]
@@ -204,12 +222,14 @@ type Result struct {
 
 // Generate regenerates every block in the tree: each block's body is
 // re-rendered, and a page missing a block its generators default to gets it
-// at the end. Pages with mangled markers are left alone. Generate is a pure
-// function of the tree: run on its own output it changes nothing.
+// at the end. Blocks in files in subdirectories are re-rendered too, but
+// only pages get default blocks. Files with mangled markers are left alone.
+// Generate is a pure function of the tree: run on its own output it changes
+// nothing.
 func Generate(t Tree, o Options) Result {
 	ix := NewIndex(t, o)
 	res := Result{Changed: map[string][]byte{}, Problems: ix.Problems}
-	for _, p := range ix.Pages {
+	for _, p := range ix.Files {
 		segs, ok := ix.segs[p]
 		if !ok {
 			continue // mangled
@@ -229,7 +249,7 @@ func Generate(t Tree, o Options) Result {
 			}
 		}
 		for _, g := range Generators {
-			if has[g.Name] || !g.Default(p) {
+			if has[g.Name] || !IsPage(p) || !g.Default(p) {
 				continue
 			}
 			segs = appendBlock(segs, g.Name, g.Render(ix, p))

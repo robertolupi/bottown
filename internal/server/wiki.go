@@ -195,9 +195,11 @@ type wikiState struct {
 	head   string            // "" when the wiki does not exist yet
 	tree   wiki.Tree         // path -> content
 	blobs  map[string]string // path -> blob SHA
-	// created: the head is the commit with which this write created the
-	// wiki, whose placeholder tree the write replaces.
-	created bool
+	// placeholder: when this write created the wiki, the files of the
+	// creation commit still exactly as it made them. The write removes
+	// them; anything changed or added since (the owner editing in the web
+	// UI before the write landed) stays.
+	placeholder map[string]bool
 }
 
 func (st *wikiState) files() []string { return st.tree.Files() }
@@ -227,23 +229,13 @@ func (s *Server) readWiki(ctx context.Context, org, repo string) (*wikiState, er
 		return st, nil // an empty wiki repository: no commits yet
 	}
 	st.head = strings.TrimSpace(head)
-	ls, err := mergeGit(ctx, st.gitDir, nil, nil, "ls-tree", "-r", "-z", st.head)
-	if err != nil {
+	if st.blobs, err = lsTree(ctx, st.gitDir, st.head); err != nil {
 		return nil, err
 	}
-	var shas []string
-	var paths []string
-	for _, ent := range strings.Split(strings.TrimSuffix(ls, "\x00"), "\x00") {
-		if ent == "" {
-			continue
-		}
-		meta, p, ok := strings.Cut(ent, "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 || f[1] != "blob" {
-			continue
-		}
-		st.blobs[p] = f[2]
-		shas, paths = append(shas, f[2]), append(paths, p)
+	paths := slices.Sorted(maps.Keys(st.blobs))
+	shas := make([]string, len(paths))
+	for i, p := range paths {
+		shas[i] = st.blobs[p]
 	}
 	contents, err := catBlobs(ctx, st.gitDir, shas)
 	if err != nil {
@@ -253,6 +245,24 @@ func (s *Server) readWiki(ctx context.Context, org, repo string) (*wikiState, er
 		st.tree[p] = contents[i]
 	}
 	return st, nil
+}
+
+// lsTree lists a commit's files: path -> blob SHA.
+func lsTree(ctx context.Context, gitDir, commit string) (map[string]string, error) {
+	ls, err := mergeGit(ctx, gitDir, nil, nil, "ls-tree", "-r", "-z", commit)
+	if err != nil {
+		return nil, err
+	}
+	blobs := map[string]string{}
+	for _, ent := range strings.Split(strings.TrimSuffix(ls, "\x00"), "\x00") {
+		meta, p, ok := strings.Cut(ent, "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 || f[1] != "blob" {
+			continue
+		}
+		blobs[p] = f[2]
+	}
+	return blobs, nil
 }
 
 // catBlobs reads blobs in one git process.
@@ -351,11 +361,11 @@ func (s *Server) opWikiRead(ctx context.Context, p secrets.Principal, repoName, 
 	return WikiReadOut{Repo: org + "/" + repo, Path: f, SHA: st.blobs[f], Head: st.head, Content: string(st.tree[f])}, nil
 }
 
-// wikiChange is a commit to make on a wiki: files to write, with an empty
-// tree underneath when the wiki was only just created.
+// wikiChange is a commit to make on a wiki: files to write, and files to
+// remove (the creation's placeholder, on the wiki's first write).
 type wikiChange struct {
 	files   map[string][]byte
-	replace bool // the commit's tree is exactly files (the wiki's first write)
+	remove  []string
 	msg     string
 	bottown bool // authored by bottown (regeneration), not the writer
 }
@@ -380,7 +390,13 @@ func (s *Server) opWikiPut(ctx context.Context, p secrets.Principal, in WikiPutI
 	out := WikiPutOut{Repo: full}
 	var final []byte // the file as committed, its blocks filled
 	commit, changed, err := s.wikiCommit(ctx, p, org, repo, true, func(st *wikiState) (*wikiChange, error) {
-		f, exists := wiki.Resolve(st.files(), file)
+		// The wiki as it is once the placeholder is gone: a placeholder
+		// file does not exist for the put.
+		tree := maps.Clone(st.tree)
+		for f := range st.placeholder {
+			delete(tree, f)
+		}
+		f, exists := wiki.Resolve(tree.Files(), file)
 		if !strings.HasSuffix(f, ".md") {
 			return nil, ferr(http.StatusBadRequest, "wiki files are markdown: %s does not end in .md", f)
 		}
@@ -401,21 +417,24 @@ func (s *Server) opWikiPut(ctx context.Context, p secrets.Principal, in WikiPutI
 				return nil, &wikiConflict{fmt.Sprintf("%s changed since blob %s (now %s): read it again and re-apply your edit", f, shortCommit(in.Base), shortCommit(cur))}
 			}
 		}
-		tree := maps.Clone(st.tree)
-		if st.fresh() {
-			tree = wiki.Tree{}
-		}
 		tree[f] = []byte(content)
 		files := map[string][]byte{f: []byte(content)}
 		for gp, b := range wiki.Generate(tree, s.wikiOptions(org, repo)).Changed {
 			files[gp] = b
 		}
 		final = files[f]
+		var remove []string
+		for pf := range st.placeholder {
+			if _, ok := files[pf]; !ok {
+				remove = append(remove, pf)
+			}
+		}
+		slices.Sort(remove)
 		msg := in.Message
 		if msg == "" {
 			msg = "Update " + wiki.WebPath(f)
 		}
-		return &wikiChange{files: files, replace: st.fresh(), msg: msg}, nil
+		return &wikiChange{files: files, remove: remove, msg: msg}, nil
 	})
 	if err != nil {
 		var ce *wikiConflict
@@ -443,11 +462,8 @@ func sameText(a, b string) bool {
 }
 
 // freshMessage marks the commit with which bottown creates a wiki through
-// Forgejo's API: the store's first write replaces its tree.
+// Forgejo's API: the store's first write removes its placeholder.
 const freshMessage = "Create the wiki (bottown)"
-
-// fresh reports whether the head is the creation commit alone.
-func (st *wikiState) fresh() bool { return st.head != "" && st.created }
 
 func (s *Server) opWikiGenerate(ctx context.Context, p secrets.Principal, in WikiGenerateIn) (WikiGenerateOut, error) {
 	org, repo, err := s.resolveRepo(p, in.Repo)
@@ -523,13 +539,20 @@ func nonNilP(s []wiki.Problem) []wiki.Problem {
 func (s *Server) wikiCommit(ctx context.Context, p secrets.Principal, org, repo string, create bool, change func(*wikiState) (*wikiChange, error)) (string, []string, error) {
 	s.wikiMu.Lock()
 	defer s.wikiMu.Unlock()
-	created := ""
+	var placeholder map[string]string // the creation commit's files, when this write created the wiki
 	for range wikiAttempts {
 		st, err := s.readWiki(ctx, org, repo)
 		if err != nil {
 			return "", nil, err
 		}
-		st.created = created != "" && st.head == created
+		for f, sha := range placeholder {
+			if st.blobs[f] == sha {
+				if st.placeholder == nil {
+					st.placeholder = map[string]bool{}
+				}
+				st.placeholder[f] = true
+			}
+		}
 		if st.head == "" {
 			if !create {
 				return "", []string{}, nil
@@ -538,7 +561,7 @@ func (s *Server) wikiCommit(ctx context.Context, p secrets.Principal, org, repo 
 			if _, err := change(st); err != nil {
 				return "", nil, err
 			}
-			if created, err = s.createWiki(ctx, p, org, repo); err != nil {
+			if placeholder, err = s.createWiki(ctx, p, org, repo); err != nil {
 				return "", nil, err
 			}
 			continue
@@ -552,15 +575,13 @@ func (s *Server) wikiCommit(ctx context.Context, p secrets.Principal, org, repo 
 		}
 		var changed []string
 		for f, b := range c.files {
-			if old, ok := st.tree[f]; !ok || !bytes.Equal(old, b) || c.replace {
+			if old, ok := st.tree[f]; !ok || !bytes.Equal(old, b) {
 				changed = append(changed, f)
 			}
 		}
-		if c.replace {
-			for f := range st.tree {
-				if _, ok := c.files[f]; !ok {
-					changed = append(changed, f)
-				}
+		for _, f := range c.remove {
+			if _, ok := st.tree[f]; ok {
+				changed = append(changed, f)
 			}
 		}
 		slices.Sort(changed)
@@ -593,13 +614,18 @@ func (s *Server) writeWikiCommit(ctx context.Context, p secrets.Principal, st *w
 	}
 	defer os.RemoveAll(tmp)
 	idx := []string{"GIT_INDEX_FILE=" + tmp + "/index"}
-	if c.replace {
-		_, err = mergeGit(ctx, st.gitDir, nil, idx, "read-tree", "--empty")
-	} else {
-		_, err = mergeGit(ctx, st.gitDir, nil, idx, "read-tree", st.head)
-	}
-	if err != nil {
+	if _, err := mergeGit(ctx, st.gitDir, nil, idx, "read-tree", st.head); err != nil {
 		return "", err
+	}
+	if len(c.remove) > 0 {
+		// Mode 0 removes an entry; unlike --force-remove it needs no work tree.
+		var rm strings.Builder
+		for _, f := range c.remove {
+			fmt.Fprintf(&rm, "0 %s\t%s\x00", strings.Repeat("0", len(st.head)), f)
+		}
+		if _, err := mergeGit(ctx, st.gitDir, strings.NewReader(rm.String()), idx, "update-index", "-z", "--index-info"); err != nil {
+			return "", err
+		}
 	}
 	for _, f := range sortedKeys(c.files) {
 		sha, err := hashBlob(ctx, st.gitDir, c.files[f])
@@ -657,28 +683,46 @@ func (s *Server) wikiPush(ctx context.Context, p secrets.Principal, org, repo st
 }
 
 // createWiki creates a wiki that does not exist yet, through Forgejo's API
-// as the writer, and returns the creation commit, whose tree the first
-// write replaces.
-func (s *Server) createWiki(ctx context.Context, p secrets.Principal, org, repo string) (string, error) {
+// as the writer, and returns the creation commit's files (path -> blob),
+// the placeholder the first write removes. The head may already be past
+// the creation (the owner saving a page in between), so the creation
+// commit is found as the history's root, and only when its message is
+// bottown's: a wiki someone else created at the same moment has no
+// placeholder of bottown's to remove.
+func (s *Server) createWiki(ctx context.Context, p secrets.Principal, org, repo string) (map[string]string, error) {
 	if s.wikiCreateFn != nil {
 		if err := s.wikiCreateFn(ctx, org, repo); err != nil {
-			return "", err
+			return nil, err
 		}
 	} else {
 		c, err := s.actorClient(ctx, p.Actor)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if err := c.CreateWikiPage(org, repo, "Home", "This wiki is kept through bottown.\n", freshMessage); err != nil {
-			return "", fmt.Errorf("create the wiki of %s/%s: %w", org, repo, err)
+			return nil, fmt.Errorf("create the wiki of %s/%s: %w", org, repo, err)
 		}
 	}
 	st, err := s.readWiki(ctx, org, repo)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if st.head == "" {
-		return "", fmt.Errorf("created the wiki of %s/%s, but it has no commit", org, repo)
+		return nil, fmt.Errorf("created the wiki of %s/%s, but it has no commit", org, repo)
 	}
-	return st.head, nil
+	roots, err := mergeGit(ctx, st.gitDir, nil, nil, "rev-list", "--max-parents=0", st.head)
+	if err != nil {
+		return nil, err
+	}
+	if r := strings.Fields(roots); len(r) == 1 {
+		subj, err := mergeGit(ctx, st.gitDir, nil, nil, "log", "-1", "--format=%s", r[0])
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(subj) == freshMessage {
+			return lsTree(ctx, st.gitDir, r[0])
+		}
+	}
+	s.Log.Info("the new wiki's first commit is not bottown's; keeping its files", "repo", org+"/"+repo)
+	return map[string]string{}, nil
 }

@@ -270,6 +270,76 @@ func TestWikiCreate(t *testing.T) {
 	}
 }
 
+// TestWikiCreateRace: the owner saves pages in the web UI between the
+// wiki's creation and the first write. The write removes only the
+// placeholder as created: a page the owner added stays, and so does Home
+// when the owner edited it.
+func TestWikiCreateRace(t *testing.T) {
+	for _, editHome := range []bool{false, true} {
+		t.Run(fmt.Sprintf("editHome=%v", editHome), func(t *testing.T) {
+			w := newWikiRepo(t, false)
+			create := w.s.wikiCreateFn
+			w.s.wikiCreateFn = func(ctx context.Context, org, repo string) error {
+				if err := create(ctx, org, repo); err != nil {
+					return err
+				}
+				w.commit("Owner.md", "the owner's page\n", "owner in the UI")
+				if editHome {
+					w.commit("Home.md", "# Home\n\nthe owner's home\n", "owner edits Home")
+				}
+				return nil
+			}
+			ctx := context.Background()
+			if _, err := w.s.opWikiPut(ctx, owner, WikiPutIn{Repo: "demo", Path: "Idea.md", Content: "idea\n"}); err != nil {
+				t.Fatal(err)
+			}
+			if got := w.read("Owner.md").Content; !strings.Contains(got, "the owner's page") {
+				t.Fatalf("Owner.md = %q", got)
+			}
+			_, err := w.s.opWikiRead(ctx, owner, "demo", "Home.md")
+			switch {
+			case editHome && err != nil:
+				t.Fatalf("the owner's Home was removed: %v", err)
+			case editHome && !strings.Contains(w.read("Home.md").Content, "the owner's home"):
+				t.Fatalf("Home.md = %q", w.read("Home.md").Content)
+			case !editHome && status(err) != http.StatusNotFound:
+				t.Fatalf("the placeholder Home survived: %v", err)
+			}
+		})
+	}
+}
+
+// TestWikiSubdirectoryBlock: a block in a file below the top level is
+// filled on put, like a page's, and generate --check finds it current.
+func TestWikiSubdirectoryBlock(t *testing.T) {
+	w := newWikiRepo(t, true)
+	ctx := context.Background()
+	content := "# Round 1\n\n" + wiki.Open("health") + "\nstale\n" + wiki.Close("health") + "\n"
+	if _, err := w.s.opWikiPut(ctx, owner, WikiPutIn{Repo: "demo", Path: "reviews/r1.md", Content: content}); err != nil {
+		t.Fatal(err)
+	}
+	got := w.read("reviews/r1.md").Content
+	if strings.Contains(got, "stale") || !strings.Contains(got, wiki.Open("health")+"\n- [Home](Home) (broken-link)") {
+		t.Fatalf("reviews/r1.md = %q", got)
+	}
+	check, err := w.s.opWikiGenerate(ctx, owner, WikiGenerateIn{Repo: "demo", Check: true})
+	if err != nil || len(check.Stale) != 0 || len(check.Changed) != 0 {
+		t.Fatalf("check = %+v, %v", check, err)
+	}
+	// Hand-edited inside the block: check reports it, generate repairs it.
+	w.commit("reviews/r1.md", strings.Replace(got, "(broken-link)", "(edited)", 1), "owner edits the block")
+	check, err = w.s.opWikiGenerate(ctx, owner, WikiGenerateIn{Repo: "demo", Check: true})
+	if err != nil || fmt.Sprint(check.Stale) != "[{reviews/r1.md health}]" {
+		t.Fatalf("check after a hand edit = %+v, %v", check, err)
+	}
+	if gen, err := w.s.opWikiGenerate(ctx, owner, WikiGenerateIn{Repo: "demo"}); err != nil || strings.Join(gen.Changed, ",") != "reviews/r1.md" {
+		t.Fatalf("generate = %+v, %v", gen, err)
+	}
+	if w.read("reviews/r1.md").Content != got {
+		t.Fatal("generate did not restore the block")
+	}
+}
+
 func TestWikiGenerate(t *testing.T) {
 	w := newWikiRepo(t, true)
 	ctx := context.Background()

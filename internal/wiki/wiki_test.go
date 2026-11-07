@@ -185,7 +185,15 @@ func TestGenerateGolden(t *testing.T) {
 		t.Error("a page with mangled markers was rewritten")
 	}
 	if _, ok := res.Changed["reviews/1-demo/r1-claude.md"]; ok {
-		t.Error("a file in a subdirectory was rewritten")
+		t.Error("a file in a subdirectory without blocks was rewritten")
+	}
+	// A block in a subdirectory file is regenerated like a page's; such a
+	// file gets no default blocks, and its problems name it.
+	if !reflect.DeepEqual(filterStale(res.Stale, "reviews/"), []Stale{{"reviews/1-demo/summary.md", "health"}}) {
+		t.Errorf("stale in subdirectories = %v", filterStale(res.Stale, "reviews/"))
+	}
+	if !strings.Contains(string(got["reviews/1-demo/summary.md"]), "- `reviews/1-demo/r1-codex.md` (mangled)") {
+		t.Errorf("summary.md = %s", got["reviews/1-demo/summary.md"])
 	}
 	again := Generate(got, o)
 	if len(again.Changed) != 0 || len(again.Stale) != 0 {
@@ -203,6 +211,16 @@ func TestGenerateGolden(t *testing.T) {
 			t.Errorf("no %s problem reported: %v", k, res.Problems)
 		}
 	}
+}
+
+func filterStale(s []Stale, prefix string) []Stale {
+	var out []Stale
+	for _, x := range s {
+		if strings.HasPrefix(x.Page, prefix) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // TestGenerateStaleBlocks: a missing block is inserted, a stale one is
