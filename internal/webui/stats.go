@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,29 +18,37 @@ import (
 // per-issue/PR vector and the breakdowns, built on the shared activity
 // derivation (ComputeActivity) so the timeline and the statistics cannot
 // disagree. It adds the issues' size labels and milestones, and the merged
-// PRs' diffs for the measured size.
+// PRs' diffs for the measured size: the issue list is the one the activity
+// read, and the diffs not yet cached are read activity.Concurrency at a
+// time.
 func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.Stats, error) {
-	a, err := s.ComputeActivity(ctx, w)
+	a, issues, err := s.computeActivity(ctx, w)
 	if err != nil {
 		return nil, err
 	}
-	issues, err := s.issues(ctx, "all", false)
-	if err != nil {
-		return nil, fmt.Errorf("read issues: %w", err)
-	}
 	f := stats.Facts{Issues: issues, Diffs: map[int64]string{}}
-	var incomplete []string
+	var (
+		mu         sync.Mutex
+		incomplete []string
+		reads      []func()
+	)
 	for _, th := range a.Threads {
 		if th.PR <= 0 || th.PRMerged == nil {
 			continue
 		}
-		diff, err := s.diffs.get(ctx, th.PR, s.pullRequestDiff)
-		if err != nil {
-			incomplete = append(incomplete, fmt.Sprintf("diff of !%d: %v", th.PR, err))
-			continue
-		}
-		f.Diffs[th.PR] = diff
+		reads = append(reads, func() {
+			diff, err := s.diffs.get(ctx, th.PR, s.pullRequestDiff)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				incomplete = append(incomplete, fmt.Sprintf("diff of !%d: %v", th.PR, err))
+				return
+			}
+			f.Diffs[th.PR] = diff
+		})
 	}
+	activity.Parallel(activity.Concurrency, reads)
+	slices.Sort(incomplete)
 	st := stats.Compute(a, f, time.Now())
 	st.Incomplete = append(st.Incomplete, incomplete...)
 	return st, nil

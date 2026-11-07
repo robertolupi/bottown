@@ -653,10 +653,16 @@ issues that can hold a stop or a wait in the window: those of the window's
 threads, those updated in the window (a new stop updates its issue), and
 every open one, whose wait may have begun before the window, even before
 the flow's first run. That is 3 + issues + 2 × PRs calls, for a 7-day
-window or any other. The web UI keeps the issues it read in memory, each as
-of its `updated` time, and reads one again only when that has changed;
-the cache only saves reads, and a restart empties it. A failed issue or PR
-read leaves its facts out and is named in `incomplete`.
+window or any other; after the three lists they run eight at a time. The
+web UI keeps the issues it read in memory, and the reviews and gates of
+merged and closed PRs, each as of the issue's or PR's `updated` time, and
+reads one again only when that has changed. An open PR's are read on every
+load: the flow's check statuses land on its commits without updating it.
+A late review or status on a closed PR shows once something updates the
+PR. The cache only saves reads, and a restart empties it. A failed issue
+or PR read leaves its facts out and is named in `incomplete`, sorted. The
+statistics reuse the issue list the activity read, and read the merged
+PRs' diffs, eight at a time, once each (kept in memory too).
 
 **Timeline.** `GET /api/timeline?since=&until=` (RFC 3339; `since`
 defaults to six hours before `until`, and `until` to now, which leaves the

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -355,14 +357,17 @@ func TestStopsByThread(t *testing.T) {
 	}
 }
 
-// fakeSource counts Load's reads.
+// fakeSource counts Load's reads, which may run concurrently.
 type fakeSource struct {
+	mu    sync.Mutex
 	facts Facts
 	reads map[string]int
 	fail  map[string]bool
 }
 
 func (f *fakeSource) read(what string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reads[what]++
 	if f.fail[what] {
 		return errors.New("boom")
@@ -530,13 +535,13 @@ func TestOwnerWaitsMergedStop(t *testing.T) {
 
 // With a cache, Load reads an issue again only once its updated time
 // changes; without one, or with an emptied one, it reads it each time.
-func TestLoadIssueCache(t *testing.T) {
+func TestLoadCache(t *testing.T) {
 	src := &fakeSource{reads: map[string]int{}, facts: Facts{
 		IssueList: []*server.IssueItem{listed(8, -20, -8)},
 		Issues:    map[int64]*server.IssueOut{8: issueWith(8, stopComment(1, flow.ActorBusy, 0, -8))},
 	}}
-	var cache IssueCache
-	load := func(c *IssueCache) *Activity {
+	var cache Cache
+	load := func(c *Cache) *Activity {
 		t.Helper()
 		a, err := Load(context.Background(), src, c, week, week.Until)
 		if err != nil {
@@ -557,8 +562,117 @@ func TestLoadIssueCache(t *testing.T) {
 	}
 
 	load(nil)
-	load(&IssueCache{})
+	load(&Cache{})
 	if src.reads["issue 8"] != 4 {
 		t.Errorf("reads = %v, want issue 8 read by each load without the cache", src.reads)
 	}
+}
+
+// With a cache, a merged or closed PR's reviews and gate are read again
+// only once its updated time changes; an open PR's on every load, since
+// the flow's check statuses do not update it.
+func TestLoadPRCache(t *testing.T) {
+	src := &fakeSource{reads: map[string]int{}, facts: Facts{
+		Runs: []server.RunItem{run("r-1", "implement", 7, 0, 1, 2), run("r-2", "implement", 8, 0, 3, 4)},
+		PRs:  []*server.PRItem{merged(pr(12, 7, 1.5), 4), pr(13, 8, 3.5)},
+		Reviews: map[int64]*server.PROut{
+			12: {Reviews: []server.ReviewOut{{State: "REQUEST_CHANGES"}}},
+			13: {},
+		},
+		Gates: map[int64]server.GateOut{12: {Failed: []string{"abc"}}},
+	}}
+	var cache Cache
+	load := func() *Activity {
+		t.Helper()
+		a, err := Load(context.Background(), src, &cache, week, week.Until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	load()
+	a := load()
+	if src.reads["pr 12"] != 1 || src.reads["gate 12"] != 1 || src.reads["pr 13"] != 2 || src.reads["gate 13"] != 2 {
+		t.Errorf("after two loads: reads = %v", src.reads)
+	}
+	if th := thread(t, a, "flow:issue:7:pr:12"); th.ImplementRounds != 1 || th.CheckRounds != 1 {
+		t.Errorf("thread from the cache = %+v", th)
+	}
+
+	// A late review updates the closed PR, and the next load reads it.
+	src.facts.PRs[0].Updated = ptr(at(5))
+	load()
+	if src.reads["pr 12"] != 2 || src.reads["gate 12"] != 2 {
+		t.Errorf("after the update: reads = %v", src.reads)
+	}
+
+	// A failed read is not cached.
+	src.fail = map[string]bool{"gate 12": true}
+	src.facts.PRs[0].Updated = ptr(at(6))
+	load()
+	src.fail = nil
+	load()
+	if src.reads["gate 12"] != 4 || src.reads["pr 12"] != 3 {
+		t.Errorf("after a failed gate read: reads = %v", src.reads)
+	}
+}
+
+// slowSource holds each issue read a moment and counts how many ran at
+// once.
+type slowSource struct {
+	*fakeSource
+	running, peak atomic.Int32
+}
+
+func (s *slowSource) Issue(ctx context.Context, n int64) (*server.IssueOut, error) {
+	now := s.running.Add(1)
+	defer s.running.Add(-1)
+	for {
+		p := s.peak.Load()
+		if now <= p || s.peak.CompareAndSwap(p, now) {
+			break
+		}
+	}
+	time.Sleep(10 * time.Millisecond)
+	return s.fakeSource.Issue(ctx, n)
+}
+
+// Load's reads run concurrently, at most Concurrency at a time, and its
+// Incomplete is sorted however they finish.
+func TestLoadConcurrent(t *testing.T) {
+	src := &slowSource{fakeSource: &fakeSource{reads: map[string]int{}, fail: map[string]bool{}, facts: Facts{Issues: map[int64]*server.IssueOut{}}}}
+	for n := int64(1); n <= 3*Concurrency; n++ {
+		src.facts.IssueList = append(src.facts.IssueList, listed(n, -20, 1))
+		if n%5 == 0 {
+			src.fail[fmt.Sprintf("issue %d", n)] = true
+		}
+	}
+	a, err := Load(context.Background(), src, nil, week, week.Until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := src.peak.Load(); p < 2 || p > Concurrency {
+		t.Errorf("peak concurrent reads = %d, want 2..%d", p, Concurrency)
+	}
+	if len(src.reads) != 3+3*Concurrency {
+		t.Errorf("reads = %v", src.reads)
+	}
+	if len(a.Incomplete) != 4 || !slices.IsSorted(a.Incomplete) {
+		t.Errorf("incomplete = %q, want 4 sorted", a.Incomplete)
+	}
+}
+
+func TestParallel(t *testing.T) {
+	var mu sync.Mutex
+	var got []int
+	var fns []func()
+	for i := range 20 {
+		fns = append(fns, func() { mu.Lock(); got = append(got, i); mu.Unlock() })
+	}
+	Parallel(3, fns)
+	slices.Sort(got)
+	if len(slices.Compact(got)) != 20 || got[0] != 0 || got[19] != 19 {
+		t.Errorf("ran %v", got)
+	}
+	Parallel(0, nil)
 }
