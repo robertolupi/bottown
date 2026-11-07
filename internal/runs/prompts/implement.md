@@ -77,7 +77,10 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
    request: when `bottown flow` drives the issue, it runs them itself at
    your pushed head before a verifier starts, and a failure comes back to
    you as another implement round. Run the e2e tests your change touches
-   when that helps you.
+   when that helps you. When you change a message, error text or command
+   output, `grep -rn` for the old text in the repository's tests, its e2e
+   tests included, and update and run the tests that assert it before you
+   push.
 2. The branch is pushed and a pull request is open (`pr create`), whose
    description says what changed and how you checked it.
 {{- if .SelfEnd}}
