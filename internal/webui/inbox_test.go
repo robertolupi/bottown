@@ -85,28 +85,6 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 	return srv, port
 }
 
-// paginate returns the slice of items a Forgejo list endpoint would send for
-// the request's page/limit, mirroring the real server's windowing.
-func paginate[T any](r *http.Request, items []T) []T {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if page < 1 {
-		page = 1
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	start := (page - 1) * limit
-	if start >= len(items) {
-		return []T{}
-	}
-	end := start + limit
-	if end > len(items) {
-		end = len(items)
-	}
-	return items[start:end]
-}
-
 func defaultFixture() *fixtureForge {
 	return &fixtureForge{
 		actors: []map[string]any{

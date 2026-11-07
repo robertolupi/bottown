@@ -264,7 +264,7 @@ helper), `serve` and `admin` (inside the container), and `mcp call`.
 make build    # bin/bottown (the web UI only if make web ran)
 make web      # the web UI, from web/ into internal/webui/dist/ui (runs npm ci if needed)
 make test     # Go unit tests and frontend behavioral tests (runs npm ci if needed)
-make check    # gofmt, go mod tidy, vet, Go and frontend tests, svelte-check
+make check    # gofmt, go mod tidy, vet, dead-code lint, Go (-race) and frontend tests, svelte-check
 make e2e      # end-to-end tests on throwaway e2e-* instances (needs Docker)
 ```
 

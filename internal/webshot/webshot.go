@@ -111,9 +111,7 @@ type Case struct {
 }
 
 type shotCase = Case
-type shotResult = CaseResult
 type shotReport = Report
-type shotBuild = Build
 
 // Cases is the matrix of widths and schemes, in the order given.
 func Cases(widths []int, height int, schemes []string) ([]Case, error) {
