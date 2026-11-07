@@ -47,7 +47,7 @@ bottown issue show [N] [--repo R] [--json] [--download DIR]
 bottown issue create --title T --body-file -
 bottown pr list [--state open|closed|all] [--repo R] [--json]
 bottown pr show [N] [--repo R] [--diff [--full] | --stat | --since-review [--reviewer R]] [--json]
-bottown pr create --title T --body-file -
+bottown pr create --title T --body-file - [--part]
 bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
 bottown api METHOD PATH [--data JSON]
