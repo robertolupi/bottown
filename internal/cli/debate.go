@@ -170,9 +170,7 @@ func runDebate(cmd *cobra.Command, g *globals, target string, o debateOpts) erro
 		}
 	}
 	if o.consolidate != "" {
-		ro.actor = o.consolidate
-		ro.debate = &server.DebateRequest{Slug: o.slug, Date: date}
-		if err := startRun(cmd, g, policy.Consolidate, target, ro); err != nil {
+		if err := startRun(cmd, g, policy.Consolidate, target, consolidateOpts(ro, o.consolidate, o.slug, date)); err != nil {
 			return fmt.Errorf("debate: consolidate: %w", err)
 		}
 	}
@@ -180,6 +178,19 @@ func runDebate(cmd *cobra.Command, g *globals, target string, o debateOpts) erro
 		return fmt.Errorf("debate: the runs of %s did not succeed", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// consolidateOpts is the consolidate run's options, from the round's.
+// The round's runs may have taken long enough for the default branch to
+// move, and the server pins the consolidate run to its head then: the run
+// fetches the mirror again rather than reuse the round's fetch, or its
+// worktree has no commit to check out (#388).
+func consolidateOpts(round runOpts, actor, slug, date string) runOpts {
+	ro := round
+	ro.actor, ro.question = actor, ""
+	ro.debate = &server.DebateRequest{Slug: slug, Date: date}
+	ro.synced = false
+	return ro
 }
 
 // debatePrompt is run's debate round as its prompt shows it, from the

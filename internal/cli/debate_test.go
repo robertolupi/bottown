@@ -74,3 +74,19 @@ func TestConsolidatedText(t *testing.T) {
 		t.Errorf("failed consolidation text:\n%s", got)
 	}
 }
+
+// The consolidate run fetches the mirror again: the round's runs may have
+// let the default branch move past the round's fetch (#388).
+func TestConsolidateOpts(t *testing.T) {
+	round := runOpts{keep: true, plain: true, synced: true}
+	got := consolidateOpts(round, "claude:opus", "s", "2026-11-07")
+	if got.synced {
+		t.Error("consolidate run reuses the round's fetch")
+	}
+	if got.actor != "claude:opus" || !got.keep || !got.plain {
+		t.Errorf("consolidateOpts = %+v", got)
+	}
+	if d := got.debate; d == nil || d.Slug != "s" || d.Date != "2026-11-07" {
+		t.Errorf("debate = %+v", d)
+	}
+}
