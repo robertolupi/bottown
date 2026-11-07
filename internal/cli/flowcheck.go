@@ -28,6 +28,8 @@ import (
 type flowChecker struct {
 	ws   *runs.Workspace
 	tail *liveTail
+	// hold marks a check live; nil is runs.HoldCheck. Tests replace it.
+	hold func(dir string, rec runs.CheckRecord) (release func(), err error)
 }
 
 // prefix starts the names of req's checks: flow-<issue>-<sha>.
@@ -110,10 +112,17 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	if deadline, ok := ctx.Deadline(); ok {
 		rec.Expires, limit = deadline, deadline.Sub(started)
 	}
-	release, holdErr := runs.HoldCheck(c.ws.RunsDir, rec)
-	if holdErr == nil {
-		defer release()
+	// Without it, the cleanup of a check that starts meanwhile would remove
+	// this one's worktree while its commands run: the check does not start.
+	hold := c.hold
+	if hold == nil {
+		hold = runs.HoldCheck
 	}
+	release, err := hold(c.ws.RunsDir, rec)
+	if err != nil {
+		return out, fmt.Errorf("marking the check live: %w", err)
+	}
+	defer release()
 	c.removeLeftovers()
 	if _, err := runs.Git(c.ws.Mirror, nil, "worktree", "add", "-q", "--detach", dir, req.SHA); err != nil {
 		return out, err
@@ -133,11 +142,6 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	// Unbuffered: the live tails read the log while the commands run.
 	l := &checkLog{w: f}
 	l.line(fmt.Sprintf("bottown flow: post-implement checks for #%d (!%d) at %s, %s", req.Issue, req.PR, req.SHA, started.Format(time.RFC3339)))
-	if holdErr != nil {
-		// Without the record, the cleanup of a check that starts meanwhile
-		// may remove this one's worktree.
-		l.line("bottown flow: the live tails will not show these checks: " + holdErr.Error())
-	}
 	if c.tail != nil {
 		ended := c.tail.Follow(tailRun{
 			ID: rec.ID, Target: fmt.Sprintf("!%d at %s", req.PR, short(req.SHA)),

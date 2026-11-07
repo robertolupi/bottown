@@ -97,6 +97,22 @@ func TestFlowChecker(t *testing.T) {
 		t.Errorf("check worktrees left behind:\n%s", wts)
 	}
 
+	// A check that cannot mark itself live does not start: without the
+	// record, another check's cleanup would remove its worktree.
+	failing := flowChecker{ws: ws, hold: func(string, runs.CheckRecord) (func(), error) {
+		return nil, fmt.Errorf("no record")
+	}}
+	before, _ := os.ReadDir(ws.RunsDir)
+	if out, err := failing.Check(ctx, req); err == nil || !strings.Contains(err.Error(), "no record") || out.Passed {
+		t.Fatalf("check without a record: %+v, %v", out, err)
+	}
+	if after, _ := os.ReadDir(ws.RunsDir); len(after) != len(before) {
+		t.Errorf("check without a record left files: %v, before %v", after, before)
+	}
+	if wts := git(ws.Mirror, "worktree", "list"); strings.Contains(wts, "flow-9-") {
+		t.Errorf("check without a record made a worktree:\n%s", wts)
+	}
+
 	req.SHA = strings.Repeat("0", 40)
 	if _, err := c.Check(ctx, req); err == nil || !strings.Contains(err.Error(), "not in the mirror") {
 		t.Fatalf("unknown head: %v", err)
