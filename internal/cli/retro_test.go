@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,5 +348,105 @@ func TestRetroHandover(t *testing.T) {
 	text := handoverText(runs.Record{ID: "r-1", Kind: policy.Retro, Actor: "codex", Family: "openai", Issue: 7, SHA: "abc"}, runs.StatusSucceeded, 0, "posted")
 	if !strings.Contains(text, "Retrospective against `abc`, the default branch's head.") {
 		t.Errorf("retro handover:\n%s", text)
+	}
+}
+
+// A windowed retro (#383) covers the pull requests the window's
+// first-parent commits merged, in the order they landed, and each one's
+// flow once: an issue/<m> pull request stands for issue m's flow, with
+// all its pull requests. Unmerged pull requests, and those merged
+// outside the window, are left out.
+func TestGatherRetroWindow(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	pr := func(n int64, ref, merge string) prHead {
+		h := prHead{Number: n, Title: fmt.Sprintf("PR %d | x", n), Merged: merge != "", MergeCommit: merge}
+		h.Head.Ref = ref
+		return h
+	}
+	heads := []prHead{
+		pr(9, "issue/7", ""),          // #7's first try, closed
+		pr(12, "issue/7", "m2"),       // #7's second, merged in the window
+		pr(20, "hotfix", "m1"),        // not on an issue/ branch
+		pr(21, "issue/8", "before"),   // merged before the window
+		pr(22, "issue/10", "m3"),      // merged in it
+		pr(23, "issue/10", "m3-copy"), // a merge commit not on main
+	}
+	merged, flows := windowFlows([]string{"m1", "m2", "x", "m3"}, heads)
+	var got []string
+	for _, m := range merged {
+		got = append(got, fmt.Sprint(m.Number))
+	}
+	if strings.Join(got, " ") != "20 12 22" {
+		t.Errorf("merged = %v, want 20 12 22, in the order they landed", got)
+	}
+	got = nil
+	for _, f := range flows {
+		got = append(got, fmt.Sprintf("%s%v", f.Flow, f.ForgePRs))
+	}
+	if strings.Join(got, " ") != "!20[20] #7[9 12] #10[22 23]" {
+		t.Errorf("flows = %v, want !20[20] #7[9 12] #10[22 23]", got)
+	}
+
+	list := []server.RunItem{
+		{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: t0}, State: "ended"},
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", PR: 9, Branch: "issue/7", Created: t0.Add(time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Implement, Actor: "kimi", Issue: 8, Branch: "issue/8", Created: t0.Add(2 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-4d", Kind: policy.Verify, Actor: "codex", PR: 20, Branch: "hotfix", Created: t0.Add(3 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-5e", Kind: policy.Discuss, Actor: "agy", Issue: 10, Created: t0.Add(4 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-self", Kind: policy.Retro, Actor: "claude", Created: t0.Add(5 * time.Minute)}, State: "active"},
+	}
+	scope := retroScope{
+		Flows: flows, Merged: merged, Head: "bbbbbbbbbbbbbbbb",
+		Window: &secrets.RetroWindow{Since: "2w", Base: "aaaaaaaaaaaaaaaa", Page: "20261107-bbbbbbb-retrospective"},
+	}
+	dir := filepath.Join(t.TempDir(), retroDir)
+	n, _, err := gatherRetroScope(dir, scope, "r-self", ws, list, nil, nil, prStatuses{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 {
+		t.Errorf("gathered %d runs, want 4: not #8's, merged before the window, nor the retro's own", n)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(b)
+	for _, want := range []string{
+		"# Evidence for the retro of the window `aaaaaaaaaa..bbbbbbbbbb`",
+		"(`--since 2w`) is what landed on the default branch after `aaaaaaaaaaaaaaaa`, up to `bbbbbbbbbbbbbbbb`",
+		"| !20 | PR 20 \\| x | `hotfix` | `m1` | !20 |", "| !12 | PR 12 \\| x | `issue/7` | `m2` | !12 of #7 |",
+		"the flows of the pull requests merged in the window",
+		"`r-1a`", "`r-2b`", "`r-4d`", "`r-5e`",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README lacks %q:\n%s", want, readme)
+		}
+	}
+	if strings.Contains(readme, "`r-3c`") {
+		t.Errorf("README has #8's run:\n%s", readme)
+	}
+}
+
+// run retro takes an issue or --since, not both, and a windowed retro has
+// no family rule to override; these are refused before anything starts.
+func TestRunRetroArgs(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-a", "codex"}, "give an ISSUE or --since WINDOW"},
+		{[]string{"-a", "codex", "--since", "2w", "7"}, "not both"},
+		{[]string{"-a", "codex", "--since", "last", "--allow-same-family"}, "no family rule"},
+	} {
+		root := newRoot()
+		var out strings.Builder
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(append([]string{"run", "retro"}, c.args...))
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("run retro %v = %v, want an error saying %q", c.args, err, c.want)
+		}
 	}
 }

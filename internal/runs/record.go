@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/robertolupi/bottown/internal/secrets"
 )
 
 // Local run states. The server separately tracks whether the key is live.
@@ -42,14 +44,16 @@ type Record struct {
 	Interactive     bool   `json:"interactive,omitempty"`
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
 	Critical        bool   `json:"critical,omitempty"` // discuss: an adversarial review (--critical)
-	Question        string `json:"question,omitempty"` // discuss: the owner's question
-	Message         string `json:"message,omitempty"`  // the owner's note for the prompt (--message)
-	Harness         string `json:"harness"`
-	Spec            string `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
-	Status          string `json:"status"`
-	StopRequested   bool   `json:"stop_requested,omitempty"`
-	ExitCode        *int   `json:"exit_code,omitempty"`
-	PID             int    `json:"pid,omitempty"`
+	// Window is a windowed retro's window (#383); nil for other runs.
+	Window        *secrets.RetroWindow `json:"window,omitempty"`
+	Question      string               `json:"question,omitempty"` // discuss: the owner's question
+	Message       string               `json:"message,omitempty"`  // the owner's note for the prompt (--message)
+	Harness       string               `json:"harness"`
+	Spec          string               `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
+	Status        string               `json:"status"`
+	StopRequested bool                 `json:"stop_requested,omitempty"`
+	ExitCode      *int                 `json:"exit_code,omitempty"`
+	PID           int                  `json:"pid,omitempty"`
 	// LauncherLock is the file the launcher holds locked while it lives
 	// (see HoldLauncher); empty for runs started before it existed.
 	LauncherLock string     `json:"launcher_lock,omitempty"`
@@ -84,8 +88,12 @@ type Handover struct {
 	Failed  bool   `json:"failed,omitempty"` // the agent ended the run as failed
 }
 
-// Target is "#<issue>" or "!<pr>".
+// Target is "#<issue>", "!<pr>", or a windowed retro's window,
+// "<base>..<head>".
 func (r Record) Target() string {
+	if r.Window != nil {
+		return shortSHA(r.Window.Base) + ".." + shortSHA(r.SHA)
+	}
 	if r.PR > 0 {
 		return "!" + itoa(r.PR)
 	}
@@ -99,6 +107,8 @@ func (r Record) Mode() string {
 	}
 	return "batch"
 }
+
+func shortSHA(sha string) string { return sha[:min(10, len(sha))] }
 
 func itoa(n int64) string {
 	b, _ := json.Marshal(n)

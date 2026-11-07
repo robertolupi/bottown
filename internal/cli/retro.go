@@ -105,6 +105,41 @@ type retroLocal struct {
 // sees in the evidence (retroGaps, and the statuses it could not read),
 // which the README and the prompt warn of.
 func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64, tips []prTip, sts prStatuses) (int, []string, error) {
+	return gatherRetroScope(dir, retroScope{Flows: []retroFlowPRs{{Flow: flow, ForgePRs: forgePRs}}}, self, ws, runList, audit, tips, sts)
+}
+
+// retroScope is what a retro's evidence covers: one flow, or the flows of
+// a window's merged pull requests (#383).
+type retroScope struct {
+	Flows []retroFlowPRs
+	// Window is a windowed retro's window, up to Head, and Merged the pull
+	// requests its first-parent commits merged, oldest first; nil for a
+	// retro of one flow.
+	Window *secrets.RetroWindow
+	Head   string
+	Merged []prHead
+}
+
+// retroFlowPRs is a flow and the pull requests Forgejo has from its branch.
+type retroFlowPRs struct {
+	Flow     server.RetroFlow
+	ForgePRs []int64
+}
+
+// String names the scope for people: the flow, or the window.
+func (sc retroScope) String() string {
+	if sc.Window != nil {
+		return fmt.Sprintf("the window `%s..%s`", short(sc.Window.Base), short(sc.Head))
+	}
+	if len(sc.Flows) == 1 {
+		return sc.Flows[0].Flow.String()
+	}
+	return "no flow"
+}
+
+// gatherRetroScope is gatherRetro for every flow of scope: a run is in
+// the evidence when it belongs to any of them.
+func gatherRetroScope(dir string, scope retroScope, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, tips []prTip, sts prStatuses) (int, []string, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return 0, nil, err
 	}
@@ -141,11 +176,22 @@ func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Worksp
 			states = append(states, "")
 		}
 	}
-	prs := flow.PRs(forgePRs, cands)
+	prs := make([]map[int64]bool, len(scope.Flows))
+	for i, f := range scope.Flows {
+		prs[i] = f.Flow.PRs(f.ForgePRs, cands)
+	}
+	inScope := func(r secrets.Run) bool {
+		for i, f := range scope.Flows {
+			if f.Flow.Has(r, prs[i]) {
+				return true
+			}
+		}
+		return false
+	}
 
 	var out []retroRun
 	for i, r := range cands {
-		if r.ID == self || !flow.Has(r, prs) {
+		if r.ID == self || !inScope(r) {
 			continue
 		}
 		rr := retroRun{
@@ -201,7 +247,7 @@ func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Worksp
 		return 0, nil, err
 	}
 	gaps := append(retroGaps(out, tips), sts.Errors...)
-	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out, gaps, sts.Statuses)), 0o600)
+	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(scope, out, gaps, sts.Statuses)), 0o600)
 }
 
 // prStatus is a commit status at one of a flow pull request's commits.
@@ -306,9 +352,9 @@ func writeTranscript(path, harness string, log []byte) (int, error) {
 // retroReadme is the evidence's index: the runs, oldest first, and where
 // to read more, then the pull requests' commit statuses (sts). The gaps,
 // from retroGaps, come first, as a warning.
-func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string, sts []prStatus) string {
+func retroReadme(scope retroScope, rs []retroRun, gaps []string, sts []prStatus) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Evidence for the retro of %s\n\n", flow)
+	fmt.Fprintf(&b, "# Evidence for the retro of %s\n\n", scope)
 	if len(gaps) > 0 {
 		b.WriteString("> [!WARNING]\n> **The evidence looks partial.** Say so in the retro, and do not read\n" +
 			"> what is missing as a short flow.\n>\n")
@@ -318,7 +364,14 @@ func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string, sts []prSt
 		b.WriteString("\n")
 	}
 	what := "the issue or its pull requests"
+	var flow server.RetroFlow
+	if len(scope.Flows) == 1 {
+		flow = scope.Flows[0].Flow
+	}
 	switch {
+	case scope.Window != nil:
+		what = "the flows of the pull requests merged in the window"
+		writeWindow(&b, scope)
 	case flow.PR > 0 && flow.Issue > 0:
 		fmt.Fprintf(&b, "The retro is on pull request !%d, from `%s`: the evidence is the flow of issue #%d.\n\n", flow.PR, flow.Branch, flow.Issue)
 	case flow.PR > 0:
@@ -367,6 +420,25 @@ func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string, sts []prSt
 	}
 	writeStatuses(&b, sts)
 	return b.String()
+}
+
+// writeWindow writes a windowed retro's window and the pull requests
+// merged in it, each with the flow whose runs the evidence holds.
+func writeWindow(b *strings.Builder, scope retroScope) {
+	w := scope.Window
+	fmt.Fprintf(b, "The window (`--since %s`) is what landed on the default branch after `%s`, up to `%s`:\n"+
+		"its first-parent commits, the pull requests they merged, and each one's flow.\n\n", w.Since, w.Base, scope.Head)
+	if len(scope.Merged) == 0 {
+		b.WriteString("No pull request was merged in the window: its commits were pushed directly.\n\n")
+		return
+	}
+	b.WriteString("| pull request | title | branch | merge commit | flow |\n|---|---|---|---|---|\n")
+	for _, pr := range scope.Merged {
+		flow, _ := retroFlowOf(pr.Number, []prHead{pr})
+		fmt.Fprintf(b, "| !%d | %s | `%s` | `%s` | %s |\n", pr.Number, strings.ReplaceAll(pr.Title, "|", `\|`),
+			pr.Head.Ref, short(pr.MergeCommit), flow)
+	}
+	b.WriteString("\n")
 }
 
 // writeStatuses writes each pull request's commit statuses, oldest first,
@@ -466,6 +538,90 @@ func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir stri
 	return flow, n, gaps, err
 }
 
+// collectRetroWindow gathers the evidence of a windowed retro run (#383)
+// into dir with the owner key: the flows of the pull requests merged by
+// the default branch's first-parent commits after the window's base, up
+// to the run's SHA, read in gitDir. It returns the scope it covered, how
+// many runs it found and the gaps it saw.
+func collectRetroWindow(ctx context.Context, rc *runContext, run secrets.Run, gitDir, dir string) (retroScope, int, []string, error) {
+	scope := retroScope{Window: run.Window, Head: run.SHA}
+	if dir == "" {
+		return scope, 0, nil, errors.New("the run has no scratch directory")
+	}
+	revs, err := runs.GitCtx(ctx, gitDir, nil, "rev-list", "--first-parent", "--reverse", run.Window.Base+".."+run.SHA)
+	if err != nil {
+		return scope, 0, nil, fmt.Errorf("list the window's commits: %w", err)
+	}
+	heads, err := prHeads(ctx, rc)
+	if err != nil {
+		return scope, 0, nil, fmt.Errorf("list pull requests: %w", err)
+	}
+	scope.Merged, scope.Flows = windowFlows(strings.Fields(revs), heads)
+	var list []server.RunItem
+	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?history=1&repo="+run.Repo, nil, &list); err != nil {
+		return scope, 0, nil, fmt.Errorf("list runs: %w", err)
+	}
+	var audit []server.AuditEntry
+	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/audit?decision=deny,reject", nil, &audit); err != nil {
+		return scope, 0, nil, fmt.Errorf("read the audit log: %w", err)
+	}
+	var tips []prTip
+	var sts prStatuses
+	for _, h := range heads {
+		if !windowHas(scope, h.Number) || h.Head.Sha == "" {
+			continue
+		}
+		if t, err := prTipOf(ctx, rc, h); err == nil {
+			tips = append(tips, t)
+		}
+		sts.add(ctx, rc, h, list)
+	}
+	n, gaps, err := gatherRetroScope(dir, scope, run.ID, rc.ws, list, audit, tips, sts)
+	return scope, n, gaps, err
+}
+
+// windowFlows is the pull requests that the window's first-parent
+// commits revs (oldest first) merged, in that order, and their flows,
+// each once: an issue/<m> pull request stands for issue m's flow, with
+// every pull request from its branch (heads).
+func windowFlows(revs []string, heads []prHead) ([]prHead, []retroFlowPRs) {
+	at := map[string]int{}
+	for i, r := range revs {
+		at[r] = i
+	}
+	var merged []prHead
+	for _, h := range heads {
+		if _, ok := at[h.MergeCommit]; ok && h.Merged {
+			merged = append(merged, h)
+		}
+	}
+	slices.SortStableFunc(merged, func(a, b prHead) int { return cmp.Compare(at[a.MergeCommit], at[b.MergeCommit]) })
+	var flows []retroFlowPRs
+	seen := map[string]bool{}
+	for _, pr := range merged {
+		flow, prs := retroFlowOf(pr.Number, heads)
+		if flow.Issue > 0 {
+			// The issue's flow, whichever of its pull requests merged.
+			flow = server.NewRetroFlow(flow.Issue, false, "")
+		}
+		if k := flow.String(); !seen[k] {
+			seen[k] = true
+			flows = append(flows, retroFlowPRs{Flow: flow, ForgePRs: prs})
+		}
+	}
+	return merged, flows
+}
+
+// windowHas is whether pull request n is one of scope's flows'.
+func windowHas(scope retroScope, n int64) bool {
+	for _, f := range scope.Flows {
+		if slices.Contains(f.ForgePRs, n) || f.Flow.PR == n {
+			return true
+		}
+	}
+	return false
+}
+
 // add reads the commit statuses at h's commits, its head, and the heads
 // its verify runs saw (a force push may have dropped them from it). What it
 // cannot read it records in Errors rather than costing the run its evidence.
@@ -544,10 +700,14 @@ func commitStatuses(ctx context.Context, rc *runContext, sha string) ([]prStatus
 	}
 }
 
-// prHead is a pull request's number, head branch and head commit.
+// prHead is a pull request's number, head branch and head commit, and,
+// once merged, its title and merge commit (a windowed retro's selection).
 type prHead struct {
-	Number int64
-	Head   struct{ Ref, Sha string }
+	Number      int64
+	Title       string
+	Head        struct{ Ref, Sha string }
+	Merged      bool
+	MergeCommit string `json:"merge_commit_sha"`
 }
 
 // maxTipMerges bounds how many merge commits prTipOf walks down.

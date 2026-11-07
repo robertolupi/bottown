@@ -58,6 +58,15 @@ type PromptData struct {
 	// for a pull request from another branch.
 	RetroPR, RetroIssue int64
 	RetroBranch         string
+	// Retro: a windowed retro's window (#383), from WindowBase (exclusive)
+	// to SHA, as the owner gave its start (WindowSince); the wiki page it
+	// writes; and the pull requests merged in it and the flows they make.
+	// Window is false for a retro of one flow.
+	Window              bool
+	WindowSince         string
+	WindowBase          string
+	WindowPage          string
+	WindowMerged, Flows int
 	// The issue or PR whose attachments were fetched for the run, with
 	// their local paths, or why they could not be listed.
 	AttachmentsOf    int64

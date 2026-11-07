@@ -44,6 +44,7 @@ type runOpts struct {
 	tail            *liveTail             // the live tail the run shows in, if bottown flow runs one
 	plain           bool                  // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
 	debate          *server.DebateRequest // discuss in a debate round, consolidate: the debate (bottown debate)
+	since           string                // retro: the window's start, for a windowed retro (#383)
 }
 
 // ownTail is whether startRun shows a live tail of its own for the run,
@@ -120,8 +121,8 @@ signed with the actor's family.`,
 	discuss.Flags().BoolVar(&o.critical, "critical", false, "review the issue adversarially, as a red team, from another model family than its author")
 	discuss.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a critical discuss by an actor of the author's model family (said on its comment)")
 	retro := &cobra.Command{
-		Use:   "retro -a ACTOR [-I] [--allow-same-family] ISSUE",
-		Short: "Write a blameless retrospective of an issue's flow from bottown's records",
+		Use:   "retro -a ACTOR [-I] [--allow-same-family] (ISSUE | --since WINDOW)",
+		Short: "Write a blameless retrospective of an issue's flow, or of a window of the default branch, from bottown's records",
 		Long: `Write a blameless retrospective of an issue's flow: every implement, verify
 and discuss run on the issue and its pull requests. Before the agent starts,
 bottown gathers what it recorded of those runs (the server's records and
@@ -134,19 +135,44 @@ ISSUE may be a pull request: one from an issue/M branch stands for issue M's
 flow, and one from another branch for that pull request's runs. The retro is
 posted on the number given.
 
+--since WINDOW, instead of ISSUE, looks back on everything that landed on the
+default branch in a window: the pull requests merged by its first-parent
+commits after the window's start, up to its head, and each one's flow. WINDOW
+is where the window starts:
+
+  git:REF      after REF, a SHA or tag on the default branch
+  last         after the head the newest windowed retro covered
+  YYYY-MM-DD   after the default branch as it was at that date's start (UTC)
+  Nd, Nw       after the default branch as it was N days or weeks ago
+
+The server resolves it to a commit, which the command prints. The agent writes
+the retro to one wiki page, YYYYMMDD-<head>-retrospective, which the next
+--since last continues from. A windowed retro has no family rule.
+
 The worktree is detached at the default branch's head, and the run cannot push,
 open pull requests or review. Drafts the agent writes there (a design note, a
 proposal) keep the worktree, whatever the outcome. Run it with -I to discuss
 the findings before the comment is posted.
 
-As with verify, the retro should come from another model family than the
-issue's implementers: an actor of an implementer's family needs
+As with verify, the retro of an issue should come from another model family
+than the issue's implementers: an actor of an implementer's family needs
 --allow-same-family.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch {
+			case o.since == "" && len(args) == 0:
+				return errors.New("give an ISSUE or --since WINDOW")
+			case o.since != "" && len(args) > 0:
+				return errors.New("give an ISSUE or --since WINDOW, not both")
+			case o.since != "" && o.allowSameFamily:
+				return errors.New("--allow-same-family: a windowed retro has no family rule")
+			case o.since != "":
+				return startRun(cmd, g, policy.Retro, "", o)
+			}
 			return startRun(cmd, g, policy.Retro, args[0], o)
 		},
 	}
+	retro.Flags().StringVar(&o.since, "since", "", "look back on what landed on the default branch after WINDOW (git:REF, last, YYYY-MM-DD, Nd or Nw), not on an issue")
 	for _, c := range []*cobra.Command{implement, verify, discuss, retro} {
 		runFlags(c, &o)
 	}
@@ -311,9 +337,11 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	} else {
 		out = colorOut(out)
 	}
-	n, err := parseNumber(target)
-	if err != nil {
-		return err
+	var n int64
+	if o.since == "" {
+		if n, err = parseNumber(target); err != nil {
+			return err
+		}
 	}
 	actor, spec, err := runs.SplitActorSpec(o.actor)
 	if err != nil {
@@ -338,7 +366,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate, Since: o.since}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
 	} else {
@@ -355,6 +383,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	run := created.Run
+	if w := run.Window; w != nil {
+		fmt.Fprintf(out, "retro window --since %s: after %s, up to %s; wiki page %s\n", w.Since, w.Base, run.SHA, w.Page)
+	}
 	lc := launchedLifecycle(rc, run)
 	// The launcher's lock (see below) is released last, after the deferred
 	// end below has finished the record.
@@ -405,7 +436,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, Base: run.Base, SHA: run.SHA,
-		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Critical: run.Critical, Harness: harnessName, Spec: run.Spec,
+		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Critical: run.Critical, Window: run.Window, Harness: harnessName, Spec: run.Spec,
 		PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
@@ -737,7 +768,10 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		Title string `json:"title"`
 		Body  string `json:"body"`
 	}
-	if err := callServer(ctx, rc.inst, rc.key, "GET", fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", run.Org, run.Repo, n), nil, &item); err != nil {
+	if run.Window != nil {
+		// A windowed retro is on no issue: its window is its target.
+		item.Title = fmt.Sprintf("what landed on %s after %s, up to %s", def, short(run.Window.Base), short(run.SHA))
+	} else if err := callServer(ctx, rc.inst, rc.key, "GET", fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d", run.Org, run.Repo, n), nil, &item); err != nil {
 		return "", "", err
 	}
 	d := runs.PromptData{
@@ -745,7 +779,16 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message,
 		FlowNote: rec.FlowNote, ChecksPassed: rec.ChecksPassed,
 	}
-	if run.Kind == policy.Retro {
+	if run.Kind == policy.Retro && run.Window != nil {
+		d.Window, d.WindowSince, d.WindowBase, d.WindowPage = true, run.Window.Since, run.Window.Base, run.Window.Page
+		d.Evidence = filepath.Join(rec.TmpDir, retroDir)
+		scope, n, gaps, err := collectRetroWindow(ctx, rc, run, rc.ws.Mirror, d.Evidence)
+		if err != nil {
+			d.Evidence, d.EvidenceError = "", err.Error()
+		}
+		d.EvidenceRuns, d.EvidenceGaps = n, gaps
+		d.WindowMerged, d.Flows = len(scope.Merged), len(scope.Flows)
+	} else if run.Kind == policy.Retro {
 		// Like attachments, missing evidence does not stop the run: the
 		// prompt says why, and the forge's threads are still there.
 		d.Evidence = filepath.Join(rec.TmpDir, retroDir)
@@ -766,7 +809,10 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	// Attachments never stop a launched run: a failure is in the prompt
 	// instead.
 	var is server.IssueOut
-	isErr := rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is)
+	var isErr error
+	if n > 0 {
+		isErr = rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is)
+	}
 	p, err := goalPrompt(ctx, rk, run, d, rc.ws.Mirror, rc.ws.Remote+"/"+def, attachDir, &is, isErr)
 	return p, base, err
 }
@@ -875,6 +921,10 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 	case run.Kind == policy.Discuss && run.Debate != nil:
 		// A round's answers stay in the wiki: the consolidation's
 		// comment links them all.
+		return nil
+	case run.Window != nil:
+		// A windowed retro is on no issue: its page in the wiki, and
+		// its digest, say how it went.
 		return nil
 	case run.Kind == policy.Consolidate && run.Debate != nil:
 		body = consolidatedText(rec, run, status, code)

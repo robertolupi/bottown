@@ -173,6 +173,11 @@ func (s *Server) wikiWho(p secrets.Principal) string {
 // round files by their rounds, the rest by WikiRules.
 func (s *Server) wikiDecide(p secrets.Principal, st *wikiState, write bool, file string) policy.Decision {
 	who := s.wikiWho(p)
+	if p.Run != nil && p.Run.Window != nil {
+		if d, ok := policy.DecideWikiRetroPage(who, p.Run.Window.Page, file); ok {
+			return d
+		}
+	}
 	if d, ok := policy.DecideWikiRound(who, wikiRound(p), write, file, st.consolidated); ok {
 		return d
 	}
