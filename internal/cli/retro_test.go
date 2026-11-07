@@ -50,7 +50,7 @@ func TestGatherRetro(t *testing.T) {
 		{Run: "r-4d", Op: "api", Decision: "deny"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	n, err := gatherRetro(dir, 7, "r-3c", ws, list, audit, nil)
+	n, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-3c", ws, list, audit, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestGatherRetro(t *testing.T) {
 	}
 
 	// A flow bottown never ran still gets its (empty) evidence.
-	n, err = gatherRetro(dir, 99, "r-3c", ws, list, audit, nil)
+	n, err = gatherRetro(dir, server.NewRetroFlow(99, false, ""), "r-3c", ws, list, audit, nil)
 	if err != nil || n != 0 {
 		t.Fatalf("gatherRetro(99) = %d, %v", n, err)
 	}
@@ -146,7 +146,7 @@ func TestGatherRetroPRDiscussions(t *testing.T) {
 		{Run: secrets.Run{ID: "r-7g", Kind: policy.Discuss, Actor: "kimi", Issue: 13, Created: t0.Add(7 * time.Minute)}, State: "ended"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	if _, err := gatherRetro(dir, 7, "r-self", ws, list, nil, []int64{13}); err != nil {
+	if _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{13}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
@@ -163,6 +163,58 @@ func TestGatherRetroPRDiscussions(t *testing.T) {
 	}
 	if want := "r-1a r-2b r-3c r-5e r-6f r-7g"; strings.Join(ids, " ") != want {
 		t.Errorf("runs = %v, want %s (not r-4d, a discussion of !11)", ids, want)
+	}
+}
+
+// A retro on a pull request from issue/7 gathers #7's flow, the implement
+// runs included, as a retro on #7 does; one on a pull request from another
+// branch gathers that pull request's runs.
+func TestGatherRetroOnPR(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	heads := []prHead{{Number: 9}, {Number: 12}, {Number: 20}, {Number: 21}}
+	heads[0].Head.Ref, heads[1].Head.Ref, heads[2].Head.Ref, heads[3].Head.Ref = "issue/7", "issue/7", "hotfix", "issue/8"
+	list := []server.RunItem{
+		{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: t0}, State: "ended"},
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", PR: 9, Branch: "issue/7", Created: t0.Add(time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: t0.Add(2 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-4d", Kind: policy.Discuss, Actor: "kimi", Issue: 12, Created: t0.Add(3 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-5e", Kind: policy.Implement, Actor: "claude", Issue: 8, Branch: "issue/8", Created: t0.Add(4 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-6f", Kind: policy.Verify, Actor: "codex", PR: 20, Branch: "hotfix", Created: t0.Add(5 * time.Minute)}, State: "ended"},
+	}
+	gather := func(n int64) ([]string, string) {
+		t.Helper()
+		flow, prs := retroFlowOf(n, heads)
+		dir := filepath.Join(t.TempDir(), retroDir)
+		if _, err := gatherRetro(dir, flow, "r-self", ws, list, nil, prs); err != nil {
+			t.Fatal(err)
+		}
+		var got []retroRun
+		b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
+		if err != nil || json.Unmarshal(b, &got) != nil {
+			t.Fatalf("runs.json = %s, %v", b, err)
+		}
+		var ids []string
+		for _, r := range got {
+			ids = append(ids, r.ID)
+		}
+		readme, _ := os.ReadFile(filepath.Join(dir, "README.md"))
+		return ids, string(readme)
+	}
+	const want = "r-1a r-2b r-3c r-4d"
+	if ids, _ := gather(7); strings.Join(ids, " ") != want {
+		t.Errorf("retro on #7 = %v, want %s", ids, want)
+	}
+	ids, readme := gather(9)
+	if strings.Join(ids, " ") != want {
+		t.Errorf("retro on !9 = %v, want %s, the implement runs of #7 included", ids, want)
+	}
+	if !strings.Contains(readme, "# Evidence for the retro of !9 of #7\n\nThe retro is on pull request !9, from `issue/7`: the evidence is the flow of issue #7.") {
+		t.Errorf("README of the retro on !9:\n%s", readme)
+	}
+	ids, readme = gather(20)
+	if strings.Join(ids, " ") != "r-6f" || !strings.Contains(readme, "# Evidence for the retro of !20\n") {
+		t.Errorf("retro on !20 = %v, want r-6f:\n%s", ids, readme)
 	}
 }
 

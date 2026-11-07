@@ -800,11 +800,3 @@ func TestGCFlowLogs(t *testing.T) {
 		t.Errorf("--older-than removed a recent e2e log: %v", err)
 	}
 }
-
-func TestIssueBranchNumber(t *testing.T) {
-	for ref, want := range map[string]int64{"issue/278": 278, "issue/0": 0, "issue/x": 0, "feature/3": 0, "3": 0} {
-		if n, ok := issueBranchNumber(ref); ok != (want > 0) || ok && n != want {
-			t.Errorf("issueBranchNumber(%q) = %d, %v; want %d", ref, n, ok, want)
-		}
-	}
-}

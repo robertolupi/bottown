@@ -89,37 +89,13 @@ type retroLocal struct {
 	Handover      *runs.Handover `json:"handover,omitempty"`
 }
 
-// retroPRs is the set of issue n's pull requests: those from its issue/<n>
-// branch, as Forgejo lists them (forge) or as runs record them (a verify run
-// has the PR and the branch), ended and purged runs included.
-func retroPRs(n int64, forge []int64, rs []secrets.Run) map[int64]bool {
-	prs := map[int64]bool{}
-	for _, p := range forge {
-		prs[p] = true
-	}
-	for _, r := range rs {
-		if r.PR > 0 && r.Branch == fmt.Sprintf("issue/%d", n) {
-			prs[r.PR] = true
-		}
-	}
-	return prs
-}
-
-// inRetro is whether run r belongs to the flow of issue n, whose pull
-// requests are prs: it worked the issue (implement, plan, discuss), or a
-// pull request on its issue/<n> branch (verify), or discussed one of those
-// pull requests (a discuss run records its target, issue or PR, as Issue).
-func inRetro(r secrets.Run, n int64, prs map[int64]bool) bool {
-	return r.Issue == n || r.PR == n || r.Branch == fmt.Sprintf("issue/%d", n) ||
-		prs[r.Issue] || prs[r.PR]
-}
-
-// gatherRetro writes the evidence of issue n's flow, for retro run self,
-// into dir, and returns how many runs it found. Local files come from ws;
-// the server's records from runList (GET /v1/runs?history=1), the
-// denials from audit (GET /v1/audit?decision=deny,reject), and forgePRs
-// are the pull requests Forgejo has from the issue/<n> branch.
-func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64) (int, error) {
+// gatherRetro writes the evidence of flow, for retro run self, into dir,
+// and returns how many runs it found: those flow.Has selects, as the
+// server's cross-family rule does. Local files come from ws; the server's
+// records from runList (GET /v1/runs?history=1), the denials from audit
+// (GET /v1/audit?decision=deny,reject), and forgePRs are the pull requests
+// Forgejo has from the flow's branch.
+func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64) (int, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return 0, err
 	}
@@ -156,11 +132,11 @@ func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList [
 			states = append(states, "")
 		}
 	}
-	prs := retroPRs(n, forgePRs, cands)
+	prs := flow.PRs(forgePRs, cands)
 
 	var out []retroRun
 	for i, r := range cands {
-		if r.ID == self || !inRetro(r, n, prs) {
+		if r.ID == self || !flow.Has(r, prs) {
 			continue
 		}
 		rr := retroRun{
@@ -214,7 +190,7 @@ func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList [
 	if err := os.WriteFile(filepath.Join(dir, "runs.json"), append(b, '\n'), 0o600); err != nil {
 		return 0, err
 	}
-	return len(out), os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(n, out)), 0o600)
+	return len(out), os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out)), 0o600)
 }
 
 func orEmptyRuns(rs []retroRun) []retroRun {
@@ -251,14 +227,21 @@ func writeTranscript(path, harness string, log []byte) error {
 
 // retroReadme is the evidence's index: the runs, oldest first, and where
 // to read more.
-func retroReadme(n int64, rs []retroRun) string {
+func retroReadme(flow server.RetroFlow, rs []retroRun) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Evidence for the retro of #%d\n\n", n)
+	fmt.Fprintf(&b, "# Evidence for the retro of %s\n\n", flow)
+	what := "the issue or its pull requests"
+	switch {
+	case flow.PR > 0 && flow.Issue > 0:
+		fmt.Fprintf(&b, "The retro is on pull request !%d, from `%s`: the evidence is the flow of issue #%d.\n\n", flow.PR, flow.Branch, flow.Issue)
+	case flow.PR > 0:
+		what = "the pull request or its branch"
+	}
 	if len(rs) == 0 {
-		b.WriteString("bottown has no record of a run on this issue or its pull requests.\n")
+		fmt.Fprintf(&b, "bottown has no record of a run on %s.\n", what)
 		return b.String()
 	}
-	b.WriteString("The runs that worked the issue or its pull requests, oldest first. `runs.json`\n" +
+	b.WriteString("The runs that worked " + what + ", oldest first. `runs.json`\n" +
 		"has each run in full: the server's record and digest (summary, usage, observed failure),\n" +
 		"the launcher's record, and the policy refusals (denials). Transcripts are JSON lines,\n" +
 		"one per assistant message, tool call or status event, the same format for every harness:\n" +
@@ -297,46 +280,68 @@ func retroReadme(n int64, rs []retroRun) string {
 }
 
 // collectRetro gathers the evidence for retro run run into dir with the
-// owner key, and returns how many runs it found.
-func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir string) (int, error) {
+// owner key, and returns the flow it looked back on (from run.Issue alone
+// when the pull requests could not be listed) and how many runs it found.
+func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir string) (server.RetroFlow, int, error) {
+	flow := server.NewRetroFlow(run.Issue, false, "")
+	heads, err := prHeads(ctx, rc)
+	if err != nil {
+		return flow, 0, fmt.Errorf("list pull requests: %w", err)
+	}
+	flow, prs := retroFlowOf(run.Issue, heads)
 	var list []server.RunItem
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?history=1&repo="+run.Repo, nil, &list); err != nil {
-		return 0, fmt.Errorf("list runs: %w", err)
+		return flow, 0, fmt.Errorf("list runs: %w", err)
 	}
 	var audit []server.AuditEntry
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/audit?decision=deny,reject", nil, &audit); err != nil {
-		return 0, fmt.Errorf("read the audit log: %w", err)
-	}
-	prs, err := issueBranchPRs(ctx, rc, run.Issue)
-	if err != nil {
-		return 0, fmt.Errorf("list pull requests: %w", err)
+		return flow, 0, fmt.Errorf("read the audit log: %w", err)
 	}
 	if dir == "" {
-		return 0, errors.New("the run has no scratch directory")
+		return flow, 0, errors.New("the run has no scratch directory")
 	}
-	return gatherRetro(dir, run.Issue, run.ID, rc.ws, list, audit, prs)
+	n, err := gatherRetro(dir, flow, run.ID, rc.ws, list, audit, prs)
+	return flow, n, err
 }
 
-// issueBranchPRs is the numbers of rc's repository's pull requests, open or
-// closed, from the issue/<n> branch.
-func issueBranchPRs(ctx context.Context, rc *runContext, n int64) ([]int64, error) {
-	var out []int64
+// prHead is a pull request's number and head branch.
+type prHead struct {
+	Number int64
+	Head   struct{ Ref string }
+}
+
+// prHeads is rc's repository's pull requests, open or closed.
+func prHeads(ctx context.Context, rc *runContext) ([]prHead, error) {
+	var out []prHead
 	for page := 1; ; page++ {
-		var prs []struct {
-			Number int64
-			Head   struct{ Ref string }
-		}
+		var prs []prHead
 		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all&limit=50&page=%d", rc.org, rc.repo, page)
 		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &prs); err != nil {
 			return nil, err
 		}
-		for _, pr := range prs {
-			if m, ok := issueBranchNumber(pr.Head.Ref); ok && m == n {
-				out = append(out, pr.Number)
-			}
-		}
+		out = append(out, prs...)
 		if len(prs) < 50 {
 			return out, nil
 		}
 	}
+}
+
+// retroFlowOf is the flow of a retro on n, given the repository's pull
+// requests (heads): n's issue flow when n is a pull request from an
+// issue/<m> branch, and the numbers of the pull requests from the flow's
+// branch.
+func retroFlowOf(n int64, heads []prHead) (server.RetroFlow, []int64) {
+	flow := server.NewRetroFlow(n, false, "")
+	for _, pr := range heads {
+		if pr.Number == n {
+			flow = server.NewRetroFlow(n, true, pr.Head.Ref)
+		}
+	}
+	var prs []int64
+	for _, pr := range heads {
+		if flow.Branch != "" && pr.Head.Ref == flow.Branch {
+			prs = append(prs, pr.Number)
+		}
+	}
+	return flow, prs
 }

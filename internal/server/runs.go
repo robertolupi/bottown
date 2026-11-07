@@ -237,7 +237,8 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		if req.Issue <= 0 {
 			return run, runErr(http.StatusBadRequest, "%s runs need an issue or pull request number", req.Kind)
 		}
-		if _, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue); forgejo.IsNotFound(resp, err) {
+		is, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue)
+		if forgejo.IsNotFound(resp, err) {
 			return run, runErr(http.StatusNotFound, "issue #%d not found", req.Issue)
 		} else if err != nil {
 			return run, err
@@ -253,15 +254,28 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		if req.Kind == policy.Retro {
 			// The cross-family rule, as for verify: a model looking back on
 			// its own family's work is the weakest reviewer of it.
+			// A retro on a pull request looks back on its issue's flow.
+			flow := NewRetroFlow(req.Issue, false, "")
+			if is.PullRequest != nil {
+				pr, _, err := api.GetPullRequest(run.Org, run.Repo, req.Issue)
+				if err != nil {
+					return run, fmt.Errorf("pull request #%d: %w", req.Issue, err)
+				}
+				var head string
+				if pr.Head != nil {
+					head = pr.Head.Ref
+				}
+				flow = NewRetroFlow(req.Issue, true, head)
+			}
 			st, err := s.Store.Read()
 			if err != nil {
 				return run, err
 			}
-			if same := sameFamilyImplementers(st, run, actor.Family); len(same) > 0 {
+			if same := sameFamilyImplementers(st, run, flow, actor.Family); len(same) > 0 {
 				if !req.AllowSameFamily {
 					return run, runErr(http.StatusConflict,
-						"%s and the implementer %s of #%d are both %s; pass allow_same_family (--allow-same-family) to override",
-						actor.Name, strings.Join(same, ", "), req.Issue, actor.Family)
+						"%s and the implementer %s of %s are both %s; pass allow_same_family (--allow-same-family) to override",
+						actor.Name, strings.Join(same, ", "), flow, actor.Family)
 				}
 				run.AllowSameFamily = true
 			}
@@ -274,21 +288,26 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 }
 
 // sameFamilyImplementers are the actors of family whose implement or plan
-// runs, live or ended, worked retro's target: the issue, or a pull request
-// on its issue/<N> branch.
-func sameFamilyImplementers(st secrets.State, retro secrets.Run, family string) []string {
-	branch := fmt.Sprintf("issue/%d", retro.Issue)
-	var names []string
+// runs, live or ended, in retro's repository belong to flow, the flow the
+// retro looks back on (RetroFlow.Has, as the launcher selects its
+// evidence).
+func sameFamilyImplementers(st secrets.State, retro secrets.Run, flow RetroFlow, family string) []string {
+	var all []secrets.Run
 	for _, rs := range []map[string]secrets.Run{st.Runs, st.History} {
 		for _, r := range rs {
-			if r.Org != retro.Org || r.Repo != retro.Repo || r.Family != family ||
-				(r.Kind != policy.Implement && r.Kind != policy.Plan) ||
-				(r.Issue != retro.Issue && r.Branch != branch) {
-				continue
+			if r.Org == retro.Org && r.Repo == retro.Repo {
+				all = append(all, r)
 			}
-			if !slices.Contains(names, r.Actor) {
-				names = append(names, r.Actor)
-			}
+		}
+	}
+	prs := flow.PRs(nil, all)
+	var names []string
+	for _, r := range all {
+		if r.Family != family || (r.Kind != policy.Implement && r.Kind != policy.Plan) || !flow.Has(r, prs) {
+			continue
+		}
+		if !slices.Contains(names, r.Actor) {
+			names = append(names, r.Actor)
 		}
 	}
 	slices.Sort(names)
