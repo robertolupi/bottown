@@ -27,6 +27,32 @@ func TestActionRefs(t *testing.T) {
 		"```\nCloses #312\n```":                       nil,
 		"prefixes #3, unclosed #4, closes the gap":    nil,
 		"Part of #312":                                nil,
+
+		// Escaped backticks are literal text, not code delimiters.
+		"Escaped backticks: \\` reopen #312 \\`.": {"reopen #312"},
+		"\\` Closes #3`":                       {"Closes #3"},
+		"``a` closes #3":                       {"closes #3"},
+		"`` a ` closes #3 ``":                  nil,
+		"``Closes #3``":                        nil,
+		"`no closer on this line\ncloses #3 `": {"closes #3"},
+		"``` closes #3 ```":                    nil,
+		"\\#3 fixes \\#4":                      {"fixes #4"},
+
+		// Fences open at a line's start and close on their own character.
+		"```go\nCloses #3\n```\nreopen #4":      {"reopen #4"},
+		"````\n```\nCloses #3\n````\nreopen #4": {"reopen #4"},
+		"~~~\nCloses #3\n```\n~~~\nreopen #4":   {"reopen #4"},
+		"  ```\nCloses #3\n  ```":               nil,
+		"    ```\nCloses #3\n```":               {"Closes #3"},
+		"```\nCloses #3":                        nil,
+		"text ``` Closes #3":                    {"Closes #3"},
+
+		// Formatting around the keyword renders to the same text.
+		"**Reopen** #312":                          {"Reopen #312"},
+		"_Closes:_ **#3**":                         {"Closes: #3"},
+		"<b>Fixes</b> #3":                          {"Fixes #3"},
+		"~~resolves~~ #3":                          {"resolves #3"},
+		"fix <http://forge/bottown/demo/issues/7>": {"fix http://forge/bottown/demo/issues/7"},
 	} {
 		if got := actionRefs(body); !reflect.DeepEqual(got, want) {
 			t.Errorf("actionRefs(%q) = %q, want %q", body, got, want)
