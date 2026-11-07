@@ -23,8 +23,9 @@ import (
 // `bottown run end` hands over and revokes the key.
 
 func newRunStart() *cobra.Command {
-	return &cobra.Command{
-		Use:   "start implement|verify|discuss|plan [issue|pr] N",
+	var critical bool
+	c := &cobra.Command{
+		Use:   "start implement|verify|discuss|plan [--critical] [issue|pr] N",
 		Short: "Start a run for this actor worktree and print its goal prompt (agent CLI)",
 		Long: `Start a run for this actor worktree and print its goal prompt. The number may
 be written 12, #12 or !12, optionally after "issue", "pr" or "pull request", so
@@ -33,7 +34,9 @@ Each argument is split on spaces, so it may also arrive as one quoted word.
 
 A discuss run reviews and discusses an issue (or pull request) without
 implementing it: the worktree is detached at the default branch, and the
-run may read and comment, but not push, open pull requests or review.
+run may read and comment, but not push, open pull requests or review. With
+--critical (/bottown-discuss-critical) it is a red team: an adversarial review,
+from another model family than the issue's author.
 
 A plan run writes a milestone plan from its kickoff issue on issue/<N>, like
 an implement run, and opens a pull request for it; it cannot create issues.`,
@@ -43,13 +46,18 @@ an implement run, and opens a pull request for it; it cannot create issues.`,
 			if kind != policy.Implement && kind != policy.Verify && kind != policy.Discuss && kind != policy.Plan {
 				return fmt.Errorf("kind must be %s, %s, %s or %s", policy.Implement, policy.Verify, policy.Discuss, policy.Plan)
 			}
+			if critical && kind != policy.Discuss {
+				return errors.New("--critical is for discuss runs")
+			}
 			n, err := runTarget(kind, args[1:])
 			if err != nil {
 				return err
 			}
-			return runStart(cmd, kind, n)
+			return runStart(cmd, kind, n, critical)
 		},
 	}
+	c.Flags().BoolVar(&critical, "critical", false, "discuss: review the issue adversarially, as a red team, from another model family than its author")
+	return c
 }
 
 // runTarget parses run start's number from what the user typed: 12, #12 or
@@ -87,7 +95,7 @@ func worktreeRepo(a *agentCtx) (string, error) {
 	return name, nil
 }
 
-func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
+func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err error) {
 	a, err := resolveAgent()
 	if err != nil {
 		return err
@@ -119,7 +127,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 		return err
 	}
 
-	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true}
+	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true, Critical: critical}
 	if kind == policy.Verify {
 		req.PR = n
 	} else {
@@ -133,7 +141,7 @@ func runStart(cmd *cobra.Command, kind string, n int64) (err error) {
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: true, Harness: run.Harness, Started: time.Now().UTC(),
+		Interactive: true, Critical: run.Critical, Harness: run.Harness, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 		Attachments: leaseAttachments(a),
 	}

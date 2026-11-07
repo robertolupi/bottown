@@ -40,6 +40,7 @@ type Record struct {
 	SHA             string `json:"sha,omitempty"`
 	Interactive     bool   `json:"interactive,omitempty"`
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	Critical        bool   `json:"critical,omitempty"` // discuss: an adversarial review (--critical)
 	Question        string `json:"question,omitempty"` // discuss: the owner's question
 	Message         string `json:"message,omitempty"`  // the owner's note for the prompt (--message)
 	Harness         string `json:"harness"`

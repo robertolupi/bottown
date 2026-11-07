@@ -170,7 +170,10 @@ func TestClaudeCommandsKeepTheRequestOutOfTheShell(t *testing.T) {
 	}
 	for _, k := range harnessKinds {
 		kind := k.Kind
-		b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", "bottown-"+kind+".md"))
+		if k.Critical {
+			kind += " --critical"
+		}
+		b, err := os.ReadFile(filepath.Join(home, ".claude", "commands", k.name()+".md"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,6 +185,54 @@ func TestClaudeCommandsKeepTheRequestOutOfTheShell(t *testing.T) {
 		}
 		if !strings.Contains(string(b), selfPath()+" run start "+kind+" <number>") {
 			t.Errorf("%s command does not say how to start the run:\n%s", kind, b)
+		}
+	}
+}
+
+// Every harness gets /bottown-discuss-critical, which starts a critical
+// discuss run and calls the words after the number its focus; the plain
+// /bottown-discuss stays a question.
+func TestInstallDiscussCritical(t *testing.T) {
+	home := t.TempDir()
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	t.Setenv("KIMI_CODE_HOME", "")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CRUSH_SKILLS_DIR", "")
+	self := selfPath()
+	for h, paths := range map[string][2]string{
+		"claude": {filepath.Join(home, ".claude", "commands", "bottown-discuss.md"), filepath.Join(home, ".claude", "commands", "bottown-discuss-critical.md")},
+		"agy":    {filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-discuss.md"), filepath.Join(home, ".gemini", "config", "global_workflows", "bottown-discuss-critical.md")},
+		"kimi":   {filepath.Join(home, ".kimi-code", "skills", "bottown-discuss", "SKILL.md"), filepath.Join(home, ".kimi-code", "skills", "bottown-discuss-critical", "SKILL.md")},
+		"codex":  {filepath.Join(home, ".codex", "skills", "bottown-discuss", "SKILL.md"), filepath.Join(home, ".codex", "skills", "bottown-discuss-critical", "SKILL.md")},
+		"crush":  {filepath.Join(home, ".config", "crush", "skills", "bottown-discuss", "SKILL.md"), filepath.Join(home, ".config", "crush", "skills", "bottown-discuss-critical", "SKILL.md")},
+	} {
+		if err := installCommands(cmd, home, h, false); err != nil {
+			t.Fatal(err)
+		}
+		plain, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		crit, err := os.ReadFile(paths[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{self + " run start discuss --critical <number>", "red-team", "the focus of the red team", "model family", harnessMarker} {
+			if !strings.Contains(string(crit), want) {
+				t.Errorf("%s critical discuss lacks %q:\n%s", h, want, crit)
+			}
+		}
+		if strings.Contains(string(plain), "--critical") || strings.Contains(string(plain), "red team") || !strings.Contains(string(plain), "the question to discuss") {
+			t.Errorf("%s plain discuss:\n%s", h, plain)
+		}
+		if h == "kimi" || h == "codex" || h == "crush" {
+			if !strings.Contains(string(crit), "name: bottown-discuss-critical\n") {
+				t.Errorf("%s critical discuss skill is misnamed:\n%s", h, crit)
+			}
+		}
+		if (h == "claude" || h == "agy") && !strings.Contains(string(crit), "/bottown-discuss-critical") {
+			t.Errorf("%s critical discuss does not name its command:\n%s", h, crit)
 		}
 	}
 }
@@ -239,8 +290,16 @@ func TestDiscussHandover(t *testing.T) {
 		t.Errorf("handover:\n%s", got)
 	}
 	rec.Question = ""
-	if got := handoverText(rec, "succeeded", 0, ""); strings.Contains(got, "Question:") {
+	if got := handoverText(rec, "succeeded", 0, ""); strings.Contains(got, "Question:") || strings.Contains(got, "Critical") {
 		t.Errorf("handover without a question:\n%s", got)
+	}
+	rec.Critical = true
+	if got := handoverText(rec, "succeeded", 0, ""); !strings.Contains(got, "Critical discuss (red team) by the anthropic family. Discussed against `abc`") || strings.Contains(got, "override") {
+		t.Errorf("critical handover:\n%s", got)
+	}
+	rec.AllowSameFamily = true
+	if got := handoverText(rec, "succeeded", 0, ""); !strings.Contains(got, "Same family as the author, allowed by owner override.") {
+		t.Errorf("same-family critical handover:\n%s", got)
 	}
 }
 
