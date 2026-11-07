@@ -66,6 +66,8 @@ func TestAPIError(t *testing.T) {
 			"GET /p?q=1: actor claude already has a live batch run: r-1", []error{ErrActorBusy}, []error{ErrHeadMoved}},
 		{"head moved", 409, `{"error":"pull request #4: the head moved","code":"` + server.ErrorCodeHeadMoved + `"}`,
 			"GET /p?q=1: pull request #4: the head moved", []error{ErrHeadMoved}, []error{ErrActorBusy}},
+		{"issue closed", 409, `{"error":"issue #3 is closed","code":"` + server.ErrorCodeIssueClosed + `"}`,
+			"GET /p?q=1: issue #3 is closed", []error{ErrIssueClosed}, []error{ErrHeadMoved, ErrActorBusy}},
 		// The message alone is not the code: only the server's code counts.
 		{"message without code", 409, `{"error":"the head moved"}`, "GET /p?q=1: the head moved", nil, []error{ErrHeadMoved}},
 	} {

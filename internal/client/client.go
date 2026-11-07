@@ -39,6 +39,9 @@ var (
 	// ErrWikiConflict is a wiki put refused because the page's text
 	// changed since the writer read it: read it again and re-apply.
 	ErrWikiConflict = errors.New("wiki page changed since it was read")
+	// ErrIssueClosed is an implement or plan run refused because its issue
+	// is closed.
+	ErrIssueClosed = errors.New("issue is closed")
 )
 
 // APIError is a non-2xx answer from the server.
@@ -73,6 +76,8 @@ func (e *APIError) Is(target error) bool {
 		return e.Code == server.ErrorCodeHeadMoved
 	case ErrWikiConflict:
 		return e.Code == server.ErrorCodeWikiConflict
+	case ErrIssueClosed:
+		return e.Code == server.ErrorCodeIssueClosed
 	}
 	return false
 }

@@ -221,6 +221,7 @@ the owner sees it in Forgejo and in the UI:
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | merging `main` into the PR would still conflict after the flow's conflict rounds, or one pushed nothing | read the named files; start an implement run to resolve them, or re-run the flow |
 | checks failed | the post-implement checks failed at the head and no check rounds remain | read the log the stop names; fix the cause (a flake gets its own issue), then re-run, maybe with more check rounds |
+| merged | the PR was merged, or the issue closed, while the flow ran: the flow reads both before each run, and the server's refusal of a run on a closed issue stops it the same way | nothing; the work has landed |
 | actor busy | with `--serialize-actors`, the actor's other batch run, which the stop names, was still live after `--actor-wait` | see why that run has not ended; stop or revoke it, then re-run the flow |
 
 ### 3.3 State and restart

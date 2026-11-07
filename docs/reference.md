@@ -472,7 +472,8 @@ forge, apart from an in-memory cache of issues (see Reads below).
   PR the issue's work belonged to then. Each leaves the thread waiting on
   the owner until its next run, the PR's merge or close (the issue's close
   for a thread with no PR), or the next stop, whichever is first; still
-  waiting when none has happened. The flow's
+  waiting when none has happened. A `merged` stop, written when the PR was
+  merged (or the issue closed) while the flow ran, leaves no wait. The flow's
   announcements of a round it starts share the prefix but are not stops.
 
 **Reads.** Load reads the run list (all of it, so threads group as History
