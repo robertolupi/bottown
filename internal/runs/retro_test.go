@@ -31,6 +31,19 @@ func TestRetroPrompt(t *testing.T) {
 	if strings.Contains(p, "run end") {
 		t.Errorf("a launched retro run's prompt asks it to end itself:\n%s", p)
 	}
+	if strings.Contains(p, "partial") {
+		t.Errorf("whole evidence is called partial:\n%s", p)
+	}
+
+	d.EvidenceGaps = []string{"The evidence has 2 verify run(s) but no implement or plan run.", "Pull request !9's head is by kimi."}
+	if p, err = Prompt("retro", d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p, "`prompts/<run>.md`: the goal prompt the run was given.\n\n**The evidence looks partial:**\n\n"+
+		"- The evidence has 2 verify run(s) but no implement or plan run.\n- Pull request !9's head is by kimi.\n\nSay so in the retro.") {
+		t.Errorf("retro prompt with partial evidence:\n%s", p)
+	}
+	d.EvidenceGaps = nil
 
 	d.Evidence, d.EvidenceError = "", "list runs: boom"
 	p, err = Prompt("retro", d)

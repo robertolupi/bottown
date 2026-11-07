@@ -46,6 +46,17 @@ files.
   message, tool call, tool output or status event, in the same format for
   every harness. Long fields are cut. Interactive runs have none.
 - `prompts/<run>.md`: the goal prompt the run was given.
+{{- if .EvidenceGaps}}
+
+**The evidence looks partial:**
+{{range .EvidenceGaps}}
+- {{.}}
+{{- end}}
+
+Say so in the retro. Missing runs look like a short flow: do not build a
+timeline from them as if the evidence were whole, and say what the forge
+shows of the work the records lack.
+{{- end}}
 {{- else}}
 
 bottown could not gather its records of the flow: {{.EvidenceError}}.
