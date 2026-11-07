@@ -491,8 +491,10 @@ Step 1 adds a **Milestones** view to `bottown web ui` ([web UI design](web-ui.md
     - In Step 1: start a single-issue flow or run on any `ready` or `stopped`
       child issue directly from its node; clicking any open node that is not
       running opens the flow dialog for it.
-    - In Step 2: start or stop `bottown milestone run <E>` with an actor pool
-      selector.
+    - In Step 2: start or stop `bottown milestone run <slug>` from the
+      epic's group, with its `--agents` pool and `--parallel`; while it
+      runs, the group shows its pool and child flows (reference: Milestone
+      run).
 
 ---
 

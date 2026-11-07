@@ -805,8 +805,8 @@
         "state": "open",
         "url": "http://127.0.0.1:3030/bottown/demo/issues/50"
       },
-      "plan": "docs/milestones/v0.3.md",
-      "plan_file": "docs/milestones/v0.3.md",
+      "plan": "v0-3",
+      "plan_file": "docs/milestones/v0-3.md",
       "kickoff": {
         "number": 49,
         "title": "Plan v0.3",
@@ -944,7 +944,16 @@
           "to": 54
         }
       ],
-      "layers": 3
+      "layers": 3,
+      "scheduler": {
+        "id": "milestone-v0-3",
+        "agents": "codex=*,kimi=1,agy:gemini-3.8-flash=1,claude=2",
+        "pool": ["codex=*", "kimi=1", "agy:gemini-3.8-flash=1", "claude=2"],
+        "parallel": 2,
+        "started_at": "2026-11-02T10:12:00Z",
+        "elapsed": "31m 40s",
+        "log": ".bottown/milestone-v0-3.log"
+      }
     }
   ],
   "logs": {

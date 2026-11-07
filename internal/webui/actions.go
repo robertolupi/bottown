@@ -208,11 +208,15 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 	return fmt.Sprintf("Run (%s) started in background for #%d", req.Kind, req.Target), nil
 }
 
-// ExecuteStop stops a live run or a flow supervising it.
+// ExecuteStop stops a live run, a flow supervising it (flow-N), or a
+// milestone run (milestone-SLUG).
 func (s *Server) ExecuteStop(ctx context.Context, id string) (string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", errors.New("run or flow ID is required")
+	}
+	if slug, ok := strings.CutPrefix(id, milestoneRunPrefix); ok {
+		return s.stopMilestoneRun(slug)
 	}
 
 	if strings.HasPrefix(id, "flow-") {

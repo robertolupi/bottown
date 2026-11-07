@@ -21,6 +21,20 @@ export interface RunForm {
   allowSameFamily: boolean;
 }
 
+// The Start Milestone Run dialog's values: the plan slug, the --agents
+// spec and --parallel.
+export interface MilestoneRunForm {
+  slug: string;
+  agents: string;
+  parallel: number | string;
+}
+
+// buildMilestoneRunPayload is POST /api/actions/milestone-run's body. The
+// server checks the spec with the agents parser `milestone run` uses.
+export function buildMilestoneRunPayload(form: MilestoneRunForm): { slug: string; agents: string; parallel: number } {
+  return { slug: form.slug, agents: form.agents.trim(), parallel: Number(form.parallel) };
+}
+
 // postAction POSTs an owner action to the UI server (/api/actions/...),
 // with body as JSON when given, and returns its result. It throws when the
 // action failed, with the server's error, else its output, else failure.

@@ -387,6 +387,22 @@ entries removed after `agent did nothing` are back in the pool.
 | 3 | run stopped with children open, and an agent did nothing |
 | 1 | it stopped otherwise with children open, finish failed, or an error |
 
+The web UI's Milestones tab starts and stops it (owner only, like its
+other actions). An open epic's group has **Run milestone**, which asks for
+`--agents` and `--parallel`: `POST /api/actions/milestone-run`
+(`internal/webui/milestone_run.go`) checks the pool with the same
+`internal/agents` parser against the instance's actors, showing its
+message in the dialog, refuses a slug whose run the UI is already
+running, and starts `bottown milestone run SLUG` in the background,
+logged to `.bottown/milestone-<slug>.log` with a
+`.bottown/milestone-<slug>.json` record (its pool, parallelism and PID)
+while the process is alive. The group then shows that it is running, its
+pool, its parallelism and its child flows (the group's nodes with a flow
+record), and **Stop** sends `milestone-<slug>` to the stop action, which
+signals the run's process group with SIGTERM as it does a flow's and
+removes the record; run interrupts its flows and exits when they have
+stopped.
+
 ### Scratch directories
 
 Launched runs get a private scratch directory under the launcher's temporary

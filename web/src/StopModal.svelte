@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Confirm stopping a run, or a flow (runId flow-N) (§5).
+  // Confirm stopping a run, a flow (runId flow-N), or a milestone run
+  // (milestone-SLUG) (§5).
   import Modal from './Modal.svelte';
 
   interface Props {
@@ -10,20 +11,31 @@
   }
 
   let { runId, actionLoading, onconfirm, onclose }: Props = $props();
+
+  let milestone = $derived(runId.startsWith('milestone-') ? runId.slice('milestone-'.length) : '');
 </script>
 
 <Modal>
-  <h3>Stop Run & Flow</h3>
-  <p class="muted">
-    Are you sure you want to stop run <strong>{runId}</strong>?
-    This will kill the harness process group and end the run as failed. If this run is part of a flow, the flow will also stop.
-  </p>
+  {#if milestone}
+    <h3>Stop Milestone Run</h3>
+    <p class="muted">
+      Are you sure you want to stop the milestone run for <strong>{milestone}</strong>?
+      It interrupts the flows it started, which end their runs, and exits once they have stopped.
+      Starting it again resumes.
+    </p>
+  {:else}
+    <h3>Stop Run & Flow</h3>
+    <p class="muted">
+      Are you sure you want to stop run <strong>{runId}</strong>?
+      This will kill the harness process group and end the run as failed. If this run is part of a flow, the flow will also stop.
+    </p>
+  {/if}
   <div class="modal-actions">
     <button class="btn btn-secondary" onclick={onclose} disabled={actionLoading}>
       Cancel
     </button>
     <button class="btn btn-danger" onclick={onconfirm} disabled={actionLoading}>
-      {actionLoading ? 'Stopping...' : 'Confirm & Stop Run'}
+      {actionLoading ? 'Stopping...' : milestone ? 'Confirm & Stop Milestone Run' : 'Confirm & Stop Run'}
     </button>
   </div>
 </Modal>
