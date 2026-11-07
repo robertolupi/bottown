@@ -13,6 +13,7 @@ import (
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -112,7 +113,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 	mergeStates := make(map[int64]serverapi.PRMergeStatus)
 	for _, pr := range prs {
-		if !isPROpen(pr) {
+		if !activity.PROpen(pr) {
 			continue
 		}
 		status, err := s.prMergeStatus(ctx, repo, pr.Number)
@@ -132,7 +133,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		issuesByIndex[issue.Number] = issue
 	}
 	issueForPR := func(pr *serverapi.PRItem) (int64, string) {
-		issueNum := parseIssueRef(pr.HeadBranch)
+		issueNum := activity.BranchIssue(pr.HeadBranch)
 		if issue := issuesByIndex[issueNum]; issue != nil {
 			return issueNum, issue.Title
 		}
@@ -146,7 +147,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Open PR, mergeable, and its reviews assess as approved
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if !isPROpen(pr) {
+		if !activity.PROpen(pr) {
 			continue
 		}
 		if !pr.Mergeable || mergeStates[pr.Number].Behind {
@@ -185,7 +186,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// Item 2: Merge base, or report conflicts (§4.1)
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if !isPROpen(pr) {
+		if !activity.PROpen(pr) {
 			continue
 		}
 		merge := mergeStates[pr.Number]
@@ -251,7 +252,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	// request) and verifier undecided
 	// ----------------------------------------------------
 	for _, pr := range prs {
-		if !isPROpen(pr) {
+		if !activity.PROpen(pr) {
 			continue
 		}
 		if activeByPR[pr.Number] {
@@ -306,7 +307,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   prURL,
 				Created:     a.Review.Submitted,
 			})
-		} else if st, ok := flowChecksFailed(pr); ok && !activeByIssue[parseIssueRef(pr.HeadBranch)] {
+		} else if st, ok := flowChecksFailed(pr); ok && !activeByIssue[activity.BranchIssue(pr.HeadBranch)] {
 			items = append(items, InboxItem{
 				ID:          fmt.Sprintf("stopped-flow-checks-pr-%d", pr.Number),
 				Kind:        InboxStoppedFlow,
