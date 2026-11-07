@@ -208,6 +208,10 @@ type Supervisor struct {
 	// the terminal back for the prompt (internal/cli).
 	Pause      func() (resume func())
 	RetryDelay time.Duration
+	// Lock, if set, takes the issue's flow lock for the flow's whole life
+	// (internal/runs.HoldFlow), so a second flow on the issue refuses
+	// rather than starting runs beside this one's.
+	Lock func(repo string, issue int64) (release func(), err error)
 
 	answers *bufio.Reader
 	// now and after, if set, replace time.Now and time.After in the wait
@@ -237,6 +241,13 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	if s.API == nil || s.Runner == nil {
 		return result, errors.New("flow API and runner are required")
+	}
+	if s.Lock != nil {
+		release, err := s.Lock(opts.Repo, opts.Issue)
+		if err != nil {
+			return result, err
+		}
+		defer release()
 	}
 	if err := s.checkFamilies(ctx, opts); err != nil {
 		return result, err

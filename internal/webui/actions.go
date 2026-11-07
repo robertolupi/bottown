@@ -113,6 +113,13 @@ func (s *Server) ExecuteFlow(ctx context.Context, req FlowRequest) (string, erro
 		}
 	}
 
+	// One flow per issue: the flow takes the issue's lock itself, and this
+	// refuses here, where the owner sees it, rather than in the flow's log.
+	_, repo := s.orgAndRepo()
+	if pid, held := runs.FlowHolder(filepath.Join(s.cfg.RepoTop, ".bottown", "runs"), repo, req.Issue); held {
+		return "", &runs.FlowBusyError{Repo: repo, Issue: req.Issue, PID: pid}
+	}
+
 	args := []string{"-i", s.cfg.Instance.Name, "flow", fmt.Sprint(req.Issue),
 		"--implement", req.Implement,
 		"--verify", req.Verify,
