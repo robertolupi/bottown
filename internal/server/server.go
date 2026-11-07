@@ -60,6 +60,9 @@ type Server struct {
 	debateMu     sync.Mutex // places runs in debate rounds one at a time (debate.go)
 	wikiPushFn   func(ctx context.Context, gitDir, branch, old, commit string) error
 	wikiCreateFn func(ctx context.Context, org, repo string) error
+	// milestonePushFn replaces the push of a merge into a milestone branch
+	// (milestone.go) in tests.
+	milestonePushFn func(ctx context.Context, gitDir, branch, commit string) error
 }
 
 // Health is the /healthz document.

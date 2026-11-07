@@ -15,6 +15,10 @@ import (
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
+// defaultCheckTimeout limits the e2e checks of bottown flow at each head,
+// and of bottown milestone finish.
+const defaultCheckTimeout = time.Hour
+
 // flowChecker runs the post-implement checks for bottown flow: the e2e
 // commands .bottown.toml names on the default branch (default: make e2e),
 // in a clean worktree detached at the PR head, with no agent involved. Each
@@ -141,10 +145,15 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	defer f.Close()
 	// Unbuffered: the live tails read the log while the commands run.
 	l := &checkLog{w: f}
-	l.line(fmt.Sprintf("bottown flow: post-implement checks for #%d (!%d) at %s, %s", req.Issue, req.PR, req.SHA, started.Format(time.RFC3339)))
+	// A milestone's final checks have no PR yet: they are its epic's.
+	what, target := fmt.Sprintf("#%d (!%d)", req.Issue, req.PR), fmt.Sprintf("!%d at %s", req.PR, short(req.SHA))
+	if req.PR == 0 {
+		what, target = fmt.Sprintf("#%d", req.Issue), fmt.Sprintf("#%d at %s", req.Issue, short(req.SHA))
+	}
+	l.line(fmt.Sprintf("bottown flow: post-implement checks for %s at %s, %s", what, req.SHA, started.Format(time.RFC3339)))
 	if c.tail != nil {
 		ended := c.tail.Follow(tailRun{
-			ID: rec.ID, Target: fmt.Sprintf("!%d at %s", req.PR, short(req.SHA)),
+			ID: rec.ID, Target: target,
 			Check: strings.Join(settings.E2E, "; "), Started: started, Limit: limit,
 		}, "", out.Log)
 		defer ended()

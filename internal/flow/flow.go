@@ -561,20 +561,9 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks at %s\n", opts.Issue, shortSHA(pr.HeadSHA))
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, opts.CheckTimeout)
-	outcome, err := s.Checker.Check(checkCtx, req)
-	timedOut := errors.Is(checkCtx.Err(), context.DeadlineExceeded)
-	cancel()
-	if ctx.Err() != nil {
-		return outcome, ctx.Err()
-	}
-	if err != nil && !timedOut {
-		return outcome, fmt.Errorf("the post-implement checks could not run at %s: %w", shortSHA(pr.HeadSHA), err)
-	}
-	if timedOut {
-		outcome.Passed, outcome.Skipped = false, false
-		outcome.Description = fmt.Sprintf("timed out after %s; %s", opts.CheckTimeout, outcome.Description)
-		outcome.Summary = outcome.Description + "\n" + outcome.Summary
+	outcome, err := RunCheck(ctx, s.Checker, req, opts.CheckTimeout)
+	if err != nil {
+		return outcome, err
 	}
 	if outcome.Skipped {
 		return outcome, nil
@@ -588,6 +577,28 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	}
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks %s at %s; log: %s\n", opts.Issue, state, shortSHA(pr.HeadSHA), outcome.Log)
+	}
+	return outcome, nil
+}
+
+// RunCheck runs c's checks at req's head within timeout. Running out of
+// time is a failed check, not an error; an error is checks that could not
+// run, or ctx ending.
+func RunCheck(ctx context.Context, c Checker, req CheckRequest, timeout time.Duration) (CheckOutcome, error) {
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	outcome, err := c.Check(checkCtx, req)
+	timedOut := errors.Is(checkCtx.Err(), context.DeadlineExceeded)
+	cancel()
+	if ctx.Err() != nil {
+		return outcome, ctx.Err()
+	}
+	if err != nil && !timedOut {
+		return outcome, fmt.Errorf("the post-implement checks could not run at %s: %w", shortSHA(req.SHA), err)
+	}
+	if timedOut {
+		outcome.Passed, outcome.Skipped = false, false
+		outcome.Description = fmt.Sprintf("timed out after %s; %s", timeout, outcome.Description)
+		outcome.Summary = outcome.Description + "\n" + outcome.Summary
 	}
 	return outcome, nil
 }
