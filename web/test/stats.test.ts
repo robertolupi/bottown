@@ -172,3 +172,47 @@ test('Stats says when nothing happened', async () => {
     view.unmount();
   }
 });
+
+test('Stats shows a spinner while it loads, and while it refreshes', async () => {
+  // Each fetch waits until the test answers it, as a slow forge would.
+  const pending: Array<() => void> = [];
+  globalThis.fetch = (() => new Promise<Response>((resolve) => {
+    pending.push(() => resolve(new Response(JSON.stringify(data()), { status: 200 })));
+  })) as typeof fetch;
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      flushSync();
+    }
+  };
+  const props = reactiveProps({ refreshKey: 0, issuesLink: '', pullsLink: '' });
+  const view = render(Stats, props);
+  try {
+    await settle();
+    const first = view.target.querySelector('.stats-loading');
+    assert.ok(first, 'the first load shows the loading state');
+    assert.ok(first!.querySelector('.spinner'), 'with a spinner');
+    assert.equal(first!.getAttribute('role'), 'status');
+    assert.equal(view.target.querySelector('.stats-updating'), null);
+
+    pending.shift()!();
+    await settle();
+    assert.equal(view.target.querySelector('.stats-loading'), null, 'the loading state goes once the data is in');
+    assert.match(view.target.textContent!, /1 issue, 1 merged/);
+    assert.equal(view.target.querySelector('.stats-updating'), null);
+
+    // A refresh keeps the data on screen and says it is updating.
+    props.refreshKey = 1;
+    await settle();
+    assert.equal(pending.length, 1, 'the refresh fetched again');
+    assert.ok(view.target.querySelector('.stats-updating .spinner'), 'the header shows the refresh');
+    assert.equal(view.target.querySelector('.stats-loading'), null);
+    assert.match(view.target.textContent!, /1 issue, 1 merged/);
+
+    pending.shift()!();
+    await settle();
+    assert.equal(view.target.querySelector('.stats-updating'), null);
+  } finally {
+    view.unmount();
+  }
+});

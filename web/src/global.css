@@ -236,3 +236,18 @@ body {
 .muted { color: var(--text-muted); }
 .text-sm { font-size: 12px; }
 .loading-state { text-align: center; padding: 48px; color: var(--text-muted); }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: spin 0.8s linear infinite;
+}
+.loading-state .spinner { width: 24px; height: 24px; border-width: 3px; display: block; margin: 0 auto 12px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
