@@ -217,7 +217,8 @@ func TestPromptsNameWhereChecksAre(t *testing.T) {
 		}
 	}
 	p, err := Prompt("implement", PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, Bottown: "/bin/bottown", FlowNote: "the checks failed at `abc`"})
-	if err != nil || !strings.Contains(p, "## Note from bottown flow\n\nthe checks failed at `abc`") || !strings.Contains(p, "You need not run its e2e commands") {
+	if err != nil || !strings.Contains(p, "## Note from bottown flow\n\nthe checks failed at `abc`") || !strings.Contains(p, "You need not run its e2e commands") ||
+		!strings.Contains(p, "`grep -rn` for the old text") {
 		t.Errorf("implement prompt with a flow note (%v):\n%s", err, p)
 	}
 }
