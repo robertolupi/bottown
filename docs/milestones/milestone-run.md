@@ -313,8 +313,18 @@ that slug). If the branch exists, report it and succeed.
 
 ### bottown milestone finish SLUG
 
-1. Refuse if any child of the epic is still open, listing them (`--force`
-   is not offered: the owner merges by hand if they want a partial branch).
+The epic's **active children** are the issues that carry a trusted child
+marker for `<slug>` (owner-authored, `milestone.ParseMarker`,
+`milestone.Trusted`) and are in the epic's current `blocked_by` set, open or
+closed. A key removed from the plan is not active: `apply` leaves its issue
+and marker in place and drops only its edge from the epic and its checklist
+line (milestones design §2.6, `internal/milestone/apply.go`). Put this
+definition in one function in `internal/milestone`, which the scheduler
+reuses.
+
+1. Refuse if any active child is still open, listing them (`--force` is not
+   offered: the owner merges by hand if they want a partial branch). An
+   open issue removed from the plan does not block finish.
 2. Merge the default branch into `milestone/<slug>`, as `manager`. This is
    the only time `main` is merged into the milestone branch. On a conflict,
    stop and say so, leaving the branch unchanged; the owner resolves it.
@@ -324,7 +334,7 @@ that slug). If the branch exists, report it and succeed.
    code rather than copying it.
 4. Only when the gate passes, open the final PR from `milestone/<slug>` into
    the default branch as `manager`, or update its description if it is
-   already open. Its description lists the merged children and their PRs,
+   already open. Its description lists the merged active children and their PRs,
    and closes the epic when the owner merges it.
 5. When the gate fails, comment on the epic with the summary and the log's
    path, and exit non-zero; open no PR.
@@ -335,7 +345,8 @@ refused.
 ### Acceptance criteria
 
 - Tests for: branch created once and idempotent; finish refused with open
-  children; a conflicting merge leaves the branch alone; a failed gate opens
+  active children; an open issue whose key was removed from the plan (apply,
+  remove the key, apply again) does not refuse finish; a conflicting merge leaves the branch alone; a failed gate opens
   no PR and comments; a passed gate opens, and on a second call updates,
   one PR authored by `manager`.
 - `docs/reference.md` describes both commands.
@@ -408,7 +419,7 @@ command that drives a milestone's children to completion on
 
 ### Loop
 
-- **Ready children:** open children of the epic whose `blocked_by`
+- **Ready children:** open active children of the epic whose `blocked_by`
   dependencies are all closed. Dispatch in ascending issue number; no
   file-overlap prediction.
 - **Pairing:** for each child dispatched, take the next cross-family
@@ -429,7 +440,7 @@ command that drives a milestone's children to completion on
     this invocation, and name it in the summary. Do not substitute another
     actor for that child: it stays stopped.
   - any other stop: leave the child for the owner, as the flow left it.
-- **Finish:** when every child is closed, run `bottown milestone finish`.
+- **Finish:** when every active child is closed, run `bottown milestone finish`.
   Otherwise, when nothing more can be dispatched, comment a summary on the
   epic: merged, stopped (with reasons), blocked, and removed pool entries.
 - Exit codes follow `bottown flow`'s conventions: success only when the
@@ -441,11 +452,16 @@ The scheduler keeps no state of its own: every invocation rebuilds what to
 do from the forge, so the owner can stop it, add children (edit the plan,
 merge it, `bottown milestone apply` again) and run it again.
 
-- **Children** are the open and closed issues the owner filed with a
-  trusted child marker for `<slug>`, the ones `apply` filed. An issue
-  linked to the epic by hand, without such a marker, is not a child: the
-  base rule would not put its PR on `milestone/<slug>`. List it in the
-  summary as ignored, and do not dispatch it.
+- **Children** are the epic's active children, as `milestone finish`
+  defines them and with the same function: issues with a trusted child
+  marker for `<slug>` that are in the epic's current `blocked_by` set, open
+  or closed. An issue linked to the epic by hand, without such a marker, is
+  not a child: the base rule would not put its PR on `milestone/<slug>`.
+  List it in the summary as ignored, and do not dispatch it.
+- **Removed keys:** an issue whose key the owner removed from the plan
+  keeps its marker but is no longer in the epic's `blocked_by` set. It is
+  not dispatched and not counted for finish; list it in the summary as
+  flagged (removed from the plan), as `apply` does.
 - **Closed children** are done and skipped. **Stopped children** (open, a
   flow stopped on them earlier) are dispatched again once ready; their flow
   resumes on the existing PR. A child with labels keeps its pair while both
@@ -455,7 +471,7 @@ merge it, `bottown milestone apply` again) and run it again.
 - **An open final PR:** each merge into `milestone/<slug>` moves the final
   PR's head past the commit `finish` gated. After such a merge, comment on
   the final PR that its head has not been gated, so the owner does not
-  merge it; when every child is closed again, `finish` re-gates the head and
+  merge it; when every active child is closed again, `finish` re-gates the head and
   updates the PR, and comments that the head is gated.
 - **A merged final PR:** if the previous final PR was merged into the
   default branch, merge the default branch into `milestone/<slug>` (as
@@ -464,7 +480,9 @@ merge it, `bottown milestone apply` again) and run it again.
 
 Tests: a rerun after `apply` added a child dispatches only the new and the
 stopped children; an unmarked issue linked to the epic is ignored and
-reported; a removed entry is back on the next invocation; a merge with an
+reported; apply a plan, remove an open child's key, apply again and rerun:
+the removed issue is neither dispatched nor required for finish, and the
+summary flags it; a removed entry is back on the next invocation; a merge with an
 open final PR comments on it, and the next `finish` re-gates and updates
 it; a rerun after the final PR merged starts from the default branch.
 - If batch runs come to lease permanent actor worktrees (iteration 1, step
