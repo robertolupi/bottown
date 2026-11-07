@@ -951,7 +951,9 @@ The UI uses the server's existing API where it can. What changes:
   the same issue or pull request head, and, with `serialize_actor`, a batch
   run whose actor has another live one.
 - **Later, for the queue:** provisioning creates `implement/<actor>` and
-  `verify/<actor>` labels, and an owner-only endpoint sets or clears them.
+  `verify/<actor>` labels (built: `bottown milestone run` sets them with
+  the owner's key through the API proxy), and an owner-only endpoint sets
+  or clears them.
 
 The UI makes no Forgejo reads of its own: everything it shows from the
 forge comes from these endpoints, so a rule (what counts as approved, as

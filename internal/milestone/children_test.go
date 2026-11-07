@@ -56,6 +56,13 @@ func TestEpicActiveChildren(t *testing.T) {
 	if !slices.Equal(numbers(st.Open()), []int64{3, 4, 5}) {
 		t.Errorf("open %v", numbers(st.Open()))
 	}
+	// The hand-linked issues are ignored; d's issue is flagged removed.
+	if !slices.Equal(numbers(st.Ignored), []int64{copied, plain}) || !slices.Equal(numbers(st.Removed), []int64{6}) {
+		t.Errorf("ignored %v, removed %v", numbers(st.Ignored), numbers(st.Removed))
+	}
+	if is := st.Issue(2); is == nil || is.Title != "External" {
+		t.Errorf("Issue(2) = %+v", is)
+	}
 	for _, n := range []int64{3, 4, 5} {
 		f.issues[n].Closed = true
 	}

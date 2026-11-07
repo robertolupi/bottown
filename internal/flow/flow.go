@@ -110,6 +110,9 @@ type Result struct {
 	PR     int64
 	Reason StopReason
 	Detail string
+	// Actor is the actor whose agent did nothing, for an AgentDidNothing
+	// stop, whose marker carries it.
+	Actor string
 }
 
 // StopError is returned for every ordinary stop other than ready to merge.
@@ -935,6 +938,7 @@ func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (
 			detail += "; last error: " + idle.err.LastError
 		}
 		detail += "; if the actor is unavailable (quota, sign-in), rerun the flow with another `--implement`/`--verify`"
+		result.Actor, _, _ = strings.Cut(idle.actor, ":")
 		return s.stop(ctx, result, AgentDidNothing, detail)
 	}
 	return s.stop(ctx, result, RunFailed, runFailedDetail(err))
@@ -957,7 +961,7 @@ func runFailedDetail(err error) string {
 
 func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason, detail string) (Result, error) {
 	result.Reason, result.Detail = reason, detail
-	if err := s.API.Comment(ctx, result.Repo, result.Issue, stopBody(reason, detail, result.PR)); err != nil {
+	if err := s.API.Comment(ctx, result.Repo, result.Issue, stopBody(reason, detail, result.PR, result.Actor)); err != nil {
 		return result, fmt.Errorf("flow stopped: %s, but posting the stop comment failed: %w", reason, err)
 	}
 	if reason == ReadyToMerge {

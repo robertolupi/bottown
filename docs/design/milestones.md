@@ -4,7 +4,11 @@ Status: **design**, written with the owner in issue #74; Phases 1–4
 (§5) are built (`internal/milestone`, `bottown milestone check`; the base
 issue/PR/milestone rules, the `plan` run kind, `bottown run plan` /
 `milestone plan` and `/bottown-plan`; `bottown milestone apply`; the web
-UI's Milestones tab and `GET /api/milestones`). Extends
+UI's Milestones tab and `GET /api/milestones`). Step 2 is built in the
+reduced shape of kickoff #316 (`milestone/<slug>`, `milestone branch`,
+`merge`, `finish` and `run`); where this design and
+[the reference](../reference.md#milestone-run) differ, the reference
+says what is built. Extends
 [the local web UI and supervisor design](web-ui.md) (§3.7).
 
 ## 1. Goal

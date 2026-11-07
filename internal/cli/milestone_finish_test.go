@@ -71,8 +71,9 @@ func TestMilestoneFinishGateFails(t *testing.T) {
 	}
 }
 
-// Passed checks open the PR at the checked head, and a second finish
-// updates it.
+// Passed checks open the PR at the checked head, and a second finish, after
+// a merge moved the head, re-gates and updates it, and says on it that the
+// head is gated.
 func TestMilestoneFinishGatePasses(t *testing.T) {
 	api := newFinishAPI()
 	checker := &fakeChecker{out: flow.CheckOutcome{Passed: true, Description: "make e2e passed in 3m", Log: "/runs/l.e2e.log"}}
@@ -89,8 +90,11 @@ func TestMilestoneFinishGatePasses(t *testing.T) {
 	if len(api.prs) != 2 || api.prs[0] != want {
 		t.Errorf("PRs %+v, want %+v", api.prs, want)
 	}
-	if len(api.comments) != 0 {
-		t.Errorf("comments %q", api.comments)
+	if len(checker.reqs) != 2 {
+		t.Errorf("checks %+v: each finish gates the head", checker.reqs)
+	}
+	if len(api.comments) != 1 || !strings.Contains(api.comments[0], "the head is gated") || !strings.Contains(api.comments[0], finishHead) {
+		t.Errorf("comments %q, want one on the updated PR", api.comments)
 	}
 }
 

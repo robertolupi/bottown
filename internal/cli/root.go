@@ -11,6 +11,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/spf13/cobra"
 )
 
@@ -37,10 +38,15 @@ func Execute(ctx context.Context) int {
 }
 
 // exitCode is the exit status for a command's error: 1, or
-// ExitAgentDidNothing for that flow stop.
+// ExitAgentDidNothing for that flow stop, and for a milestone run that
+// stopped short having removed an agent that did nothing from its pool.
 func exitCode(err error) int {
 	var stop *flow.StopError
 	if errors.As(err, &stop) && stop.Result.Reason == flow.AgentDidNothing {
+		return ExitAgentDidNothing
+	}
+	var unfinished *milestone.UnfinishedError
+	if errors.As(err, &unfinished) && unfinished.AgentDidNothing() {
 		return ExitAgentDidNothing
 	}
 	return 1

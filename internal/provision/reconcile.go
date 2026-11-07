@@ -410,7 +410,7 @@ func (r *Reconciler) ensureLabels(api *forgejo.Client, rep *Report) error {
 	for _, l := range have {
 		byName[l.Name] = l
 	}
-	for _, dl := range r.Desired.Labels {
+	for _, dl := range r.Desired.AllLabels() {
 		want := forgejo.OrgLabel{Name: dl.Name, Color: dl.Color, Description: dl.Description, Exclusive: dl.Exclusive}
 		l, ok := byName[dl.Name]
 		switch {
