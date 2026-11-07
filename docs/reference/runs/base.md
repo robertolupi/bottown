@@ -39,3 +39,9 @@ carries over when the patch is unchanged; otherwise the flow verifies the
 new head. The flag does nothing for any other base: the default branch is
 still the owner's to merge. A conflicting base is never merged; it starts
 an implement round, as without the flag, against `--rounds`.
+
+While a request for changes stands at the head, the flow neither merges
+the base nor starts a conflict round: the implement round answers the
+request first, and the base is merged, or its conflicts resolved, at the
+head that round pushes. Merging first would push a head that dismisses the
+request unanswered, and a verifier would review the rejected patch again.

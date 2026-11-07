@@ -344,6 +344,14 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return result, err
 		}
+		// A request for changes at the head is answered first: merging the
+		// base now would push a head that dismisses the request unanswered,
+		// and the flow would start a verifier on the rejected patch. The
+		// base is merged after the implement round pushes its fix.
+		changesAtHead := pr.Assessment.Decision == review.ChangesRequested && pr.Assessment.AtHead(pr.HeadSHA)
+		if changesAtHead {
+			merge.Behind = false
+		}
 		if merge.Behind && !merge.Clean {
 			files := strings.Join(merge.Conflicts, ", ")
 			if files == "" {
@@ -390,7 +398,7 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				continue
 			}
 		}
-		if !pr.Mergeable && !(merge.Behind && merge.Clean) {
+		if !pr.Mergeable && !(merge.Behind && merge.Clean) && !changesAtHead {
 			if !resuming {
 				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("!%d no longer merges cleanly into %s; rerun the flow to resolve it", pr.Number, pr.BaseBranch))
 			}
