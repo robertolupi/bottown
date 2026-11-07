@@ -38,6 +38,7 @@ type PromptData struct {
 	Remote                     string // the bottown remote in the worktree
 	SelfEnd                    bool   // the agent ends the run itself (worktree runs)
 	Question                   string // discuss: the owner's question, if given to the command
+	Critical                   bool   // discuss: review adversarially, as a red team
 	Message                    string // implement, verify, plan: the owner's note, if given to the command
 	FlowNote                   string // implement, verify: bottown flow's note on the post-implement checks
 	ChecksPassed               bool   // verify: the flow's post-implement checks passed at SHA

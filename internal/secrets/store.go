@@ -67,8 +67,11 @@ type Run struct {
 	PR              int64  `json:"pr,omitempty"`
 	Branch          string `json:"branch,omitempty"`
 	SHA             string `json:"sha,omitempty"`    // verify: PR head at creation
-	Author          string `json:"author,omitempty"` // verify: PR author
+	Author          string `json:"author,omitempty"` // verify: PR author; critical discuss: issue author
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	// Critical discuss runs review their issue adversarially (a red team),
+	// and come from another model family than its author (Author).
+	Critical bool `json:"critical,omitempty"`
 	// Interactive runs are steered by the owner in the harness's TUI, so
 	// their result is partly the owner's work.
 	Interactive bool `json:"interactive,omitempty"`

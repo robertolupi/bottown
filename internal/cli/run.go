@@ -35,6 +35,7 @@ type runOpts struct {
 	allow           []string
 	keep            bool
 	question        string                // discuss: the owner's question for the prompt
+	critical        bool                  // discuss: an adversarial review, from another family than the issue's author
 	message         string                // implement, verify, plan: the owner's note for the prompt
 	flowNote        string                // implement, verify: bottown flow's note (the post-implement checks)
 	checksPassed    bool                  // verify: the flow's post-implement checks passed at sha
@@ -84,7 +85,7 @@ the actor's git identity, and a key limited to the role and this repository.`,
 	}
 	var questionFile string
 	discuss := &cobra.Command{
-		Use:   "discuss -a ACTOR [-I] N [QUESTION... | --question-file F|-]",
+		Use:   "discuss -a ACTOR [-I] [--critical [--allow-same-family]] N [QUESTION... | --question-file F|-]",
 		Short: "Discuss an issue or pull request without implementing it: the agent answers in a comment",
 		Long: `Discuss an issue or pull request without implementing it. The agent reads the
 issue and the code at the default branch's head, and answers in one comment;
@@ -93,18 +94,31 @@ the run cannot push, open pull requests or review.
 The question can follow the number, but your shell reads it first: quote it,
 since ?, *, #, ' and ! mean something to the shell, and put -- before it if a
 word starts with -. --question-file - reads it from stdin, which the shell
-leaves alone. Without a question, the agent reviews the issue.`,
+leaves alone. Without a question, the agent reviews the issue.
+
+--critical makes the run a red team: the agent steelmans the design, then
+attacks its assumptions, cost, failure modes, scope and what it makes harder
+later, ranks its findings by severity and says plainly if it should not be
+built. The question, if any, is what to focus on. As with verify, the
+critique should come from another model family than the issue's author: an
+actor of the author's family needs --allow-same-family. The comment is
+signed with the actor's family.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q, err := discussQuestion(cmd, args[1:], questionFile)
 			if err != nil {
 				return err
 			}
+			if o.allowSameFamily && !o.critical {
+				return errors.New("--allow-same-family needs --critical: only a critical discuss has a family rule")
+			}
 			o.question = q
 			return startRun(cmd, g, policy.Discuss, args[0], o)
 		},
 	}
 	discuss.Flags().StringVar(&questionFile, "question-file", "", "read the question from a file, or - for stdin")
+	discuss.Flags().BoolVar(&o.critical, "critical", false, "review the issue adversarially, as a red team, from another model family than its author")
+	discuss.Flags().BoolVar(&o.allowSameFamily, "allow-same-family", false, "allow a critical discuss by an actor of the author's model family (said on its comment)")
 	retro := &cobra.Command{
 		Use:   "retro -a ACTOR [-I] [--allow-same-family] ISSUE",
 		Short: "Write a blameless retrospective of an issue's flow from bottown's records",
@@ -324,7 +338,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
 	} else {
@@ -391,7 +405,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
-		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Harness: harnessName, Spec: run.Spec,
+		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Critical: run.Critical, Harness: harnessName, Spec: run.Spec,
 		PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
@@ -749,6 +763,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 func goalPrompt(ctx context.Context, rk *agentCtx, run secrets.Run, d runs.PromptData, gitDir, baseRef, attachDir string, item *server.IssueOut, itemErr error) (string, error) {
 	d.RunID, d.Actor, d.Family, d.Repo = run.ID, run.Actor, run.Family, run.Org+"/"+run.Repo
 	d.Issue, d.PR, d.Branch, d.SHA, d.Author, d.AllowSameFamily = run.Issue, run.PR, run.Branch, run.SHA, run.Author, run.AllowSameFamily
+	d.Critical = run.Critical
 	d.AttachmentsOf = run.Issue
 	if run.Kind == policy.Verify {
 		d.AttachmentsOf = run.PR
@@ -881,6 +896,13 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 	case policy.Retro:
 		fmt.Fprintf(&b, "Retrospective against `%s`, the default branch's head.\n\n", rec.SHA)
 	case policy.Discuss:
+		if rec.Critical {
+			fmt.Fprintf(&b, "Critical discuss (red team) by the %s family.", rec.Family)
+			if rec.AllowSameFamily {
+				b.WriteString(" Same family as the author, allowed by owner override.")
+			}
+			b.WriteString(" ")
+		}
 		fmt.Fprintf(&b, "Discussed against `%s`, the default branch's head.\n\n", rec.SHA)
 		if rec.Question != "" {
 			fmt.Fprintf(&b, "Question:%s\n\n", quoteLines(rec.Question))
@@ -1233,6 +1255,9 @@ func printRunShow(out io.Writer, rec *runs.Record, sr *secrets.Run, srErr error,
 		)
 		if sr.Status != "" {
 			fmt.Fprintf(out, ", ended %s", st.runStatus(sr.Status))
+		}
+		if sr.Critical {
+			fmt.Fprint(out, ", critical")
 		}
 		if sr.AllowSameFamily {
 			fmt.Fprint(out, ", same-family override")

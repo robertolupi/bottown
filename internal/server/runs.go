@@ -36,6 +36,10 @@ type RunRequest struct {
 	// so the run is pinned exactly at it.
 	SHA             string `json:"sha,omitempty"`
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
+	// Critical makes a discuss run an adversarial review of its issue,
+	// refused (409) from an actor of the issue author's model family
+	// unless AllowSameFamily.
+	Critical bool `json:"critical,omitempty"`
 	// SerializeActor refuses a batch run (409, ActorBusyMessage) while
 	// its actor has another live batch run. Without it an actor's batch
 	// runs on different targets run concurrently.
@@ -149,7 +153,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "spec", run.Spec, "repo", run.Org+"/"+run.Repo,
 		"issue", run.Issue, "pr", run.PR, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
-		"serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
+		"critical", run.Critical, "serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
 }
 
@@ -178,6 +182,9 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family, Harness: actor.Harness, Spec: req.Spec,
 		Org: s.desired().Org, Repo: req.Repo, Interactive: req.Interactive,
 		Created: now, Expires: now.Add(ttl),
+	}
+	if req.Critical && req.Kind != policy.Discuss {
+		return run, runErr(http.StatusBadRequest, "only discuss runs can be critical")
 	}
 	api := s.Rec.API(r.Context())
 	repo, resp, err := api.GetRepo(run.Org, req.Repo)
@@ -275,6 +282,22 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			return run, fmt.Errorf("default branch %s has no commit", repo.DefaultBranch)
 		}
 		run.Issue, run.SHA = req.Issue, b.Commit.ID
+		if req.Critical {
+			// The cross-family rule, as for verify: a red team of the
+			// author's own family shares its blind spots.
+			run.Critical = true
+			if is.Poster != nil {
+				run.Author = is.Poster.UserName
+			}
+			if author, isActor := s.desired().Actor(run.Author); isActor && author.Family == actor.Family {
+				if !req.AllowSameFamily {
+					return run, runErr(http.StatusConflict,
+						"%s and #%d's author %s are both %s; a critical discuss comes from another family; pass allow_same_family (--allow-same-family) to override",
+						actor.Name, req.Issue, author.Name, actor.Family)
+				}
+				run.AllowSameFamily = true
+			}
+		}
 		if req.Debate != nil {
 			if err := s.placeInDebate(r.Context(), &run, req, is.Title); err != nil {
 				return run, err

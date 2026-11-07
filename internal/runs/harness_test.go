@@ -279,6 +279,45 @@ func TestDiscussPrompt(t *testing.T) {
 	}
 }
 
+// A critical discuss prompt is the discuss prompt plus the red team: its
+// stance, the attack, the ranking and the verdict, with the same ending.
+func TestDiscussPromptCritical(t *testing.T) {
+	d := PromptData{RunID: "r-1", Actor: "codex", Family: "openai", Repo: "o/r", Issue: 7, Title: "T", SHA: "abc", Base: "main", Bottown: "/b", SelfEnd: true, Author: "claude"}
+	plain, err := Prompt("discuss", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "Red team") {
+		t.Errorf("plain discuss prompt has the red team:\n%s", plain)
+	}
+	d.Critical = true
+	p, err := Prompt("discuss", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"**discussant**", "Do not\nimplement it", "## Red team\n\nThis is a **critical** discuss run",
+		"them. #7 was written by claude; you are codex,\nof the openai family",
+		"**Steelman it.**", "**Assumptions:**", "**Cost:**", "**Failure modes:**", "**Scope:**",
+		"**What it makes harder later:**", "**Rank your findings by severity**",
+		"If it should not be built, say so plainly.", "No praise for its own sake",
+		"attack the whole design", "signs the comment with your name and family\n   (codex, openai)",
+		"/b comment --body-file -", "/b run end --summary", "cannot push, open pull\n  requests or review",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("critical discuss prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if !strings.HasPrefix(p, plain[:strings.Index(plain, "\n## How this run works")]) {
+		t.Errorf("critical prompt does not start with the discuss prompt:\n%s", p)
+	}
+	d.Question = "Is the cache needed?"
+	p, _ = Prompt("discuss", d)
+	if !strings.Contains(p, "Is the cache needed?\n\n## Red team") || !strings.Contains(p, "Focus the red team on the question above") {
+		t.Errorf("critical prompt with a focus:\n%s", p)
+	}
+}
+
 // TestWebPreviewPrompt checks that implement and verify prompts point at
 // `web preview` and `web shot` only in a repository that has its fixtures.
 func TestWebPreviewPrompt(t *testing.T) {
