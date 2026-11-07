@@ -17,7 +17,14 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   - `{{.Bottown}} issue show` prints the issue and its discussion.
   - `{{.Bottown}} comment --body-file -` comments on the issue.
   - `{{.Bottown}} pr create --title "…" --body-file -` opens the pull request
-    once your branch is pushed.
+    once your branch is pushed. It ends the description with `Closes
+    #{{.Issue}}`, so merging the PR closes the issue. When the issue says
+    its work spans several pull requests, or the owner says this PR does
+    only part of it, add `--part`: it writes `Part of #{{.Issue}}` instead,
+    and the issue stays open. Forgejo applies the last `close`/`fix`/
+    `resolve` or `reopen` keyword before `#{{.Issue}}` in the PR's
+    description and comments when the PR merges, so do not write those
+    keywords before `#{{.Issue}}` yourself.
   - On a review follow-up, push your new commits, then comment on the existing
     PR with what changed. `pr create` reports that PR and succeeds; it does not
     change its title or description.

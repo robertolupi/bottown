@@ -77,6 +77,21 @@ func TestPRCreateAlreadyOpen(t *testing.T) {
 	}
 }
 
+func TestPRBody(t *testing.T) {
+	run := secrets.Run{ID: "r-1", Kind: policy.Implement, Actor: "claude", Family: "anthropic", Issue: 7}
+	for _, tc := range []struct {
+		part bool
+		want string
+	}{
+		{false, "did it\n\nCloses #7\n\n_bottown implement run r-1 (claude, anthropic)_"},
+		{true, "did it\n\nPart of #7\n\n_bottown implement run r-1 (claude, anthropic)_"},
+	} {
+		if got := prBody(PRCreateIn{Body: " did it\n", Part: tc.part}, run); got != tc.want {
+			t.Errorf("prBody(part=%v) = %q, want %q", tc.part, got, tc.want)
+		}
+	}
+}
+
 func TestParseState(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
