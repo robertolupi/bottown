@@ -422,8 +422,9 @@ forge.
   groups them with it too: implement and verify runs for one issue and PR
   share a thread, each PR of an issue is its own, implement runs before
   the PR join its thread, and discuss and retro runs stand alone. The
-  window's threads are those with a run that overlaps it, or whose PR was
-  created, updated, merged or closed in it, or is open. Each has its PR's
+  window's threads are those with a run that overlaps it, whose PR was
+  created, updated, merged or closed in it, or is open, or with a stop in
+  it or an owner wait that overlaps it. Each has its PR's
   created, merged and closed times, its implement rounds (`REQUEST_CHANGES`
   reviews) and check rounds (commits whose flow `bottown/e2e` status
   failed), as the flow counts them.
@@ -435,13 +436,20 @@ forge.
   (`**bottown flow: <reason>**`, written and parsed in `internal/flow`)
   are typed stop reasons, in the thread of the PR they name, else of the
   PR the issue's work belonged to then. Each leaves the thread waiting on
-  the owner until its next run, the PR's merge or close, or the next stop,
-  whichever is first; still waiting when none has happened. The flow's
+  the owner until its next run, the PR's merge or close (the issue's close
+  for a thread with no PR), or the next stop, whichever is first; still
+  waiting when none has happened. The flow's
   announcements of a round it starts share the prefix but are not stops.
 
 **Reads.** Load reads the run list (all of it, so threads group as History
-groups them and a wait that began before the window ends where it did) and
-the PR list once, then, for the window's threads only, each issue once
-(its comments) and each PR once and its gate once: 2 + issues + 2 × PRs
-calls, for a 7-day window or any other. A failed issue or PR read leaves
-its facts out and is named in `incomplete`.
+groups them and a wait that began before the window ends where it did),
+the PR list and the issue list once. It then reads each PR of the window's
+threads once and its gate once, and, once each, the comments of the
+issues that can hold a stop or a wait in the window: those of the window's
+threads, those updated in the window (a new stop updates its issue), and
+the open ones with flow runs but no PR yet, whose wait may have begun
+before the window. That is 3 + issues + 2 × PRs calls, for a 7-day window
+or any other. Not read, so missing: the wait of an open issue whose flow
+stopped before it ever ran and that has not changed since the window
+began. A failed issue or PR read leaves its facts out and is named in
+`incomplete`.

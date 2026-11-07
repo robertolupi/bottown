@@ -64,6 +64,16 @@ func issueWith(n int64, comments ...server.CommentOut) *server.IssueOut {
 	return &server.IssueOut{Number: n, Comments: comments}
 }
 
+// listed is issue n's entry in the issue list, open.
+func listed(n int64, created, updated float64) *server.IssueItem {
+	return &server.IssueItem{Number: n, State: "open", Created: at(created), Updated: at(updated)}
+}
+
+func closedIssue(is *server.IssueItem, h float64) *server.IssueItem {
+	is.State, is.Closed, is.Updated = "closed", ptr(at(h)), at(h)
+	return is
+}
+
 var week = Window{Since: t0, Until: t0.Add(7 * 24 * time.Hour)}
 
 func thread(t *testing.T, a *Activity, key string) Thread {
@@ -336,6 +346,10 @@ func (f *fakeSource) PullRequests(context.Context) ([]*server.PRItem, error) {
 	return f.facts.PRs, f.read("prs")
 }
 
+func (f *fakeSource) Issues(context.Context) ([]*server.IssueItem, error) {
+	return f.facts.IssueList, f.read("issues")
+}
+
 func (f *fakeSource) PullRequest(_ context.Context, n int64) (*server.PROut, error) {
 	return f.facts.Reviews[n], f.read(fmt.Sprintf("pr %d", n))
 }
@@ -356,14 +370,19 @@ func TestLoadReadsAreBounded(t *testing.T) {
 			run("r-1", "implement", 7, 0, 1, 2), run("r-2", "implement", 7, 0, 5, 6),
 			run("r-old", "implement", 3, 0, -100, -99), run("r-d", "discuss", 4, 0, 1, 2),
 		},
-		PRs:    []*server.PRItem{closed(pr(12, 7, 1.5), 4), pr(13, 7, 5.5), merged(pr(9, 3, -99.5), -98)},
+		PRs: []*server.PRItem{closed(pr(12, 7, 1.5), 4), pr(13, 7, 5.5), merged(pr(9, 3, -99.5), -98)},
+		IssueList: []*server.IssueItem{
+			listed(7, 0, 6.1), closedIssue(listed(3, -101, -98), -98),
+			listed(4, -200, 2),   // the discuss run commented: updated in the window
+			listed(5, -200, -50), // open, no runs, unchanged
+		},
 		Issues: map[int64]*server.IssueOut{7: issueWith(7, stopComment(1, flow.ReadyToMerge, 13, 6.1))},
 	}}
 	a, err := Load(context.Background(), src, Window{Since: t0}, week.Until)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"runs": 1, "prs": 1, "issue 7": 1, "pr 12": 1, "gate 12": 1, "pr 13": 1, "gate 13": 1}
+	want := map[string]int{"runs": 1, "prs": 1, "issues": 1, "issue 4": 1, "issue 7": 1, "pr 12": 1, "gate 12": 1, "pr 13": 1, "gate 13": 1}
 	if fmt.Sprint(src.reads) != fmt.Sprint(want) {
 		t.Errorf("reads = %v, want %v", src.reads, want)
 	}
@@ -377,5 +396,73 @@ func TestLoadReadsAreBounded(t *testing.T) {
 	src.fail = map[string]bool{"runs": true}
 	if _, err := Load(context.Background(), src, week, week.Until); err == nil {
 		t.Error("Load without runs succeeded")
+	}
+}
+
+// A flow without a PR whose runs ended before the window: Load reads its
+// issue when the issue is still open, or changed in the window, and keeps
+// the thread while a stop or a wait of it meets the window.
+func TestLoadThreadWithoutPRBeforeWindow(t *testing.T) {
+	old := run("r-old", "implement", 7, 0, -10, -9)
+	for _, tc := range []struct {
+		name    string
+		issue   *server.IssueItem
+		stop    float64
+		reads   int // of issue 7
+		shown   bool
+		end     *time.Time
+		endedBy string
+	}{
+		{name: "an ongoing wait from before the window", issue: listed(7, -20, -8), stop: -8, reads: 1, shown: true},
+		{name: "a stop in the window", issue: listed(7, -20, 2), stop: 2, reads: 1, shown: true},
+		{name: "a wait the issue's close ended in the window", issue: closedIssue(listed(7, -20, -8), 3), stop: -8, reads: 1, shown: true,
+			end: ptr(at(3)), endedBy: EndedByClose},
+		{name: "a wait the issue's close ended before the window", issue: closedIssue(listed(7, -20, -8), -5), stop: -8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeSource{reads: map[string]int{}, facts: Facts{
+				Runs:      []server.RunItem{old},
+				PRs:       []*server.PRItem{merged(pr(9, 3, -99.5), -98)},
+				IssueList: []*server.IssueItem{tc.issue},
+				Issues:    map[int64]*server.IssueOut{7: issueWith(7, stopComment(1, flow.RunFailed, 0, tc.stop))},
+			}}
+			a, err := Load(context.Background(), src, week, week.Until)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := src.reads["issue 7"]; got != tc.reads {
+				t.Errorf("issue 7 read %d times, want %d (reads %v)", got, tc.reads, src.reads)
+			}
+			if !tc.shown {
+				if len(a.Threads) != 0 {
+					t.Errorf("threads = %+v, want none", a.Threads)
+				}
+				return
+			}
+			th := thread(t, a, "flow:issue:7")
+			if len(th.Runs) != 0 || len(th.Stops) != 1 || len(th.OwnerWaits) != 1 {
+				t.Fatalf("thread = %+v", th)
+			}
+			w := th.OwnerWaits[0]
+			if !w.Start.Equal(at(tc.stop)) || w.EndedBy != tc.endedBy || (w.End == nil) != (tc.end == nil) || (w.End != nil && !w.End.Equal(*tc.end)) {
+				t.Errorf("wait = %+v, want end %v by %q", w, tc.end, tc.endedBy)
+			}
+		})
+	}
+}
+
+// A stop before the flow's first run (its actor busy) is read when its
+// issue changed in the window.
+func TestLoadStopWithoutRuns(t *testing.T) {
+	src := &fakeSource{reads: map[string]int{}, facts: Facts{
+		IssueList: []*server.IssueItem{listed(8, -20, 4)},
+		Issues:    map[int64]*server.IssueOut{8: issueWith(8, stopComment(1, flow.ActorBusy, 0, 4))},
+	}}
+	a, err := Load(context.Background(), src, week, week.Until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if th := thread(t, a, "flow:issue:8"); len(th.Stops) != 1 || th.Stops[0].Reason != flow.ActorBusy || th.OwnerWaits[0].End != nil {
+		t.Errorf("thread = %+v", th)
 	}
 }

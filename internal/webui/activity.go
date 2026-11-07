@@ -29,6 +29,10 @@ func (a activitySource) PullRequests(ctx context.Context) ([]*serverapi.PRItem, 
 	return a.s.pullRequests(ctx, "all", false)
 }
 
+func (a activitySource) Issues(ctx context.Context) ([]*serverapi.IssueItem, error) {
+	return a.s.issues(ctx, "all", false)
+}
+
 func (a activitySource) PullRequest(ctx context.Context, n int64) (*serverapi.PROut, error) {
 	return a.s.pullRequest(ctx, n)
 }

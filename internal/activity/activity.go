@@ -37,8 +37,9 @@ type Activity struct {
 	// oldest first.
 	Runs []Run `json:"runs"`
 	// Threads are the flow threads with something in the window: a run
-	// that overlaps it, or a PR created, updated, merged or closed in it,
-	// or still open. Standalone runs (discuss, retro) are not threads.
+	// that overlaps it, a PR created, updated, merged or closed in it, or
+	// still open, or a stop in it or an owner wait that overlaps it.
+	// Standalone runs (discuss, retro) are not threads.
 	Threads []Thread `json:"threads"`
 	// Usage is how many of Runs reported their usage.
 	Usage Coverage `json:"usage"`
@@ -140,12 +141,13 @@ type Stop struct {
 const (
 	EndedByRun   = "run"   // the thread's next run started
 	EndedByMerge = "merge" // the PR was merged
-	EndedByClose = "close" // the PR was closed
+	EndedByClose = "close" // the PR was closed; with no PR, the issue was
 	EndedByStop  = "stop"  // the flow stopped again, with no run between
 )
 
 // OwnerWait is the time from a flow stop until the thread's next run, its
-// merge or its close, whichever came first; or its next stop, which starts
+// merge or its close (its PR's, or with no PR its issue's), whichever came
+// first; or its next stop, which starts
 // the next wait. End is nil while the thread still waits.
 type OwnerWait struct {
 	Start   time.Time       `json:"start"`
@@ -162,6 +164,9 @@ type Source interface {
 	// PullRequests are the repository's PRs in every state
 	// (GET /v1/forge/prs?state=all).
 	PullRequests(ctx context.Context) ([]*server.PRItem, error)
+	// Issues are the repository's issues in every state, without their
+	// comments (GET /v1/forge/issues?state=all).
+	Issues(ctx context.Context) ([]*server.IssueItem, error)
 	// PullRequest is PR n with its reviews (GET /v1/forge/pr).
 	PullRequest(ctx context.Context, n int64) (*server.PROut, error)
 	// Gate is the flow's gate on PR n (GET /v1/forge/pr/gate).
@@ -172,8 +177,9 @@ type Source interface {
 
 // Facts are what Derive works from, as Load reads them.
 type Facts struct {
-	Runs []server.RunItem
-	PRs  []*server.PRItem
+	Runs      []server.RunItem
+	PRs       []*server.PRItem
+	IssueList []*server.IssueItem
 	// By number, for the threads in the window: each issue with its
 	// comments, each PR with its reviews, and each PR's gate.
 	Issues  map[int64]*server.IssueOut
@@ -183,13 +189,21 @@ type Facts struct {
 
 // Load reads the facts for w from src and derives its activity.
 //
-// Its reads are bounded by the threads in the window, whatever its length:
-// one run list (the server's own records, all of them, so threads group as
-// History groups them and a wait that began before the window ends where
-// it did), one PR list, and then one issue read (its comments) per issue
-// and one PR read and one gate read per PR of those threads. For 7 days
-// that is 2 + issues + 2 × PRs reads, each issue and PR read once. A read
-// that fails leaves its facts out and is named in Incomplete.
+// Its reads are bounded by what happened in the window, whatever its
+// length: one run list (the server's own records, all of them, so threads
+// group as History groups them and a wait that began before the window ends
+// where it did), one PR list and one issue list; then one issue read (its
+// comments, where the stops are) per issue of the window's threads, per
+// issue updated in the window (a new stop updates its issue), and per open
+// issue with flow runs but no PR yet (its wait may have begun before the
+// window and still go on); and one PR read and one gate read per PR of the
+// window's threads. For 7 days that is 3 + issues + 2 × PRs reads, each
+// issue and PR read once. A read that fails leaves its facts out and is
+// named in Incomplete.
+//
+// Not read: an open issue whose flow stopped before it ever ran (its actor
+// busy at the start) and that has not changed since the window began; that
+// wait is missing from the window.
 func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, error) {
 	w = w.resolve(now)
 	runs, err := src.Runs(ctx)
@@ -200,18 +214,27 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 	if err != nil {
 		return nil, fmt.Errorf("read pull requests: %w", err)
 	}
-	f := Facts{Runs: runs, PRs: prs, Issues: map[int64]*server.IssueOut{}, Reviews: map[int64]*server.PROut{}, Gates: map[int64]server.GateOut{}}
+	issues, err := src.Issues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read issues: %w", err)
+	}
+	f := Facts{Runs: runs, PRs: prs, IssueList: issues, Issues: map[int64]*server.IssueOut{}, Reviews: map[int64]*server.PROut{}, Gates: map[int64]server.GateOut{}}
 	var incomplete []string
-	for _, t := range windowThreads(w, Group(runs, prs), runs, prs) {
-		if t.Issue > 0 && f.Issues[t.Issue] == nil {
-			is, err := src.Issue(ctx, t.Issue)
-			if err != nil {
-				incomplete = append(incomplete, fmt.Sprintf("issue #%d: %v", t.Issue, err))
-				// Read each issue once, even when it fails.
-				is = &server.IssueOut{Number: t.Issue}
-			}
-			f.Issues[t.Issue] = is
+	readIssue := func(n int64) {
+		if n <= 0 || f.Issues[n] != nil {
+			return
 		}
+		is, err := src.Issue(ctx, n)
+		if err != nil {
+			incomplete = append(incomplete, fmt.Sprintf("issue #%d: %v", n, err))
+			// Read each issue once, even when it fails.
+			is = &server.IssueOut{Number: n}
+		}
+		f.Issues[n] = is
+	}
+	g := Group(runs, prs)
+	for _, t := range windowThreads(w, g, runs, prs) {
+		readIssue(t.Issue)
 		if t.PR > 0 {
 			pr, err := src.PullRequest(ctx, t.PR)
 			if err != nil {
@@ -227,9 +250,45 @@ func Load(ctx context.Context, src Source, w Window, now time.Time) (*Activity, 
 			}
 		}
 	}
+	for _, n := range stopIssues(w, g, runs, issues) {
+		readIssue(n)
+	}
 	a := Derive(w, f, now)
 	a.Incomplete = incomplete
 	return a, nil
+}
+
+// stopIssues are the issues whose comments may hold a stop in w or the
+// start of an owner wait that overlaps it, beyond the issues of the
+// window's threads, by number: those updated in w, and the open ones with
+// flow runs before any PR.
+func stopIssues(w Window, g Grouping, runs []server.RunItem, issues []*server.IssueItem) []int64 {
+	byNumber := map[int64]*server.IssueItem{}
+	set := map[int64]bool{}
+	for _, is := range issues {
+		if is == nil || is.Number <= 0 || is.PullRequest {
+			continue
+		}
+		byNumber[is.Number] = is
+		if !is.Updated.Before(w.Since) && is.Created.Before(w.Until) {
+			set[is.Number] = true
+		}
+	}
+	for _, r := range runs {
+		rt := g.Runs[r.ID]
+		if Standalone(r.Kind) || rt.Issue <= 0 || rt.PR > 0 {
+			continue
+		}
+		if is := byNumber[rt.Issue]; is != nil && is.Closed == nil && is.State != "closed" && is.Created.Before(w.Until) {
+			set[rt.Issue] = true
+		}
+	}
+	out := make([]int64, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (w Window) resolve(now time.Time) Window {
@@ -311,6 +370,20 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 			prs[pr.Number] = pr
 		}
 	}
+	issueClosed := map[int64]*time.Time{}
+	for _, is := range f.IssueList {
+		if is != nil && is.Closed != nil {
+			issueClosed[is.Number] = is.Closed
+		}
+	}
+	// The threads to derive: the window's, and every thread with a stop,
+	// which is kept only when a stop or an owner wait meets the window.
+	inWindow := map[string]bool{}
+	candidates := map[string]RunThread{}
+	for _, rt := range windowThreads(w, g, f.Runs, f.PRs) {
+		inWindow[rt.Key] = true
+		candidates[rt.Key] = rt
+	}
 	// Each issue's stops, by the thread the flow stopped in: the PR it
 	// names, else the PR the issue's work belonged to at the time.
 	stops := map[string][]Stop{}
@@ -323,12 +396,21 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 			if !ok {
 				continue
 			}
-			key := ThreadKey(issue, g.PRAt(issue, c.Created, st.PR), "")
-			stops[key] = append(stops[key], Stop{Time: c.Created, Reason: st.Reason, Comment: c.ID})
+			rt := RunThread{Issue: issue, PR: g.PRAt(issue, c.Created, st.PR)}
+			rt.Key = ThreadKey(rt.Issue, rt.PR, "")
+			stops[rt.Key] = append(stops[rt.Key], Stop{Time: c.Created, Reason: st.Reason, Comment: c.ID})
+			if _, ok := candidates[rt.Key]; !ok {
+				candidates[rt.Key] = rt
+			}
 		}
 	}
+	threads := make([]RunThread, 0, len(candidates))
+	for _, rt := range candidates {
+		threads = append(threads, rt)
+	}
+	slices.SortFunc(threads, func(x, y RunThread) int { return strings.Compare(x.Key, y.Key) })
 
-	for _, rt := range windowThreads(w, g, f.Runs, f.PRs) {
+	for _, rt := range threads {
 		t := Thread{Key: rt.Key, Issue: rt.Issue, PR: rt.PR, Runs: []string{}, Checks: []Check{}, Stops: []Stop{}, OwnerWaits: []OwnerWait{}}
 		for _, r := range a.Runs {
 			if r.ThreadKey == t.Key {
@@ -357,16 +439,41 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 				starts = append(starts, r.Created)
 			}
 		}
-		t.OwnerWaits = ownerWaits(t.Stops, starts, pr)
-		a.Threads = append(a.Threads, t)
+		closedAt := issueClosed[t.Issue]
+		if t.PR > 0 {
+			closedAt = nil
+			if pr != nil {
+				closedAt = pr.ClosedAt
+			}
+		}
+		t.OwnerWaits = ownerWaits(t.Stops, starts, pr, closedAt)
+		if inWindow[t.Key] || meets(w, t) {
+			a.Threads = append(a.Threads, t)
+		}
 	}
 	return a
 }
 
+// meets is whether one of t's stops is in w, or one of its owner waits
+// overlaps w.
+func meets(w Window, t Thread) bool {
+	for _, st := range t.Stops {
+		if w.contains(&st.Time) {
+			return true
+		}
+	}
+	for _, ow := range t.OwnerWaits {
+		if w.overlaps(ow.Start, ow.End) {
+			return true
+		}
+	}
+	return false
+}
+
 // ownerWaits are the waits that stops leave a thread in: each from its stop
-// until the first of the thread's next run, the PR's merge or close, and
-// the next stop.
-func ownerWaits(stops []Stop, runStarts []time.Time, pr *server.PRItem) []OwnerWait {
+// until the first of the thread's next run, the PR's merge, the close
+// (closedAt: the PR's, or with no PR the issue's), and the next stop.
+func ownerWaits(stops []Stop, runStarts []time.Time, pr *server.PRItem, closedAt *time.Time) []OwnerWait {
 	out := []OwnerWait{}
 	for i, st := range stops {
 		w := OwnerWait{Start: st.Time, Reason: st.Reason}
@@ -381,8 +488,8 @@ func ownerWaits(stops []Stop, runStarts []time.Time, pr *server.PRItem) []OwnerW
 		if pr != nil && pr.MergedAt != nil {
 			end(*pr.MergedAt, EndedByMerge)
 		}
-		if pr != nil && pr.ClosedAt != nil {
-			end(*pr.ClosedAt, EndedByClose)
+		if closedAt != nil {
+			end(*closedAt, EndedByClose)
 		}
 		if i+1 < len(stops) {
 			end(stops[i+1].Time, EndedByStop)
