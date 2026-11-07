@@ -170,3 +170,20 @@ func TestEntriesReturnsCopy(t *testing.T) {
 		t.Error("mutating Entries result changed the pool")
 	}
 }
+
+func TestLookupAndSpare(t *testing.T) {
+	pool := mustPool(t, "claude=1,agy:m=*")
+	if e, ok := pool.Lookup("agy"); !ok || e.String() != "agy:m" {
+		t.Errorf("Lookup(agy) = %+v, %v", e, ok)
+	}
+	if _, ok := pool.Lookup("kimi"); ok {
+		t.Error("Lookup found an actor outside the pool")
+	}
+	if !pool.Spare("claude", nil) || pool.Spare("claude", map[string]int{"claude": 1}) || !pool.Spare("agy", map[string]int{"agy": 9}) {
+		t.Error("Spare does not follow the limits")
+	}
+	pool.Remove("agy")
+	if _, ok := pool.Lookup("agy"); ok || pool.Spare("agy", nil) {
+		t.Error("a removed entry is still found")
+	}
+}

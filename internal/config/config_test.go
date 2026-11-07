@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,22 @@ func TestDefaultDesiredIsValid(t *testing.T) {
 	}
 	if a, ok := d.Actor("claude"); !ok || a.Family != "anthropic" {
 		t.Fatalf("claude = %+v", a)
+	}
+}
+
+// Every actor gets an exclusive implement/<actor> and verify/<actor>
+// label, after the configured ones.
+func TestAllLabels(t *testing.T) {
+	d := Desired{Labels: []Label{{Name: "needs/human"}}, Actors: []Actor{{Name: "claude"}, {Name: "agy"}}}
+	var names []string
+	for _, l := range d.AllLabels() {
+		names = append(names, l.Name)
+		if l.Name != "needs/human" && !l.Exclusive {
+			t.Errorf("%s is not exclusive", l.Name)
+		}
+	}
+	if got, want := strings.Join(names, " "), "needs/human implement/claude verify/claude implement/agy verify/agy"; got != want {
+		t.Errorf("labels %q, want %q", got, want)
 	}
 }
 

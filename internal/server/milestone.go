@@ -26,6 +26,7 @@ import (
 //	POST /v1/forge/milestone/branch      {repo, slug}
 //	POST /v1/forge/milestone/merge-base  {repo, slug}
 //	POST /v1/forge/milestone/pr          {repo, slug, sha, checks}
+//	POST /v1/forge/milestone/restart     {repo, slug}
 
 // MilestoneIn names a milestone plan in a repository.
 type MilestoneIn struct {
@@ -50,6 +51,17 @@ type MilestoneMergeBaseOut struct {
 	HeadSHA string `json:"head_sha"`
 	BaseSHA string `json:"base_sha"`
 	Epic    int64  `json:"epic"`
+	Merged  bool   `json:"merged"`
+}
+
+// MilestoneRestartOut is the milestone branch after restart. Final is the
+// open final PR, or else the newest merged one, 0 if there is neither;
+// Merged is whether this call merged the default branch, Base, into it.
+type MilestoneRestartOut struct {
+	Branch  string `json:"branch"`
+	Base    string `json:"base"`
+	HeadSHA string `json:"head_sha,omitempty"`
+	Final   int64  `json:"final,omitempty"`
 	Merged  bool   `json:"merged"`
 }
 
@@ -162,17 +174,84 @@ func (s *Server) opMilestoneMergeBase(ctx context.Context, p secrets.Principal, 
 	if err != nil {
 		return MilestoneMergeBaseOut{}, err
 	}
-	out := MilestoneMergeBaseOut{Branch: m.branch, Base: r.DefaultBranch, Epic: m.st.Epic.Number}
-	gitDir := filepath.Join(s.GitRoot, strings.ToLower(m.org), strings.ToLower(m.repo)+".git")
-	head, err := mergeGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "refs/heads/"+m.branch+"^{commit}")
-	if err != nil {
-		return out, ferr(http.StatusNotFound, "%s does not exist: create it with `bottown milestone branch %s`", m.branch, in.Slug)
+	message := fmt.Sprintf("Merge %s into %s\n\nbottown milestone finish for epic #%d, at the owner's request.\n", r.DefaultBranch, m.branch, m.st.Epic.Number)
+	return s.mergeDefault(ctx, p, m, r.DefaultBranch, in.Slug, message, "milestone_merge_base")
+}
+
+// opMilestoneRestart starts a new round of a milestone whose final PR was
+// merged: it merges the default branch into the milestone branch, as the
+// manager, so the round's children start from it. It does nothing while a
+// final PR is open, when none was merged, or when the branch already
+// contains the last one's merge. Unlike merge-base, open children do not
+// refuse it: they are the new round's.
+func (s *Server) opMilestoneRestart(ctx context.Context, p secrets.Principal, in MilestoneIn) (MilestoneRestartOut, error) {
+	if s.GitRoot == "" {
+		return MilestoneRestartOut{}, ferr(http.StatusNotImplemented, "forge git repositories are not available")
 	}
-	base, err := mergeGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "refs/heads/"+out.Base+"^{commit}")
+	m, err := s.milestoneOp(ctx, p, in)
+	if err != nil {
+		return MilestoneRestartOut{}, err
+	}
+	r, _, err := m.c.GetRepo(m.org, m.repo)
+	if err != nil {
+		return MilestoneRestartOut{}, err
+	}
+	out := MilestoneRestartOut{Branch: m.branch, Base: r.DefaultBranch}
+	prs, _, err := m.c.AllPullRequests(m.org, m.repo, sdk.ListPullRequestsOptions{State: sdk.StateAll})
+	if err != nil {
+		return out, fmt.Errorf("listing pull requests: %w", err)
+	}
+	var last *sdk.PullRequest // the newest merged final PR
+	for _, pr := range prs {
+		if pr.Head == nil || pr.Base == nil || pr.Head.Ref != m.branch || pr.Base.Ref != r.DefaultBranch {
+			continue
+		}
+		if pr.State == sdk.StateOpen {
+			out.Final = pr.Index
+			return out, nil
+		}
+		if pr.HasMerged && pr.MergedCommitID != nil && (last == nil || pr.Index > last.Index) {
+			last = pr
+		}
+	}
+	if last == nil {
+		return out, nil
+	}
+	out.Final = last.Index
+	gitDir := m.gitDir(s.GitRoot)
+	head, err := m.head(ctx, gitDir, in.Slug)
 	if err != nil {
 		return out, err
 	}
-	out.HeadSHA, out.BaseSHA = strings.TrimSpace(head), strings.TrimSpace(base)
+	out.HeadSHA = head
+	switch contains, err := gitmerge.IsAncestor(ctx, gitDir, *last.MergedCommitID, head); {
+	case err != nil:
+		return out, err
+	case contains:
+		return out, nil
+	}
+	message := fmt.Sprintf("Merge %s into %s\n\nbottown milestone run for epic #%d: the final PR !%d was merged, so the new round starts from %s.\n",
+		r.DefaultBranch, m.branch, m.st.Epic.Number, last.Index, r.DefaultBranch)
+	merged, err := s.mergeDefault(ctx, p, m, r.DefaultBranch, in.Slug, message, "milestone_restart")
+	out.HeadSHA, out.Merged = merged.HeadSHA, merged.Merged
+	return out, err
+}
+
+// mergeDefault merges the default branch, base, into the milestone branch
+// as the manager, with message, unless the branch already contains it. A
+// conflict leaves the branch as it was.
+func (s *Server) mergeDefault(ctx context.Context, p secrets.Principal, m *milestoneOp, base, slug, message, audit string) (MilestoneMergeBaseOut, error) {
+	out := MilestoneMergeBaseOut{Branch: m.branch, Base: base, Epic: m.st.Epic.Number}
+	gitDir := m.gitDir(s.GitRoot)
+	head, err := m.head(ctx, gitDir, slug)
+	if err != nil {
+		return out, err
+	}
+	baseSHA, err := mergeGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "refs/heads/"+out.Base+"^{commit}")
+	if err != nil {
+		return out, err
+	}
+	out.HeadSHA, out.BaseSHA = head, strings.TrimSpace(baseSHA)
 	contains, err := gitmerge.IsAncestor(ctx, gitDir, out.BaseSHA, out.HeadSHA)
 	if err != nil || contains {
 		return out, err
@@ -185,7 +264,6 @@ func (s *Server) opMilestoneMergeBase(ctx context.Context, p secrets.Principal, 
 		return out, ferr(http.StatusConflict, "merging %s into %s conflicts in %s; %s is unchanged at %s: merge and resolve it by hand",
 			out.Base, m.branch, strings.Join(merged.Conflicts, ", "), m.branch, shortCommit(out.HeadSHA))
 	}
-	message := fmt.Sprintf("Merge %s into %s\n\nbottown milestone finish for epic #%d, at the owner's request.\n", out.Base, m.branch, out.Epic)
 	commit, err := mergeGit(ctx, gitDir, strings.NewReader(message), []string{
 		"GIT_AUTHOR_NAME=" + m.manager, "GIT_AUTHOR_EMAIL=" + m.manager + "@bottown.local",
 		"GIT_COMMITTER_NAME=" + m.manager, "GIT_COMMITTER_EMAIL=" + m.manager + "@bottown.local",
@@ -198,8 +276,22 @@ func (s *Server) opMilestoneMergeBase(ctx context.Context, p secrets.Principal, 
 		return out, err
 	}
 	out.HeadSHA, out.Merged = commit, true
-	s.toolAudit(p, m.org+"/"+m.repo, "milestone_merge_base", "allow", fmt.Sprintf("%s merged into %s at %s", out.Base, m.branch, shortCommit(commit)))
+	s.toolAudit(p, m.org+"/"+m.repo, audit, "allow", fmt.Sprintf("%s merged into %s at %s", out.Base, m.branch, shortCommit(commit)))
 	return out, nil
+}
+
+// gitDir is the repository's bare git directory under root.
+func (m *milestoneOp) gitDir(root string) string {
+	return filepath.Join(root, strings.ToLower(m.org), strings.ToLower(m.repo)+".git")
+}
+
+// head is the milestone branch's head commit in gitDir.
+func (m *milestoneOp) head(ctx context.Context, gitDir, slug string) (string, error) {
+	head, err := mergeGit(ctx, gitDir, nil, nil, "rev-parse", "--verify", "refs/heads/"+m.branch+"^{commit}")
+	if err != nil {
+		return "", ferr(http.StatusNotFound, "%s does not exist: create it with `bottown milestone branch %s`", m.branch, slug)
+	}
+	return strings.TrimSpace(head), nil
 }
 
 // milestonePush pushes commit to the milestone branch as the manager,

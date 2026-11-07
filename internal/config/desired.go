@@ -131,6 +131,20 @@ func (d Desired) Accounts() []Account {
 	return out
 }
 
+// AllLabels is every organization label to reconcile: Labels, then an
+// implement/<actor> and a verify/<actor> label for each actor, which
+// `bottown milestone run` sets on a child to record the pair it assigned.
+// Each set is exclusive: an issue has one implementer and one verifier.
+func (d Desired) AllLabels() []Label {
+	out := append([]Label(nil), d.Labels...)
+	for _, a := range d.Actors {
+		out = append(out,
+			Label{Name: "implement/" + a.Name, Color: "5319e7", Description: a.Name + " implements this issue (bottown milestone run)", Exclusive: true},
+			Label{Name: "verify/" + a.Name, Color: "006b75", Description: a.Name + " verifies this issue's PR (bottown milestone run)", Exclusive: true})
+	}
+	return out
+}
+
 // ActorNames lists the actors' logins.
 func (d Desired) ActorNames() []string {
 	var out []string

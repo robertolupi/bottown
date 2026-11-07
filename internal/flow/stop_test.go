@@ -28,7 +28,24 @@ func TestParseStopReadsWhatStopWrites(t *testing.T) {
 	}
 }
 
-// TestParseStopIgnoresOtherComments: the flow's announcements of a round
+// An agent that did nothing names its actor in the marker, for a scheduler
+// that drops the actor from its pool; no other stop carries one.
+func TestParseStopReadsIdleActor(t *testing.T) {
+	api := &fakeAPI{}
+	_, _ = (&Supervisor{API: api}).stop(context.Background(), Result{Issue: 9, Repo: "demo", PR: 12, Actor: "agy"}, AgentDidNothing, "the implement run r-1 by agy (model m) exited 0 without a tool call")
+	if marker := `<!-- bottown:flow-stop v=1 reason="agent did nothing" actor="agy" -->`; !strings.HasSuffix(api.comments[0], "\n\n"+marker) {
+		t.Errorf("comment does not end with %s: %q", marker, api.comments[0])
+	}
+	if got, ok := ParseStop(api.comments[0]); !ok || got != (Stop{Reason: AgentDidNothing, PR: 12, Actor: "agy"}) {
+		t.Errorf("ParseStop = %+v, %v", got, ok)
+	}
+	body := `**bottown flow: run failed**` + "\n\nx\n\n" + `<!-- bottown:flow-stop v=1 reason="run failed" actor="agy" -->`
+	if got, ok := ParseStop(body); !ok || got.Actor != "" {
+		t.Errorf("run failed with an actor: %+v, %v", got, ok)
+	}
+}
+
+// TestParseStopIgnoresOtherComments:the flow's announcements of a round
 // share the prefix but are not stops, nor are other comments.
 func TestParseStopIgnoresOtherComments(t *testing.T) {
 	for _, body := range []string{

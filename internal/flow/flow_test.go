@@ -563,7 +563,12 @@ func TestFlowRunWithoutToolCalls(t *testing.T) {
 			if !errors.As(err, &stop) || result.Reason != tc.want || len(api.comments) != 1 || actor != tc.actor {
 				t.Fatalf("result = %+v, error = %v, comments = %q, actor = %q", result, err, api.comments, actor)
 			}
-			for _, want := range append(tc.wants, "log: /runs/r-1.log", "last error: "+line, `<!-- bottown:flow-stop v=1 reason="`+string(tc.want)+`" -->`) {
+			marker := `<!-- bottown:flow-stop v=1 reason="` + string(tc.want) + `" -->`
+			if tc.want == AgentDidNothing {
+				name, _, _ := strings.Cut(tc.actor, ":")
+				marker = `<!-- bottown:flow-stop v=1 reason="agent did nothing" actor="` + name + `" -->`
+			}
+			for _, want := range append(tc.wants, "log: /runs/r-1.log", "last error: "+line, marker) {
 				if !strings.Contains(api.comments[0], want) {
 					t.Errorf("stop comment lacks %q:\n%s", want, api.comments[0])
 				}

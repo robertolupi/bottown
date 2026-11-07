@@ -27,9 +27,17 @@ type OrgLabel struct {
 
 // ListOrgLabels lists org's labels.
 func (c *Client) ListOrgLabels(org string) ([]OrgLabel, error) {
-	var ls []OrgLabel
-	err := c.do(http.MethodGet, "/orgs/"+url.PathEscape(org)+"/labels?limit=50", nil, &ls)
-	return ls, err
+	var all []OrgLabel
+	for page := 1; ; page++ {
+		var ls []OrgLabel
+		if err := c.do(http.MethodGet, fmt.Sprintf("/orgs/%s/labels?limit=50&page=%d", url.PathEscape(org), page), nil, &ls); err != nil {
+			return nil, err
+		}
+		all = append(all, ls...)
+		if len(ls) < 50 {
+			return all, nil
+		}
+	}
 }
 
 // CreateOrgLabel creates an organization-wide label.

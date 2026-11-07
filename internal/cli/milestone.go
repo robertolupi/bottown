@@ -47,6 +47,7 @@ design document exists.`,
 	m.AddCommand(newMilestoneBranch(g))
 	m.AddCommand(newMilestoneMerge(g))
 	m.AddCommand(newMilestoneFinish(g))
+	m.AddCommand(newMilestoneRun(g))
 	return m
 }
 
