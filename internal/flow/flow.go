@@ -93,6 +93,11 @@ type Options struct {
 	// Attended flows ask on In before merging a clean, behind base; the
 	// others leave that to the owner inbox.
 	Attended bool
+	// MergeMilestoneBase merges a clean, behind base into the head without
+	// asking, attended or not, when the PR's base is a milestone/* branch.
+	// It does nothing for any other base: the default branch stays the
+	// owner's to merge.
+	MergeMilestoneBase bool
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -364,10 +369,12 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			resuming = false
 			continue
 		}
-		if merge.Behind && merge.Clean && opts.Attended {
-			yes, err := s.confirmMerge(pr)
-			if err != nil {
-				return result, err
+		if merge.Behind && merge.Clean && (opts.Attended || autoMerge(opts, pr)) {
+			yes := autoMerge(opts, pr)
+			if !yes {
+				if yes, err = s.confirmMerge(pr); err != nil {
+					return result, err
+				}
 			}
 			if yes {
 				merged, err := s.API.MergeBase(ctx, opts.Repo, pr.Number, merge.HeadSHA)
@@ -502,6 +509,13 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			}
 		}
 	}
+}
+
+// autoMerge reports whether the flow merges pr's clean, behind base
+// without asking: only with Options.MergeMilestoneBase, and only into a
+// milestone/* base.
+func autoMerge(opts Options, pr server.PROut) bool {
+	return opts.MergeMilestoneBase && strings.HasPrefix(pr.BaseBranch, "milestone/")
 }
 
 // confirmMerge asks the owner whether to merge the base into pr's branch.
