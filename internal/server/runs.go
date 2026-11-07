@@ -49,6 +49,10 @@ type RunRequest struct {
 	// Debate puts a discuss run in a debate round; a consolidate run needs
 	// it, to name the debate (debate.go).
 	Debate *DebateRequest `json:"debate,omitempty"`
+	// Since makes a retro run windowed (#383): it looks back on what
+	// landed on the default branch after this start (git:<ref>, last, a
+	// date or an age, retroWindow) instead of on an issue.
+	Since string `json:"since,omitempty"`
 }
 
 // ActorBusyMessage is in the error for a SerializeActor run refused
@@ -118,6 +122,10 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 			// Rounds start when the owner asks (bottown debate).
 			writeError(w, http.StatusForbidden, "only the owner starts a debate's runs")
 			return
+		case req.Since != "":
+			// Gathering a window's evidence takes the owner key.
+			writeError(w, http.StatusForbidden, "only the owner starts a windowed retro")
+			return
 		}
 		req.Actor = p.Actor
 	}
@@ -153,7 +161,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "spec", run.Spec, "repo", run.Org+"/"+run.Repo,
 		"issue", run.Issue, "pr", run.PR, "base", run.Base, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
-		"critical", run.Critical, "serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
+		"critical", run.Critical, "window", run.Window, "serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
 }
 
@@ -172,6 +180,12 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		return run, runErr(http.StatusBadRequest, "consolidate runs need a debate")
 	case req.Debate != nil && req.Kind != policy.Discuss && req.Kind != policy.Consolidate:
 		return run, runErr(http.StatusBadRequest, "only discuss and consolidate runs take a debate")
+	case req.Since != "" && req.Kind != policy.Retro:
+		return run, runErr(http.StatusBadRequest, "only retro runs take a window (since)")
+	case req.Since != "" && req.Issue > 0:
+		return run, runErr(http.StatusBadRequest, "a windowed retro looks back on a window, not on issue #%d: give one or the other", req.Issue)
+	case req.Since != "" && req.AllowSameFamily:
+		return run, runErr(http.StatusBadRequest, "a windowed retro has no family rule to override")
 	}
 	ttl := defaultRunTTL
 	if req.TTLSeconds > 0 {
@@ -268,6 +282,23 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		// nothing but the comments (a debate's, the wiki), and a retro
 		// looks back at finished work. The run reads the default branch's
 		// current code, recorded as its SHA.
+		if req.Since != "" {
+			// A windowed retro: no issue, and no family rule, since a
+			// window's implementers are of every family (#383).
+			b, _, err := api.GetRepoBranch(run.Org, run.Repo, repo.DefaultBranch)
+			if err != nil {
+				return run, fmt.Errorf("default branch %s: %w", repo.DefaultBranch, err)
+			}
+			if b.Commit == nil || b.Commit.ID == "" {
+				return run, fmt.Errorf("default branch %s has no commit", repo.DefaultBranch)
+			}
+			w, err := s.retroWindow(r.Context(), run.Org, run.Repo, repo.DefaultBranch, b.Commit.ID, req.Since, now)
+			if err != nil {
+				return run, err
+			}
+			run.SHA, run.Window = b.Commit.ID, w
+			return run, nil
+		}
 		if req.Issue <= 0 {
 			return run, runErr(http.StatusBadRequest, "%s runs need an issue or pull request number", req.Kind)
 		}

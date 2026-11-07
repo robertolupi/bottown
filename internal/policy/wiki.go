@@ -43,7 +43,8 @@ type WikiRule struct {
 
 // WikiRules are the store's rules, the first match wins; a path no rule
 // matches is denied. #311 (garden runs) adds its rules before the defaults;
-// debate round files are decided by DecideWikiRound before these.
+// debate round files are decided by DecideWikiRound, and a windowed
+// retro's page by DecideWikiRetroPage, before these.
 var WikiRules = []WikiRule{
 	{Name: "wiki-owner", Who: []string{WikiOwner}, Pattern: "/**", Read: true, Write: true},
 	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro, Consolidate}, Pattern: "/**", Read: true},
@@ -102,6 +103,18 @@ func DecideWikiRound(who string, in *WikiRound, write bool, p string, consolidat
 		return Decision{Allow: true, Rule: "wiki-round-closed"}, true
 	}
 	return Decision{Allow: false, Rule: "wiki-round-open"}, true
+}
+
+// DecideWikiRetroPage decides an access by who to file p for a windowed
+// retro run (#383) whose page is page, ahead of WikiRules: the run may
+// read and write its own page, the one bottown named when it created the
+// run, and no other. ok is false for any other principal or file, which
+// WikiRules decide.
+func DecideWikiRetroPage(who, page string, p string) (d Decision, ok bool) {
+	if who != Retro || page == "" || p != page+".md" {
+		return Decision{}, false
+	}
+	return Decision{Allow: true, Rule: "wiki-retro-page"}, true
 }
 
 // DecideWiki decides a wiki store access by who (WikiOwner, WikiActor or a

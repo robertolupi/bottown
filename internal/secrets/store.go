@@ -97,6 +97,22 @@ type Run struct {
 	// Debate is the round a debate's discuss run answers in, or a
 	// consolidate run merges (#315); nil for other runs.
 	Debate *Debate `json:"debate,omitempty"`
+	// Window is what a windowed retro looks back on (#383): what landed
+	// on the default branch after Base, up to the run's SHA; nil for
+	// other runs.
+	Window *RetroWindow `json:"window,omitempty"`
+}
+
+// RetroWindow is a windowed retro's window: the commits on the default
+// branch after Base, first-parent, up to the run's SHA, and the wiki page
+// the run writes (YYYYMMDD-<short head>-retrospective).
+type RetroWindow struct {
+	// Since is the window's start as the owner gave it: git:<ref>, last,
+	// a date (YYYY-MM-DD) or an age (Nd, Nw).
+	Since string `json:"since"`
+	// Base is the commit Since resolved to, the window's exclusive start.
+	Base string `json:"base"`
+	Page string `json:"page"`
 }
 
 // Debate is a run's place in a debate: the debate's name in the wiki
@@ -299,7 +315,7 @@ func (e *RunBusyError) Error() string {
 // sameTarget reports whether a and b work the same target: implement or
 // plan runs on the same issue (git checks its branch out in one worktree
 // only), or verify runs at the same pull request head (their verdicts would
-// race). Discuss runs change nothing that another run needs.
+// race), or windowed retros that write the same wiki page. Discuss runs change nothing that another run needs.
 func sameTarget(a, b Run) bool {
 	if a.Org != b.Org || a.Repo != b.Repo {
 		return false
@@ -310,6 +326,9 @@ func sameTarget(a, b Run) bool {
 		return a.Issue == b.Issue
 	case a.Kind == "verify" && b.Kind == "verify":
 		return a.PR == b.PR && a.SHA == b.SHA
+	case a.Window != nil && b.Window != nil:
+		// Two windowed retros writing one page would clobber each other.
+		return a.Window.Page == b.Window.Page
 	}
 	return false
 }

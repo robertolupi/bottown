@@ -146,3 +146,27 @@ func TestDebateQuiet(t *testing.T) {
 		t.Errorf("consolidate push = %+v", d)
 	}
 }
+
+// A windowed retro writes its own page, the one bottown named, and no
+// other; everyone else, and other files, go to WikiRules.
+func TestDecideWikiRetroPage(t *testing.T) {
+	page := "20261107-abc1234-retrospective"
+	for _, c := range []struct {
+		who, page, file string
+		ok              bool
+	}{
+		{Retro, page, page + ".md", true},
+		{Retro, page, "Home.md", false},
+		{Retro, page, "20261108-abc1234-retrospective.md", false},
+		{Retro, "", page + ".md", false},
+		{Discuss, page, page + ".md", false},
+	} {
+		d, ok := DecideWikiRetroPage(c.who, c.page, c.file)
+		if ok != c.ok || ok && (!d.Allow || d.Rule != "wiki-retro-page") {
+			t.Errorf("DecideWikiRetroPage(%s, %s, %s) = %+v, %v; want decided %v", c.who, c.page, c.file, d, ok, c.ok)
+		}
+	}
+	if d := DecideWiki(Retro, true, page+".md"); d.Allow {
+		t.Errorf("WikiRules let a retro write %s: %+v", page, d)
+	}
+}
