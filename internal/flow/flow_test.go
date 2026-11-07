@@ -31,6 +31,16 @@ type fakeAPI struct {
 	// MergeBase was asked to merge into.
 	merge      server.PRMergeStatus
 	mergeCalls []string
+	// issueState is what Issue reports; empty is open.
+	issueState string
+}
+
+func (f *fakeAPI) Issue(_ context.Context, _ string, number int64) (server.IssueOut, error) {
+	state := f.issueState
+	if state == "" {
+		state = "open"
+	}
+	return server.IssueOut{Number: number, State: state}, nil
 }
 
 func (f *fakeAPI) Actors(context.Context) ([]server.ActorInfo, error) {

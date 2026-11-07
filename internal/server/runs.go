@@ -57,6 +57,9 @@ const HeadMovedMessage = "the head moved"
 const (
 	ErrorCodeActorBusy = "actor_busy" // ActorBusyMessage
 	ErrorCodeHeadMoved = "head_moved" // HeadMovedMessage
+	// ErrorCodeIssueClosed is an implement or plan run refused because its
+	// issue is closed: a flow whose PR was merged mid-flow stops as merged.
+	ErrorCodeIssueClosed = "issue_closed"
 )
 
 // RunResponse is a created run and its key. The key is returned once.
@@ -181,7 +184,9 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		case is.PullRequest != nil:
 			return run, runErr(http.StatusBadRequest, "#%d is a pull request; %s runs take an issue", req.Issue, req.Kind)
 		case is.State != "open":
-			return run, runErr(http.StatusConflict, "issue #%d is %s", req.Issue, is.State)
+			re := runErr(http.StatusConflict, "issue #%d is %s", req.Issue, is.State)
+			re.code = ErrorCodeIssueClosed
+			return run, re
 		}
 		run.Issue, run.Branch = req.Issue, fmt.Sprintf("issue/%d", req.Issue)
 

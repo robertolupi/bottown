@@ -522,10 +522,15 @@ func meets(w Window, t Thread) bool {
 
 // ownerWaits are the waits that stops leave a thread in: each from its stop
 // until the first of the thread's next run, the PR's merge, the close
-// (closedAt: the PR's, or with no PR the issue's), and the next stop.
+// (closedAt: the PR's, or with no PR the issue's), and the next stop. A
+// merged stop leaves no wait: it comes after the merge, with nothing left
+// to do.
 func ownerWaits(stops []Stop, runStarts []time.Time, pr *server.PRItem, closedAt *time.Time) []OwnerWait {
 	out := []OwnerWait{}
 	for i, st := range stops {
+		if st.Reason == flow.Merged {
+			continue
+		}
 		w := OwnerWait{Start: st.Time, Reason: st.Reason}
 		end := func(t time.Time, by string) {
 			if t.After(st.Time) && (w.End == nil || t.Before(*w.End)) {

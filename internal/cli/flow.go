@@ -108,6 +108,9 @@ nothing.`,
 				if errors.Is(err, errHeadMoved) {
 					return fmt.Errorf("%w: %v", flow.ErrHeadMoved, err)
 				}
+				if errors.Is(err, client.ErrIssueClosed) {
+					return fmt.Errorf("%w: %v", flow.ErrIssueClosed, err)
+				}
 				return err
 			})
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
