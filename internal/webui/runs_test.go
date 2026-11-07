@@ -1250,3 +1250,23 @@ func TestOverviewOrdersLiveRunsFirst(t *testing.T) {
 		t.Errorf("expected LiveRuns before OwnerInbox in App.svelte (live %d, inbox %d)", liveIdx, inboxIdx)
 	}
 }
+
+// A windowed retro run is on no issue: its target is its window as the CLI
+// shows it, linking the wiki page it writes, not issue #0 (#386).
+func TestRunTarget(t *testing.T) {
+	const repoURL = "http://forge/bottown/demo"
+	window := &secrets.RetroWindow{Since: "last", Base: "0123456789abcdef", Page: "20261107-fedcba9876-retrospective"}
+	for _, tc := range []struct {
+		run             secrets.Run
+		target, wantURL string
+	}{
+		{secrets.Run{Issue: 7}, "#7", repoURL + "/issues/7"},
+		{secrets.Run{Issue: 7, PR: 8}, "!8", repoURL + "/pulls/8"},
+		{secrets.Run{Kind: "retro", SHA: "fedcba9876543210", Window: window}, "0123456789..fedcba9876", repoURL + "/wiki/20261107-fedcba9876-retrospective"},
+	} {
+		target, targetURL := runTarget(tc.run, repoURL)
+		if target != tc.target || targetURL != tc.wantURL {
+			t.Errorf("runTarget(%+v) = %q, %q; want %q, %q", tc.run, target, targetURL, tc.target, tc.wantURL)
+		}
+	}
+}

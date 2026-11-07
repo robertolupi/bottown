@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,30 +35,33 @@ type ActorDetail struct {
 
 // LiveRunInfo represents an active run.
 type LiveRunInfo struct {
-	ID          string         `json:"id"`
-	Target      string         `json:"target"` // "#51" or "!51"
-	TargetURL   string         `json:"target_url"`
-	Issue       int64          `json:"issue,omitempty"`
-	IssueURL    string         `json:"issue_url,omitempty"`
-	IssueTitle  string         `json:"issue_title,omitempty"`
-	PR          int64          `json:"pr,omitempty"`
-	PRURL       string         `json:"pr_url,omitempty"`
-	PRTitle     string         `json:"pr_title,omitempty"`
-	Milestone   string         `json:"milestone,omitempty"`
-	ThreadKey   string         `json:"thread_key,omitempty"`
-	Kind        string         `json:"kind"` // implement, verify, discuss
-	Actor       string         `json:"actor"`
-	Family      string         `json:"family"`
-	Harness     string         `json:"harness"`
-	Spec        string         `json:"spec,omitempty"` // the harness's model, if chosen
-	Interactive bool           `json:"interactive"`
-	Created     time.Time      `json:"created"`
-	Expires     time.Time      `json:"expires"`
-	Elapsed     string         `json:"elapsed"` // e.g. "4m 12s"
-	Timeout     string         `json:"timeout"` // e.g. "60m"
-	Flow        *FlowInfo      `json:"flow,omitempty"`
-	LogTail     []runs.LogLine `json:"log_tail"`
-	Denials     []Denial       `json:"denials"`
+	ID        string `json:"id"`
+	Target    string `json:"target"` // runTarget's
+	TargetURL string `json:"target_url"`
+	// Window is a windowed retro's window (#383), on no issue; nil for
+	// other runs.
+	Window      *secrets.RetroWindow `json:"window,omitempty"`
+	Issue       int64                `json:"issue,omitempty"`
+	IssueURL    string               `json:"issue_url,omitempty"`
+	IssueTitle  string               `json:"issue_title,omitempty"`
+	PR          int64                `json:"pr,omitempty"`
+	PRURL       string               `json:"pr_url,omitempty"`
+	PRTitle     string               `json:"pr_title,omitempty"`
+	Milestone   string               `json:"milestone,omitempty"`
+	ThreadKey   string               `json:"thread_key,omitempty"`
+	Kind        string               `json:"kind"` // implement, verify, discuss
+	Actor       string               `json:"actor"`
+	Family      string               `json:"family"`
+	Harness     string               `json:"harness"`
+	Spec        string               `json:"spec,omitempty"` // the harness's model, if chosen
+	Interactive bool                 `json:"interactive"`
+	Created     time.Time            `json:"created"`
+	Expires     time.Time            `json:"expires"`
+	Elapsed     string               `json:"elapsed"` // e.g. "4m 12s"
+	Timeout     string               `json:"timeout"` // e.g. "60m"
+	Flow        *FlowInfo            `json:"flow,omitempty"`
+	LogTail     []runs.LogLine       `json:"log_tail"`
+	Denials     []Denial             `json:"denials"`
 }
 
 // Denial is an operation the server's policy refused a run, from
@@ -113,25 +117,28 @@ type ActiveFlowInfo struct {
 
 // HistoryRunInfo represents a finished run in the history view.
 type HistoryRunInfo struct {
-	ID         string `json:"id"`
-	Target     string `json:"target"` // "#51" or "!51"
-	TargetURL  string `json:"target_url"`
-	Issue      int64  `json:"issue,omitempty"`
-	IssueURL   string `json:"issue_url,omitempty"`
-	IssueTitle string `json:"issue_title,omitempty"`
-	PR         int64  `json:"pr,omitempty"`
-	PRURL      string `json:"pr_url,omitempty"`
-	PRTitle    string `json:"pr_title,omitempty"`
-	Milestone  string `json:"milestone,omitempty"`
-	ThreadKey  string `json:"thread_key,omitempty"`
-	Active     bool   `json:"active,omitempty"`
-	Kind       string `json:"kind"`
-	Actor      string `json:"actor"`
-	Family     string `json:"family"`
-	Harness    string `json:"harness"`
-	Spec       string `json:"spec,omitempty"` // the harness's model, if chosen
-	Mode       string `json:"mode"`           // "batch" or "interactive"
-	Status     string `json:"status"`         // "succeeded", "failed", "revoked"
+	ID        string `json:"id"`
+	Target    string `json:"target"` // runTarget's
+	TargetURL string `json:"target_url"`
+	// Window is a windowed retro's window (#383), on no issue; nil for
+	// other runs.
+	Window     *secrets.RetroWindow `json:"window,omitempty"`
+	Issue      int64                `json:"issue,omitempty"`
+	IssueURL   string               `json:"issue_url,omitempty"`
+	IssueTitle string               `json:"issue_title,omitempty"`
+	PR         int64                `json:"pr,omitempty"`
+	PRURL      string               `json:"pr_url,omitempty"`
+	PRTitle    string               `json:"pr_title,omitempty"`
+	Milestone  string               `json:"milestone,omitempty"`
+	ThreadKey  string               `json:"thread_key,omitempty"`
+	Active     bool                 `json:"active,omitempty"`
+	Kind       string               `json:"kind"`
+	Actor      string               `json:"actor"`
+	Family     string               `json:"family"`
+	Harness    string               `json:"harness"`
+	Spec       string               `json:"spec,omitempty"` // the harness's model, if chosen
+	Mode       string               `json:"mode"`           // "batch" or "interactive"
+	Status     string               `json:"status"`         // "succeeded", "failed", "revoked"
 	// Outcome is the work result the server recorded (secrets.Outcome*),
 	// apart from Status: empty when none was recorded.
 	Outcome  string         `json:"outcome,omitempty"`
@@ -303,12 +310,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			harness = act.Harness
 		}
 
-		target := fmt.Sprintf("#%d", sr.Issue)
-		targetURL := fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, sr.Issue)
-		if sr.PR > 0 {
-			target = fmt.Sprintf("!%d", sr.PR)
-			targetURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, sr.PR)
-		}
+		target, targetURL := runTarget(sr.Run, fmt.Sprintf("%s/%s/%s", forgeURL, org, repo))
 
 		// Read log tail from disk if batch run
 		var logTail []runs.LogLine
@@ -420,6 +422,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			ID:          sr.ID,
 			Target:      target,
 			TargetURL:   targetURL,
+			Window:      sr.Window,
 			Issue:       issueNum,
 			IssueURL:    issueURL,
 			IssueTitle:  issueTitle,
@@ -753,12 +756,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			harness = act.Harness
 		}
 
-		target := fmt.Sprintf("#%d", sr.Issue)
-		targetURL := fmt.Sprintf("%s/%s/%s/issues/%d", forgeURL, org, repo, sr.Issue)
-		if sr.PR > 0 {
-			target = fmt.Sprintf("!%d", sr.PR)
-			targetURL = fmt.Sprintf("%s/%s/%s/pulls/%d", forgeURL, org, repo, sr.PR)
-		}
+		target, targetURL := runTarget(sr.Run, fmt.Sprintf("%s/%s/%s", forgeURL, org, repo))
 
 		mode := "batch"
 		if sr.Interactive {
@@ -840,6 +838,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 			ID:             sr.ID,
 			Target:         target,
 			TargetURL:      targetURL,
+			Window:         sr.Window,
 			Issue:          meta.Issue,
 			IssueURL:       meta.IssueURL,
 			IssueTitle:     meta.IssueTitle,
@@ -1203,6 +1202,21 @@ func firstLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// runTarget is a run's target and its link: "!<pr>" and the pull
+// request, "#<issue>" and the issue, or a windowed retro's window,
+// "<base>..<head>" as the CLI shows it (runs.Record.Target), and the wiki
+// page the retro writes. repoURL is the repository's Forgejo URL.
+func runTarget(run secrets.Run, repoURL string) (string, string) {
+	switch {
+	case run.Window != nil:
+		return shortSHA(run.Window.Base) + ".." + shortSHA(run.SHA), repoURL + "/wiki/" + url.PathEscape(run.Window.Page)
+	case run.PR > 0:
+		return fmt.Sprintf("!%d", run.PR), fmt.Sprintf("%s/pulls/%d", repoURL, run.PR)
+	default:
+		return fmt.Sprintf("#%d", run.Issue), fmt.Sprintf("%s/issues/%d", repoURL, run.Issue)
+	}
 }
 
 func (s *Server) orgAndRepo() (string, string) {
