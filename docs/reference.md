@@ -348,7 +348,11 @@ Then it loops, rebuilding everything from the forge each time:
    --unattended --merge-milestone-base` process of its own (the flow
    command is one supervisor per process), logged to `.bottown/flow-<N>.log`
    with a `.bottown/flow-<N>.json` record while it runs, so the web UI
-   shows and can stop it. Waiting for a busy actor is the flow's own
+   shows and can stop it. The record is written once the flow holds the
+   issue's lock, and removed only while it is still that flow's. A child
+   another flow is already driving (from the web UI, or another run) is
+   left to it, its record untouched, and stops as `flow busy` in this
+   invocation. Waiting for a busy actor is the flow's own
    retry. Interrupting run interrupts its flows, and it exits when they
    have stopped.
 5. **Results:** when a flow exits, run reads its stop, the owner's last

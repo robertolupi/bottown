@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +17,9 @@ import (
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/milestone"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
+	"github.com/robertolupi/bottown/internal/webui"
 )
 
 // The launcher runs `bottown flow` as a process and reads its stop from
@@ -64,7 +68,7 @@ func TestFlowLauncher(t *testing.T) {
 			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			l := &flowLauncher{bin: bin, instance: "dev", repo: "demo", dir: dir, logDir: dir, owner: "owner",
+			l := &flowLauncher{bin: bin, instance: "dev", repo: "demo", dir: dir, logDir: dir, runsDir: dir, owner: "owner",
 				c: client.New(srv.URL, "k").WithTimeout(time.Minute), rounds: 2, timeout: time.Hour, checkTimeout: time.Minute}
 			oc := l.Flow(context.Background(), milestone.FlowRequest{Issue: 4, Implement: "claude", Verify: "agy:fast"})
 			if oc.Kind != tc.want.Kind || oc.Reason != tc.want.Reason || oc.Actor != tc.want.Actor {
@@ -83,6 +87,136 @@ func TestFlowLauncher(t *testing.T) {
 			}
 			if log, _ := os.ReadFile(filepath.Join(dir, "flow-4.log")); !strings.Contains(string(log), "boom") {
 				t.Errorf("log %q", log)
+			}
+		})
+	}
+}
+
+// issueServer serves issue 4 with no comments.
+func issueServer(t *testing.T) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(server.IssueOut{Number: 4})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func readFlowRecord(t *testing.T, path string) (webui.FlowRecord, bool) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return webui.FlowRecord{}, false
+	}
+	var rec webui.FlowRecord
+	if err != nil || json.Unmarshal(b, &rec) != nil {
+		t.Fatalf("reading %s: %v %q", path, err, b)
+	}
+	return rec, true
+}
+
+// A child another live flow is driving (started from the web UI, or by
+// another run) is left to it: no second flow starts, and that flow's
+// record and pid stay.
+func TestFlowLauncherBusy(t *testing.T) {
+	dir := t.TempDir()
+	release, err := runs.HoldFlow(dir, "demo", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	info := filepath.Join(dir, "flow-4.json")
+	theirs := webui.FlowRecord{Issue: 4, Implement: "kimi", Verify: "claude", PID: os.Getpid()}
+	b, _ := json.Marshal(theirs)
+	if err := os.WriteFile(info, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "bottown")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch "+filepath.Join(dir, "ran")+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l := &flowLauncher{bin: bin, instance: "dev", repo: "demo", dir: dir, logDir: dir, runsDir: dir, owner: "owner",
+		c: client.New(issueServer(t).URL, "k").WithTimeout(time.Minute), rounds: 2, timeout: time.Hour, checkTimeout: time.Minute}
+	oc := l.Flow(context.Background(), milestone.FlowRequest{Issue: 4, Implement: "claude", Verify: "agy"})
+	if oc.Kind != milestone.FlowStopped || oc.Reason != "flow busy" || !strings.Contains(oc.Detail, "already driving") {
+		t.Errorf("outcome %+v, want a busy stop", oc)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ran")); !os.IsNotExist(err) {
+		t.Error("a second flow started on a busy child")
+	}
+	if rec, ok := readFlowRecord(t, info); !ok || rec.PID != theirs.PID || rec.Implement != "kimi" {
+		t.Errorf("the live flow's record is %+v (present %v), want %+v", rec, ok, theirs)
+	}
+}
+
+// The launcher writes its flow's record once the flow holds the issue's
+// lock, and removes it at the end only while it is still that flow's.
+func TestFlowLauncherRecord(t *testing.T) {
+	defer func(d time.Duration) { flowLockPoll = d }(flowLockPoll)
+	flowLockPoll = 10 * time.Millisecond
+	for _, replaced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replaced=%v", replaced), func(t *testing.T) {
+			dir := t.TempDir()
+			pidFile, goFile := filepath.Join(dir, "pid"), filepath.Join(dir, "go")
+			// The fake flow says its pid and waits to be let go.
+			script := "#!/bin/sh\necho $$ > " + pidFile + ".tmp && mv " + pidFile + ".tmp " + pidFile +
+				"\nwhile [ ! -f " + goFile + " ]; do sleep 0.01; done\n"
+			bin := filepath.Join(dir, "bottown")
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			l := &flowLauncher{bin: bin, instance: "dev", repo: "demo", dir: dir, logDir: dir, runsDir: dir, owner: "owner",
+				c: client.New(issueServer(t).URL, "k").WithTimeout(time.Minute), rounds: 2, timeout: time.Hour, checkTimeout: time.Minute}
+			done := make(chan milestone.Outcome, 1)
+			go func() { done <- l.Flow(context.Background(), milestone.FlowRequest{Issue: 4, Implement: "claude", Verify: "agy"}) }()
+
+			info := filepath.Join(dir, "flow-4.json")
+			waitFor := func(what string, ok func() bool) {
+				t.Helper()
+				for deadline := time.Now().Add(10 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("timed out waiting for %s", what)
+					}
+				}
+			}
+			var pid int
+			waitFor("the flow's pid", func() bool {
+				b, err := os.ReadFile(pidFile)
+				if err != nil {
+					return false
+				}
+				pid, err = strconv.Atoi(strings.TrimSpace(string(b)))
+				return err == nil
+			})
+			time.Sleep(5 * flowLockPoll)
+			if _, ok := readFlowRecord(t, info); ok {
+				t.Fatal("the record was written before the flow held the lock")
+			}
+			// The flow takes the lock: held here, with its pid in it.
+			release, err := runs.HoldFlow(dir, "demo", 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			if err := os.WriteFile(runs.FlowLockPath(dir, "demo", 4), []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			waitFor("the flow's record", func() bool { rec, ok := readFlowRecord(t, info); return ok && rec.PID == pid })
+			if replaced {
+				b, _ := json.Marshal(webui.FlowRecord{Issue: 4, PID: pid + 100000})
+				if err := os.WriteFile(info, b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(goFile, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			<-done
+			rec, ok := readFlowRecord(t, info)
+			if replaced && (!ok || rec.PID != pid+100000) {
+				t.Errorf("another flow's record was removed or changed: %+v, %v", rec, ok)
+			}
+			if !replaced && ok {
+				t.Errorf("the flow's record outlived it: %+v", rec)
 			}
 		})
 	}
