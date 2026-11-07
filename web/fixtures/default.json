@@ -1608,5 +1608,650 @@
       "success": true,
       "output": "removed 2 ended run worktrees (preview)"
     }
+  },
+  "timeline": {
+    "window": {
+      "since": "2026-11-02T05:00:00Z",
+      "until": "2026-11-02T11:00:00Z"
+    },
+    "now": "2026-11-02T10:45:00Z",
+    "open": false,
+    "runs": [
+      {
+        "id": "r-1a2b3c4e",
+        "kind": "verify",
+        "actor": "claude",
+        "family": "anthropic",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "approved",
+        "created": "2026-11-02T08:00:00Z",
+        "ended": "2026-11-02T08:11:00Z",
+        "purged": false,
+        "issue": 40,
+        "pr": 55,
+        "thread_key": "flow:issue:40:pr:55",
+        "usage_reported": false
+      },
+      {
+        "id": "r-2b3c4d5e",
+        "kind": "implement",
+        "actor": "agy",
+        "family": "google",
+        "state": "ended",
+        "status": "failed",
+        "created": "2026-11-02T08:30:00Z",
+        "ended": "2026-11-02T08:52:00Z",
+        "purged": false,
+        "issue": 47,
+        "thread_key": "flow:issue:47",
+        "usage_reported": false
+      },
+      {
+        "id": "r-5f6a7b8c",
+        "kind": "implement",
+        "actor": "claude",
+        "family": "anthropic",
+        "state": "ended",
+        "status": "failed",
+        "created": "2026-11-02T09:00:00Z",
+        "ended": "2026-11-02T09:14:00Z",
+        "purged": false,
+        "issue": 62,
+        "thread_key": "flow:issue:62",
+        "usage_reported": false
+      },
+      {
+        "id": "r-3c4d5e6f",
+        "kind": "implement",
+        "actor": "codex",
+        "family": "openai",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "pr_opened",
+        "created": "2026-11-02T09:10:00Z",
+        "ended": "2026-11-02T09:48:00Z",
+        "purged": false,
+        "issue": 51,
+        "pr": 57,
+        "thread_key": "flow:issue:51:pr:57",
+        "usage_reported": false
+      },
+      {
+        "id": "r-9c0d1e2f",
+        "kind": "verify",
+        "actor": "agy",
+        "family": "google",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "approved",
+        "created": "2026-11-02T09:10:00Z",
+        "ended": "2026-11-02T09:20:00Z",
+        "purged": false,
+        "issue": 56,
+        "pr": 62,
+        "thread_key": "flow:issue:56:pr:62",
+        "usage_reported": false
+      },
+      {
+        "id": "r-6a7b8c9d",
+        "kind": "implement",
+        "actor": "claude",
+        "family": "anthropic",
+        "state": "ended",
+        "status": "failed",
+        "created": "2026-11-02T09:20:00Z",
+        "ended": "2026-11-02T09:20:04Z",
+        "purged": false,
+        "issue": 62,
+        "thread_key": "flow:issue:62",
+        "usage_reported": false
+      },
+      {
+        "id": "r-8b9c0d1e",
+        "kind": "verify",
+        "actor": "claude",
+        "family": "anthropic",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "changes_requested",
+        "created": "2026-11-02T09:40:00Z",
+        "ended": "2026-11-02T09:55:00Z",
+        "purged": false,
+        "issue": 54,
+        "pr": 59,
+        "thread_key": "flow:issue:54:pr:59",
+        "usage_reported": false
+      },
+      {
+        "id": "r-4d5e6f70",
+        "kind": "verify",
+        "actor": "kimi",
+        "family": "moonshot",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "changes_requested",
+        "created": "2026-11-02T09:50:00Z",
+        "ended": "2026-11-02T10:05:00Z",
+        "purged": false,
+        "issue": 51,
+        "pr": 57,
+        "thread_key": "flow:issue:51:pr:57",
+        "usage_reported": false
+      },
+      {
+        "id": "r-7a8b9c0d",
+        "kind": "verify",
+        "actor": "kimi",
+        "family": "moonshot",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "approved",
+        "created": "2026-11-02T10:15:00Z",
+        "ended": "2026-11-02T10:25:00Z",
+        "purged": false,
+        "issue": 52,
+        "pr": 58,
+        "thread_key": "flow:issue:52:pr:58",
+        "usage_reported": false
+      },
+      {
+        "id": "r-0f1e2d3c",
+        "kind": "discuss",
+        "actor": "codex",
+        "family": "openai",
+        "state": "active",
+        "status": "running",
+        "created": "2026-11-02T10:20:00Z",
+        "purged": false,
+        "issue": 44,
+        "thread_key": "discuss:r-0f1e2d3c",
+        "interactive": true,
+        "usage_reported": false
+      },
+      {
+        "id": "r-5e6f7a8b",
+        "kind": "implement",
+        "actor": "codex",
+        "family": "openai",
+        "state": "ended",
+        "status": "succeeded",
+        "outcome": "pr_opened",
+        "created": "2026-11-02T10:22:00Z",
+        "ended": "2026-11-02T10:39:00Z",
+        "purged": false,
+        "issue": 51,
+        "pr": 57,
+        "thread_key": "flow:issue:51:pr:57",
+        "usage_reported": false
+      },
+      {
+        "id": "r-1a2b3c4d",
+        "kind": "implement",
+        "actor": "claude",
+        "family": "anthropic",
+        "state": "active",
+        "status": "running",
+        "created": "2026-11-02T10:31:00Z",
+        "purged": false,
+        "issue": 42,
+        "thread_key": "flow:issue:42",
+        "usage_reported": false
+      },
+      {
+        "id": "r-9c8d7e6f",
+        "kind": "verify",
+        "actor": "kimi",
+        "family": "moonshot",
+        "state": "active",
+        "status": "running",
+        "created": "2026-11-02T10:39:30Z",
+        "purged": false,
+        "issue": 51,
+        "pr": 57,
+        "thread_key": "flow:issue:51:pr:57",
+        "usage_reported": false
+      }
+    ],
+    "actors": [
+      {
+        "actor": "agy",
+        "rows": [
+          [
+            "r-2b3c4d5e",
+            "r-9c0d1e2f"
+          ]
+        ],
+        "runs": 2,
+        "busy": 1920
+      },
+      {
+        "actor": "claude",
+        "rows": [
+          [
+            "r-1a2b3c4e",
+            "r-5f6a7b8c",
+            "r-6a7b8c9d",
+            "r-8b9c0d1e",
+            "r-1a2b3c4d"
+          ]
+        ],
+        "runs": 5,
+        "busy": 3244
+      },
+      {
+        "actor": "codex",
+        "rows": [
+          [
+            "r-3c4d5e6f",
+            "r-0f1e2d3c"
+          ],
+          [
+            "r-5e6f7a8b"
+          ]
+        ],
+        "runs": 3,
+        "busy": 3780
+      },
+      {
+        "actor": "kimi",
+        "rows": [
+          [
+            "r-4d5e6f70",
+            "r-7a8b9c0d",
+            "r-9c8d7e6f"
+          ]
+        ],
+        "runs": 3,
+        "busy": 1830
+      }
+    ],
+    "flows": [
+      {
+        "key": "flow:issue:40:pr:55",
+        "issue": 40,
+        "pr": 55,
+        "title": "Paginate the export endpoint",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T08:00:00Z",
+            "end": "2026-11-02T08:11:00Z",
+            "run_id": "r-1a2b3c4e"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T08:11:00Z",
+            "end": "2026-11-02T08:12:00Z"
+          },
+          {
+            "kind": "owner_wait",
+            "start": "2026-11-02T08:12:00Z",
+            "end": "2026-11-02T08:40:00Z",
+            "reason": "ready to merge",
+            "ended_by": "merge"
+          }
+        ],
+        "runs": 1,
+        "agent": 660,
+        "e2e": 0,
+        "owner_wait": 1680,
+        "overhead": 60
+      },
+      {
+        "key": "flow:issue:47",
+        "issue": 47,
+        "title": "Migrate settings to TOML",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T08:30:00Z",
+            "end": "2026-11-02T08:52:00Z",
+            "run_id": "r-2b3c4d5e"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T08:52:00Z",
+            "end": "2026-11-02T08:53:00Z"
+          },
+          {
+            "kind": "owner_wait",
+            "start": "2026-11-02T08:53:00Z",
+            "end": "2026-11-02T09:30:00Z",
+            "reason": "implement failed",
+            "ended_by": "close"
+          }
+        ],
+        "runs": 1,
+        "agent": 1320,
+        "e2e": 0,
+        "owner_wait": 2220,
+        "overhead": 60
+      },
+      {
+        "key": "flow:issue:62",
+        "issue": 62,
+        "title": "Retry webhook deliveries with jitter",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:00:00Z",
+            "end": "2026-11-02T09:14:00Z",
+            "run_id": "r-5f6a7b8c"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:14:00Z",
+            "end": "2026-11-02T09:20:00Z"
+          },
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:20:00Z",
+            "end": "2026-11-02T09:20:04Z",
+            "run_id": "r-6a7b8c9d"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:20:04Z",
+            "end": "2026-11-02T09:21:00Z"
+          },
+          {
+            "kind": "owner_wait",
+            "start": "2026-11-02T09:21:00Z",
+            "end": "2026-11-02T10:45:00Z",
+            "live": true,
+            "reason": "implement failed"
+          }
+        ],
+        "runs": 2,
+        "agent": 844,
+        "e2e": 0,
+        "owner_wait": 5040,
+        "overhead": 416
+      },
+      {
+        "key": "flow:issue:56:pr:62",
+        "issue": 56,
+        "pr": 62,
+        "title": "Compress websocket payloads",
+        "segments": [
+          {
+            "kind": "e2e",
+            "start": "2026-11-02T09:05:00Z",
+            "end": "2026-11-02T09:05:00Z",
+            "state": "failure",
+            "sha": "7c1d2e3f",
+            "description": "failed: make e2e (exit 2)"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:05:00Z",
+            "end": "2026-11-02T09:10:00Z"
+          },
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:10:00Z",
+            "end": "2026-11-02T09:20:00Z",
+            "run_id": "r-9c0d1e2f"
+          }
+        ],
+        "runs": 1,
+        "agent": 600,
+        "e2e": 0,
+        "owner_wait": 0,
+        "overhead": 300
+      },
+      {
+        "key": "flow:issue:51:pr:57",
+        "issue": 51,
+        "pr": 57,
+        "title": "Rate-limit the public API",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:10:00Z",
+            "end": "2026-11-02T09:48:00Z",
+            "run_id": "r-3c4d5e6f"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:48:00Z",
+            "end": "2026-11-02T09:48:10Z"
+          },
+          {
+            "kind": "e2e",
+            "start": "2026-11-02T09:48:10Z",
+            "end": "2026-11-02T09:49:40Z",
+            "state": "success",
+            "sha": "3c4d5e6f",
+            "description": "passed: make e2e in 1m30s",
+            "derived": true
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:49:40Z",
+            "end": "2026-11-02T09:50:00Z"
+          },
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:50:00Z",
+            "end": "2026-11-02T10:05:00Z",
+            "run_id": "r-4d5e6f70"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T10:05:00Z",
+            "end": "2026-11-02T10:22:00Z"
+          },
+          {
+            "kind": "run",
+            "start": "2026-11-02T10:22:00Z",
+            "end": "2026-11-02T10:39:00Z",
+            "run_id": "r-5e6f7a8b"
+          },
+          {
+            "kind": "e2e",
+            "start": "2026-11-02T10:39:00Z",
+            "end": "2026-11-02T10:39:20Z",
+            "state": "success",
+            "sha": "5e6f7a8b",
+            "description": "passed: make e2e in 0m20s",
+            "derived": true
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T10:39:20Z",
+            "end": "2026-11-02T10:39:30Z"
+          },
+          {
+            "kind": "run",
+            "start": "2026-11-02T10:39:30Z",
+            "end": "2026-11-02T10:45:00Z",
+            "live": true,
+            "run_id": "r-9c8d7e6f"
+          }
+        ],
+        "runs": 4,
+        "agent": 4530,
+        "e2e": 110,
+        "owner_wait": 0,
+        "overhead": 1060
+      },
+      {
+        "key": "flow:issue:54:pr:59",
+        "issue": 54,
+        "pr": 59,
+        "title": "Support S3 storage backend",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T09:40:00Z",
+            "end": "2026-11-02T09:55:00Z",
+            "run_id": "r-8b9c0d1e"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T09:55:00Z",
+            "end": "2026-11-02T09:56:00Z"
+          },
+          {
+            "kind": "owner_wait",
+            "start": "2026-11-02T09:56:00Z",
+            "end": "2026-11-02T10:45:00Z",
+            "live": true,
+            "reason": "changes requested after the last round"
+          }
+        ],
+        "runs": 1,
+        "agent": 900,
+        "e2e": 0,
+        "owner_wait": 2940,
+        "overhead": 60
+      },
+      {
+        "key": "flow:issue:52:pr:58",
+        "issue": 52,
+        "pr": 58,
+        "title": "Audit log streaming",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T10:15:00Z",
+            "end": "2026-11-02T10:25:00Z",
+            "run_id": "r-7a8b9c0d"
+          },
+          {
+            "kind": "overhead",
+            "start": "2026-11-02T10:25:00Z",
+            "end": "2026-11-02T10:26:00Z"
+          },
+          {
+            "kind": "owner_wait",
+            "start": "2026-11-02T10:26:00Z",
+            "end": "2026-11-02T10:45:00Z",
+            "live": true,
+            "reason": "ready to merge"
+          }
+        ],
+        "runs": 1,
+        "agent": 600,
+        "e2e": 0,
+        "owner_wait": 1140,
+        "overhead": 60
+      },
+      {
+        "key": "flow:issue:42",
+        "issue": 42,
+        "title": "Retry webhook deliveries with backoff",
+        "segments": [
+          {
+            "kind": "run",
+            "start": "2026-11-02T10:31:00Z",
+            "end": "2026-11-02T10:45:00Z",
+            "live": true,
+            "run_id": "r-1a2b3c4d"
+          }
+        ],
+        "runs": 1,
+        "agent": 840,
+        "e2e": 0,
+        "owner_wait": 0,
+        "overhead": 0
+      }
+    ],
+    "concurrency": {
+      "steps": [
+        {
+          "t": "2026-11-02T05:00:00Z",
+          "n": 0
+        },
+        {
+          "t": "2026-11-02T08:00:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T08:11:00Z",
+          "n": 0
+        },
+        {
+          "t": "2026-11-02T08:30:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T08:52:00Z",
+          "n": 0
+        },
+        {
+          "t": "2026-11-02T09:00:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T09:10:00Z",
+          "n": 3
+        },
+        {
+          "t": "2026-11-02T09:14:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T09:20:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T09:20:04Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T09:40:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T09:48:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T09:50:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T09:55:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T10:05:00Z",
+          "n": 0
+        },
+        {
+          "t": "2026-11-02T10:15:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T10:22:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T10:25:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T10:31:00Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T10:39:00Z",
+          "n": 1
+        },
+        {
+          "t": "2026-11-02T10:39:30Z",
+          "n": 2
+        },
+        {
+          "t": "2026-11-02T10:45:00Z",
+          "n": 0
+        }
+      ],
+      "peak": 3,
+      "mean": 0.4765740740740741
+    }
   }
 }

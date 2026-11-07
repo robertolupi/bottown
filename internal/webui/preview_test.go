@@ -209,6 +209,16 @@ func TestPreviewRoutes(t *testing.T) {
 		t.Errorf("a run without a log has no lines: %+v", log)
 	}
 
+	// The fixture's timeline, whatever window is asked for.
+	var view Timeline
+	c.get("/api/timeline?since=2026-01-01T00:00:00Z", &view)
+	if fx.Timeline == nil || len(view.Runs) != len(fx.Timeline.Runs) || len(view.Actors) == 0 || len(view.Flows) == 0 {
+		t.Errorf("timeline: %d runs, %d actors, %d flows", len(view.Runs), len(view.Actors), len(view.Flows))
+	}
+	if code, _ := c.do(http.MethodGet, "/api/timeline?since=nonsense", ""); code != http.StatusBadRequest {
+		t.Errorf("timeline with a bad since: %d", code)
+	}
+
 	var issue IssueDetails
 	c.get("/api/issues/51", &issue)
 	if issue.Issue != 51 || issue.Title == "" {

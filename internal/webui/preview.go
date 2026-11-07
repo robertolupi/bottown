@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/runs"
 )
 
@@ -39,6 +40,10 @@ type Fixture struct {
 	ActiveFlows []ActiveFlowInfo `json:"active_flows"`
 	History     []HistoryRunInfo `json:"history"`
 	Milestones  []MilestoneGroup `json:"milestones"`
+	// Timeline is GET /api/timeline, whatever window it asks for: the
+	// view draws the window the answer names. Without one, the answer is
+	// an empty timeline of the window asked for.
+	Timeline *Timeline `json:"timeline,omitempty"`
 	// Logs are the rendered logs by run ID: GET /api/runs/{id}/log, and a
 	// live run's or check's log_tail (its last lines) when it has one here.
 	Logs map[string][]runs.LogLine `json:"logs"`
@@ -188,6 +193,7 @@ func (s *PreviewServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleMilestones)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
+	mux.HandleFunc("GET /api/timeline", s.handleTimelineView)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleIssue)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleTimeline)
@@ -308,6 +314,23 @@ func (s *PreviewServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 			return history
 		}
 		return map[string]any{"live": live, "history": history}
+	}))
+}
+
+func (s *PreviewServer) handleTimelineView(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	win, err := timelineWindow(r, now)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any {
+		if fx.Timeline != nil {
+			return fx.Timeline
+		}
+		tl := BuildTimeline(&activity.Activity{Window: win}, nil, now)
+		tl.Open = r.URL.Query().Get("until") == ""
+		return tl
 	}))
 }
 

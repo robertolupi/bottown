@@ -450,8 +450,8 @@ forge, apart from an in-memory cache of issues (see Reads below).
   the PR join its thread, and discuss and retro runs stand alone. The
   window's threads are those with a run that overlaps it, whose PR was
   created, updated, merged or closed in it, or is open, or with a stop in
-  it or an owner wait that overlaps it. Each has its PR's
-  created, merged and closed times, its implement rounds (`REQUEST_CHANGES`
+  it or an owner wait that overlaps it. Each has its title (the issue's,
+  else the PR's), its PR's created, merged and closed times, its implement rounds (`REQUEST_CHANGES`
   reviews) and check rounds (commits whose flow `bottown/e2e` status
   failed), as the flow counts them.
 - **Checks.** Each flow `bottown/e2e` status on the PR's commits
@@ -479,3 +479,26 @@ window or any other. The web UI keeps the issues it read in memory, each as
 of its `updated` time, and reads one again only when that has changed;
 the cache only saves reads, and a restart empties it. A failed issue or PR
 read leaves its facts out and is named in `incomplete`.
+
+**Timeline.** `GET /api/timeline?since=&until=` (RFC 3339; `since`
+defaults to six hours before `until`, and `until` to now, which leaves the
+window `open`) lays the activity out for the web UI's Timeline tab
+(`webui.BuildTimeline`), clipping every interval to the window:
+
+- **Actor lanes:** each actor's runs packed into sub-rows so that none
+  overlap, and its `busy` seconds, the union of its runs, interactive ones
+  included.
+- **Flow lanes:** each thread's `segments` in time order: its runs, its
+  checks (a check without a duration is a zero-length segment at its end;
+  a flow's checks still running, from the host's live check records, run
+  to now), its owner waits with their stop reason, and `overhead` for each
+  gap between the first and the last of those that none covers (sync
+  waits, mirror fetches, waits for a busy actor; the data to tell them
+  apart is only in the flow's local log). Each lane has the seconds spent
+  on agents (the union of its runs), e2e, waiting on the owner and
+  overhead.
+- **Concurrency:** the number of batch runs (not interactive) live at each
+  step, its peak and its mean over the window.
+
+A run, check or wait still going is `live` and ends at the server's now;
+in an open window the view grows it with the clock.
