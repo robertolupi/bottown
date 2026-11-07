@@ -68,6 +68,9 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 		// Outside /repos only reads (own user, users, version, settings).
 		return Decision{Allow: false, Rule: "run-repo"}
 	}
+	if match(split(wikiAPI.Pattern), segs) {
+		return Decision{Allow: false, Rule: wikiAPI.Name}
+	}
 	if method == "GET" || method == "HEAD" {
 		return Decision{Allow: true, Rule: "run-read"}
 	}
@@ -100,6 +103,9 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 // path below /git (e.g. /bottown/demo.git/info/refs); service is the
 // "service" query parameter of info/refs, if any.
 func (s RunScope) DecideGit(gitPath, service string) Decision {
+	if IsWikiGit(gitPath) {
+		return Decision{Allow: false, Rule: wikiAPI.Name}
+	}
 	segs := split(gitPath)
 	if len(segs) < 2 || segs[0] != strings.ToLower(s.Org) || strings.TrimSuffix(segs[1], ".git") != strings.ToLower(s.Repo) {
 		return Decision{Allow: false, Rule: "run-repo"}

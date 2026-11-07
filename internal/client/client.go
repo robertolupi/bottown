@@ -36,6 +36,9 @@ var (
 	// ErrHeadMoved is a verify run refused because the pull request's head
 	// is not the commit it was asked to pin.
 	ErrHeadMoved = errors.New(server.HeadMovedMessage)
+	// ErrWikiConflict is a wiki put refused because the page's text
+	// changed since the writer read it: read it again and re-apply.
+	ErrWikiConflict = errors.New("wiki page changed since it was read")
 )
 
 // APIError is a non-2xx answer from the server.
@@ -68,6 +71,8 @@ func (e *APIError) Is(target error) bool {
 		return e.Code == server.ErrorCodeActorBusy
 	case ErrHeadMoved:
 		return e.Code == server.ErrorCodeHeadMoved
+	case ErrWikiConflict:
+		return e.Code == server.ErrorCodeWikiConflict
 	}
 	return false
 }

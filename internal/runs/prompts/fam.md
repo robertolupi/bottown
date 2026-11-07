@@ -52,6 +52,7 @@ bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
 bottown api METHOD PATH [--data JSON]
 bottown check [--e2e | --report] [--json]
+bottown wiki list | read PATH | put PATH [--base SHA] --file F
 bottown run end [--failed] --summary-file -
 ```
 
@@ -79,12 +80,19 @@ bottown run end [--failed] --summary-file -
   `.bottown.toml` names, by default `make check`), keeps the full output in
   a log, prints a short summary, and records the result on your committed,
   pushed HEAD.
+- **The wiki** is reached only through `bottown wiki`, never Forgejo's wiki
+  API or git. It holds ideas, not decisions: it is never binding, and an
+  issue or a design document wins over it. Leave the blocks between
+  `<!-- bottown:<name>:generated -->` markers alone: bottown rewrites them.
+  Runs read the wiki; which runs may write it, and where, is the server's
+  call (`put` says when it refuses).
 - **Review follow-ups** happen in a new implement run on the same issue: it
   resumes `issue/<n>`. Every new head needs a new verify run.
 
 ## Outside a run
 
-- **Reading is allowed:** `whoami`, `issue list`/`show`, `pr list`/`show`.
+- **Reading is allowed:** `whoami`, `issue list`/`show`, `pr list`/`show`,
+  `wiki list`/`read`.
 - **Anyone can file issues** (`issue create`), in or outside a run (except a
   plan run): follow-ups found while working, or what the owner asks you to
   file from a conversation. Filing is the one write a read-only key may make.
