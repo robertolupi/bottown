@@ -89,18 +89,37 @@ type retroLocal struct {
 	Handover      *runs.Handover `json:"handover,omitempty"`
 }
 
-// inRetro is whether run r belongs to the flow of issue n: it worked the
-// issue (implement, plan, discuss), or a pull request on its issue/<n>
-// branch (verify), or n is that pull request.
-func inRetro(r secrets.Run, n int64) bool {
-	return r.Issue == n || r.PR == n || r.Branch == fmt.Sprintf("issue/%d", n)
+// retroPRs is the set of issue n's pull requests: those from its issue/<n>
+// branch, as Forgejo lists them (forge) or as runs record them (a verify run
+// has the PR and the branch), ended and purged runs included.
+func retroPRs(n int64, forge []int64, rs []secrets.Run) map[int64]bool {
+	prs := map[int64]bool{}
+	for _, p := range forge {
+		prs[p] = true
+	}
+	for _, r := range rs {
+		if r.PR > 0 && r.Branch == fmt.Sprintf("issue/%d", n) {
+			prs[r.PR] = true
+		}
+	}
+	return prs
+}
+
+// inRetro is whether run r belongs to the flow of issue n, whose pull
+// requests are prs: it worked the issue (implement, plan, discuss), or a
+// pull request on its issue/<n> branch (verify), or discussed one of those
+// pull requests (a discuss run records its target, issue or PR, as Issue).
+func inRetro(r secrets.Run, n int64, prs map[int64]bool) bool {
+	return r.Issue == n || r.PR == n || r.Branch == fmt.Sprintf("issue/%d", n) ||
+		prs[r.Issue] || prs[r.PR]
 }
 
 // gatherRetro writes the evidence of issue n's flow, for retro run self,
 // into dir, and returns how many runs it found. Local files come from ws;
-// the server's records from runList (GET /v1/runs?history=1) and the
-// denials from audit (GET /v1/audit?decision=deny,reject).
-func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry) (int, error) {
+// the server's records from runList (GET /v1/runs?history=1), the
+// denials from audit (GET /v1/audit?decision=deny,reject), and forgePRs
+// are the pull requests Forgejo has from the issue/<n> branch.
+func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64) (int, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return 0, err
 	}
@@ -115,18 +134,40 @@ func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList [
 			local[r.ID] = r
 		}
 	}
-	var out []retroRun
-	seen := map[string]bool{}
-	add := func(r secrets.Run, state string) {
-		if r.ID == self || seen[r.ID] || !inRetro(r, n) {
-			return
+	// Every run the server lists, then those it no longer lists but this
+	// checkout still records; the flow's pull requests come from all of
+	// them before any run is selected.
+	var cands []secrets.Run
+	var states []string
+	listed := map[string]bool{}
+	for _, it := range runList {
+		if !listed[it.Run.ID] {
+			listed[it.Run.ID] = true
+			cands, states = append(cands, it.Run), append(states, it.State)
 		}
-		seen[r.ID] = true
+	}
+	for _, l := range local {
+		if !listed[l.ID] {
+			cands = append(cands, secrets.Run{
+				ID: l.ID, Kind: l.Kind, Actor: l.Actor, Family: l.Family, Harness: l.Harness, Spec: l.Spec,
+				Issue: l.Issue, PR: l.PR, Branch: l.Branch, SHA: l.SHA, Interactive: l.Interactive,
+				Created: l.Started, Ended: l.Ended,
+			})
+			states = append(states, "")
+		}
+	}
+	prs := retroPRs(n, forgePRs, cands)
+
+	var out []retroRun
+	for i, r := range cands {
+		if r.ID == self || !inRetro(r, n, prs) {
+			continue
+		}
 		rr := retroRun{
 			ID: r.ID, Kind: r.Kind, Actor: r.Actor, Family: r.Family, Harness: r.Harness, Spec: r.Spec,
 			Issue: r.Issue, PR: r.PR, Branch: r.Branch, SHA: r.SHA, Interactive: r.Interactive,
 			AllowSameFamily: r.AllowSameFamily, StartedBy: r.StartedBy, Created: r.Created, Ended: r.Ended,
-			State: state, Status: r.Status, Outcome: r.Outcome, Digest: r.Digest, Purged: r.Purged,
+			State: states[i], Status: r.Status, Outcome: r.Outcome, Digest: r.Digest, Purged: r.Purged,
 		}
 		if r.Ended != nil {
 			rr.Duration = r.Ended.Sub(r.Created).Round(time.Second).String()
@@ -146,17 +187,6 @@ func gatherRetro(dir string, n int64, self string, ws *runs.Workspace, runList [
 			}
 		}
 		out = append(out, rr)
-	}
-	for _, it := range runList {
-		add(it.Run, it.State)
-	}
-	// Runs the server no longer lists, but this checkout still records.
-	for _, l := range local {
-		add(secrets.Run{
-			ID: l.ID, Kind: l.Kind, Actor: l.Actor, Family: l.Family, Harness: l.Harness, Spec: l.Spec,
-			Issue: l.Issue, PR: l.PR, Branch: l.Branch, SHA: l.SHA, Interactive: l.Interactive,
-			Created: l.Started, Ended: l.Ended,
-		}, "")
 	}
 	slices.SortFunc(out, func(a, b retroRun) int { return a.Created.Compare(b.Created) })
 
@@ -277,8 +307,36 @@ func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir stri
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/audit?decision=deny,reject", nil, &audit); err != nil {
 		return 0, fmt.Errorf("read the audit log: %w", err)
 	}
+	prs, err := issueBranchPRs(ctx, rc, run.Issue)
+	if err != nil {
+		return 0, fmt.Errorf("list pull requests: %w", err)
+	}
 	if dir == "" {
 		return 0, errors.New("the run has no scratch directory")
 	}
-	return gatherRetro(dir, run.Issue, run.ID, rc.ws, list, audit)
+	return gatherRetro(dir, run.Issue, run.ID, rc.ws, list, audit, prs)
+}
+
+// issueBranchPRs is the numbers of rc's repository's pull requests, open or
+// closed, from the issue/<n> branch.
+func issueBranchPRs(ctx context.Context, rc *runContext, n int64) ([]int64, error) {
+	var out []int64
+	for page := 1; ; page++ {
+		var prs []struct {
+			Number int64
+			Head   struct{ Ref string }
+		}
+		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls?state=all&limit=50&page=%d", rc.org, rc.repo, page)
+		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &prs); err != nil {
+			return nil, err
+		}
+		for _, pr := range prs {
+			if m, ok := issueBranchNumber(pr.Head.Ref); ok && m == n {
+				out = append(out, pr.Number)
+			}
+		}
+		if len(prs) < 50 {
+			return out, nil
+		}
+	}
 }
