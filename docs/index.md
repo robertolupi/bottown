@@ -18,7 +18,9 @@ full, then only the document, or section, your work needs.
   `run gc`, retro runs, critical discuss runs, sharing the host),
   [harness models](reference.md#harness-models),
   [the fam guide](reference.md#the-fam-guide),
-  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`) and
+  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`),
+  [debates](reference.md#debates) (`bottown debate`: independent rounds of
+  answers, consolidated in the wiki) and
   [activity](reference.md#activity) (`internal/activity`: runs, flow
   threads, checks, stops and owner waits over a window).
 - [Local web UI and supervisor](design/web-ui.md): read for `bottown flow`

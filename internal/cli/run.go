@@ -34,15 +34,16 @@ type runOpts struct {
 	serializeActor  bool // implement, verify: refuse the run while the actor has another live batch run
 	allow           []string
 	keep            bool
-	question        string    // discuss: the owner's question for the prompt
-	critical        bool      // discuss: an adversarial review, from another family than the issue's author
-	message         string    // implement, verify, plan: the owner's note for the prompt
-	flowNote        string    // implement, verify: bottown flow's note (the post-implement checks)
-	checksPassed    bool      // verify: the flow's post-implement checks passed at sha
-	sha             string    // verify: the head the run must be pinned at (bottown flow)
-	synced          bool      // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
-	tail            *liveTail // the live tail the run shows in, if bottown flow runs one
-	plain           bool      // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
+	question        string                // discuss: the owner's question for the prompt
+	critical        bool                  // discuss: an adversarial review, from another family than the issue's author
+	message         string                // implement, verify, plan: the owner's note for the prompt
+	flowNote        string                // implement, verify: bottown flow's note (the post-implement checks)
+	checksPassed    bool                  // verify: the flow's post-implement checks passed at sha
+	sha             string                // verify: the head the run must be pinned at (bottown flow)
+	synced          bool                  // the mirror was fetched for an earlier try of this run (bottown flow, waiting for a busy actor)
+	tail            *liveTail             // the live tail the run shows in, if bottown flow runs one
+	plain           bool                  // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
+	debate          *server.DebateRequest // discuss in a debate round, consolidate: the debate (bottown debate)
 }
 
 // ownTail is whether startRun shows a live tail of its own for the run,
@@ -337,7 +338,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
 	} else {
@@ -464,7 +465,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
 		MCPURL: mcpURL, Key: created.Key,
 		RecordFile: recPath, RunID: run.ID, Interactive: o.interactive, Allow: o.allow,
-		ReadOnly: kind == policy.Discuss, Spec: run.Spec, TmpDir: tmpDir,
+		ReadOnly: kind == policy.Discuss || kind == policy.Consolidate, Spec: run.Spec, TmpDir: tmpDir,
 	}
 	if err := h.PrepareMCP(&l, rc.ws.RunsDir); err != nil {
 		return err
@@ -737,6 +738,13 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		d.EvidenceRuns, d.EvidenceGaps = n, gaps
 		d.RetroPR, d.RetroIssue, d.RetroBranch = flow.PR, flow.Issue, flow.Branch
 	}
+	if run.Debate != nil {
+		var ls server.WikiListOut
+		if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/wiki/files?"+repoQuery(rc.repo).Encode(), nil, &ls); err != nil {
+			return "", "", fmt.Errorf("list the wiki for the debate: %w", err)
+		}
+		d.Debate = debatePrompt(run, ls.Files)
+	}
 	// Attachments never stop a launched run: a failure is in the prompt
 	// instead.
 	var is server.IssueOut
@@ -776,6 +784,9 @@ func goalPrompt(ctx context.Context, rk *agentCtx, run secrets.Run, d runs.Promp
 			return "", err
 		}
 		d.MilestonesDir = settings.MilestonesDir
+	}
+	if run.Kind == policy.Discuss && run.Debate != nil {
+		return runs.Prompt("debate", d)
 	}
 	return runs.Prompt(run.Kind, d)
 }
@@ -832,8 +843,17 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 	if run.Kind == policy.Verify {
 		n = run.PR
 	}
+	body := handoverText(rec, status, code, summary)
+	switch {
+	case run.Kind == policy.Discuss && run.Debate != nil:
+		// A round's answers stay in the wiki: the consolidation's
+		// comment links them all.
+		return nil
+	case run.Kind == policy.Consolidate && run.Debate != nil:
+		body = consolidatedText(rec, run, status, code)
+	}
 	path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", run.Org, run.Repo, n)
-	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": handoverText(rec, status, code, summary)}, nil)
+	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": body}, nil)
 }
 
 // cleanSummary is an agent's summary as the forge and the digest show it.
@@ -845,8 +865,9 @@ func cleanSummary(rec runs.Record, summary string) string {
 	return strings.TrimSpace(summary)
 }
 
-// handoverText is the handover comment for a finished run.
-func handoverText(rec runs.Record, status string, code int, summary string) string {
+// handoverHeader is the handover comment's first line, and the blank line
+// after it: the run, who ran it and how it ended.
+func handoverHeader(rec runs.Record, status string, code int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**bottown run `%s`** · %s · %s (%s)", rec.ID, rec.Kind, rec.Actor, rec.Family)
 	if rec.Spec != "" {
@@ -857,6 +878,13 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		fmt.Fprintf(&b, " (exit %d)", code)
 	}
 	b.WriteString("\n\n")
+	return b.String()
+}
+
+// handoverText is the handover comment for a finished run.
+func handoverText(rec runs.Record, status string, code int, summary string) string {
+	var b strings.Builder
+	b.WriteString(handoverHeader(rec, status, code))
 	if rec.StopRequested {
 		b.WriteString("Stopped by the owner.\n\n")
 	}
