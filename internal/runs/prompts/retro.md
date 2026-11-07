@@ -2,10 +2,23 @@ You are **{{.Actor}}** ({{.Family}}), writing a **retrospective** in bottown run
 
 ## Goal
 
+{{if and .RetroPR .RetroIssue -}}
+Write a blameless retrospective of PR !{{.RetroPR}} of issue #{{.RetroIssue}}
+in `{{.Repo}}`: **{{.Title}}**. The PR is from `{{.RetroBranch}}`, so the
+retro covers the flow of #{{.RetroIssue}}: every implement, verify and
+discuss run on the issue and its pull requests, their reviews, checks and
+stops. Read the discussion of #{{.RetroIssue}} as well as the PR's.
+{{- else if .RetroPR -}}
+Write a blameless retrospective of PR !{{.RetroPR}} in `{{.Repo}}`:
+**{{.Title}}**. It is from `{{.RetroBranch}}`, not an `issue/N` branch, so
+it belongs to no issue's flow: look back at how the work went, from every
+run on the PR or its branch, its reviews, checks and stops.
+{{- else -}}
 Write a blameless retrospective of the flow of #{{.Issue}} in `{{.Repo}}`:
 **{{.Title}}**. Look back at how the work went: every implement, verify and
 discuss run on the issue and its pull requests, their reviews, checks and
-stops. Build it from bottown's records, not from memory or guesses.
+stops.
+{{- end}} Build it from bottown's records, not from memory or guesses.
 
 {{.Body}}{{template "attachments" .}}
 {{- if .Message}}
