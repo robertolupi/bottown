@@ -17,8 +17,10 @@ full, then only the document, or section, your work needs.
   [runs](reference.md#runs) (issue branches, scratch directories,
   `run gc`, retro runs, sharing the host),
   [harness models](reference.md#harness-models),
-  [the fam guide](reference.md#the-fam-guide) and
-  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`).
+  [the fam guide](reference.md#the-fam-guide),
+  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`) and
+  [activity](reference.md#activity) (`internal/activity`: runs, flow
+  threads, checks, stops and owner waits over a window).
 - [Local web UI and supervisor](design/web-ui.md): read for `bottown flow`
   (implement and cross-family verify), `bottown web ui` (runs, the inbox,
   host state) and `.bottown.toml`. Built: Phases 3–7 (host UI and health,

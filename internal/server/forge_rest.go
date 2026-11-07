@@ -27,7 +27,7 @@ import (
 //	POST /v1/forge/review   {event, body, commit_id}
 //	POST /v1/forge/status   {sha, check, state, description}   (bottown check)
 //	                        {repo, sha, ...} as the owner: the flow's gate
-//	GET  /v1/forge/pr/gate?repo=&number=   (the owner: the flow's gate failures)
+//	GET  /v1/forge/pr/gate?repo=&number=   (the owner: the flow's gate failures and statuses)
 //
 // repo and number default to the run's.
 
