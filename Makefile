@@ -1,4 +1,4 @@
-.PHONY: build install test e2e e2e-linux vet check web
+.PHONY: build install test e2e e2e-linux vet lint check web
 
 # The web UI, built by vite into internal/webui/dist/ui, which is not
 # tracked. Needs Node and npm. make build does not depend on it: without
@@ -53,14 +53,26 @@ install:
 vet:
 	go vet ./... && go vet -tags e2e ./e2e/
 
+# Go tests run under the race detector: bottown's flow supervisor, server,
+# live tail and run launchers are concurrent.
 test: web/node_modules
-	go test ./...
+	go test -race ./...
 	cd web && npm test
 
+# Dead code: staticcheck's U1000 (unused unexported identifiers, tests
+# included), pinned and run with go run, so it needs no global install and
+# adds nothing to go.mod.
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+
+lint:
+	go run $(STATICCHECK) -checks U1000 ./...
+	go run $(STATICCHECK) -checks U1000 -tags e2e ./e2e/
+
 # The repository's checks, run before a PR and by verifiers: gofmt clean,
-# go.mod/go.sum tidy, vet (incl. the e2e build tag), Go and web unit tests,
-# and svelte-check on web/ (installing web/node_modules with npm ci first).
-check: vet test web/node_modules
+# go.mod/go.sum tidy, vet (incl. the e2e build tag), the dead-code lint,
+# Go tests (with -race) and web unit tests, and svelte-check on web/
+# (installing web/node_modules with npm ci first).
+check: vet lint test web/node_modules
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	go mod tidy -diff
 	cd web && npm run check

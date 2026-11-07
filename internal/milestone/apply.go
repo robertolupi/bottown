@@ -156,7 +156,6 @@ type applier struct {
 	byKey    map[string]*child
 	removed  []*ForgeIssue // issues with a marker for a key no longer in the plan
 	epic     *ForgeIssue   // nil until created
-	epicBody string        // the rendered epic body, when it changes
 	epicNew  bool          // the epic is to be created or updated
 
 	blockedBy map[int64][]int64 // the forge's dependencies, as fetched

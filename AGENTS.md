@@ -73,7 +73,8 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   use, runs `bottown harness setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
   --if-changed` (`UP=0` skips it). `--if-changed` keeps prod's image when
   the commits differ only in docs.
-- **Tests:** `make test` runs the Go unit tests (`go test ./...`) and the
+- **Tests:** `make test` runs the Go unit tests under the race detector
+  (`go test -race ./...`) and the
   frontend behavioral tests (`cd web && npm test`, after `npm ci` if
   needed). `make e2e` needs Docker and starts throwaway `e2e-*` instances;
   it never touches prod or dev.
@@ -84,8 +85,10 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   implementers and verifiers (needs Go, Node and npm; installs
   `web/node_modules` reproducibly with `npm ci` on a clean checkout):
   `gofmt -l` clean, `go mod tidy -diff` clean, `make vet` (including
-  `-tags e2e`), `make test` (Go and frontend tests) and `cd web && npm run
-  check` (`svelte-check`).
+  `-tags e2e`), `make lint` (dead code: staticcheck's U1000, pinned in the
+  Makefile and run with `go run`, so no global install), `make test` (Go
+  tests with `-race`, and frontend tests) and `cd web && npm run check`
+  (`svelte-check`). Remove what `make lint` reports rather than keeping it.
 - **Before a PR:** `make check` passes, and `make e2e` should (the flow
   runs it before a verifier sees the PR). New behaviour gets a test. Keep the docs in `docs/` true to the code; `docs/history/` is a
   record and is not kept current.

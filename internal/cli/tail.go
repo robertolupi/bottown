@@ -64,12 +64,6 @@ type liveTail struct {
 	mu     sync.Mutex
 	buf    []byte // a partial line written through Write
 	paused bool
-
-	follow struct {
-		cancel context.CancelFunc
-		done   chan struct{}
-		f      *runs.LogFollower
-	}
 }
 
 // newLiveTail starts the tail's program on out, a terminal.

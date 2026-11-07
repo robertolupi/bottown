@@ -1093,10 +1093,6 @@ func renderScriptLog(log []byte) []string {
 	return lines
 }
 
-func formatToolCall(name string, input any) string {
-	return joinToolCall(name, toolArg(input))
-}
-
 func joinToolCall(name, arg string) string {
 	if arg == "" {
 		return name
