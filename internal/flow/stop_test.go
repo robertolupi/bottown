@@ -43,6 +43,11 @@ func TestParseStopIgnoresOtherComments(t *testing.T) {
 			t.Errorf("ParseStop(%q) = %+v, want no stop", body, got)
 		}
 	}
+	// Stops written before milestone bases named the conflict stop
+	// "conflicts with main"; they read back as ConflictsWithBase.
+	if got, ok := ParseStop("**bottown flow: conflicts with main**\n\n!12 no longer merges cleanly\n\nPull request: !12"); !ok || got.Reason != ConflictsWithBase || got.PR != 12 {
+		t.Errorf("legacy conflicts stop = %+v, %v", got, ok)
+	}
 	// A stop with no detail still parses.
 	if got, ok := ParseStop("**bottown flow: run failed**"); !ok || got.Reason != RunFailed {
 		t.Errorf("bare stop = %+v, %v", got, ok)

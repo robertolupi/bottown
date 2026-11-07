@@ -30,7 +30,9 @@ const (
 	// or signed out.
 	AgentDidNothing   StopReason = "agent did nothing"
 	VerifierUndecided StopReason = "verifier undecided"
-	ConflictsWithMain StopReason = "conflicts with main"
+	// ConflictsWithBase: the PR conflicts with its base (main, or a
+	// milestone child's milestone/<slug>), and the flow cannot resolve it.
+	ConflictsWithBase StopReason = "conflicts with base"
 	// ChangesRequested: the head is approved, but a request for changes at
 	// an older head still blocks the merge.
 	ChangesRequested StopReason = "changes requested"
@@ -343,11 +345,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			// the flow's own, bounded by Rounds; one that pushes nothing, or
 			// conflicts that outlast the rounds, stop the flow.
 			if resolving == pr.HeadSHA {
-				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("the implement round to resolve the conflicts with %s at %s pushed no new commit; merging %s into %s for !%d would still conflict in %s",
+				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("the implement round to resolve the conflicts with %s at %s pushed no new commit; merging %s into %s for !%d would still conflict in %s",
 					pr.BaseBranch, shortSHA(pr.HeadSHA), pr.BaseBranch, pr.HeadBranch, pr.Number, files))
 			}
 			if conflictRounds >= opts.Rounds {
-				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("merging %s into %s for !%d would conflict in %s, and %d conflict rounds are used; start an implement run to resolve it",
+				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("merging %s into %s for !%d would conflict in %s, and %d conflict rounds are used; start an implement run to resolve it",
 					pr.BaseBranch, pr.HeadBranch, pr.Number, files, conflictRounds))
 			}
 			conflictRounds++
@@ -380,10 +382,10 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		}
 		if !pr.Mergeable && !(merge.Behind && merge.Clean) {
 			if !resuming {
-				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("!%d no longer merges cleanly; rerun the flow to resolve it", pr.Number))
+				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("!%d no longer merges cleanly into %s; rerun the flow to resolve it", pr.Number, pr.BaseBranch))
 			}
 			if server.ChangesRequested(pr.Reviews) >= opts.Rounds {
-				return s.stop(ctx, result, OutOfRounds, "the PR conflicts with main and no implement rounds remain")
+				return s.stop(ctx, result, OutOfRounds, fmt.Sprintf("the PR conflicts with %s and no implement rounds remain", pr.BaseBranch))
 			}
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
 				return s.runFailure(ctx, result, err)

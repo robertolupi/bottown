@@ -19,7 +19,11 @@ import (
 const commentPrefix = "**bottown flow: "
 
 // StopReasons are the reasons a flow stops with.
-var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, AgentDidNothing, VerifierUndecided, ConflictsWithMain, ChangesRequested, ChecksFailed, ActorBusy, Merged}
+var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, AgentDidNothing, VerifierUndecided, ConflictsWithBase, ChangesRequested, ChecksFailed, ActorBusy, Merged}
+
+// legacyConflictsWithMain is ConflictsWithBase's name before milestone
+// bases, in the stops flows wrote then.
+const legacyConflictsWithMain StopReason = "conflicts with main"
 
 // stopBody is the issue comment for a stop.
 func stopBody(reason StopReason, detail string, pr int64) string {
@@ -65,6 +69,9 @@ func ParseStop(body string) (Stop, bool) {
 		return Stop{}, false
 	}
 	reason := StopReason(head)
+	if reason == legacyConflictsWithMain {
+		reason = ConflictsWithBase
+	}
 	if !slices.Contains(StopReasons, reason) {
 		return Stop{}, false
 	}

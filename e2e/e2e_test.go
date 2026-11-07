@@ -291,8 +291,8 @@ func TestE2E(t *testing.T) {
 
 	t.Run("repo add uses an instance remote and leaves origin alone", func(t *testing.T) {
 		out := a.mustCmd(demo, "repo", "add", "demo")
-		if !strings.Contains(out, "protected bottown/demo:main") {
-			t.Fatalf("repo add did not protect main:\n%s", out)
+		if !strings.Contains(out, "protected bottown/demo:main") || !strings.Contains(out, "protected bottown/demo:milestone/*") {
+			t.Fatalf("repo add did not protect main and milestone/*:\n%s", out)
 		}
 		if got := git(t, demo, "remote", "get-url", "origin"); got != "https://example.invalid/demo.git" {
 			t.Fatalf("origin changed: %s", got)
@@ -309,6 +309,26 @@ func TestE2E(t *testing.T) {
 		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections/main", nil, &bp)
 		if bp.RequiredApprovals != 1 || !bp.DismissStaleApprovals || !bp.EnableMergeWhitelist {
 			t.Fatalf("protection = %+v", bp)
+		}
+		// The proxy refuses encoded paths, so the rule is read from the list.
+		type rule struct {
+			RuleName                string   `json:"rule_name"`
+			EnablePushWhitelist     bool     `json:"enable_push_whitelist"`
+			PushWhitelistUsernames  []string `json:"push_whitelist_usernames"`
+			MergeWhitelistUsernames []string `json:"merge_whitelist_usernames"`
+		}
+		var rules []rule
+		a.mustAPI(owner, "GET", "/repos/bottown/demo/branch_protections", nil, &rules)
+		i := slices.IndexFunc(rules, func(r rule) bool { return r.RuleName == "milestone/*" })
+		if i < 0 {
+			t.Fatalf("no milestone/* rule in %+v", rules)
+		}
+		mp := rules[i]
+		slices.Sort(mp.PushWhitelistUsernames)
+		slices.Sort(mp.MergeWhitelistUsernames)
+		if !mp.EnablePushWhitelist || !slices.Equal(mp.PushWhitelistUsernames, []string{"manager", "owner"}) ||
+			!slices.Equal(mp.MergeWhitelistUsernames, []string{"manager", "owner"}) {
+			t.Fatalf("milestone/* protection = %+v", mp)
 		}
 	})
 
@@ -500,6 +520,12 @@ func TestE2E(t *testing.T) {
 		}
 		if out, err := a.pushAs(demo, "claude", impl, "main:refs/heads/main"); err == nil && !strings.Contains(out, "Everything up-to-date") {
 			t.Errorf("implementer push to protected main succeeded:\n%s", out)
+		}
+		if out, err := a.pushAs(demo, "claude", impl, "main:refs/heads/milestone/x"); err == nil {
+			t.Errorf("implementer push to milestone/x succeeded:\n%s", out)
+		}
+		if code, _ := a.api(owner, "GET", "/repos/bottown/demo/branches/milestone/x", nil); code != 404 {
+			t.Errorf("milestone/x exists after a refused push: %d", code)
 		}
 		var me struct{ Login string }
 		req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/forgejo/api/v1/user", nil)
@@ -2173,6 +2199,59 @@ func TestE2E(t *testing.T) {
 		}
 		if out := a.mustCmd(demo, "run", "ls"); !strings.Contains(out, "discuss") || !strings.Contains(out, "succeeded") {
 			t.Errorf("run ls after discuss:\n%s", out)
+		}
+	})
+
+	t.Run("a milestone child runs on its milestone branch", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+		}
+		// The owner creates milestone/e2e by hand, a commit ahead of main.
+		ownerGit("fetch", "-q", remote)
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, "milestone.txt"), []byte("milestone\n"), 0o644)
+		git(t, demo, "add", "milestone.txt")
+		git(t, demo, "-c", "commit.gpgsign=false", "commit", "-qm", "start milestone e2e")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/milestone/e2e")
+		git(t, demo, "checkout", "-q", "main")
+
+		var issue struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{
+			"title": "milestone child",
+			"body":  "Add child.txt.\n\n<!-- bottown:milestone v=1 plan=\"e2e\" key=\"child\" sha=\"0123456789abcdef\" -->",
+		}, &issue)
+		script := "set -e; grep -qF 'started from `milestone/e2e`' \"$BOTTOWN_PROMPT_FILE\"; test -f milestone.txt; " +
+			"test \"$(git rev-parse --abbrev-ref @{upstream})\" = " + remote + "/milestone/e2e; " +
+			"echo child > child.txt; git add child.txt; git -c commit.gpgsign=false commit -qm 'child change'; git push -q " + remote + " HEAD; " +
+			bin + ` mcp call pr_create '{"title":"milestone child PR","body":"scripted"}' > /dev/null; echo 'milestone child done'`
+		c := exec.Command(bin, "run", "implement", "-a", "claude", fmt.Sprint(issue.Number))
+		c.Env = append(a.env(), "BOTTOWN_HARNESS_CMD="+script)
+		c.Dir = demo
+		if out, err := c.CombinedOutput(); err != nil || !strings.Contains(string(out), "succeeded") {
+			t.Fatalf("run implement on a milestone child: %v\n%s", err, out)
+		}
+		var prs []struct {
+			Title string
+			Base  struct{ Ref string }
+		}
+		a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+		found := false
+		for _, p := range prs {
+			if p.Title == "milestone child PR" {
+				found = true
+				if p.Base.Ref != "milestone/e2e" {
+					t.Errorf("milestone child PR base = %q, want milestone/e2e", p.Base.Ref)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no milestone child PR: %+v", prs)
 		}
 	})
 

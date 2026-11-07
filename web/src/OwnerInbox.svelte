@@ -59,8 +59,8 @@
                 <span class="badge badge-success">ready to merge</span>
               {:else if item.kind === 'merge_base'}
                 <span class="badge badge-accent">clean base merge</span>
-              {:else if item.kind === 'conflicts_with_main'}
-                <span class="badge badge-error">conflicts with main</span>
+              {:else if item.kind === 'conflicts_with_base'}
+                <span class="badge badge-error">conflicts with base</span>
               {:else if item.kind === 'stopped_flow'}
                 <span class="badge badge-warning">stopped flow</span>
               {:else if item.kind === 'broken_run'}

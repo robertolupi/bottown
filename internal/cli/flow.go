@@ -45,7 +45,7 @@ When the PR's base has moved and merging it into the branch would conflict,
 the flow starts an implement round with the conflicting files in its
 prompt, asking the implementer to merge the base and resolve them. Up to
 --rounds such rounds run in one flow, apart from the review rounds; the
-flow stops (conflicts with main) when they are used, or when one pushes
+flow stops (conflicts with base) when they are used, or when one pushes
 nothing.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

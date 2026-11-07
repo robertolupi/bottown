@@ -754,7 +754,7 @@ func TestFlowMergeBaseConflictRoundPushesNothing(t *testing.T) {
 	})
 	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
 	var stop *StopError
-	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain || implements != 1 {
+	if !errors.As(err, &stop) || result.Reason != ConflictsWithBase || implements != 1 {
 		t.Fatalf("result = %+v, err = %v, implements = %d", result, err, implements)
 	}
 	if !strings.Contains(result.Detail, "pushed no new commit") || !strings.Contains(result.Detail, "a.txt") {
@@ -777,7 +777,7 @@ func TestFlowMergeBaseConflictOutOfRounds(t *testing.T) {
 	opts := testOptions()
 	result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
 	var stop *StopError
-	if !errors.As(err, &stop) || result.Reason != ConflictsWithMain || implements != opts.Rounds {
+	if !errors.As(err, &stop) || result.Reason != ConflictsWithBase || implements != opts.Rounds {
 		t.Fatalf("result = %+v, err = %v, implements = %d", result, err, implements)
 	}
 	if !strings.Contains(result.Detail, "a.txt, b.txt") || !strings.Contains(result.Detail, "3 conflict rounds are used") {

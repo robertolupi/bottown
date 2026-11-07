@@ -25,6 +25,8 @@ func TestRunConcurrency(t *testing.T) {
 		switch p := r.Method + " " + r.URL.Path; p {
 		case "GET /api/v1/repos/bottown/demo":
 			_, _ = io.WriteString(w, `{"name":"demo","default_branch":"main"}`)
+		case "GET /api/v1/repos/bottown/demo/pulls":
+			_, _ = io.WriteString(w, `[]`)
 		case "GET /api/v1/repos/bottown/demo/issues/7", "GET /api/v1/repos/bottown/demo/issues/8", "GET /api/v1/repos/bottown/demo/issues/9":
 			_, _ = io.WriteString(w, `{"number":7,"state":"open","title":"An issue"}`)
 		case "GET /api/v1/repos/bottown/demo/issues/10":
