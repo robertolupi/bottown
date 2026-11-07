@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
@@ -94,14 +95,16 @@ type retroLocal struct {
 // server's cross-family rule does. Local files come from ws; the server's
 // records from runList (GET /v1/runs?history=1), the denials from audit
 // (GET /v1/audit?decision=deny,reject), and forgePRs are the pull requests
-// Forgejo has from the flow's branch.
-func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64) (int, error) {
+// Forgejo has from the flow's branch, and tips their heads' own commits.
+// It also returns the gaps it sees in the evidence (retroGaps), which the
+// README and the prompt warn of.
+func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64, tips []prTip) (int, []string, error) {
 	if err := os.RemoveAll(dir); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	for _, d := range []string{dir, filepath.Join(dir, "transcripts"), filepath.Join(dir, "prompts")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
 	local := map[string]runs.Record{}
@@ -171,26 +174,71 @@ func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Worksp
 		if b, err := runs.ReadLog(ws.Path(r.ID, ".log")); err == nil && len(b) > 0 {
 			rel := filepath.Join("transcripts", r.ID+".jsonl")
 			if err := writeTranscript(filepath.Join(dir, rel), r.Harness, b); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			r.Transcript = rel
 		}
 		if b, err := os.ReadFile(ws.Path(r.ID, ".prompt.md")); err == nil {
 			rel := filepath.Join("prompts", r.ID+".md")
 			if err := os.WriteFile(filepath.Join(dir, rel), b, 0o600); err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			r.Prompt = rel
 		}
 	}
 	b, err := json.MarshalIndent(orEmptyRuns(out), "", "  ")
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "runs.json"), append(b, '\n'), 0o600); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return len(out), os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out)), 0o600)
+	gaps := retroGaps(out, tips)
+	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out, gaps)), 0o600)
+}
+
+// prTip is a pull request's head and its own last commit: the head or,
+// when the head merges another branch in (as the flow's "Merge main into"
+// commits do), the first-parent commit below the merges. Author is that
+// commit's Forgejo login, or its git author name when it has none.
+type prTip struct {
+	PR     int64
+	Head   string
+	SHA    string
+	Author string
+}
+
+// retroGaps is what the evidence of runs rs visibly lacks: missing runs
+// otherwise look like a short flow. A verify run with no implement or plan
+// run means the runs that wrote the code are not in it; a pull request
+// whose own last commit (tips) is by an actor with no implement or plan
+// run in rs was pushed by no run in it.
+func retroGaps(rs []retroRun, tips []prTip) []string {
+	var gaps []string
+	writers := map[string]bool{}
+	verifies := 0
+	for _, r := range rs {
+		switch r.Kind {
+		case policy.Implement, policy.Plan:
+			writers[r.Actor] = true
+		case policy.Verify:
+			verifies++
+		}
+	}
+	if verifies > 0 && len(writers) == 0 {
+		gaps = append(gaps, fmt.Sprintf("The evidence has %d verify run(s) but no implement or plan run: the runs that wrote the code are missing from it.", verifies))
+	}
+	for _, t := range tips {
+		if t.Author == "" || writers[t.Author] {
+			continue
+		}
+		at := "`" + short(t.Head) + "`"
+		if t.SHA != t.Head {
+			at += fmt.Sprintf(" (its own last commit, below the merges, is `%s`)", short(t.SHA))
+		}
+		gaps = append(gaps, fmt.Sprintf("Pull request !%d's head %s is by `%s`, who has no implement or plan run in the evidence: no run in it pushed that head. Someone may have pushed it by hand, or its run's record is missing.", t.PR, at, t.Author))
+	}
+	return gaps
 }
 
 func orEmptyRuns(rs []retroRun) []retroRun {
@@ -226,10 +274,18 @@ func writeTranscript(path, harness string, log []byte) error {
 }
 
 // retroReadme is the evidence's index: the runs, oldest first, and where
-// to read more.
-func retroReadme(flow server.RetroFlow, rs []retroRun) string {
+// to read more. The gaps, from retroGaps, come first, as a warning.
+func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Evidence for the retro of %s\n\n", flow)
+	if len(gaps) > 0 {
+		b.WriteString("> [!WARNING]\n> **The evidence looks partial.** Say so in the retro, and do not read\n" +
+			"> what is missing as a short flow.\n>\n")
+		for _, g := range gaps {
+			b.WriteString("> - " + g + "\n")
+		}
+		b.WriteString("\n")
+	}
 	what := "the issue or its pull requests"
 	switch {
 	case flow.PR > 0 && flow.Issue > 0:
@@ -281,33 +337,73 @@ func retroReadme(flow server.RetroFlow, rs []retroRun) string {
 
 // collectRetro gathers the evidence for retro run run into dir with the
 // owner key, and returns the flow it looked back on (from run.Issue alone
-// when the pull requests could not be listed) and how many runs it found.
-func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir string) (server.RetroFlow, int, error) {
+// when the pull requests could not be listed), how many runs it found, and
+// the gaps it saw in them.
+func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir string) (server.RetroFlow, int, []string, error) {
 	flow := server.NewRetroFlow(run.Issue, false, "")
 	heads, err := prHeads(ctx, rc)
 	if err != nil {
-		return flow, 0, fmt.Errorf("list pull requests: %w", err)
+		return flow, 0, nil, fmt.Errorf("list pull requests: %w", err)
 	}
 	flow, prs := retroFlowOf(run.Issue, heads)
 	var list []server.RunItem
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/runs?history=1&repo="+run.Repo, nil, &list); err != nil {
-		return flow, 0, fmt.Errorf("list runs: %w", err)
+		return flow, 0, nil, fmt.Errorf("list runs: %w", err)
 	}
 	var audit []server.AuditEntry
 	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/audit?decision=deny,reject", nil, &audit); err != nil {
-		return flow, 0, fmt.Errorf("read the audit log: %w", err)
+		return flow, 0, nil, fmt.Errorf("read the audit log: %w", err)
 	}
 	if dir == "" {
-		return flow, 0, errors.New("the run has no scratch directory")
+		return flow, 0, nil, errors.New("the run has no scratch directory")
 	}
-	n, err := gatherRetro(dir, flow, run.ID, rc.ws, list, audit, prs)
-	return flow, n, err
+	// A head whose commits cannot be read goes unchecked rather than
+	// costing the run its evidence.
+	var tips []prTip
+	for _, h := range heads {
+		if slices.Contains(prs, h.Number) && h.Head.Sha != "" {
+			if t, err := prTipOf(ctx, rc, h); err == nil {
+				tips = append(tips, t)
+			}
+		}
+	}
+	n, gaps, err := gatherRetro(dir, flow, run.ID, rc.ws, list, audit, prs, tips)
+	return flow, n, gaps, err
 }
 
-// prHead is a pull request's number and head branch.
+// prHead is a pull request's number, head branch and head commit.
 type prHead struct {
 	Number int64
-	Head   struct{ Ref string }
+	Head   struct{ Ref, Sha string }
+}
+
+// maxTipMerges bounds how many merge commits prTipOf walks down.
+const maxTipMerges = 20
+
+// prTipOf is h's head and its own last commit, below any merge commits.
+func prTipOf(ctx context.Context, rc *runContext, h prHead) (prTip, error) {
+	sha := h.Head.Sha
+	for i := 0; ; i++ {
+		var c struct {
+			Commit struct {
+				Author struct{ Name string }
+			}
+			Author  *struct{ Login string }
+			Parents []struct{ Sha string }
+		}
+		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/git/commits/%s?stat=false&verification=false&files=false", rc.org, rc.repo, sha)
+		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &c); err != nil {
+			return prTip{}, err
+		}
+		if len(c.Parents) < 2 || i == maxTipMerges {
+			author := c.Commit.Author.Name
+			if c.Author != nil && c.Author.Login != "" {
+				author = c.Author.Login
+			}
+			return prTip{PR: h.Number, Head: h.Head.Sha, SHA: sha, Author: author}, nil
+		}
+		sha = c.Parents[0].Sha
+	}
 }
 
 // prHeads is rc's repository's pull requests, open or closed.

@@ -708,11 +708,11 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		// Like attachments, missing evidence does not stop the run: the
 		// prompt says why, and the forge's threads are still there.
 		d.Evidence = filepath.Join(rec.TmpDir, retroDir)
-		flow, n, err := collectRetro(ctx, rc, run, d.Evidence)
+		flow, n, gaps, err := collectRetro(ctx, rc, run, d.Evidence)
 		if err != nil {
 			d.Evidence, d.EvidenceError = "", err.Error()
 		}
-		d.EvidenceRuns = n
+		d.EvidenceRuns, d.EvidenceGaps = n, gaps
 		d.RetroPR, d.RetroIssue, d.RetroBranch = flow.PR, flow.Issue, flow.Branch
 	}
 	// Attachments never stop a launched run: a failure is in the prompt
