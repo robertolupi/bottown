@@ -7,6 +7,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -45,5 +46,33 @@ func TestRunTailChoice(t *testing.T) {
 	attended := flowRunOpts(req, "", shared)
 	if attended.ownTail() || attended.tail != shared || attended.plain {
 		t.Errorf("a flow run does not show in the flow's tail: %+v", attended)
+	}
+}
+
+// --repo ORG/NAME and NAME resolve to one repository, so a flow started
+// either way takes the same lock, and a qualified name's slash never
+// reaches the lock path.
+func TestFlowRepoQualifiedSharesLock(t *testing.T) {
+	short, err := repoInOrg("bottown", "bottown")
+	if err != nil || short != "bottown" {
+		t.Fatalf("repoInOrg(bottown) = %q, %v", short, err)
+	}
+	qualified, err := repoInOrg("bottown", "bottown/bottown")
+	if err != nil || qualified != "bottown" {
+		t.Fatalf("repoInOrg(bottown/bottown) = %q, %v", qualified, err)
+	}
+	if _, err := repoInOrg("bottown", "other/bottown"); err == nil {
+		t.Fatal("repoInOrg(other/bottown) in org bottown succeeded")
+	}
+
+	dir := t.TempDir()
+	release, err := runs.HoldFlow(dir, qualified, 338)
+	if err != nil {
+		t.Fatalf("HoldFlow(%q): %v", qualified, err)
+	}
+	defer release()
+	var busy *runs.FlowBusyError
+	if _, err := runs.HoldFlow(dir, short, 338); !errors.As(err, &busy) {
+		t.Fatalf("second HoldFlow(%q) = %v, want *FlowBusyError", short, err)
 	}
 }

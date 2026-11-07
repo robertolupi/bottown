@@ -231,17 +231,25 @@ func ownerRepo(g *globals, repoOverride string) (top string, inst config.Instanc
 	}
 	org, name, _ = strings.Cut(full, "/")
 	if repoOverride != "" {
-		if o, r, ok := strings.Cut(repoOverride, "/"); ok {
-			if o != org {
-				err = fmt.Errorf("repository %q is not in org %s", repoOverride, org)
-				return
-			}
-			repoOverride = r
+		if name, err = repoInOrg(org, repoOverride); err != nil {
+			return
 		}
-		name = repoOverride
 	}
 	key, err = ownerKey(g)
 	return
+}
+
+// repoInOrg is the name within org of a --repo value: NAME, or ORG/NAME
+// with org's name.
+func repoInOrg(org, repo string) (string, error) {
+	o, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return repo, nil
+	}
+	if o != org {
+		return "", fmt.Errorf("repository %q is not in org %s", repo, org)
+	}
+	return name, nil
 }
 
 // discussQuestion is the question for a discuss run: the words after the
