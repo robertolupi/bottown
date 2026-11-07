@@ -1,16 +1,22 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +44,88 @@ design document exists.`,
 		},
 	})
 	m.AddCommand(newMilestoneApply(g))
+	m.AddCommand(newMilestoneMerge(g))
 	return m
+}
+
+func newMilestoneMerge(g *globals) *cobra.Command {
+	var sha, repo string
+	c := &cobra.Command{
+		Use:   "merge <issue> [--sha SHA] [--repo R]",
+		Short: "Merge a milestone child's approved PR into its milestone branch, as the manager",
+		Long: `Merge the open pull request from issue/<issue> into its milestone/* base,
+as the manager account, then close the issue and comment on it with what
+was merged (POST /v1/forge/pr/merge). The server refuses unless the base is
+a milestone/* branch, the PR's head is SHA, and the review assessment
+reports the PR approved at that head (a verifier of another family than
+the author's, or the owner). --sha defaults to the PR's current head.
+
+Merging again reports the PR as already merged. Owner only.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			issue, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
+			if err != nil || issue <= 0 {
+				return fmt.Errorf("invalid issue number %q", args[0])
+			}
+			_, inst, _, name, key, err := ownerRepo(g, repo)
+			if err != nil {
+				return err
+			}
+			c := client.New(inst.ServerURL(), key).WithTimeout(time.Minute)
+			out, err := milestoneMerge(cmd.Context(), c, name, issue, sha)
+			if err != nil {
+				return err
+			}
+			w := cmd.OutOrStdout()
+			if out.AlreadyMerged {
+				fmt.Fprintf(w, "!%d was already merged into %s at %s\n", out.Number, out.Base, shortSHA(out.HeadSHA))
+			} else {
+				fmt.Fprintf(w, "merged !%d into %s at %s as the manager\n", out.Number, out.Base, shortSHA(out.HeadSHA))
+			}
+			if out.IssueClosed {
+				fmt.Fprintf(w, "closed #%d\n", out.Issue)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&sha, "sha", "", "the head the PR must be at (default: its current head)")
+	c.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
+	return c
+}
+
+// milestoneMerge merges issue's open PR at sha, or at its current head when
+// sha is empty.
+func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue int64, sha string) (server.MilestoneMergeOut, error) {
+	q := url.Values{"repo": {repo}, "state": {"all"}}
+	var prs []server.PRItem
+	if err := c.Call(ctx, "GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
+		return server.MilestoneMergeOut{}, err
+	}
+	branch := fmt.Sprintf("issue/%d", issue)
+	var pr *server.PRItem
+	for i := range prs {
+		p := &prs[i]
+		if p.HeadBranch != branch || (p.State != "open" && !p.Merged) {
+			continue
+		}
+		// An open PR wins over a merged one: merging reports the latter
+		// as merged.
+		if pr == nil || (p.State == "open" && pr.State != "open") {
+			pr = p
+		} else if p.State == "open" && pr.State == "open" {
+			return server.MilestoneMergeOut{}, fmt.Errorf("more than one open PR from %s", branch)
+		}
+	}
+	if pr == nil {
+		return server.MilestoneMergeOut{}, fmt.Errorf("no open pull request from %s", branch)
+	}
+	if sha == "" {
+		sha = pr.HeadSHA
+	}
+	var out server.MilestoneMergeOut
+	in := server.MilestoneMergeIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: sha}
+	err := c.Call(ctx, "POST", "/v1/forge/pr/merge", in, &out)
+	return out, err
 }
 
 func newMilestoneApply(g *globals) *cobra.Command {
