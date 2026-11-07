@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
 )
 
 // actionRef matches a Forgejo close or reopen keyword before an issue
@@ -11,108 +16,89 @@ import (
 // request. Forgejo records each as a cross-reference from the PR it is
 // posted on, and at merge applies only the PR's latest one per issue
 // (quirk 8 in docs/history/bootstrap.md), so a comment saying "reopen #N"
-// overrides the description's "Closes #N". Forgejo matches on the text
-// Markdown renders to, so "**Reopen** #N" and "<b>Reopen</b> #N" count:
-// emphasis marks and HTML tags may stand around the keyword and between
-// it and the reference. It is looser than Forgejo's own match (any
-// whitespace after the keyword, not one space), so it refuses a little
-// more rather than missing one.
+// overrides the description's "Closes #N". It runs on the text
+// markdownText returns, where emphasis is gone but HTML blocks are not, so
+// it lets emphasis marks and HTML tags stand around the keyword and
+// between it and the reference. It is looser than Forgejo's own match
+// (any whitespace after the keyword, not one space), so it refuses a
+// little more rather than missing one.
 var actionRef = regexp.MustCompile(`(?i)(?:^|[\s(\[*_~>])((?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|reopen(?:s|ed)?):?)(?:[\s*_~]|<[^>\n]*>)+((?:[\w.-]+/)?[\w.-]+#\d+|#\d+|<?https?://[^\s>]+/(?:issues|pulls)/\d+)`)
-
-// fenceOpen matches a line that opens a fenced code block: up to three
-// spaces, then three or more backticks or tildes. A backtick fence's info
-// string may not hold a backtick.
-var fenceOpen = regexp.MustCompile("^ {0,3}(`{3,}[^`]*$|~{3,})")
 
 // actionRefs returns the close and reopen references in a comment's body,
 // outside code.
 func actionRefs(body string) []string {
 	var refs []string
-	for _, m := range actionRef.FindAllStringSubmatch(stripCode(body), -1) {
+	for _, m := range actionRef.FindAllStringSubmatch(markdownText(body), -1) {
 		refs = append(refs, m[1]+" "+strings.Trim(m[2], "<"))
 	}
 	return refs
 }
 
-// stripCode blanks the parts of a Markdown body where Forgejo does not
-// look for references: fenced code blocks and inline code spans. It
-// follows CommonMark where that is simple, and otherwise keeps text it is
-// unsure of, so that an ambiguous span is checked rather than hidden: a
-// backslash-escaped backtick does not delimit a span, a span closes only
-// on a backtick run of its opener's length, a span does not continue past
-// its line, and a fence closes only on a run of its own character at
-// least as long as the opener. A fence left open runs to the end, as in
-// CommonMark. Backslash escapes outside code are removed, since Forgejo
-// sees the escaped character.
-func stripCode(body string) string {
+// markdown parses bodies as Forgejo does: goldmark, with GitHub's
+// extensions.
+var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
+// markdownText returns the text of a Markdown body where Forgejo looks for
+// references. Parsing it as Forgejo does puts code where CommonMark puts
+// it, inside list items and block quotes too, and drops code spans and
+// fenced or indented code blocks. Like Forgejo's mdstripper it keeps link
+// destinations and autolinks. To refuse rather than miss a reference it
+// also keeps what Forgejo skips or reads apart: link text, HTML blocks,
+// and text on both sides of emphasis or an inline HTML tag, joined by a
+// space; and it removes backslash escapes, which Forgejo would leave
+// before the escaped character.
+func markdownText(body string) string {
+	src := []byte(body)
 	var out strings.Builder
-	var fence string // the open fence's run, or "" outside a fence
-	for _, line := range strings.Split(body, "\n") {
-		if fence != "" {
-			if t := strings.TrimLeft(line, " "); len(line)-len(t) <= 3 && strings.HasPrefix(t, fence) &&
-				strings.TrimSpace(strings.TrimLeft(t, fence[:1])) == "" {
-				fence = ""
+	_ = ast.Walk(markdown.Parser().Parse(text.NewReader(src)), func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			if n.Type() == ast.TypeBlock {
+				out.WriteString("\n")
 			}
-			out.WriteString("\n")
-			continue
+			return ast.WalkContinue, nil
 		}
-		if m := fenceOpen.FindStringSubmatch(line); m != nil {
-			fence = m[1][:len(m[1])-len(strings.TrimLeft(m[1], m[1][:1]))]
-			out.WriteString("\n")
-			continue
+		switch v := n.(type) {
+		case *ast.CodeSpan, *ast.FencedCodeBlock, *ast.CodeBlock:
+			out.WriteString(" ")
+			if n.Type() == ast.TypeBlock {
+				out.WriteString("\n")
+			}
+			return ast.WalkSkipChildren, nil
+		case *ast.HTMLBlock:
+			for i := 0; i < v.Lines().Len(); i++ {
+				seg := v.Lines().At(i)
+				out.Write(seg.Value(src))
+			}
+		case *ast.Text:
+			out.WriteString(unescape(string(v.Segment.Value(src))))
+			if v.SoftLineBreak() || v.HardLineBreak() {
+				out.WriteString("\n")
+			}
+		case *ast.String:
+			out.Write(v.Value)
+		case *ast.RawHTML:
+			out.WriteString(" ")
+		case *ast.Link:
+			out.WriteString(" " + string(v.Destination) + " ")
+		case *ast.AutoLink:
+			out.WriteString(" " + string(v.URL(src)) + " ")
+			return ast.WalkSkipChildren, nil
 		}
-		out.WriteString(stripCodeSpans(line))
-		out.WriteString("\n")
-	}
+		return ast.WalkContinue, nil
+	})
 	return out.String()
 }
 
-// stripCodeSpans blanks the inline code spans in one line and removes
-// backslash escapes outside them.
-func stripCodeSpans(line string) string {
+// unescape removes the backslashes that escape ASCII punctuation.
+func unescape(s string) string {
 	var out strings.Builder
-	for i := 0; i < len(line); {
-		switch c := line[i]; {
-		case c == '\\' && i+1 < len(line) && isASCIIPunct(line[i+1]):
-			out.WriteByte(line[i+1])
-			i += 2
-		case c == '`':
-			n := backticks(line[i:])
-			if end := closingRun(line[i+n:], n); end >= 0 {
-				out.WriteByte(' ')
-				i += n + end + n
-				continue
-			}
-			out.WriteString(line[i : i+n])
-			i += n
-		default:
-			out.WriteByte(c)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && isASCIIPunct(s[i+1]) {
 			i++
 		}
+		out.WriteByte(s[i])
 	}
 	return out.String()
-}
-
-// closingRun returns where in s the first run of exactly n backticks
-// starts, or -1. Backslashes do not escape inside a code span.
-func closingRun(s string, n int) int {
-	for i := 0; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		k := backticks(s[i:])
-		if k == n {
-			return i
-		}
-		i += k
-	}
-	return -1
-}
-
-// backticks returns the length of the backtick run that starts s.
-func backticks(s string) int {
-	return len(s) - len(strings.TrimLeft(s, "`"))
 }
 
 func isASCIIPunct(c byte) bool {

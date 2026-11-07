@@ -34,7 +34,8 @@ func TestActionRefs(t *testing.T) {
 		"``a` closes #3":                       {"closes #3"},
 		"`` a ` closes #3 ``":                  nil,
 		"``Closes #3``":                        nil,
-		"`no closer on this line\ncloses #3 `": {"closes #3"},
+		"`a span may cross\ncloses #3 a line`": nil,
+		"`no closer\n\ncloses #3 `":            {"closes #3"},
 		"``` closes #3 ```":                    nil,
 		"\\#3 fixes \\#4":                      {"fixes #4"},
 
@@ -46,6 +47,17 @@ func TestActionRefs(t *testing.T) {
 		"    ```\nCloses #3\n```":               {"Closes #3"},
 		"```\nCloses #3":                        nil,
 		"text ``` Closes #3":                    {"Closes #3"},
+
+		// Fences in list items and block quotes belong to them.
+		"- ```\n  example\n  ```\n\nReopen #312 after merging.":                      {"Reopen #312"},
+		"- ```\n  a\n  ```\n\nReopen #3\n\n- ```\n  b\n  ```":                        {"Reopen #3"},
+		"1. ```\n   Closes #3\n   ```\n\nreopen #4":                                  {"reopen #4"},
+		"> ```\n> Closes #3\n> ```\n\nreopen #4":                                     {"reopen #4"},
+		"- item\n\n      Closes #3\n\nreopen #4":                                     {"reopen #4"},
+		"- a list item with `Closes #3`\n  and fixes #4":                             {"fixes #4"},
+		"> quoted: Reopen #3":                                                        {"Reopen #3"},
+		"[Closes #3](http://forge/x) and [here](http://forge/bottown/demo/issues/7)": {"Closes #3"},
+		"<div>\nFixes #3\n</div>":                                                    {"Fixes #3"},
 
 		// Formatting around the keyword renders to the same text.
 		"**Reopen** #312":                          {"Reopen #312"},
