@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/review"
 	serverapi "github.com/robertolupi/bottown/internal/server"
@@ -305,17 +306,17 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 		if pr == nil {
 			continue
 		}
-		n := parseIssueRef(pr.HeadBranch)
+		n := activity.BranchIssue(pr.HeadBranch)
 		if n <= 0 {
 			continue
 		}
 		cur := prByIssue[n]
 		switch {
-		case isPROpen(pr):
-			if cur == nil || !isPROpen(cur) || pr.Number > cur.Number {
+		case activity.PROpen(pr):
+			if cur == nil || !activity.PROpen(cur) || pr.Number > cur.Number {
 				prByIssue[n] = pr
 			}
-		case pr.Merged && (cur == nil || (!isPROpen(cur) && pr.Number > cur.Number)):
+		case pr.Merged && (cur == nil || (!activity.PROpen(cur) && pr.Number > cur.Number)):
 			prByIssue[n] = pr
 		}
 	}
@@ -418,7 +419,7 @@ func (s *Server) buildGraph(
 			if r.Kind != "implement" && r.Kind != "verify" {
 				continue
 			}
-			if r.Issue == issue || parseIssueRef(r.Branch) == issue || (pr != nil && r.PR == pr.Number) {
+			if r.Issue == issue || activity.BranchIssue(r.Branch) == issue || (pr != nil && r.PR == pr.Number) {
 				out = append(out, r)
 			}
 		}
@@ -452,7 +453,7 @@ func (s *Server) buildGraph(
 		if pr != nil {
 			state := "closed"
 			switch {
-			case isPROpen(pr):
+			case activity.PROpen(pr):
 				state = "open"
 			case pr.Merged:
 				state = "merged"

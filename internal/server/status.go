@@ -167,9 +167,18 @@ func (s *Server) markGate(sts []CommitStatus) {
 }
 
 // GateOut is the flow's gate history on one PR: the PR's commits whose
-// latest bottown/e2e status from the flow is a failure, oldest first.
+// latest bottown/e2e status from the flow is a failure, oldest first, and
+// every bottown/e2e status the flow wrote on them, by commit in the same
+// order and oldest first on each.
 type GateOut struct {
-	Failed []string `json:"failed"`
+	Failed []string     `json:"failed"`
+	Checks []GateStatus `json:"checks"`
+}
+
+// GateStatus is one bottown/e2e status the flow wrote on a PR commit.
+type GateStatus struct {
+	SHA string `json:"sha"`
+	CommitStatus
 }
 
 // opGate lists the PR's commits where the flow's post-implement checks
@@ -187,7 +196,7 @@ func (s *Server) opGate(ctx context.Context, p secrets.Principal, in Target) (Ga
 	if err != nil {
 		return GateOut{}, err
 	}
-	out := GateOut{Failed: []string{}}
+	out := GateOut{Failed: []string{}, Checks: []GateStatus{}}
 	for page := 1; ; page++ {
 		commits, resp, err := c.ListPullRequestCommits(org, repo, n, sdk.ListPullRequestCommitsOptions{ListOptions: sdk.ListOptions{Page: page, PageSize: 50}})
 		if forgejo.IsNotFound(resp, err) {
@@ -207,11 +216,28 @@ func (s *Server) opGate(ctx context.Context, p secrets.Principal, in Target) (Ga
 					out.Failed = append(out.Failed, cm.SHA)
 				}
 			}
+			out.Checks = append(out.Checks, s.gateStatuses(cm.SHA, sts)...)
 		}
 		if len(commits) < 50 {
 			return out, nil
 		}
 	}
+}
+
+// gateStatuses are the flow's bottown/e2e statuses among sts, on commit
+// sha, oldest first.
+func (s *Server) gateStatuses(sha string, sts []*sdk.Status) []GateStatus {
+	var out []GateStatus
+	for _, st := range sts {
+		if st.Context != "bottown/e2e" || s.Owner == "" || login(st.Creator) != s.Owner {
+			continue
+		}
+		cs := commitStatus(st)
+		cs.Gate = true
+		out = append(out, GateStatus{SHA: sha, CommitStatus: cs})
+	}
+	slices.SortStableFunc(out, func(a, b GateStatus) int { return a.Created.Compare(b.Created) })
+	return out
 }
 
 func commitStatus(st *sdk.Status) CommitStatus {

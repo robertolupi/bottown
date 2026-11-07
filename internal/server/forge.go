@@ -298,7 +298,11 @@ type IssueItem struct {
 	// include.
 	PullRequest bool      `json:"pull_request,omitempty"`
 	Created     time.Time `json:"created,omitzero"`
-	URL         string    `json:"url"`
+	// Updated is the issue's last change, a comment included; Closed is
+	// when it was closed, nil while it is open.
+	Updated time.Time  `json:"updated,omitzero"`
+	Closed  *time.Time `json:"closed,omitempty"`
+	URL     string     `json:"url"`
 }
 
 // MilestoneItem is a milestone.
@@ -313,7 +317,7 @@ func NewIssueItem(is *sdk.Issue, withBody bool) IssueItem {
 	item := IssueItem{
 		Number: is.Index, Title: is.Title, State: string(is.State), Author: login(is.Poster),
 		Labels: []string{}, Milestone: milestoneItem(is.Milestone), PullRequest: is.PullRequest != nil,
-		Created: is.Created, URL: is.HTMLURL,
+		Created: is.Created, Updated: is.Updated, Closed: is.Closed, URL: is.HTMLURL,
 	}
 	for _, l := range is.Labels {
 		if l != nil {

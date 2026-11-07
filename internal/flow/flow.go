@@ -330,8 +330,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 					pr.BaseBranch, pr.HeadBranch, pr.Number, files, conflictRounds))
 			}
 			conflictRounds++
-			if err := s.API.Comment(ctx, opts.Repo, opts.Issue, fmt.Sprintf("**bottown flow: conflicts with %s** on !%d at %s, in %s; starting implement round %d of %d to resolve them.",
-				pr.BaseBranch, pr.Number, shortSHA(pr.HeadSHA), files, conflictRounds, opts.Rounds)); err != nil {
+			if err := s.API.Comment(ctx, opts.Repo, opts.Issue, roundBody("conflicts with "+pr.BaseBranch, fmt.Sprintf("on !%d at %s, in %s; starting implement round %d of %d to resolve them.",
+				pr.Number, shortSHA(pr.HeadSHA), files, conflictRounds, opts.Rounds))); err != nil {
 				return result, err
 			}
 			resolving = pr.HeadSHA
@@ -430,8 +430,8 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 						return s.stop(ctx, result, ChecksFailed, fmt.Sprintf("the post-implement checks failed at %s, and %d check rounds are used: %s; log: %s",
 							shortSHA(head), opts.CheckRounds, outcome.Description, outcome.Log))
 					}
-					if err := s.API.Comment(ctx, opts.Repo, opts.Issue, fmt.Sprintf("**bottown flow: checks failed** at %s on !%d; starting implement round %d of %d to fix them.\n\n%s\n\nLog: `%s`",
-						shortSHA(head), pr.Number, len(failed), opts.CheckRounds, outcome.Description, outcome.Log)); err != nil {
+					if err := s.API.Comment(ctx, opts.Repo, opts.Issue, roundBody(string(ChecksFailed), fmt.Sprintf("at %s on !%d; starting implement round %d of %d to fix them.\n\n%s\n\nLog: `%s`",
+						shortSHA(head), pr.Number, len(failed), opts.CheckRounds, outcome.Description, outcome.Log))); err != nil {
 						return result, err
 					}
 					fixing = head
@@ -824,11 +824,7 @@ func runFailedDetail(err error) string {
 
 func (s *Supervisor) stop(ctx context.Context, result Result, reason StopReason, detail string) (Result, error) {
 	result.Reason, result.Detail = reason, detail
-	body := fmt.Sprintf("**bottown flow: %s**\n\n%s", reason, detail)
-	if result.PR > 0 {
-		body += fmt.Sprintf("\n\nPull request: !%d", result.PR)
-	}
-	if err := s.API.Comment(ctx, result.Repo, result.Issue, body); err != nil {
+	if err := s.API.Comment(ctx, result.Repo, result.Issue, stopBody(reason, detail, result.PR)); err != nil {
 		return result, fmt.Errorf("flow stopped: %s, but posting the stop comment failed: %w", reason, err)
 	}
 	if reason == ReadyToMerge {

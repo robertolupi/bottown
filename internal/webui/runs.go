@@ -8,15 +8,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -274,11 +273,11 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	for _, sr := range serverRuns {
 		issueNum := sr.Issue
 		if issueNum <= 0 {
-			issueNum = parseIssueRef(sr.Branch)
+			issueNum = activity.BranchIssue(sr.Branch)
 		}
 		if issueNum <= 0 && sr.PR > 0 {
 			if pr := prByIndex[sr.PR]; pr != nil {
-				if num := parseIssueRef(pr.HeadBranch); num > 0 {
+				if num := activity.BranchIssue(pr.HeadBranch); num > 0 {
 					issueNum = num
 				}
 			}
@@ -332,12 +331,12 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		var flow *FlowInfo
 		issueNum := sr.Issue
 		if issueNum <= 0 {
-			issueNum = parseIssueRef(sr.Branch)
+			issueNum = activity.BranchIssue(sr.Branch)
 		}
 		if issueNum <= 0 && sr.PR > 0 {
 			for _, pr := range prs {
 				if pr.Number == sr.PR {
-					if num := parseIssueRef(pr.HeadBranch); num > 0 {
+					if num := activity.BranchIssue(pr.HeadBranch); num > 0 {
 						issueNum = num
 					}
 					break
@@ -345,7 +344,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			}
 		}
 		prNum := sr.PR
-		if prNum <= 0 && issueNum > 0 && !standaloneKind(sr.Kind) {
+		if prNum <= 0 && issueNum > 0 && !activity.Standalone(sr.Kind) {
 			if pr := prByIssue[issueNum]; pr != nil {
 				prNum = pr.Number
 			}
@@ -405,10 +404,10 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 				}
 			}
 		}
-		if standaloneKind(sr.Kind) {
-			threadKey = standaloneThreadKey(sr.Kind, sr.ID)
+		if activity.Standalone(sr.Kind) {
+			threadKey = activity.StandaloneKey(sr.Kind, sr.ID)
 		} else {
-			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
+			threadKey = activity.ThreadKey(issueNum, prNum, sr.ID)
 		}
 
 		elapsed := formatDuration(now.Sub(sr.Created))
@@ -591,8 +590,6 @@ func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
 	return live
 }
 
-var summaryPRRegex = regexp.MustCompile(`!(\d+)\b`)
-
 type resolvedRunMeta struct {
 	Issue      int64
 	IssueURL   string
@@ -605,68 +602,8 @@ type resolvedRunMeta struct {
 	Active     bool
 }
 
-func parseIssueRef(ref string) int64 {
-	ref = strings.TrimSpace(ref)
-	ref = strings.TrimPrefix(ref, "refs/heads/")
-	if strings.HasPrefix(ref, "issue/") {
-		var n int64
-		if _, err := fmt.Sscanf(ref, "issue/%d", &n); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
-func parseSummaryPR(summary string) int64 {
-	m := summaryPRRegex.FindStringSubmatch(summary)
-	if len(m) >= 2 {
-		if n, err := strconv.ParseInt(m[1], 10, 64); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
-// standaloneKind is whether runs of kind stand alone, one thread each,
-// outside the flows: discuss and retro runs look at an issue without
-// working it, so they neither join its flow nor keep it active.
-func standaloneKind(kind string) bool { return kind == "discuss" || kind == "retro" }
-
-// standaloneThreadKey is the thread of a standalone run.
-func standaloneThreadKey(kind, runID string) string { return kind + ":" + runID }
-
-// standaloneThread is whether key is a standalone run's thread.
-func standaloneThread(key string) bool {
-	return strings.HasPrefix(key, "discuss:") || strings.HasPrefix(key, "retro:")
-}
-
-func flowThreadKey(issueNum, prNum int64, runID string) string {
-	switch {
-	case issueNum > 0 && prNum > 0:
-		return fmt.Sprintf("flow:issue:%d:pr:%d", issueNum, prNum)
-	case issueNum > 0:
-		return fmt.Sprintf("flow:issue:%d", issueNum)
-	case prNum > 0:
-		return fmt.Sprintf("flow:pr:%d", prNum)
-	default:
-		return "flow:run:" + runID
-	}
-}
-
-func isPROpen(pr *serverapi.PRItem) bool {
-	if pr == nil {
-		return true
-	}
-	if pr.Merged || pr.MergedAt != nil || pr.ClosedAt != nil {
-		return false
-	}
-	return pr.State == "" || pr.State == string(sdk.StateOpen)
-}
-
 // resolveRunsMeta maps runs to their flow thread (issue, PR, milestone, thread key, and active state).
-// Implement and verify runs for the same issue and PR share a thread; distinct PRs form separate threads;
-// pre-PR implement runs group under the issue and join the PR thread once the PR is created;
-// discuss runs remain standalone entries.
+// The threads are activity.Group's, which the timeline and statistics use too.
 func (s *Server) resolveRunsMeta(
 	allRuns []serverapi.RunItem,
 	issues []*serverapi.IssueItem,
@@ -681,167 +618,22 @@ func (s *Server) resolveRunsMeta(
 			issuesByIndex[iss.Number] = iss
 		}
 	}
-
 	prsByIndex := make(map[int64]*serverapi.PRItem, len(prs))
-	issueOfPR := make(map[int64]int64)
 	for _, pr := range prs {
-		if pr == nil || pr.Number <= 0 {
-			continue
-		}
-		prsByIndex[pr.Number] = pr
-		if n := parseIssueRef(pr.HeadBranch); n > 0 {
-			issueOfPR[pr.Number] = n
+		if pr != nil && pr.Number > 0 {
+			prsByIndex[pr.Number] = pr
 		}
 	}
-
-	hasExplicitPRRun := make(map[int64]bool)
-	earliestRunForPR := make(map[int64]time.Time)
-	for _, sr := range allRuns {
-		if sr.PR > 0 {
-			hasExplicitPRRun[sr.PR] = true
-			if t, ok := earliestRunForPR[sr.PR]; !ok || (!sr.Created.IsZero() && sr.Created.Before(t)) {
-				earliestRunForPR[sr.PR] = sr.Created
-			}
-			if issueOfPR[sr.PR] == 0 {
-				if sr.Issue > 0 {
-					issueOfPR[sr.PR] = sr.Issue
-				} else if n := parseIssueRef(sr.Branch); n > 0 {
-					issueOfPR[sr.PR] = n
-				}
-			}
-		}
-	}
-
-	for _, sr := range allRuns {
-		if sr.Kind == "implement" && sr.Issue > 0 {
-			if mentioned := parseSummaryPR(sr.Digest.Summary); mentioned > 0 && issueOfPR[mentioned] == 0 {
-				if prsByIndex[mentioned] != nil || hasExplicitPRRun[mentioned] {
-					issueOfPR[mentioned] = sr.Issue
-				}
-			}
-		}
-	}
-
-	prsForIssue := make(map[int64][]int64)
-	seenPR := make(map[int64]bool)
-	for prIdx, issNum := range issueOfPR {
-		if issNum > 0 && prIdx > 0 && !seenPR[prIdx] {
-			seenPR[prIdx] = true
-			prsForIssue[issNum] = append(prsForIssue[issNum], prIdx)
-		}
-	}
-
-	prStartTime := func(prIdx int64) time.Time {
-		if pr := prsByIndex[prIdx]; pr != nil && pr.Created != nil && !pr.Created.IsZero() {
-			return *pr.Created
-		}
-		return earliestRunForPR[prIdx]
-	}
-
-	for issNum := range prsForIssue {
-		cands := prsForIssue[issNum]
-		sort.Slice(cands, func(i, j int) bool {
-			ti, tj := prStartTime(cands[i]), prStartTime(cands[j])
-			if !ti.Equal(tj) && !ti.IsZero() && !tj.IsZero() {
-				return ti.Before(tj)
-			}
-			return cands[i] < cands[j]
-		})
-		prsForIssue[issNum] = cands
-	}
-
-	prCutoffs := make(map[int64]time.Time)
-	for _, cands := range prsForIssue {
-		for idx, prIdx := range cands {
-			pr := prsByIndex[prIdx]
-			if idx == len(cands)-1 && isPROpen(pr) {
-				continue
-			}
-			var cutoff time.Time
-			if pr != nil {
-				if pr.MergedAt != nil && pr.MergedAt.After(cutoff) {
-					cutoff = *pr.MergedAt
-				}
-				if pr.ClosedAt != nil && pr.ClosedAt.After(cutoff) {
-					cutoff = *pr.ClosedAt
-				}
-				if cutoff.IsZero() {
-					if pr.Updated != nil && pr.Updated.After(cutoff) {
-						cutoff = *pr.Updated
-					}
-					if pr.Created != nil && pr.Created.After(cutoff) {
-						cutoff = *pr.Created
-					}
-				}
-			}
-			for _, r := range allRuns {
-				if standaloneKind(r.Kind) {
-					continue
-				}
-				if r.PR == prIdx || (r.Kind == "implement" && parseSummaryPR(r.Digest.Summary) == prIdx) {
-					if r.Created.After(cutoff) {
-						cutoff = r.Created
-					}
-					if r.Ended != nil && r.Ended.After(cutoff) {
-						cutoff = *r.Ended
-					}
-				}
-			}
-			prCutoffs[prIdx] = cutoff
-		}
-	}
+	g := activity.Group(allRuns, prs)
+	prsForIssue := g.PRsForIssue
 
 	meta := make(map[string]resolvedRunMeta, len(allRuns))
 	activeThreads := make(map[string]bool)
 	seenIssues := make(map[int64]bool)
 
 	for _, sr := range allRuns {
-		var issueNum, prNum int64
-		var threadKey string
-
-		switch sr.Kind {
-		case "discuss", "retro":
-			issueNum = sr.Issue
-			prNum = sr.PR
-			threadKey = standaloneThreadKey(sr.Kind, sr.ID)
-		case "verify":
-			prNum = sr.PR
-			issueNum = sr.Issue
-			if issueNum <= 0 && prNum > 0 {
-				issueNum = issueOfPR[prNum]
-			}
-			if issueNum <= 0 {
-				issueNum = parseIssueRef(sr.Branch)
-			}
-			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
-		default: // "implement"
-			issueNum = sr.Issue
-			if issueNum <= 0 {
-				issueNum = parseIssueRef(sr.Branch)
-			}
-			prNum = sr.PR
-			if issueNum <= 0 && prNum > 0 {
-				issueNum = issueOfPR[prNum]
-			}
-			if prNum <= 0 && issueNum > 0 {
-				cands := prsForIssue[issueNum]
-				if mentioned := parseSummaryPR(sr.Digest.Summary); mentioned > 0 && slices.Contains(cands, mentioned) {
-					prNum = mentioned
-				} else {
-					for idx, candPR := range cands {
-						if idx == len(cands)-1 && isPROpen(prsByIndex[candPR]) {
-							prNum = candPR
-							break
-						}
-						if cutoff := prCutoffs[candPR]; !cutoff.IsZero() && !sr.Created.After(cutoff) {
-							prNum = candPR
-							break
-						}
-					}
-				}
-			}
-			threadKey = flowThreadKey(issueNum, prNum, sr.ID)
-		}
+		rt := g.Runs[sr.ID]
+		issueNum, prNum, threadKey := rt.Issue, rt.PR, rt.Key
 
 		if issueNum > 0 {
 			seenIssues[issueNum] = true
@@ -889,22 +681,22 @@ func (s *Server) resolveRunsMeta(
 	for issueNum := range seenIssues {
 		if s.getActiveFlow(issueNum) != nil {
 			cands := prsForIssue[issueNum]
-			if len(cands) > 0 && isPROpen(prsByIndex[cands[len(cands)-1]]) {
-				activeThreads[flowThreadKey(issueNum, cands[len(cands)-1], "")] = true
+			if len(cands) > 0 && activity.PROpen(prsByIndex[cands[len(cands)-1]]) {
+				activeThreads[activity.ThreadKey(issueNum, cands[len(cands)-1], "")] = true
 			} else {
-				activeThreads[flowThreadKey(issueNum, 0, "")] = true
+				activeThreads[activity.ThreadKey(issueNum, 0, "")] = true
 			}
 		}
 	}
 
 	for id, m := range meta {
-		if !standaloneThread(m.ThreadKey) {
+		if !activity.IsStandaloneKey(m.ThreadKey) {
 			m.Active = activeThreads[m.ThreadKey]
 			meta[id] = m
 		}
 	}
 
-	return meta, prsForIssue, prCutoffs
+	return meta, prsForIssue, g.PRCutoffs
 }
 
 // ComputeHistoryRuns retrieves ended runs matching filter criteria.
@@ -990,7 +782,7 @@ func (s *Server) ComputeHistoryRuns(ctx context.Context, filter HistoryFilter) (
 		var reviewAtHead bool
 		flowState := ""
 
-		if !standaloneKind(sr.Kind) {
+		if !activity.Standalone(sr.Kind) {
 			flowState = "unknown"
 			if meta.Active {
 				flowState = "in_progress"
@@ -1162,7 +954,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 
 	if issueNum <= 0 && prIndex > 0 {
 		if pr := prsByIndex[prIndex]; pr != nil {
-			issueNum = parseIssueRef(pr.HeadBranch)
+			issueNum = activity.BranchIssue(pr.HeadBranch)
 		}
 		if issueNum > 0 && issue == nil {
 			if fetched, err := s.issue(ctx, issueNum, true); err == nil {
@@ -1172,7 +964,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 	}
 
 	matchedPR := prsByIndex[prIndex]
-	targetThreadKey := flowThreadKey(issueNum, prIndex, "")
+	targetThreadKey := activity.ThreadKey(issueNum, prIndex, "")
 
 	var milestone string
 	if issue != nil && issue.Milestone != nil && issue.Milestone.Title != "" {
@@ -1255,7 +1047,7 @@ func (s *Server) ComputeFlowTimeline(ctx context.Context, issueNum, prFilter int
 
 	// 3. Runs belonging specifically to this flow thread (excluding discuss runs and other PR threads)
 	for _, sr := range serverRuns {
-		if standaloneKind(sr.Kind) {
+		if activity.Standalone(sr.Kind) {
 			continue
 		}
 		m := metaMap[sr.ID]

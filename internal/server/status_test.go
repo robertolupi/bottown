@@ -217,6 +217,10 @@ func TestOpGate(t *testing.T) {
 	if err != nil || strings.Join(gate.Failed, ",") != c1 {
 		t.Fatalf("gate = %+v, %v", gate, err)
 	}
+	if len(gate.Checks) != 1 || gate.Checks[0].SHA != c1 || gate.Checks[0].State != "failure" || !gate.Checks[0].Gate ||
+		!gate.Checks[0].Created.Equal(time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("gate checks = %+v, want the owner's one status on c1", gate.Checks)
+	}
 	if _, err := s.opGate(ctx, secrets.Principal{Actor: "claude"}, Target{Repo: "demo", Number: 9}); errStatus(err) != 403 {
 		t.Errorf("an actor read the gate: %v", err)
 	}

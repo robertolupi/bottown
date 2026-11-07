@@ -430,3 +430,52 @@ as the owner (`--repo` outside a checkout).
   blocks and fails when there are any; anyone who can read the wiki may run
   it. The generator is a pure function of the tree (no clock, no forge), and
   running it on its own output changes nothing.
+
+## Activity
+
+`internal/activity` derives what happened in a repository over a time
+window, for the web UI's timeline and statistics views: both call
+`activity.Load` (through `webui.Server.ComputeActivity`) rather than each
+deriving on its own, and the browser shows what it returns. It keeps no
+store: every fact is read again from the server's run records and the
+forge, apart from an in-memory cache of issues (see Reads below).
+
+- **Runs** that overlap the window, purged ones included, each with its
+  thread key and its usage. A run's usage is reported when the harness
+  gave tokens or a cost; a figure it did not give is nil, never zero, so
+  the views can say "n of m runs reported".
+- **Threads.** `activity.Group` groups runs into flow threads, and History
+  groups them with it too: implement and verify runs for one issue and PR
+  share a thread, each PR of an issue is its own, implement runs before
+  the PR join its thread, and discuss and retro runs stand alone. The
+  window's threads are those with a run that overlaps it, whose PR was
+  created, updated, merged or closed in it, or is open, or with a stop in
+  it or an owner wait that overlaps it. Each has its PR's
+  created, merged and closed times, its implement rounds (`REQUEST_CHANGES`
+  reviews) and check rounds (commits whose flow `bottown/e2e` status
+  failed), as the flow counts them.
+- **Checks.** Each flow `bottown/e2e` status on the PR's commits
+  (`GET /v1/forge/pr/gate`, `checks`) ends at the status's time; its start
+  is derived, that time less the duration the description ends with
+  ("in 4m12s", "after 1m03s"), and absent when there is none.
+- **Stops and owner waits.** The flow's stop comments
+  (`**bottown flow: <reason>**`, written and parsed in `internal/flow`)
+  are typed stop reasons, in the thread of the PR they name, else of the
+  PR the issue's work belonged to then. Each leaves the thread waiting on
+  the owner until its next run, the PR's merge or close (the issue's close
+  for a thread with no PR), or the next stop, whichever is first; still
+  waiting when none has happened. The flow's
+  announcements of a round it starts share the prefix but are not stops.
+
+**Reads.** Load reads the run list (all of it, so threads group as History
+groups them and a wait that began before the window ends where it did),
+the PR list and the issue list once. It then reads each PR of the window's
+threads once and its gate once, and, once each, the comments of the
+issues that can hold a stop or a wait in the window: those of the window's
+threads, those updated in the window (a new stop updates its issue), and
+every open one, whose wait may have begun before the window, even before
+the flow's first run. That is 3 + issues + 2 × PRs calls, for a 7-day
+window or any other. The web UI keeps the issues it read in memory, each as
+of its `updated` time, and reads one again only when that has changed;
+the cache only saves reads, and a restart empties it. A failed issue or PR
+read leaves its facts out and is named in `incomplete`.
