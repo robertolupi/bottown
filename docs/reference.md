@@ -169,6 +169,13 @@ reviews before Forgejo has processed a push, which the slower VM exposes.
 
 ### Reusing an issue branch
 
+Implement and plan run pushes are confined by the git proxy to
+`refs/heads/issue/<n>` for the run's issue. Every ref update is checked,
+including deletions: pushes to other issue branches, milestone branches,
+the default branch, and tags are refused. A push containing any other ref
+is rejected in full before its pack is forwarded. Owner keys and non-run
+principals are unchanged.
+
 A retry on the same issue can reuse `issue/<n>` even when an earlier run
 kept its worktree. Before creating the server run, the launcher detaches
 that old worktree, preserving its commits and working files for inspection.
@@ -349,6 +356,39 @@ pid dead) is not held and the next flow takes it over. The web UI's flow
 start refuses in the same way before it starts the background flow, which
 takes the lock itself. The file is not removed when the flow ends, and run
 gc leaves it.
+
+### Flow stops and exit codes
+
+Each stop of `bottown flow` is an issue comment, `**bottown flow:
+<reason>**`, then its detail, then `Pull request: !N` when the flow had a
+PR, and last a marker line a reader can parse without the prose:
+
+```
+<!-- bottown:flow-stop v=1 reason="agent did nothing" -->
+```
+
+The reasons are `ready to merge`, `out of rounds`, `run failed`, `agent
+did nothing`, `verifier undecided`, `conflicts with base`, `changes
+requested`, `checks failed`, `actor busy` and `merged`. `bottown flow`
+exits with:
+
+| Exit | When |
+|---|---|
+| 0 | the flow stopped `ready to merge` |
+| 3 | the flow stopped `agent did nothing` |
+| 1 | any other stop, or an error |
+
+`agent did nothing` is a batch implement or verify run whose agent made
+no tool call (as `runs.LastError` reads its log), whether the harness
+exited 0 or not: usually its actor is out of quota or signed out. Its
+detail names the run, the actor and its model if one was pinned
+(`--implement agy:MODEL`), the log and the harness's last error line. A
+run that exited 0 without a tool call also fails `bottown run implement`
+and `run verify` (exit 1, with the log's path), though the run's record
+stays `succeeded`. Under the testing hook `BOTTOWN_HARNESS_CMD`, a script
+that exits 0 is not checked, as its log is not the harness's stream.
+`run failed` stays for a run that failed after a tool call, crashed, or
+timed out.
 
 ## Harness models
 

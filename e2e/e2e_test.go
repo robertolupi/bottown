@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -689,6 +690,9 @@ func TestE2E(t *testing.T) {
 		os.WriteFile(filepath.Join(demo, "run.txt"), []byte("run\n"), 0o644)
 		git(t, demo, "add", ".")
 		git(t, demo, "commit", "-q", "-m", "run change")
+		if out, err := a.pushAs(demo, "claude", ik, branch+":refs/heads/another-run"); err == nil || !strings.Contains(out, "run may push only refs/heads/"+branch) {
+			t.Fatalf("implement run foreign push: %v\n%s", err, out)
+		}
 		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
 			t.Fatalf("implement run push: %v\n%s", err, out)
 		}
@@ -2576,21 +2580,24 @@ fi`
 		t.Run("failed run", func(t *testing.T) {
 			issue := newIssue("flow failure")
 			// kimi out of quota: the harness fails before any tool call,
-			// and only its own error says why.
+			// and only its own error says why. The flow stops as agent did
+			// nothing, with its own exit status and stop marker.
 			const quota = "error: failed to run prompt: provider.api_error: 429 You've reached your 5-hour usage limit."
 			out, err := withHarness("echo \""+quota+"\"; exit 1", "flow", fmt.Sprint(issue), "--implement", "kimi", "--verify", "claude", "--timeout", "10s")
-			if err == nil || !strings.Contains(out, "run failed") {
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 3 || !strings.Contains(out, "agent did nothing") {
 				t.Fatalf("flow failure: %v\n%s", err, out)
 			}
 			logLine := regexp.MustCompile(`(?m)^  log: (\S+\.log)$`).FindStringSubmatch(out)
 			if logLine == nil || !strings.Contains(out, "failed (exit 1)") || !strings.Contains(out, "  last error: "+quota) {
 				t.Fatalf("launcher's output lacks the log or the last error:\n%s", out)
 			}
-			assertStopComment(issue, "run failed")
+			assertStopComment(issue, "agent did nothing")
 			var comments []struct{ Body string }
 			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
 			stop := comments[len(comments)-1].Body
-			for _, want := range []string{"log: " + logLine[1], "last error: " + quota, "the run ended before the agent did anything", "`--implement`/`--verify`"} {
+			for _, want := range []string{"log: " + logLine[1], "last error: " + quota, "the implement run r-", "by kimi failed without a tool call", "`--implement`/`--verify`",
+				`<!-- bottown:flow-stop v=1 reason="agent did nothing" -->`} {
 				if !strings.Contains(stop, want) {
 					t.Errorf("stop comment lacks %q:\n%s", want, stop)
 				}

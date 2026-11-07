@@ -5,9 +5,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -376,6 +379,27 @@ func (s *Server) gitProxy(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "denied by bottown policy rule "+d.Rule)
 			return
 		}
+		if strings.HasSuffix(gitPath, "/git-receive-pack") {
+			if encoding := r.Header.Get("Content-Encoding"); encoding != "" && encoding != "identity" {
+				http.Error(w, "unsupported push content encoding", http.StatusBadRequest)
+				return
+			}
+			refs, prefix, err := readPushRefs(r.Body)
+			if err != nil {
+				http.Error(w, "invalid push: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if d := runScope(run).DecideGitRefs(refs); !d.Allow {
+				// A git protocol failure uses HTTP 200 so clients read it.
+				s.audit(p, "git", r.Method, gitPath, gitRepo(gitPath), "deny", d.Rule, http.StatusOK)
+				writePushError(w, prefix, fmt.Sprintf("denied by bottown policy rule %s: run may push only refs/heads/issue/%d", d.Rule, run.Issue))
+				return
+			}
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(prefix), r.Body), r.Body}
+		}
 	}
 	token, ok := s.actorToken(actor)
 	if !ok {
@@ -409,7 +433,7 @@ func (s *Server) proxy(path string, auth func(*http.Request)) *httputil.ReverseP
 }
 
 func runScope(run *secrets.Run) policy.RunScope {
-	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind, Debate: inDebateRound(run)}
+	return policy.RunScope{Org: run.Org, Repo: run.Repo, Role: run.Kind, Issue: run.Issue, Debate: inDebateRound(run)}
 }
 
 // audit logs a proxy decision, and stores it unless it is an allowed read:
