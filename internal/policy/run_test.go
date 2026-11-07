@@ -104,3 +104,20 @@ func TestRunScopeGit(t *testing.T) {
 		}
 	}
 }
+
+func TestRunGitRefs(t *testing.T) {
+	for _, role := range []string{Implement, Plan} {
+		s := RunScope{Role: role, Issue: 363}
+		if d := s.DecideGitRefs([]string{"refs/heads/issue/363"}); !d.Allow {
+			t.Fatal(d)
+		}
+		for _, ref := range []string{"refs/heads/issue/364", "refs/heads/main", "refs/heads/milestone/x", "refs/tags/v1", "refs/heads/issue/363/extra", "refs/heads/Issue/363"} {
+			if d := s.DecideGitRefs([]string{"refs/heads/issue/363", ref}); d.Allow {
+				t.Errorf("%s accepted %s", role, ref)
+			}
+		}
+	}
+	if d := (RunScope{Role: Verify, Issue: 363}).DecideGitRefs([]string{"refs/heads/issue/363"}); d.Allow {
+		t.Fatal(d)
+	}
+}

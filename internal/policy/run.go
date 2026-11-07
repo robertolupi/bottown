@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -31,6 +32,7 @@ const (
 // after the base Policy: a request must pass both.
 type RunScope struct {
 	Org, Repo string
+	Issue     int64
 	Role      string // Implement | Verify | Discuss | Plan | Retro | Consolidate
 	// Debate is a discuss run answering in a debate round (#315): it may
 	// not comment or react while the round is open, since every other
@@ -133,4 +135,17 @@ func (s RunScope) DecideGit(gitPath, service string) Decision {
 		return Decision{Allow: true, Rule: "run-" + s.Role + "-push"}
 	}
 	return Decision{Allow: true, Rule: "run-fetch"}
+}
+
+// DecideGitRefs confines every update, including deletions, to the run's issue branch.
+func (s RunScope) DecideGitRefs(refs []string) Decision {
+	if s.Role != Implement && s.Role != Plan {
+		return Decision{Rule: "role-" + s.Role + "-push"}
+	}
+	for _, ref := range refs {
+		if s.Issue <= 0 || ref != fmt.Sprintf("refs/heads/issue/%d", s.Issue) {
+			return Decision{Rule: "run-push-ref"}
+		}
+	}
+	return Decision{Allow: true, Rule: "run-" + s.Role + "-push"}
 }

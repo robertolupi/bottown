@@ -663,6 +663,9 @@ func TestE2E(t *testing.T) {
 		os.WriteFile(filepath.Join(demo, "run.txt"), []byte("run\n"), 0o644)
 		git(t, demo, "add", ".")
 		git(t, demo, "commit", "-q", "-m", "run change")
+		if out, err := a.pushAs(demo, "claude", ik, branch+":refs/heads/another-run"); err == nil || !strings.Contains(out, "run may push only refs/heads/"+branch) {
+			t.Fatalf("implement run foreign push: %v\n%s", err, out)
+		}
 		if out, err := a.pushAs(demo, "claude", ik, branch); err != nil {
 			t.Fatalf("implement run push: %v\n%s", err, out)
 		}
