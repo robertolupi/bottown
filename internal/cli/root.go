@@ -5,10 +5,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/flow"
 	"github.com/spf13/cobra"
 )
 
@@ -20,13 +22,28 @@ type globals struct {
 	source   string // how instance was chosen, for messages
 }
 
+// ExitAgentDidNothing is bottown's exit status for a flow that stopped
+// because a run's agent made no tool call (flow.AgentDidNothing), so a
+// process that runs flows can tell an unavailable actor from other stops.
+const ExitAgentDidNothing = 3
+
 // Execute runs the bottown command.
 func Execute(ctx context.Context) int {
 	if err := newRoot().ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "bottown:", err)
-		return 1
+		return exitCode(err)
 	}
 	return 0
+}
+
+// exitCode is the exit status for a command's error: 1, or
+// ExitAgentDidNothing for that flow stop.
+func exitCode(err error) int {
+	var stop *flow.StopError
+	if errors.As(err, &stop) && stop.Result.Reason == flow.AgentDidNothing {
+		return ExitAgentDidNothing
+	}
+	return 1
 }
 
 // agentCmds marks the agent CLI commands, which act for the run or actor

@@ -216,7 +216,8 @@ the owner sees it in Forgejo and in the UI:
 |---|---|---|
 | ready to merge | the verifier approved the PR's current head | review and merge |
 | out of rounds | changes were still requested after N rounds | read the reviews; re-run with more rounds, steer it interactively, or take over |
-| run failed | a run failed, crashed or timed out | read its handover, and the run log and the harness's last error line that the stop names; fix the issue text or the environment, then re-run the flow (with another actor, if the run ended before the agent did anything because its actor is out of quota or signed out) |
+| run failed | a run failed, crashed or timed out after its agent made a tool call | read its handover, and the run log and the harness's last error line that the stop names; fix the issue text or the environment, then re-run the flow |
+| agent did nothing | a run ended, with any exit status, before its agent made a single tool call: usually its actor is out of quota or signed out | read the log and last error line the stop names; re-run the flow with another actor, or once the actor is available again |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
 | conflicts with main | merging `main` into the PR would still conflict after the flow's conflict rounds, or one pushed nothing | read the named files; start an implement run to resolve them, or re-run the flow |

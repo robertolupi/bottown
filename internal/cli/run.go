@@ -615,21 +615,37 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	} else {
 		fmt.Fprintf(out, "run %s %s (exit %d); worktree kept at %s\n", st.Info.Bold(true).Render(run.ID), st.runStatus(status), code, dir)
 	}
-	if status == runs.StatusSucceeded {
+	failed := &runs.FailedRunError{ID: run.ID, Status: status}
+	if o.interactive {
+		if status == runs.StatusSucceeded {
+			return nil
+		}
+		return failed
+	}
+	// Why it failed is often only in the log: a provider error, an actor
+	// out of quota or not signed in. An agent that made no tool call did
+	// nothing, whatever the harness's exit status.
+	failed.Log = logPath
+	failed.LastError, failed.ToolCalls = runs.LastError(harnessName, logBytes)
+	if status == runs.StatusSucceeded && (failed.ToolCalls || !idleCheck(kind)) {
 		return nil
 	}
-	failed := &runs.FailedRunError{ID: run.ID, Status: status}
-	if !o.interactive {
-		// Why it failed is often only in the log: a provider error, an
-		// actor out of quota or not signed in.
-		failed.Log = logPath
-		failed.LastError, failed.ToolCalls = runs.LastError(harnessName, logBytes)
-		fmt.Fprintf(out, "  log: %s\n", logPath)
-		if failed.LastError != "" {
-			fmt.Fprintf(out, "  last error: %s\n", st.Danger.Render(failed.LastError))
-		}
+	fmt.Fprintf(out, "  log: %s\n", logPath)
+	if failed.LastError != "" {
+		fmt.Fprintf(out, "  last error: %s\n", st.Danger.Render(failed.LastError))
+	}
+	if !failed.ToolCalls {
+		fmt.Fprintf(out, "  %s\n", st.Danger.Render("the agent made no tool call"))
 	}
 	return failed
+}
+
+// idleCheck is whether an implement or verify run of kind that succeeded
+// without a tool call fails all the same: its agent did nothing. A run of
+// the testing hook's script (runs.HarnessCmdEnv) is not checked when it
+// succeeds, as its log is not the harness's stream.
+func idleCheck(kind string) bool {
+	return (kind == policy.Implement || kind == policy.Verify) && os.Getenv(runs.HarnessCmdEnv) == ""
 }
 
 // keepRetroDrafts is whether a retro run's worktree in dir holds drafts the
