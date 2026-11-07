@@ -33,6 +33,9 @@ type Forge interface {
 	Issues(ctx context.Context) ([]*ForgeIssue, error)
 	CreateIssue(ctx context.Context, title, body string, milestone int64) (int64, error)
 	EditIssue(ctx context.Context, n int64, title, body string) error
+	// AddLabel adds one label to issue n; adding one it already has is a
+	// no-op.
+	AddLabel(ctx context.Context, n int64, label string) error
 	// BlockedBy lists the issues n depends on (Forgejo's dependencies).
 	BlockedBy(ctx context.Context, n int64) ([]int64, error)
 	AddBlockedBy(ctx context.Context, n, dep int64) error
@@ -47,6 +50,7 @@ type ForgeIssue struct {
 	Closed    bool
 	Poster    string
 	PR        bool
+	Labels    []string
 	Milestone *ForgeMilestone // nil if none
 }
 
@@ -128,6 +132,7 @@ type child struct {
 	content string      // the rendered body without the marker
 	sha     string
 	update  bool // PATCH cur to content
+	addSize bool // add the plan's size label: the issue has no size/* label yet
 }
 
 func (c *child) ref() string {
@@ -330,6 +335,7 @@ func (a *applier) planChildren() {
 		c.sha = Hash(c.Title, c.content)
 		if c.cur == nil {
 			a.change("create %s in milestone %q: %s", c.ref(), a.rep.Milestone.Title, c.Title)
+			a.planSize(c)
 			continue
 		}
 		m, content, _ := ParseMarker(c.cur.Body)
@@ -343,7 +349,41 @@ func (a *applier) planChildren() {
 			c.update = true
 			a.change("update %s: plan text changed", c.ref())
 		}
+		a.planSize(c)
 	}
+}
+
+// planSize decides the size label write for c. The plan's size is written
+// only when the issue carries no size/* label at all: the set is exclusive,
+// so adding one drops any other, and the label is the owner's estimate (or
+// the owner-approved plan's), which a later apply must never overwrite. An
+// existing label that differs from the plan is flagged, not changed.
+func (a *applier) planSize(c *child) {
+	if c.Size == "" {
+		return
+	}
+	want := SizeLabelName(c.Size)
+	if cur := sizeLabel(c.cur); cur != "" {
+		if cur != want {
+			a.flag("%s: has size %s, the plan proposes %s; left the owner's", c.ref(), cur, want)
+		}
+		return
+	}
+	c.addSize = true
+	a.change("label %s %s", c.ref(), want)
+}
+
+// sizeLabel is the issue's size/* label, or "" if it has none.
+func sizeLabel(is *ForgeIssue) string {
+	if is == nil {
+		return ""
+	}
+	for _, l := range is.Labels {
+		if strings.HasPrefix(l, "size/") {
+			return l
+		}
+	}
+	return ""
 }
 
 func (a *applier) link(path string) string {
@@ -735,6 +775,11 @@ func (a *applier) execute(ctx context.Context) error {
 			a.rep.Writes++
 			fmt.Fprintf(w, "updated %s\n", c.ref())
 		}
+		if c.addSize {
+			if err := a.addSize(ctx, c); err != nil {
+				return err
+			}
+		}
 	}
 	epicBody := func() string {
 		content := a.epicContent()
@@ -786,6 +831,18 @@ func (a *applier) execute(ctx context.Context) error {
 			fmt.Fprintf(w, "#%d: blocked by #%d\n", from, to)
 		}
 	}
+	return nil
+}
+
+// addSize writes the size label planSize decided on for c.
+func (a *applier) addSize(ctx context.Context, c *child) error {
+	label := SizeLabelName(c.Size)
+	if err := a.f.AddLabel(ctx, c.cur.Number, label); err != nil {
+		return fmt.Errorf("labelling %s %s: %w", c.ref(), label, err)
+	}
+	c.cur.Labels = append(c.cur.Labels, label)
+	a.rep.Writes++
+	fmt.Fprintf(a.o.Out, "%s: label %s\n", c.ref(), label)
 	return nil
 }
 

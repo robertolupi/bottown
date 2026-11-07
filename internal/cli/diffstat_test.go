@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/robertolupi/bottown/internal/diffstat"
 )
 
 const sampleDiff = `diff --git a/go.sum b/go.sum
@@ -41,7 +43,7 @@ Binary files /dev/null and b/logo.png differ
 `
 
 func TestParseDiff(t *testing.T) {
-	files := parseDiff(sampleDiff)
+	files := diffstat.Parse(sampleDiff)
 	type want struct {
 		path             string
 		added, deleted   int
@@ -75,7 +77,7 @@ func TestParseDiff(t *testing.T) {
 
 func TestWriteDiffStat(t *testing.T) {
 	var buf bytes.Buffer
-	writeDiffStat(&buf, parseDiff(sampleDiff))
+	writeDiffStat(&buf, diffstat.Parse(sampleDiff))
 	want := strings.Join([]string{
 		" go.sum               | 3 ++- (collapsed)",
 		" internal/cli/host.go | 2 +-",
@@ -91,7 +93,7 @@ func TestWriteDiffStat(t *testing.T) {
 }
 
 func TestWriteDiffCollapses(t *testing.T) {
-	files := parseDiff(sampleDiff)
+	files := diffstat.Parse(sampleDiff)
 	var buf bytes.Buffer
 	writeDiff(&buf, files)
 	got := buf.String()

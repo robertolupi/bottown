@@ -18,6 +18,7 @@
   import PushModal from './PushModal.svelte';
   import RunHistory from './RunHistory.svelte';
   import RunModal from './RunModal.svelte';
+  import Stats from './Stats.svelte';
   import StopModal from './StopModal.svelte';
   import Timeline from './Timeline.svelte';
   import TimelineModal from './TimelineModal.svelte';
@@ -77,14 +78,16 @@
 
   let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowForm.implement, flowForm.verify));
 
-  // Views: the overview (inbox, runs, health), Milestones and the
-  // Timeline, kept in the URL's fragment so a reload stays on the same one.
-  type View = 'overview' | 'milestones' | 'timeline';
+  // Views: the overview (inbox, runs, health), Milestones, the Timeline and
+  // Stats, kept in the URL's fragment so a reload stays on the same one.
+  type View = 'overview' | 'milestones' | 'timeline' | 'stats';
   const hashView = location.hash.slice(1);
-  let view = $state<View>(hashView === 'milestones' || hashView === 'timeline' ? hashView : 'overview');
+  let view = $state<View>(hashView === 'milestones' || hashView === 'timeline' || hashView === 'stats' ? hashView : 'overview');
   let milestonesRefresh = $state<number>(0);
-  // Bumped when a run or flow starts or ends, to reload the Timeline.
+  // Bumped when a run or flow starts or ends, to reload the Timeline and
+  // the Stats.
   let timelineRefresh = $state<number>(0);
+  let statsRefresh = $state<number>(0);
   let timelineRun = $state<TimelineRun | null>(null);
 
   function selectView(next: View) {
@@ -164,6 +167,7 @@
       }));
       await loadHistory();
       milestonesRefresh++;
+      statsRefresh++;
     } catch (e: any) {
       errorMessage = e.message || 'Unknown error refreshing';
     } finally {
@@ -344,6 +348,7 @@
             if (change.status) await loadStatus(true);
             if (change.status || change.history) {
               timelineRefresh++;
+              statsRefresh++;
               await loadHistory(true);
             }
 
@@ -404,6 +409,8 @@
     <Milestones refreshKey={milestonesRefresh} onFlow={openFlowFor} onRun={openRunFor} />
   {:else if view === 'timeline'}
     <Timeline refreshKey={timelineRefresh} now={nowTime} onRun={(run) => (timelineRun = run)} onFlow={openFlowTimeline} />
+  {:else if view === 'stats'}
+    <Stats refreshKey={statsRefresh} issuesLink={status?.links.issues ?? ''} pullsLink={status?.links.pulls ?? ''} />
   {:else if loading && !status}
     <div class="loading-state">Loading status...</div>
   {:else if status}

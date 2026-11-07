@@ -3,94 +3,19 @@ package cli
 import (
 	"fmt"
 	"io"
-	"path"
-	"slices"
 	"strings"
+
+	"github.com/robertolupi/bottown/internal/diffstat"
 )
 
 // Rendering of a pull request's unified diff for `pr show`: a per-file
 // summary first, then the diff with lock files collapsed. Collapsing is
-// always announced, so a reviewer knows what was not shown.
-
-// lockFiles are generated files whose diffs reviewers skim past; `pr show
-// --diff` collapses them unless --full is given.
-var lockFiles = []string{
-	"go.sum", "go.work.sum", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
-	"Cargo.lock", "poetry.lock", "uv.lock", "Gemfile.lock", "composer.lock",
-}
-
-func isLockFile(p string) bool { return slices.Contains(lockFiles, path.Base(p)) }
-
-// fileDiff is one file's section of a unified diff.
-type fileDiff struct {
-	Path       string
-	Added      int
-	Deleted    int
-	Binary     bool
-	Collapsed  bool
-	Text       string // the section, from its "diff --git" line
-	headerPath string // from "diff --git a/X b/Y", the fallback for Path
-}
-
-// parseDiff splits a git unified diff into files. Text before the first
-// "diff --git" line is dropped.
-func parseDiff(diff string) []fileDiff {
-	var files []fileDiff
-	var cur *fileDiff
-	var text strings.Builder
-	inHunk := false
-	flush := func() {
-		if cur == nil {
-			return
-		}
-		cur.Text = text.String()
-		if cur.Path == "" {
-			cur.Path = cur.headerPath
-		}
-		cur.Collapsed = isLockFile(cur.Path)
-		files = append(files, *cur)
-		text.Reset()
-	}
-	for _, line := range strings.SplitAfter(diff, "\n") {
-		if line == "" {
-			continue
-		}
-		l := strings.TrimRight(line, "\r\n")
-		if strings.HasPrefix(l, "diff --git ") {
-			flush()
-			cur, inHunk = &fileDiff{}, false
-			if _, b, ok := strings.Cut(l, " b/"); ok {
-				cur.headerPath = b
-			}
-		}
-		if cur == nil {
-			continue
-		}
-		text.WriteString(line)
-		switch {
-		case strings.HasPrefix(l, "@@"):
-			inHunk = true
-		case inHunk && strings.HasPrefix(l, "+"):
-			cur.Added++
-		case inHunk && strings.HasPrefix(l, "-"):
-			cur.Deleted++
-		case inHunk:
-		case strings.HasPrefix(l, "+++ ") && l != "+++ /dev/null":
-			cur.Path = strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/")
-		case strings.HasPrefix(l, "--- ") && l != "--- /dev/null" && cur.Path == "":
-			cur.Path = strings.TrimPrefix(strings.TrimPrefix(l, "--- "), "a/")
-		case strings.HasPrefix(l, "rename to "):
-			cur.Path = strings.TrimPrefix(l, "rename to ")
-		case strings.HasPrefix(l, "Binary files "):
-			cur.Binary = true
-		}
-	}
-	flush()
-	return files
-}
+// always announced, so a reviewer knows what was not shown. The parsing
+// itself is internal/diffstat, which the statistics' measured size reads
+// too.
 
 // writeDiffStat prints a summary like `git diff --stat`.
-func writeDiffStat(out io.Writer, files []fileDiff) {
+func writeDiffStat(out io.Writer, files []diffstat.File) {
 	width, numWidth, added, deleted, most := 0, 1, 0, 0, 0
 	for _, f := range files {
 		width = max(width, len(f.Path))
@@ -148,7 +73,7 @@ func bar(added, deleted, most int) string {
 }
 
 // writeDiff prints the files' diffs, replacing collapsed ones with a note.
-func writeDiff(out io.Writer, files []fileDiff) {
+func writeDiff(out io.Writer, files []diffstat.File) {
 	for _, f := range files {
 		if f.Collapsed {
 			fmt.Fprintf(out, "diff --git a/%s b/%s\n[%s: lock file, +%d -%d, collapsed; --full shows it]\n", f.Path, f.Path, f.Path, f.Added, f.Deleted)

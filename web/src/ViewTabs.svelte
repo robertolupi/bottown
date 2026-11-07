@@ -1,7 +1,7 @@
 <script lang="ts">
-  // The tabs between the UI's views: the overview, Milestones and the
-  // Timeline.
-  type View = 'overview' | 'milestones' | 'timeline';
+  // The tabs between the UI's views: the overview, Milestones, the
+  // Timeline and Stats.
+  type View = 'overview' | 'milestones' | 'timeline' | 'stats';
 
   let { view, onSelect }: { view: View; onSelect: (view: View) => void } = $props();
 
@@ -9,6 +9,7 @@
     { view: 'overview', label: 'Inbox · Runs · Health' },
     { view: 'milestones', label: 'Milestones' },
     { view: 'timeline', label: 'Timeline' },
+    { view: 'stats', label: 'Stats' },
   ];
 </script>
 

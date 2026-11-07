@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -39,8 +40,11 @@ type Issue struct {
 	Title   string
 	Key     string
 	Depends []string // keys in the plan, or "#<N>"
-	Body    string
-	Line    int // the line of the section's heading
+	// Size is the optional size label the planner proposes (S, M, L or
+	// XL), which `apply` sets as the issue's size/<Size> label.
+	Size string
+	Body string
+	Line int // the line of the section's heading
 }
 
 // A Diagnostic is one problem in a plan file.
@@ -127,7 +131,19 @@ type frontMatter struct {
 type issueBlock struct {
 	Key     string   `toml:"key"`
 	Depends []string `toml:"depends"`
+	Size    string   `toml:"size"`
 }
+
+// Sizes are the size labels a plan may propose, matching the provisioned
+// size/* label set (internal/config/default.toml).
+var Sizes = []string{"S", "M", "L", "XL"}
+
+// ValidSize reports whether s is a size a plan may propose; empty is valid
+// (no proposal).
+func ValidSize(s string) bool { return s == "" || slices.Contains(Sizes, s) }
+
+// SizeLabelName is the label a size names, "size/S".
+func SizeLabelName(size string) string { return "size/" + size }
 
 // fence is an open fenced code block.
 type fence struct {
@@ -378,12 +394,15 @@ func (p *parser) section(s *section) {
 	} else if s.closed {
 		var ib issueBlock
 		if p.decode(strings.Join(s.blockLines, "\n"), s.block.line+1, name, &ib) {
-			is.Key, is.Depends = ib.Key, ib.Depends
+			is.Key, is.Depends, is.Size = ib.Key, ib.Depends, ib.Size
 			if is.Depends == nil {
 				is.Depends = []string{}
 			}
 			if is.Key == "" {
 				p.errorf(s.block.line, name, "issue block: key is required")
+			}
+			if !ValidSize(is.Size) {
+				p.errorf(s.block.line, name, "issue block: size %q must be one of %s", is.Size, strings.Join(Sizes, ", "))
 			}
 		}
 		is.Body = trimBlank(s.lines)

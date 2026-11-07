@@ -95,6 +95,7 @@ type Server struct {
 	lastSuccessfulFetch time.Time
 	lastOriginErr       string
 	activityIssues      activity.IssueCache // ComputeActivity's issue reads
+	diffs               diffCache           // ComputeStats' merged-PR diff reads
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.
@@ -186,6 +187,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/milestones", s.handleGetMilestones)
 	mux.HandleFunc("GET /api/runs", s.handleGetRuns)
 	mux.HandleFunc("GET /api/timeline", s.handleGetTimeline)
+	mux.HandleFunc("GET /api/stats", s.handleGetStats)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleGetRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleGetIssueDetails)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleGetIssueTimeline)

@@ -554,3 +554,115 @@ export interface TimelineData {
   concurrency: { steps: { t: string; n: number }[]; peak: number; mean: number };
   incomplete?: string[];
 }
+
+// GET /api/stats (internal/stats): the per-issue/PR metric vector, the same
+// vector grouped into breakdowns, the size labels' estimate against the
+// measured diff, and each milestone's burndown and burnup. Every number
+// carries its coverage; a measure with n 0 has no median.
+export interface StatsMeasure {
+  n: number;
+  median?: number;
+  min?: number;
+  max?: number;
+}
+
+export interface StatsCell {
+  key: string;
+  n: number;
+  lead_seconds: StatsMeasure;
+  cycle_seconds: StatsMeasure;
+  agent_seconds: StatsMeasure;
+  implement_rounds: StatsMeasure;
+  check_rounds: StatsMeasure;
+  verifier_rejections: StatsMeasure;
+}
+
+export interface StatsBreakdown {
+  by: string;
+  cells: StatsCell[];
+}
+
+export interface StatsUsage {
+  family?: string;
+  runs: number;
+  reported: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  cost_usd?: number;
+}
+
+export interface StatsMeasured {
+  added: number;
+  deleted: number;
+  files: number;
+}
+
+export interface StatsIssue {
+  issue?: number;
+  pr?: number;
+  title?: string;
+  size?: string;
+  milestone?: string;
+  implementer?: string;
+  implementer_family?: string;
+  verifier?: string;
+  verifier_family?: string;
+  created?: string;
+  merged?: string;
+  lead_seconds?: number;
+  cycle_seconds?: number;
+  runs: number;
+  agent_seconds: number;
+  agent_by_kind?: Record<string, number>;
+  implement_rounds: number;
+  check_rounds: number;
+  verifier_rejections: number;
+  rejections_by_family?: Record<string, number>;
+  failed_runs: number;
+  failures_by_cause?: Record<string, number>;
+  interactive_runs: number;
+  stops: number;
+  usage?: StatsUsage[];
+  measured?: StatsMeasured;
+}
+
+export interface StatsSizeBucket {
+  bucket: string;
+  n: number;
+}
+
+export interface StatsSizeRow {
+  size: string;
+  n: number;
+  measured: number;
+  buckets: StatsSizeBucket[];
+}
+
+export interface StatsBurnPoint {
+  t: string;
+  total: number;
+  closed: number;
+  open: number;
+  total_weight?: number;
+  open_weight?: number;
+}
+
+export interface StatsMilestone {
+  title: string;
+  total: number;
+  closed: number;
+  weighted: boolean;
+  points: StatsBurnPoint[];
+}
+
+export interface StatsData {
+  window: { since: string; until: string };
+  now: string;
+  issues: StatsIssue[];
+  breakdowns: StatsBreakdown[];
+  sizes: StatsSizeRow[];
+  milestones: StatsMilestone[];
+  incomplete?: string[];
+}

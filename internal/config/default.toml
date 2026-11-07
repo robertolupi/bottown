@@ -92,6 +92,32 @@ name = "needs/human"
 color = "d93f0b"
 description = "Escalated; only the owner clears it"
 
+# The size labels: the owner's estimate, or the planner's proposal applied
+# by `milestone apply`. Exclusive, so an issue carries at most one.
+[[labels]]
+name = "size/S"
+color = "c5def5"
+description = "Small: a change with little scope"
+exclusive = true
+
+[[labels]]
+name = "size/M"
+color = "bfd4f2"
+description = "Medium: a change with some scope"
+exclusive = true
+
+[[labels]]
+name = "size/L"
+color = "a2c4f7"
+description = "Large: a change with wide scope"
+exclusive = true
+
+[[labels]]
+name = "size/XL"
+color = "7ea6e0"
+description = "Extra large: a change spanning many parts"
+exclusive = true
+
 [protection]
 required_approvals = 1
 # Every actor's approval counts (the owner's too); add extra approvers here.
