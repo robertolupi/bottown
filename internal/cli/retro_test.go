@@ -372,7 +372,7 @@ func TestGatherRetroWindow(t *testing.T) {
 		pr(22, "issue/10", "m3"),      // merged in it
 		pr(23, "issue/10", "m3-copy"), // a merge commit not on main
 	}
-	merged, flows := windowFlows([]string{"m1", "m2", "x", "m3"}, heads)
+	merged, flows := windowFlows([]string{"m1", "m2", "x", "m3"}, heads, nil)
 	var got []string
 	for _, m := range merged {
 		got = append(got, fmt.Sprint(m.Number))
@@ -426,6 +426,78 @@ func TestGatherRetroWindow(t *testing.T) {
 	}
 	if strings.Contains(readme, "`r-3c`") {
 		t.Errorf("README has #8's run:\n%s", readme)
+	}
+}
+
+// A pull request merged in the window whose head branch was deleted, so
+// that Forgejo reports refs/pull/N/head as its head, still stands for its
+// issue's flow (#395): the issue/<m> branch its verify runs record, or else
+// the "(#m)" in its title. Its implement run is gathered, and the evidence
+// warns per merged pull request whose flow has no implement or plan run,
+// even when its verifier's actor has one elsewhere.
+func TestGatherRetroWindowDeletedBranch(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	pr := func(n int64, title, merge string) prHead {
+		h := prHead{Number: n, Title: title, Merged: true, MergeCommit: merge}
+		h.Head.Ref = fmt.Sprintf("refs/pull/%d/head", n)
+		return h
+	}
+	heads := []prHead{
+		pr(30, "retro: something", "m1"),            // #7's, known from its verifier
+		pr(31, "flow: another thing (#8)", "m2"),    // #8's, known from its title
+		pr(32, "docs: fix a typo (see #3)", "m3"),   // no issue to recover
+		pr(33, "flow: more of #8 (#40) (#8)", "m4"), // #8's second, the last (#m)
+	}
+	list := []server.RunItem{
+		{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: t0}, State: "ended"},
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", PR: 30, Branch: "issue/7", Created: t0.Add(time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Plan, Actor: "kimi", Issue: 8, Branch: "issue/8", Created: t0.Add(2 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-4d", Kind: policy.Verify, Actor: "claude", PR: 32, Created: t0.Add(3 * time.Minute)}, State: "ended"},
+	}
+	merged, flows := windowFlows([]string{"m1", "m2", "m3", "m4"}, heads, list)
+	var got []string
+	for _, f := range flows {
+		got = append(got, fmt.Sprintf("%s%v", f.Flow, f.ForgePRs))
+	}
+	if strings.Join(got, " ") != "#7[30] #8[31 33] !32[32]" {
+		t.Errorf("flows = %v, want #7[30] #8[31 33] !32[32]", got)
+	}
+	scope := retroScope{
+		Flows: flows, Merged: merged, Head: "bbbbbbbbbbbbbbbb",
+		Window: &secrets.RetroWindow{Since: "1w", Base: "aaaaaaaaaaaaaaaa", Page: "20261107-bbbbbbb-retrospective"},
+	}
+	dir := filepath.Join(t.TempDir(), retroDir)
+	// claude implemented #7, but that says nothing of !32, which claude
+	// only verified.
+	tips := []prTip{{PR: 30, Head: "c1", SHA: "c1", Author: "claude"}, {PR: 32, Head: "c2", SHA: "c2", Author: "claude"}}
+	n, gaps, err := gatherRetroScope(dir, scope, "r-self", ws, list, nil, tips, prStatuses{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 4 {
+		t.Errorf("gathered %d runs, want 4, #7's implement run and #8's plan run included", n)
+	}
+	want := []string{
+		"Merged pull request !32 (flow !32) has 1 verify run(s) but no implement or plan run in the evidence: the runs that wrote its code are missing from it.",
+		"Pull request !32's head `c2` is by `claude`, who has no implement or plan run in the evidence: no run in it pushed that head.",
+	}
+	if len(gaps) != 2 || gaps[0] != want[0] || !strings.HasPrefix(gaps[1], want[1]) {
+		t.Errorf("gaps = %q, want %q", gaps, want)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{
+		"| !30 | retro: something | `refs/pull/30/head` | `m1` | !30 of #7 |",
+		"| !31 | flow: another thing (#8) | `refs/pull/31/head` | `m2` | !31 of #8 |",
+		"| !32 | docs: fix a typo (see #3) | `refs/pull/32/head` | `m3` | !32 |",
+		"`r-1a`", "`r-3c`",
+	} {
+		if !strings.Contains(string(b), w) {
+			t.Errorf("README lacks %q:\n%s", w, b)
+		}
 	}
 }
 
