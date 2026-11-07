@@ -83,6 +83,9 @@
           {data.issues.length} issue{data.issues.length === 1 ? '' : 's'}, {merged.length} merged
         </span>
       {/if}
+      {#if data && loading}
+        <span class="muted text-sm stats-updating" role="status"><span class="spinner" aria-hidden="true"></span> Updating…</span>
+      {/if}
     </div>
     <div class="card-header-right stats-controls">
       <label class="stats-range">
@@ -109,6 +112,13 @@
     {#if data?.incomplete?.length}
       <div class="banner stats-incomplete" title={data.incomplete.join('\n')}>
         Some forge reads failed; their numbers are missing ({data.incomplete.length}).
+      </div>
+    {/if}
+
+    {#if !data && loading}
+      <div class="loading-state stats-loading" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        Loading stats… The first load reads every issue and PR in the range from the forge, and can take a while.
       </div>
     {/if}
 
@@ -268,6 +278,7 @@
 {/snippet}
 
 <style>
+  .stats-updating { display: inline-flex; align-items: center; gap: 6px; }
   .stats-controls {
     gap: 8px;
   }

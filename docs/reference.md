@@ -538,7 +538,11 @@ derivation plus the issues' size labels and milestones and the merged PRs'
 diffs. Its window parses as the timeline's, but `since` defaults to thirty
 days before `until`. It follows the ground rules of #309: every number
 carries its coverage, missing data stays missing rather than becoming
-zero, and tokens are never added up across model families.
+zero, and tokens are never added up across model families. A cold load
+reads every issue and PR in the window from the forge and can take tens of
+seconds: the tab shows a spinner until the first answer, and an
+"Updating…" spinner in its header while a refresh runs over the numbers
+already shown.
 
 - **Per issue/PR vector:** its size label and milestone, lead time (issue
   created to PR merged) and cycle time (first run to merged), agent time by
