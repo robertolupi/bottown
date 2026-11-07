@@ -612,7 +612,7 @@ marked interactive, with no usage.
 and usage per issue.
 
 **Retention.** Records and logs, the flows' logs included
-([index.md](../index.md) lists what it removes when), stay on the
+([reference.md](../reference.md#what-run-gc-removes) lists what it removes when), stay on the
 host until `bottown run gc` removes them, which also purges the server's records of ended runs older
 than `--older-than`. For history to outlive that, each run gets a
 **digest** at run end: its record's fields, the stop or handover summary,
@@ -651,7 +651,7 @@ upgrades prod.
   run. Launched runs' own worktrees under `.bottown/runs` are listed too,
   marked with the run's kind and target; a permanent worktree shows as
   live only for the run it leases. Each permanent worktree also shows its
-  fam guide file ([index](../index.md)): current, outdated, missing,
+  fam guide file ([reference](../reference.md#the-fam-guide)): current, outdated, missing,
   foreign or none.
 - The installed slash commands and the bottown skill of each harness are
   current (what `bottown harness setup` would change), and the CLI and
@@ -693,7 +693,7 @@ and stop at the first that fails.
 ### 4.5 Declared checks
 
 Implementers and verifiers run the checks `check` and `e2e` in
-`.bottown.toml` name with `bottown check [--e2e]` (docs/index.md), which
+`.bottown.toml` name with `bottown check [--e2e]` ([reference](../reference.md#checks)), which
 records each run's result as the commit statuses `bottown/check` and
 `bottown/e2e` on the commit it ran on, and `pr show` lists them by actor.
 A status is what the run's actor reports it ran, not a verification.

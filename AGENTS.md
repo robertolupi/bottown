@@ -13,7 +13,10 @@ itself: this repository is hosted on the prod instance as `bottown/bottown`.
 > and forge operations happen exclusively through the `bottown` CLI
 > (`~/.local/bin/bottown`) and the local Forgejo control plane.
 
-Read [docs/index.md](docs/index.md) first. `docs/` holds only current docs;
+Read [docs/index.md](docs/index.md) first: a short orientation page with the
+document map. How bottown behaves today is in
+[docs/reference.md](docs/reference.md), one topic per section; read the
+section you need. `docs/` holds only current docs;
 records of past work are in `docs/history/`: iteration 1's plan and build
 record in [docs/history/iteration-1.md](docs/history/iteration-1.md), and the
 bootstrap design, including Forgejo quirks we found, in
@@ -79,7 +82,7 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   needed). `make e2e` needs Docker and starts throwaway `e2e-*` instances;
   it never touches prod or dev.
   `make e2e-linux` runs `make check` and `make e2e` on Linux in a
-  Multipass VM ([docs/index.md](docs/index.md)); the owner runs it by
+  Multipass VM ([docs/reference.md](docs/reference.md#linux-e2e)); the owner runs it by
   hand before pushing `main` to GitHub, and runs do not run it.
 - **Checks:** `make check` is what "the repository's checks" means to
   implementers and verifiers (needs Go, Node and npm; installs
