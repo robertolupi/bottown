@@ -928,6 +928,18 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 	if err != nil {
 		return CommentOut{}, err
 	}
+	if refuse := refuseActionRefs(in.Body); refuse != nil {
+		// Only a pull request's comments act at merge; on an issue the
+		// keywords are only words.
+		is, _, err := c.GetIssue(org, repo, n)
+		if err != nil {
+			return CommentOut{}, err
+		}
+		if is.PullRequest != nil {
+			s.toolAudit(p, org+"/"+repo, "comment", "deny", fmt.Sprintf("%s#%d: close or reopen reference", repo, n))
+			return CommentOut{}, refuse
+		}
+	}
 	cm, _, err := c.CreateIssueComment(org, repo, n, sdk.CreateIssueCommentOption{Body: in.Body})
 	if err != nil {
 		return CommentOut{}, err
@@ -969,6 +981,10 @@ func (s *Server) opReview(ctx context.Context, p secrets.Principal, in ReviewIn)
 	if in.CommitID != run.SHA {
 		s.toolAudit(p, "", "review_submit", "deny", "commit "+in.CommitID+" is not the run's "+run.SHA)
 		return ReviewOut{}, ferr(http.StatusConflict, "commit_id %q is not the commit this run verifies (%s)", in.CommitID, run.SHA)
+	}
+	if err := refuseActionRefs(in.Body); err != nil {
+		s.toolAudit(p, "", "review_submit", "deny", fmt.Sprintf("#%d: close or reopen reference", run.PR))
+		return ReviewOut{}, err
 	}
 	c, err := s.actorClient(ctx, p.Actor)
 	if err != nil {

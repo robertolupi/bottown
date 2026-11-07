@@ -43,6 +43,11 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
     re-running the checks to see more.
   - `{{.Bottown}} issue show N` prints the linked issue.
   - `{{.Bottown}} comment --body-file -` posts a note on the pull request.
+    Forgejo applies the last `close`/`fix`/`resolve` or `reopen` keyword
+    before an issue reference (`#N`) in the PR's description, comments and
+    reviews when the PR merges, so do not write those keywords before
+    `#N` in a note or in your verdict ("#N should be reopened", not
+    "reopen #N"); the server refuses a note or verdict that does.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
     that should not block this pull request.
 - Run checks as plain commands; write scratch files under `$TMPDIR`.
