@@ -211,6 +211,17 @@ When merging a pull request's base into it would conflict, the flow's stop
 is "conflicts with base" and names the base; stops flows wrote before as
 "conflicts with main" read back as the same stop.
 
+When a pull request's base has moved and the trial merge is clean, an
+attended `bottown flow` asks the owner before merging the base into the
+head; an unattended one (`--unattended`, as the web UI starts it) leaves
+the merge to the owner's inbox. `bottown flow --merge-milestone-base`
+merges a clean `milestone/*` base without asking, attended or not, so a
+milestone child stays up to date as its siblings land. The approval
+carries over when the patch is unchanged; otherwise the flow verifies the
+new head. The flag does nothing for any other base: the default branch is
+still the owner's to merge. A conflicting base is never merged; it starts
+an implement round, as without the flag, against `--rounds`.
+
 ### Scratch directories
 
 Launched runs get a private scratch directory under the launcher's temporary
