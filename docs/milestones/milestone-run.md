@@ -109,7 +109,7 @@ trusted marker, `milestone/<slug>`, instead.
   prompt naming it, and a PR into it.
 - Provisioning creates the `milestone/*` rule with `manager` whitelisted; a
   test shows an actor's push to `milestone/x` is refused.
-- `docs/reference.md` describes the base rule, the protection and the
+- `docs/reference/` describes the base rule, the protection and the
   renamed stop.
 
 ## Flow: a distinct stop when the agent did nothing
@@ -157,7 +157,7 @@ anything" to a `run failed` stop. Two gaps:
 - Tests: a run that exits 0 with no tool calls stops the flow as
   `agent did nothing`; one that exits non-zero with no tool calls does the
   same; one with tool calls that fails stays `run failed`.
-- `docs/reference.md` lists the new stop and exit code.
+- `docs/reference/` lists the new stop and exit code.
 
 ## The --agents pool: spec parsing and cross-family pairing
 
@@ -243,7 +243,7 @@ milestone, one run must not be able to push another's branch.
   `milestone/x` and a tag refused.
 - An e2e test (under `-tags e2e`) that an implement run's push to another
   branch is refused and to its own branch succeeds.
-- `docs/reference.md` describes the confinement.
+- `docs/reference/` describes the confinement.
 
 ## Manager merge into milestone/*: POST /v1/forge/pr/merge and bottown milestone merge
 
@@ -291,7 +291,7 @@ the owner can use it by hand before the scheduler exists.
   approved, same-family approval only) and for the merge, close and comment
   happening as `manager`.
 - Actors (any run role) are refused.
-- `docs/reference.md` describes the endpoint and the command.
+- `docs/reference/` describes the endpoint and the command.
 
 ## Milestone branch and finish: bottown milestone branch and finish
 
@@ -349,7 +349,7 @@ refused.
   remove the key, apply again) does not refuse finish; a conflicting merge leaves the branch alone; a failed gate opens
   no PR and comments; a passed gate opens, and on a second call updates,
   one PR authored by `manager`.
-- `docs/reference.md` describes both commands.
+- `docs/reference/` describes both commands.
 
 ## Flow: merge a clean milestone base without asking
 
@@ -390,7 +390,7 @@ patch is unchanged.
   is merged without a prompt and the approval carries over; with the
   default branch as base, the option changes nothing; a conflicting base
   starts an implement round.
-- `docs/reference.md` documents the flag.
+- `docs/reference/` documents the flag.
 
 ## bottown milestone run: the scheduler
 
@@ -495,7 +495,7 @@ it; a rerun after the final PR merged starts from the default branch.
   resume; auto-merge on `ready to merge`; an `agent did nothing` stop
   removes the entry and other children continue; finish called when all
   children close; the summary comment otherwise.
-- `docs/reference.md` describes the command, its flags and exit codes.
+- `docs/reference/` describes the command, its flags and exit codes.
 
 ## Web UI: start and stop a milestone run from the Milestones tab
 
