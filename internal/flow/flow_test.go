@@ -747,6 +747,91 @@ func TestFlowMergeBaseConflictStartsImplementRound(t *testing.T) {
 	}
 }
 
+func requestChanges(api *fakeAPI) {
+	api.pr.Reviews = append(api.pr.Reviews, server.ReviewOut{ID: int64(len(api.pr.Reviews) + 1), Reviewer: "agy", Official: true, State: "REQUEST_CHANGES", CommitID: api.pr.HeadSHA})
+}
+
+// pushFix moves the head to sha, as an implement round's push does: the
+// earlier reviews go stale.
+func pushFix(api *fakeAPI, sha string) {
+	api.pr.HeadSHA = sha
+	for i := range api.pr.Reviews {
+		api.pr.Reviews[i].Stale = true
+	}
+}
+
+// reapprove is the verifier's approval replacing its earlier verdict.
+func reapprove(api *fakeAPI) {
+	for i := range api.pr.Reviews {
+		api.pr.Reviews[i].Official = false
+	}
+	approve(api)
+}
+
+func TestFlowChangesRequestedImplementsBeforeMergingBase(t *testing.T) {
+	// A request for changes at h1, then main moves: the implement round
+	// answers it before the base is merged, and the verifier sees the fix.
+	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
+	requestChanges(api)
+	opts := testOptions()
+	opts.Attended = true
+	var calls []RunRequest
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		calls = append(calls, req)
+		switch req.Kind {
+		case policy.Implement:
+			pushFix(api, "h1b")
+			api.merge.HeadSHA = "h1b"
+		case policy.Verify:
+			reapprove(api)
+		}
+		return nil
+	})
+	var out bytes.Buffer
+	result, err := (&Supervisor{API: &noCarryAPI{api}, Runner: runner, In: strings.NewReader("y\n"), Out: &out}).Run(context.Background(), opts)
+	if err != nil || result.Reason != ReadyToMerge {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if len(calls) != 2 || calls[0].Kind != policy.Implement || calls[0].Note != "" || calls[1].Kind != policy.Verify || calls[1].SHA != "h2" {
+		t.Fatalf("runs = %+v, want implement, then verify at the merged head h2", calls)
+	}
+	if len(api.mergeCalls) != 1 || api.mergeCalls[0] != "h1b" {
+		t.Fatalf("merge calls = %v, want the base merged onto the fix", api.mergeCalls)
+	}
+}
+
+func TestFlowChangesRequestedImplementsBeforeResolvingConflicts(t *testing.T) {
+	// The request for changes is answered first, then the conflicts.
+	pr := openPR()
+	pr.Mergeable = false
+	api := &fakeAPI{open: true, pr: pr, merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt"}}}
+	requestChanges(api)
+	var calls []RunRequest
+	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+		calls = append(calls, req)
+		switch {
+		case req.Kind == policy.Implement && req.Note == "":
+			pushFix(api, "h1b")
+		case req.Kind == policy.Implement:
+			pushFix(api, "h2")
+			api.pr.Mergeable = true
+			api.merge = server.PRMergeStatus{}
+		case req.Kind == policy.Verify:
+			reapprove(api)
+		}
+		return nil
+	})
+	result, err := (&Supervisor{API: &noCarryAPI{api}, Runner: runner}).Run(context.Background(), testOptions())
+	if err != nil || result.Reason != ReadyToMerge {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	if len(calls) != 3 || calls[0].Kind != policy.Implement || calls[0].Note != "" ||
+		calls[1].Kind != policy.Implement || !strings.Contains(calls[1].Note, "resolve merge conflicts") ||
+		calls[2].Kind != policy.Verify || calls[2].SHA != "h2" {
+		t.Fatalf("runs = %+v, want the review round, the conflict round, then verify at h2", calls)
+	}
+}
+
 func TestFlowMergeBaseConflictRoundPushesNothing(t *testing.T) {
 	api := &fakeAPI{open: true, pr: openPR(), merge: server.PRMergeStatus{Behind: true, Clean: false, Conflicts: []string{"a.txt"}}}
 	implements := 0
