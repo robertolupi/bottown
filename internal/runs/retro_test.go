@@ -41,3 +41,43 @@ func TestRetroPrompt(t *testing.T) {
 		t.Errorf("retro prompt without evidence:\n%s", p)
 	}
 }
+
+// A retro on a pull request says which issue's flow it covers, or that it
+// covers none.
+func TestRetroPromptOnPR(t *testing.T) {
+	d := PromptData{
+		RunID: "r-1", Actor: "codex", Family: "openai", Repo: "o/r", Issue: 9,
+		Title: "Fix it", Bottown: "/b", Evidence: "/tmp/x/retro",
+		RetroPR: 9, RetroIssue: 7, RetroBranch: "issue/7",
+	}
+	p, err := Prompt("retro", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Goal\n\nWrite a blameless retrospective of PR !9 of issue #7\nin `o/r`: **Fix it**",
+		"from `issue/7`, so the\nretro covers the flow of #7",
+		"stops. Read the discussion of #7 as well as the PR's. Build it from",
+		"/b comment --body-file -`, on #9",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("retro prompt on a PR lacks %q:\n%s", want, p)
+		}
+	}
+
+	d.RetroIssue, d.RetroBranch = 0, "hotfix"
+	if p, err = Prompt("retro", d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p, "## Goal\n\nWrite a blameless retrospective of PR !9 in `o/r`:\n**Fix it**. It is from `hotfix`, not an `issue/N` branch") {
+		t.Errorf("retro prompt on a lone PR:\n%s", p)
+	}
+
+	d.RetroPR = 0
+	if p, err = Prompt("retro", d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p, "## Goal\n\nWrite a blameless retrospective of the flow of #9 in `o/r`") {
+		t.Errorf("retro prompt on an issue:\n%s", p)
+	}
+}

@@ -49,6 +49,12 @@ type PromptData struct {
 	Evidence      string
 	EvidenceRuns  int
 	EvidenceError string
+	// Retro: the flow it looks back on. RetroPR is the target when it is a
+	// pull request, from branch RetroBranch; RetroIssue is the issue whose
+	// flow it is (the target, or the issue of an issue/<m> branch), or 0
+	// for a pull request from another branch.
+	RetroPR, RetroIssue int64
+	RetroBranch         string
 	// The issue or PR whose attachments were fetched for the run, with
 	// their local paths, or why they could not be listed.
 	AttachmentsOf    int64
