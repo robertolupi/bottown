@@ -75,6 +75,12 @@ type PromptData struct {
 	// Debate is the round a debate's discuss run answers in or its
 	// consolidate run merges (#315); nil outside a debate.
 	Debate *DebatePrompt
+	// TmpDir is the launched run's scratch directory, where a read-only
+	// run writes a long wiki body before `wiki put --file` (#392); empty
+	// for a leased run. Batch says nobody is in the conversation to
+	// approve a permission request.
+	TmpDir string
+	Batch  bool
 }
 
 // DebatePrompt is a debate round as its runs' prompts show it.
@@ -113,8 +119,8 @@ type Launch struct {
 	// model (see SplitActorSpec); empty uses the harness's default.
 	Spec  string
 	Allow []string // extra allowed tools (claude syntax)
-	// ReadOnly runs (discuss; not retro, which may draft notes) must not change the worktree: no file-editing
-	// tools are pre-approved, and edits are not auto-accepted.
+	// ReadOnly runs (discuss; not retro, which may draft notes) must not change the worktree: file-editing
+	// tools are pre-approved only in TmpDir, and edits are not auto-accepted.
 	ReadOnly bool
 	TmpDir   string // scratch directory for the run
 }
@@ -324,6 +330,10 @@ func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	if l.ReadOnly {
 		allowed = slices.DeleteFunc(allowed, func(t string) bool { return t == "Edit" || t == "Write" })
 		mode = "default"
+		// The worktree stays read-only, but the run may write its scratch
+		// directory: a long answer goes there, then to `wiki put --file`
+		// (#392). Batch runs cannot approve a prompt for it.
+		allowed = append(allowed, scratchRules(l.TmpDir)...)
 	}
 	if self, err := os.Executable(); err == nil {
 		allowed = append(allowed, "Bash("+self+":*)") // the agent CLI, by absolute path
@@ -347,6 +357,28 @@ func (claudeHarness) Command(ctx context.Context, l Launch) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir, cmd.Env = l.Dir, RunEnv(l)
 	return cmd, nil
+}
+
+// scratchRules are the permission rules that let a read-only claude run
+// write and edit files under dir, its scratch directory, and nowhere else;
+// none when it has none. Claude reads "//path" as an absolute path ("/path"
+// would be relative to the settings file); the resolved path is allowed too,
+// since a macOS TMPDIR under /var is a symlink to /private/var.
+func scratchRules(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	dirs := []string{filepath.Clean(dir)}
+	if r, err := filepath.EvalSymlinks(dir); err == nil && r != dirs[0] {
+		dirs = append(dirs, r)
+	}
+	var rules []string
+	for _, d := range dirs {
+		for _, tool := range []string{"Write", "Edit"} {
+			rules = append(rules, tool+"(/"+d+"/**)")
+		}
+	}
+	return rules
 }
 
 // Summary returns the "result" of the last stream-json result event.

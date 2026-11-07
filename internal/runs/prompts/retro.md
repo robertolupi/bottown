@@ -172,6 +172,7 @@ Say what the records cannot tell you rather than guessing.
   `{{.Bottown}} issue create --title "…" --body-file -`, each linking back to
   the page. If the owner is in the conversation, discuss the findings
   with them first, and file only the follow-ups they agree to.
+{{- template "batch" .}}
 
 ## Done means
 
@@ -186,6 +187,7 @@ Say what the records cannot tell you rather than guessing.
   `{{.Bottown}} issue create --title "…" --body-file -`, each linking back to
   the retro. If the owner is in the conversation, discuss the findings
   with them first, and file only the follow-ups they agree to.
+{{- template "batch" .}}
 
 ## Done means
 
