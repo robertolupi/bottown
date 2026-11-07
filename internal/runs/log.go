@@ -52,9 +52,11 @@ func RenderLog(harness string, log []byte) []LogLine {
 	return lines
 }
 
-// FailedRunError is a launcher's error for a run that did not succeed.
-// Log and LastError are set for a batch run: its log's path, and what
-// LastError found there.
+// FailedRunError is a launcher's error for a run that did not succeed, or
+// for a batch implement or verify run that succeeded (Status
+// StatusSucceeded) but whose agent made no tool call: it did nothing, the
+// usual sign of an actor out of quota or signed out. Log and LastError are
+// set for a batch run: its log's path, and what LastError found there.
 type FailedRunError struct {
 	ID, Status string
 	Log        string
@@ -63,14 +65,16 @@ type FailedRunError struct {
 }
 
 func (e *FailedRunError) Error() string {
+	if e.Status == StatusSucceeded {
+		return fmt.Sprintf("run %s exited without a tool call", e.ID)
+	}
 	return fmt.Sprintf("run %s %s", e.ID, e.Status)
 }
 
 // maxErrorLine bounds LastError's line.
 const maxErrorLine = 300
 
-// LastError is what a batch log says about how the run ended, for a run
-// that failed: the harness's last error line, and whether the agent made
+// LastError is what a batch log says about how the run ended: the harness's last error line, and whether the agent made
 // any tool call. The line is the last of the harness's own error and
 // result events, or of the output that is none of its events (a plain-text
 // harness, or one that failed before its stream started), trimmed to one

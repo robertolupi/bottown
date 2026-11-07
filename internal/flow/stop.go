@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -13,11 +14,12 @@ import (
 // round it starts ("**bottown flow: checks failed** at …") go on in the
 // same line. ParseStop reads a stop back, for the activity derivation of
 // the web UI (internal/activity), so the flow and its readers share one
-// format.
+// format. A stop ends with a marker line, stopMarker, that carries its
+// reason for readers that do not parse the rest.
 const commentPrefix = "**bottown flow: "
 
 // StopReasons are the reasons a flow stops with.
-var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, VerifierUndecided, ConflictsWithMain, ChangesRequested, ChecksFailed, ActorBusy, Merged}
+var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, AgentDidNothing, VerifierUndecided, ConflictsWithMain, ChangesRequested, ChecksFailed, ActorBusy, Merged}
 
 // stopBody is the issue comment for a stop.
 func stopBody(reason StopReason, detail string, pr int64) string {
@@ -25,8 +27,16 @@ func stopBody(reason StopReason, detail string, pr int64) string {
 	if pr > 0 {
 		body += "\n\nPull request: !" + strconv.FormatInt(pr, 10)
 	}
-	return body
+	return body + "\n\n" + stopMarker(reason)
 }
+
+// stopMarker is a stop comment's last line, hidden when rendered:
+// <!-- bottown:flow-stop v=1 reason="agent did nothing" -->.
+func stopMarker(reason StopReason) string {
+	return fmt.Sprintf("<!-- bottown:flow-stop v=1 reason=%q -->", string(reason))
+}
+
+var stopMarkerRE = regexp.MustCompile(`\n*<!-- bottown:flow-stop v=1 reason="([a-z ]+)" -->\s*$`)
 
 // roundBody is the issue comment announcing a round the flow starts.
 func roundBody(head, text string) string {
@@ -59,6 +69,9 @@ func ParseStop(body string) (Stop, bool) {
 		return Stop{}, false
 	}
 	stop := Stop{Reason: reason}
+	if loc := stopMarkerRE.FindStringIndex(tail); loc != nil {
+		tail = tail[:loc[0]]
+	}
 	if m := stopPR.FindStringSubmatch(tail); m != nil {
 		stop.PR, _ = strconv.ParseInt(m[1], 10, 64)
 	}

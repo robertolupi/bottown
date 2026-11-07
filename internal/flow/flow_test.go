@@ -528,24 +528,42 @@ func TestFlowRunFailureAndTimeout(t *testing.T) {
 	}
 }
 
-func TestFlowRunFailureShowsLastError(t *testing.T) {
+// TestFlowRunWithoutToolCalls: a run whose agent made no tool call stops
+// the flow as agent did nothing, whether it exited 0 or not, naming the
+// actor and its model; a failed run after tool calls stays run failed.
+func TestFlowRunWithoutToolCalls(t *testing.T) {
 	const line = "error: failed to run prompt: provider.api_error: 429 You've reached your 5-hour usage limit."
-	const hint = "the run ended before the agent did anything"
+	const hint = "rerun the flow with another `--implement`/`--verify`"
 	for _, tc := range []struct {
-		name      string
-		toolCalls bool
-	}{{"before any tool call", false}, {"after tool calls", true}} {
+		name, status, actor string
+		toolCalls           bool
+		want                StopReason
+		wants               []string
+	}{
+		{"exit 0 before any tool call", runs.StatusSucceeded, "claude", false, AgentDidNothing,
+			[]string{"the implement run r-1 by claude succeeded without a tool call", hint}},
+		{"failed before any tool call", runs.StatusFailed, "agy:gemini-3.8-flash", false, AgentDidNothing,
+			[]string{"the implement run r-1 by agy (model gemini-3.8-flash) failed without a tool call", hint}},
+		{"failed after tool calls", runs.StatusFailed, "claude", true, RunFailed, []string{"run r-1 failed"}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := &fakeAPI{}
-			runner := RunnerFunc(func(context.Context, RunRequest) error {
-				return &runs.FailedRunError{ID: "r-1", Status: runs.StatusFailed, Log: "/runs/r-1.log", LastError: line, ToolCalls: tc.toolCalls}
+			var actor string
+			runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
+				actor = req.Actor
+				return &runs.FailedRunError{ID: "r-1", Status: tc.status, Log: "/runs/r-1.log", LastError: line, ToolCalls: tc.toolCalls}
 			})
-			result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), testOptions())
-			var stop *StopError
-			if !errors.As(err, &stop) || result.Reason != RunFailed || len(api.comments) != 1 {
-				t.Fatalf("result = %+v, error = %v, comments = %q", result, err, api.comments)
+			opts := testOptions()
+			opts.Implement = tc.actor
+			if strings.HasPrefix(tc.actor, "agy") {
+				opts.Verify = "claude"
 			}
-			for _, want := range []string{"run r-1 failed", "log: /runs/r-1.log", "last error: " + line} {
+			result, err := (&Supervisor{API: api, Runner: runner}).Run(context.Background(), opts)
+			var stop *StopError
+			if !errors.As(err, &stop) || result.Reason != tc.want || len(api.comments) != 1 || actor != tc.actor {
+				t.Fatalf("result = %+v, error = %v, comments = %q, actor = %q", result, err, api.comments, actor)
+			}
+			for _, want := range append(tc.wants, "log: /runs/r-1.log", "last error: "+line, `<!-- bottown:flow-stop v=1 reason="`+string(tc.want)+`" -->`) {
 				if !strings.Contains(api.comments[0], want) {
 					t.Errorf("stop comment lacks %q:\n%s", want, api.comments[0])
 				}

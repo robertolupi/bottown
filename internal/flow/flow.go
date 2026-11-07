@@ -22,9 +22,13 @@ import (
 type StopReason string
 
 const (
-	ReadyToMerge      StopReason = "ready to merge"
-	OutOfRounds       StopReason = "out of rounds"
-	RunFailed         StopReason = "run failed"
+	ReadyToMerge StopReason = "ready to merge"
+	OutOfRounds  StopReason = "out of rounds"
+	RunFailed    StopReason = "run failed"
+	// AgentDidNothing: a run's agent ended, whatever its exit status,
+	// without a single tool call, the usual sign of an actor out of quota
+	// or signed out.
+	AgentDidNothing   StopReason = "agent did nothing"
 	VerifierUndecided StopReason = "verifier undecided"
 	ConflictsWithMain StopReason = "conflicts with main"
 	// ChangesRequested: the head is approved, but a request for changes at
@@ -803,9 +807,30 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		if timedOut {
 			return fmt.Errorf("%s run timed out after %s", req.Kind, opts.Timeout)
 		}
+		var failed *runs.FailedRunError
+		if errors.As(err, &failed) && failed.Log != "" && !failed.ToolCalls {
+			return &idleRunError{kind: req.Kind, actor: req.Actor, err: failed}
+		}
 		return err
 	}
 }
+
+// idleRunError is a batch run whose agent made no tool call, for the
+// AgentDidNothing stop; actor is ACTOR[:MODEL], as the flow ran it.
+type idleRunError struct {
+	kind, actor string
+	err         *runs.FailedRunError
+}
+
+func (e *idleRunError) Error() string {
+	actor, model, _ := strings.Cut(e.actor, ":")
+	if model != "" {
+		actor += " (model " + model + ")"
+	}
+	return fmt.Sprintf("the %s run %s by %s %s without a tool call", e.kind, e.err.ID, actor, e.err.Status)
+}
+
+func (e *idleRunError) Unwrap() error { return e.err }
 
 // actorWaitError is a run whose actor was still busy at the end of
 // Options.ActorWait; err is the last refusal, which names the run that
@@ -876,12 +901,20 @@ func (s *Supervisor) runFailure(ctx context.Context, result Result, err error) (
 	if errors.As(err, &busy) {
 		return s.stop(ctx, result, ActorBusy, busy.Error()+"; end that run, or re-run the flow when it has ended")
 	}
+	var idle *idleRunError
+	if errors.As(err, &idle) {
+		detail := idle.Error() + "; log: " + idle.err.Log
+		if idle.err.LastError != "" {
+			detail += "; last error: " + idle.err.LastError
+		}
+		detail += "; if the actor is unavailable (quota, sign-in), rerun the flow with another `--implement`/`--verify`"
+		return s.stop(ctx, result, AgentDidNothing, detail)
+	}
 	return s.stop(ctx, result, RunFailed, runFailedDetail(err))
 }
 
 // runFailedDetail is a RunFailed stop's detail: for a batch run, also its
-// log and the harness's last error line, and, when the agent made no tool
-// call, a hint that the actor may be unavailable.
+// log and the harness's last error line.
 func runFailedDetail(err error) string {
 	detail := err.Error()
 	var failed *runs.FailedRunError
@@ -891,9 +924,6 @@ func runFailedDetail(err error) string {
 	detail += "; log: " + failed.Log
 	if failed.LastError != "" {
 		detail += "; last error: " + failed.LastError
-	}
-	if !failed.ToolCalls {
-		detail += "; the run ended before the agent did anything; if the actor is unavailable (quota, sign-in), rerun the flow with another `--implement`/`--verify`"
 	}
 	return detail
 }
