@@ -68,7 +68,7 @@ instance: `bottown up -i dev` builds from the working tree (ports
 Install the slash commands the actors use inside their harness:
 
 ```sh
-bottown harness setup   # /bottown-implement, /bottown-verify, /bottown-discuss, /bottown-plan
+bottown harness setup   # /bottown-implement, -verify, -discuss, -discuss-critical, -plan
 ```
 
 In kimi they are skills: `/skill:bottown-implement 1`; in codex, skills in

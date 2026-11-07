@@ -77,14 +77,24 @@ func crushSkillsDir(home string) string {
 
 type commandData struct {
 	Kind, Target, Bottown, Marker string
+	Critical                      bool // discuss: /bottown-discuss-critical, the red team
+}
+
+// name is the command's name: bottown-<kind>, or bottown-discuss-critical.
+func (c commandData) name() string {
+	if c.Critical {
+		return "bottown-" + c.Kind + "-critical"
+	}
+	return "bottown-" + c.Kind
 }
 
 // harnessKinds are the commands setup installs, /bottown-<kind>, one per
-// run role, and what each takes a number of.
+// run role and /bottown-discuss-critical, and what each takes a number of.
 var harnessKinds = []commandData{
 	{Kind: "implement", Target: "issue"},
 	{Kind: "verify", Target: "pull request"},
 	{Kind: "discuss", Target: "issue"},
+	{Kind: "discuss", Target: "issue", Critical: true},
 	{Kind: "plan", Target: "kickoff issue"},
 }
 
@@ -93,17 +103,17 @@ func newHarness() *cobra.Command {
 	var force bool
 	setup := &cobra.Command{
 		Use:   "setup [claude|agy|kimi|codex|crush]...",
-		Short: "Install /bottown-implement, /bottown-verify, /bottown-discuss and /bottown-plan in harnesses' global commands",
-		Long: `Install /bottown-implement, /bottown-verify, /bottown-discuss and /bottown-plan
-for each harness (default: all):
+		Short: "Install /bottown-implement, /bottown-verify, /bottown-discuss, /bottown-discuss-critical and /bottown-plan in harnesses' global commands",
+		Long: `Install /bottown-implement, /bottown-verify, /bottown-discuss,
+/bottown-discuss-critical and /bottown-plan for each harness (default: all):
 
-  claude  ~/.claude/commands/bottown-{implement,verify,discuss,plan}.md
-  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss,plan}.md
-  kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
+  claude  ~/.claude/commands/bottown-{implement,verify,discuss,discuss-critical,plan}.md
+  agy     ~/.gemini/config/global_workflows/bottown-{implement,verify,discuss,discuss-critical,plan}.md
+  kimi    ~/.kimi-code/skills/bottown-{implement,verify,discuss,discuss-critical,plan}/SKILL.md
           (invoked as /skill:bottown-implement 12)
-  codex   ~/.codex/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
+  codex   ~/.codex/skills/bottown-{implement,verify,discuss,discuss-critical,plan}/SKILL.md
           (invoked as $bottown-implement 12)
-  crush   ~/.config/crush/skills/bottown-{implement,verify,discuss,plan}/SKILL.md
+  crush   ~/.config/crush/skills/bottown-{implement,verify,discuss,discuss-critical,plan}/SKILL.md
           (invoked as /bottown-implement 12)
 
 claude, kimi, codex and crush also get the bottown skill, bottown/SKILL.md in
@@ -114,7 +124,9 @@ nothing elsewhere.
 Inside an actor worktree, /bottown-implement 12 starts a run for that worktree's
 actor (bottown run start implement 12) and works the issue. /bottown-discuss 12
 QUESTION starts a discuss run: the agent answers on the issue, without
-implementing it. /bottown-plan 12 starts a plan run on kickoff issue 12: the
+implementing it; /bottown-discuss-critical 12 [FOCUS] starts a critical one, a
+red team from another model family than the issue's author (bottown run start
+discuss --critical 12). /bottown-plan 12 starts a plan run on kickoff issue 12: the
 agent opens a pull request with the milestone plan. The files name this
 bottown binary by absolute path. Re-running refreshes them; a same-named file
 bottown did not write is left alone unless --force.
@@ -188,11 +200,11 @@ func harnessFiles(home, harness string) ([]harnessFile, error) {
 		if err := harnessTmpl.ExecuteTemplate(&b, tmpl, c); err != nil {
 			return nil, err
 		}
-		path := filepath.Join(dir, "bottown-"+c.Kind+".md")
+		path := filepath.Join(dir, c.name()+".md")
 		if hc.skillDirs {
-			path = filepath.Join(dir, "bottown-"+c.Kind, "SKILL.md")
+			path = filepath.Join(dir, c.name(), "SKILL.md")
 		}
-		files = append(files, harnessFile{path: path, invoke: invoke + "bottown-" + c.Kind, content: b.Bytes()})
+		files = append(files, harnessFile{path: path, invoke: invoke + c.name(), content: b.Bytes()})
 	}
 	if sd, ok := harnessSkillDirs[harness]; ok {
 		var b bytes.Buffer

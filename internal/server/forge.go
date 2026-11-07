@@ -940,12 +940,27 @@ func (s *Server) opComment(ctx context.Context, p secrets.Principal, in CommentI
 			return CommentOut{}, refuse
 		}
 	}
-	cm, _, err := c.CreateIssueComment(org, repo, n, sdk.CreateIssueCommentOption{Body: in.Body})
+	body := in.Body
+	if run := p.Run; run != nil && run.Critical {
+		body = criticalBody(*run, body)
+	}
+	cm, _, err := c.CreateIssueComment(org, repo, n, sdk.CreateIssueCommentOption{Body: body})
 	if err != nil {
 		return CommentOut{}, err
 	}
 	s.toolAudit(p, org+"/"+repo, "comment", "allow", fmt.Sprintf("%s#%d", repo, n))
 	return CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created}, nil
+}
+
+// criticalBody is a critical discuss run's comment as posted: it says which
+// family wrote the critique, and that the owner allowed it if that is the
+// issue author's family.
+func criticalBody(run secrets.Run, body string) string {
+	body = strings.TrimSpace(body)
+	if run.AllowSameFamily {
+		body = fmt.Sprintf("> **Same-family critique** (%s critiquing %s's issue), allowed by owner override.\n\n", run.Family, run.Author) + body
+	}
+	return body + fmt.Sprintf("\n\n_bottown critical discuss run %s (%s, %s)_", run.ID, run.Actor, run.Family)
 }
 
 // reviewOutcomes maps a submitted review's event to the run outcome.
