@@ -557,7 +557,7 @@ func (r *Reconciler) ensureAllRepos(api *forgejo.Client, rep *Report) error {
 			if repo.Empty || repo.DefaultBranch == "" {
 				continue
 			}
-			if err := r.ensureProtection(api, rep, repo.Name, repo.DefaultBranch); err != nil {
+			if err := r.ensureProtections(api, rep, repo.Name, repo.DefaultBranch); err != nil {
 				return err
 			}
 		}
@@ -608,7 +608,7 @@ func (r *Reconciler) EnsureRepo(ctx context.Context, name, branch string) (Repo,
 		rep.add("set default branch of %s to %s", name, branch)
 		out.DefaultBranch = branch
 	}
-	err = r.ensureProtection(api, &rep, name, out.DefaultBranch)
+	err = r.ensureProtections(api, &rep, name, out.DefaultBranch)
 	return out, rep, err
 }
 
@@ -649,9 +649,38 @@ func (r *Reconciler) WantProtection() Protection {
 	}
 }
 
-func (r *Reconciler) ensureProtection(api *forgejo.Client, rep *Report, repo, branch string) error {
+// MilestoneRule is the protection rule's pattern for milestone integration
+// branches, milestone/<plan slug>, which milestone children merge into.
+const MilestoneRule = "milestone/*"
+
+// WantMilestoneProtection is the rule for MilestoneRule: the default
+// branch's, except that only the manager, which merges milestone children,
+// and the owner may push to and merge into a milestone branch. The owner
+// creates milestone branches by hand, a push to the pattern.
+func (r *Reconciler) WantMilestoneProtection() Protection {
+	p := r.WantProtection()
+	var manager []string
+	if r.Desired.Manager.Name != "" {
+		manager = []string{r.Desired.Manager.Name}
+	}
+	p.PushWhitelistUsernames = withOwner(manager, r.Owner.Login)
+	p.MergeWhitelistUsernames = withOwner(manager, r.Owner.Login)
+	return p
+}
+
+// ensureProtections protects a repository's default branch, and its
+// milestone branches (MilestoneRule).
+func (r *Reconciler) ensureProtections(api *forgejo.Client, rep *Report, repo, branch string) error {
+	if err := r.ensureProtection(api, rep, repo, branch, r.WantProtection()); err != nil {
+		return err
+	}
+	return r.ensureProtection(api, rep, repo, MilestoneRule, r.WantMilestoneProtection())
+}
+
+// ensureProtection converges the protection rule named branch, a branch
+// name or a pattern, to want.
+func (r *Reconciler) ensureProtection(api *forgejo.Client, rep *Report, repo, branch string, want Protection) error {
 	org := r.Desired.Org
-	want := r.WantProtection()
 	bp, resp, err := api.GetBranchProtection(org, repo, branch)
 	if forgejo.IsNotFound(resp, err) {
 		if _, _, err := api.CreateBranchProtection(org, repo, sdk.CreateBranchProtectionOption{

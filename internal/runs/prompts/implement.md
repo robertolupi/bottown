@@ -8,7 +8,8 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
 
 ## How this run works
 
-- Your working directory is a git worktree on branch `{{.Branch}}`.
+- Your working directory is a git worktree on branch `{{.Branch}}`,
+  started from `{{.Base}}`, the base your pull request merges into.
   Commits you make are attributed to you ({{.Actor}}).
 - `{{.Remote}}` is the bottown forge. Push with `git push {{.Remote}} HEAD`.
   You cannot push to `{{.Base}}`; it is protected.

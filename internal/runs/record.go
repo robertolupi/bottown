@@ -37,6 +37,7 @@ type Record struct {
 	Issue           int64  `json:"issue,omitempty"`
 	PR              int64  `json:"pr,omitempty"`
 	Branch          string `json:"branch,omitempty"`
+	Base            string `json:"base,omitempty"` // implement, plan: the PR's base (the server's run.Base)
 	SHA             string `json:"sha,omitempty"`
 	Interactive     bool   `json:"interactive,omitempty"`
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`

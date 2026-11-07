@@ -86,7 +86,7 @@ export interface RepoSettingsCheck {
 export type InboxItemKind =
   | 'ready_to_merge'
   | 'merge_base'
-  | 'conflicts_with_main'
+  | 'conflicts_with_base'
   | 'stopped_flow'
   | 'broken_run'
   | 'discuss_answer'

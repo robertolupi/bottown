@@ -338,7 +338,7 @@ func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
 	}
 }
 
-func TestInbox_ConflictsWithMain(t *testing.T) {
+func TestInbox_ConflictsWithBase(t *testing.T) {
 	fix := defaultFixture()
 	_, port := newFixtureServer(t, fix)
 
@@ -376,8 +376,8 @@ func TestInbox_ConflictsWithMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Kind != InboxConflictsWithMain || items[0].Target != "!20" {
-		t.Fatalf("expected 1 conflicts_with_main item for !20, got: %+v", items)
+	if len(items) != 1 || items[0].Kind != InboxConflictsWithBase || items[0].Target != "!20" {
+		t.Fatalf("expected 1 conflicts_with_base item for !20, got: %+v", items)
 	}
 
 	// 2. Go-away condition 1: Conflict resolved (becomes mergeable)

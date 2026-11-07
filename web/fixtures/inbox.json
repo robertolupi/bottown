@@ -163,7 +163,7 @@
     },
     {
       "id": "conflict:101",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!101 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!101",
@@ -229,7 +229,7 @@
     },
     {
       "id": "conflict:107",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!107 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!107",
@@ -295,7 +295,7 @@
     },
     {
       "id": "conflict:113",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!113 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!113",
@@ -361,7 +361,7 @@
     },
     {
       "id": "conflict:119",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!119 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!119",
@@ -427,7 +427,7 @@
     },
     {
       "id": "conflict:125",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!125 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!125",

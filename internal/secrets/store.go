@@ -60,12 +60,17 @@ type Run struct {
 	// Spec is the model the launcher asked the harness for, from
 	// ACTOR:SPEC; empty is the harness's default. It never changes the
 	// actor's family.
-	Spec            string `json:"spec,omitempty"`
-	Org             string `json:"org"`
-	Repo            string `json:"repo"`
-	Issue           int64  `json:"issue,omitempty"`
-	PR              int64  `json:"pr,omitempty"`
-	Branch          string `json:"branch,omitempty"`
+	Spec   string `json:"spec,omitempty"`
+	Org    string `json:"org"`
+	Repo   string `json:"repo"`
+	Issue  int64  `json:"issue,omitempty"`
+	PR     int64  `json:"pr,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// Base, for an implement or plan run, is the branch its work starts
+	// from and its pull request merges into: the default branch, or a
+	// milestone child's milestone/<slug> (server.runBase). Empty on
+	// records from before it was kept: the default branch.
+	Base            string `json:"base,omitempty"`
 	SHA             string `json:"sha,omitempty"`    // verify: PR head at creation
 	Author          string `json:"author,omitempty"` // verify: PR author; critical discuss: issue author
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`

@@ -344,10 +344,10 @@ func TestStopsByThread(t *testing.T) {
 		Runs: []server.RunItem{run("r-1", "implement", 7, 0, 1, 2), run("r-2", "implement", 7, 0, 5, 6)},
 		PRs:  []*server.PRItem{first, pr(13, 7, 5.5)},
 		Issues: map[int64]*server.IssueOut{7: issueWith(7,
-			stopComment(1, flow.ConflictsWithMain, 12, 2.1),
+			stopComment(1, flow.ConflictsWithBase, 12, 2.1),
 			stopComment(2, flow.ChecksFailed, 13, 6.1))},
 	}, week.Until)
-	if th := thread(t, a, "flow:issue:7:pr:12"); len(th.Stops) != 1 || th.Stops[0].Reason != flow.ConflictsWithMain ||
+	if th := thread(t, a, "flow:issue:7:pr:12"); len(th.Stops) != 1 || th.Stops[0].Reason != flow.ConflictsWithBase ||
 		th.OwnerWaits[0].EndedBy != EndedByClose || !slices.Equal(th.Runs, []string{"r-1"}) {
 		t.Errorf("first thread = %+v", th)
 	}

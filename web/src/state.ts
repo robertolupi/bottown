@@ -493,7 +493,7 @@ export function deriveFlowState(input: {
       label: 'Needs intervention',
       tone: 'error',
       icon: '!',
-      title: latestRun.pr ? `Next action: Needs intervention — PR !${latestRun.pr} conflicts with main` : 'Next action: Needs intervention — conflicts with main',
+      title: latestRun.pr ? `Next action: Needs intervention — PR !${latestRun.pr} conflicts with its base` : 'Next action: Needs intervention — conflicts with its base',
     };
   }
 

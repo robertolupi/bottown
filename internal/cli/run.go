@@ -404,7 +404,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	releaseLauncher = release
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
-		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
+		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, Base: run.Base, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Critical: run.Critical, Harness: harnessName, Spec: run.Spec,
 		PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
@@ -721,12 +721,14 @@ func observedFailure(ctxErr error, stopped bool, code int, elapsed time.Duration
 // renderPrompt fetches the issue or PR and renders a launched run's goal
 // prompt, with the owner's question or message from rec, after downloading
 // its attachments with the run key rk into attachDir. It also returns the
-// repository's default branch.
+// run's base: the branch an implement or plan run starts from and opens
+// its pull request into (runBase).
 func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Record, rk *agentCtx, attachDir string) (string, string, error) {
-	base, err := rc.ws.DefaultBranch(ctx)
+	def, err := rc.ws.DefaultBranch(ctx)
 	if err != nil {
 		return "", "", err
 	}
+	base := runBase(run, def)
 	n := run.Issue
 	if run.Kind == policy.Verify {
 		n = run.PR
@@ -765,12 +767,21 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 	// instead.
 	var is server.IssueOut
 	isErr := rk.call(ctx, "GET", fmt.Sprintf("/v1/forge/issue?number=%d", n), nil, &is)
-	p, err := goalPrompt(ctx, rk, run, d, rc.ws.Mirror, rc.ws.Remote+"/"+base, attachDir, &is, isErr)
+	p, err := goalPrompt(ctx, rk, run, d, rc.ws.Mirror, rc.ws.Remote+"/"+def, attachDir, &is, isErr)
 	return p, base, err
 }
 
+// runBase is the base the server chose for run (secrets.Run.Base), or def,
+// the default branch, for a run recorded without one.
+func runBase(run secrets.Run, def string) string {
+	if run.Base != "" {
+		return run.Base
+	}
+	return def
+}
+
 // goalPrompt renders run's goal prompt, for either kind of run: d holds
-// what the caller knows (the issue's text, the default branch, the
+// what the caller knows (the issue's text, the run's base, the
 // owner's notes), and goalPrompt adds the run and what the run key rk
 // fetches: item's attachments, into attachDir (or itemErr, why item could
 // not be read), and a verifier's earlier reviews. gitDir has the
