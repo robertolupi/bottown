@@ -2,7 +2,9 @@
 
 Status: **design**, written with the owner in issue #55. Built so far:
 run digests (phase 2, #60), per-actor run serialisation and `run stop`
-(phase 1a, #58), and the single-issue supervisor (phase 1, #59).
+(phase 1a, #58), the single-issue supervisor (phase 1, #59), and Phases
+3–7 (host UI and health, inbox, runs with flow and run actions,
+`.bottown.toml` with after-pull steps, the audit trail and run denials).
 
 ## 1. Goal
 
@@ -628,7 +630,7 @@ breakdowns, the size estimate against the measured diff, and the milestone
 burndown and burnup, from `GET /api/stats`.
 
 **Retention.** Records and logs, the flows' logs included
-([reference.md](../reference.md#what-run-gc-removes) lists what it removes when), stay on the
+([the reference](../reference/runs/gc.md) lists what it removes when), stay on the
 host until `bottown run gc` removes them, which also purges the server's records of ended runs older
 than `--older-than`. For history to outlive that, each run gets a
 **digest** at run end: its record's fields, the stop or handover summary,
@@ -667,7 +669,7 @@ upgrades prod.
   run. Launched runs' own worktrees under `.bottown/runs` are listed too,
   marked with the run's kind and target; a permanent worktree shows as
   live only for the run it leases. Each permanent worktree also shows its
-  fam guide file ([reference](../reference.md#the-fam-guide)): current, outdated, missing,
+  fam guide file ([reference](../reference/fam-guide.md)): current, outdated, missing,
   foreign or none.
 - The installed slash commands and the bottown skill of each harness are
   current (what `bottown harness setup` would change), and the CLI and
@@ -709,7 +711,7 @@ and stop at the first that fails.
 ### 4.5 Declared checks
 
 Implementers and verifiers run the checks `check` and `e2e` in
-`.bottown.toml` name with `bottown check [--e2e]` ([reference](../reference.md#checks)), which
+`.bottown.toml` name with `bottown check [--e2e]` ([reference](../reference/checks.md)), which
 records each run's result as the commit statuses `bottown/check` and
 `bottown/e2e` on the commit it ran on, and `pr show` lists them by actor.
 A status is what the run's actor reports it ran, not a verification.
@@ -726,7 +728,7 @@ by hand) nothing runs the checks but the agents.
 
 A third tab, **Timeline** (`#timeline`), shows where time went in a
 window: every run on one time scale, from `GET /api/timeline`
-([reference](../reference.md#activity)), drawn as plain SVG.
+([reference](../reference/activity.md)), drawn as plain SVG.
 
 - **Range.** Last 6 hours (the default), today, 7 days, or a custom from
   and to. A preset ends now: the view grows the window, and live bars, with
@@ -759,7 +761,7 @@ derives nothing.
 ### 4.7 Stats
 
 A fourth tab, **Stats** (`#stats`), answers the owner's questions about the
-fam's work from `GET /api/stats` ([reference](../reference.md#activity),
+fam's work from `GET /api/stats` ([reference](../reference/activity.md),
 `internal/stats`), built on the same activity derivation as the Timeline so
 the two cannot disagree. It follows the ground rules of #309: show
 coverage next to every number, never turn missing data into zero, never

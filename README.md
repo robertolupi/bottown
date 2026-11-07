@@ -7,7 +7,7 @@ bottown scopes and records, a verifier from another model family reviews
 each pull request at the exact commit, and you merge.
 
 What bottown is for and how it is designed is in [docs/](docs/index.md),
-how it behaves today in [docs/reference.md](docs/reference.md);
+how it behaves today in [docs/reference/](docs/reference/index.md);
 instructions for agents working on this repository are in
 [AGENTS.md](AGENTS.md).
 
@@ -212,8 +212,8 @@ has the details.
 | `run implement -a ACTOR [-I] [-m NOTE] ISSUE` | An agent implements the issue: pushes `issue/N`, opens a PR. `--message` adds a note to the goal prompt, e.g. "the branch is out of date, rebase it"; `run verify` and `run plan` take it too. |
 | `run verify -a ACTOR [-I] PR` | An agent reviews the PR at its current head and submits one verdict. `--allow-same-family` waives the cross-family rule. |
 | `run discuss -a ACTOR [-I] N [QUESTION]` | An agent reviews or answers a question on an issue, in a comment, without implementing. |
-| `run retro -a ACTOR [-I] [-m NOTE] ISSUE` | An agent writes a blameless retrospective of the issue's flow from bottown's run records, transcripts and denials, posts it on the issue, and may file follow-ups; it cannot push. `--allow-same-family` waives the cross-family rule against the implementers ([reference](docs/reference.md#retro-runs)). |
-| `debate ISSUE [--actors A,B,...] [--consolidate ACTOR] [--wiki-slug S] [--date YYYYMMDD\|today] [--raw] [QUESTION]` | Several agents answer the same question about an issue independently, one discuss run each, in a round whose answers go in the wiki; `--consolidate` then has an agent merge them into the debate's wiki page ([reference](docs/reference.md#debates)). |
+| `run retro -a ACTOR [-I] [-m NOTE] ISSUE` | An agent writes a blameless retrospective of the issue's flow from bottown's run records, transcripts and denials, posts it on the issue, and may file follow-ups; it cannot push. `--allow-same-family` waives the cross-family rule against the implementers ([reference](docs/reference/runs/retro.md)). |
+| `debate ISSUE [--actors A,B,...] [--consolidate ACTOR] [--wiki-slug S] [--date YYYYMMDD\|today] [--raw] [QUESTION]` | Several agents answer the same question about an issue independently, one discuss run each, in a round whose answers go in the wiki; `--consolidate` then has an agent merge them into the debate's wiki page ([reference](docs/reference/debates.md)). |
 | `run plan -a ACTOR [-I] ISSUE` | An agent writes the milestone plan for a kickoff issue: pushes `issue/N` with `<milestones_dir>/<slug>.md` and opens a PR; it cannot create issues. Also `milestone plan`. |
 | `run ls [--all]` | List runs: local worktrees merged with the server's records. |
 | `run show RUN` | A run's local record, server record (with its summary and the usage its harness reported) and log tail. |

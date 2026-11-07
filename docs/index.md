@@ -8,34 +8,16 @@ full, then only the document, or section, your work needs.
 - [Problem statement](problem-statement.md): read for why bottown is shaped
   as it is: constraints, what v1 settled, identity and enforcement on the
   local forge, open decisions.
-- [Reference](reference.md): read the one section you need for how bottown
-  behaves today:
-  [forge reads and pagination](reference.md#forge-reads-and-pagination),
-  [issue attachments](reference.md#issue-attachments),
-  [checks](reference.md#checks) (`bottown check`, `.bottown.toml`),
-  [Linux e2e](reference.md#linux-e2e) (`make e2e-linux`),
-  [runs](reference.md#runs) (issue branches, scratch directories,
-  `run gc`, retro runs, critical discuss runs, sharing the host),
-  [harness models](reference.md#harness-models),
-  [the fam guide](reference.md#the-fam-guide),
-  [the wiki store](reference.md#the-wiki-store) (`bottown wiki`),
-  [debates](reference.md#debates) (`bottown debate`: independent rounds of
-  answers, consolidated in the wiki) and
-  [activity](reference.md#activity) (`internal/activity`: runs, flow
-  threads, checks, stops and owner waits over a window).
+- [Reference](reference/index.md): how bottown behaves today, one file per
+  topic. Read its index, then the one topic you need.
 - [Local web UI and supervisor](design/web-ui.md): read for `bottown flow`
   (implement and cross-family verify), `bottown web ui` (runs, the inbox,
-  host state) and `.bottown.toml`. Built: Phases 3–7 (host UI and health,
-  inbox, runs with flow and run actions, `.bottown.toml` with after-pull
-  steps, the audit trail and run denials).
+  host state) and `.bottown.toml`. Its status line says what is built.
 - [Milestones: plan, check, apply and run](design/milestones.md): read for
   plan runs, plan files and milestone epics: a reviewed plan on `main`
   applied as an epic of dependency-wired child issues (a DAG in the web
   UI), then run on a protected `milestone/<epic>` branch that auto-merges
-  verified child PRs. Built: Phases 1–3 (the plan format, `milestones_dir`
-  and `milestone check`; the `plan` run kind and owner-only issue edits;
-  `milestone apply`; `milestone branch` and `milestone finish`; and
-  `milestone run`, the scheduler that drives the children and finishes).
+  verified child PRs. Its status line says what is built.
 - History, not kept current; read only for how something came to be:
   [Iteration 1](history/iteration-1.md) (the first issue through runs,
   actors as forge identities, permanent actor worktrees, in-harness runs),

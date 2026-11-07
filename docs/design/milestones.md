@@ -7,7 +7,7 @@ issue/PR/milestone rules, the `plan` run kind, `bottown run plan` /
 UI's Milestones tab and `GET /api/milestones`). Step 2 is built in the
 reduced shape of kickoff #316 (`milestone/<slug>`, `milestone branch`,
 `merge`, `finish` and `run`); where this design and
-[the reference](../reference.md#milestone-run) differ, the reference
+[the reference](../reference/runs/milestone-run.md) differ, the reference
 says what is built. Extends
 [the local web UI and supervisor design](web-ui.md) (§3.7).
 
