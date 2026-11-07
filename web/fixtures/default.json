@@ -2253,5 +2253,492 @@
       "peak": 3,
       "mean": 0.4765740740740741
     }
+  },
+  "stats":   {
+    "window": {
+      "since": "2026-11-02T00:00:00Z",
+      "until": "2026-11-04T00:00:00Z"
+    },
+    "now": "2026-11-04T00:00:00Z",
+    "issues": [
+      {
+        "issue": 12,
+        "pr": 30,
+        "title": "Add the widget",
+        "size": "M",
+        "milestone": "M2",
+        "implementer": "claude",
+        "implementer_family": "anthropic",
+        "verifier": "agy",
+        "verifier_family": "google",
+        "created": "2026-11-02T00:00:00Z",
+        "merged": "2026-11-03T00:00:00Z",
+        "lead_seconds": 86400,
+        "cycle_seconds": 79200,
+        "runs": 4,
+        "agent_seconds": 14400,
+        "agent_by_kind": {
+          "implement": 10800,
+          "verify": 3600
+        },
+        "implement_rounds": 1,
+        "check_rounds": 1,
+        "verifier_rejections": 1,
+        "rejections_by_family": {
+          "openai": 1
+        },
+        "failed_runs": 0,
+        "interactive_runs": 0,
+        "stops": 1,
+        "usage": [
+          {
+            "family": "anthropic",
+            "runs": 2,
+            "reported": 1,
+            "input_tokens": 182000,
+            "output_tokens": 24000,
+            "cost_usd": 1.85
+          },
+          {
+            "family": "openai",
+            "runs": 1,
+            "reported": 0
+          },
+          {
+            "family": "google",
+            "runs": 1,
+            "reported": 0
+          }
+        ],
+        "measured": {
+          "added": 0,
+          "deleted": 0,
+          "files": 1
+        }
+      }
+    ],
+    "breakdowns": [
+      {
+        "by": "actor",
+        "cells": [
+          {
+            "key": "claude",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      },
+      {
+        "by": "family",
+        "cells": [
+          {
+            "key": "anthropic",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      },
+      {
+        "by": "verifier_family",
+        "cells": [
+          {
+            "key": "google",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      },
+      {
+        "by": "pair",
+        "cells": [
+          {
+            "key": "anthropic/google",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      },
+      {
+        "by": "size",
+        "cells": [
+          {
+            "key": "M",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      },
+      {
+        "by": "milestone",
+        "cells": [
+          {
+            "key": "M2",
+            "n": 1,
+            "lead_seconds": {
+              "n": 1,
+              "median": 86400,
+              "min": 86400,
+              "max": 86400
+            },
+            "cycle_seconds": {
+              "n": 1,
+              "median": 79200,
+              "min": 79200,
+              "max": 79200
+            },
+            "agent_seconds": {
+              "n": 1,
+              "median": 14400,
+              "min": 14400,
+              "max": 14400
+            },
+            "implement_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "check_rounds": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            },
+            "verifier_rejections": {
+              "n": 1,
+              "median": 1,
+              "min": 1,
+              "max": 1
+            }
+          }
+        ]
+      }
+    ],
+    "sizes": [
+      {
+        "size": "S",
+        "n": 0,
+        "measured": 0,
+        "buckets": [
+          {
+            "bucket": "S",
+            "n": 0
+          },
+          {
+            "bucket": "M",
+            "n": 0
+          },
+          {
+            "bucket": "L",
+            "n": 0
+          },
+          {
+            "bucket": "XL",
+            "n": 0
+          }
+        ]
+      },
+      {
+        "size": "M",
+        "n": 1,
+        "measured": 1,
+        "buckets": [
+          {
+            "bucket": "S",
+            "n": 1
+          },
+          {
+            "bucket": "M",
+            "n": 0
+          },
+          {
+            "bucket": "L",
+            "n": 0
+          },
+          {
+            "bucket": "XL",
+            "n": 0
+          }
+        ]
+      },
+      {
+        "size": "L",
+        "n": 0,
+        "measured": 0,
+        "buckets": [
+          {
+            "bucket": "S",
+            "n": 0
+          },
+          {
+            "bucket": "M",
+            "n": 0
+          },
+          {
+            "bucket": "L",
+            "n": 0
+          },
+          {
+            "bucket": "XL",
+            "n": 0
+          }
+        ]
+      },
+      {
+        "size": "XL",
+        "n": 0,
+        "measured": 0,
+        "buckets": [
+          {
+            "bucket": "S",
+            "n": 0
+          },
+          {
+            "bucket": "M",
+            "n": 0
+          },
+          {
+            "bucket": "L",
+            "n": 0
+          },
+          {
+            "bucket": "XL",
+            "n": 0
+          }
+        ]
+      },
+      {
+        "size": "",
+        "n": 0,
+        "measured": 0,
+        "buckets": [
+          {
+            "bucket": "S",
+            "n": 0
+          },
+          {
+            "bucket": "M",
+            "n": 0
+          },
+          {
+            "bucket": "L",
+            "n": 0
+          },
+          {
+            "bucket": "XL",
+            "n": 0
+          }
+        ]
+      }
+    ],
+    "milestones": [
+      {
+        "title": "M2",
+        "total": 2,
+        "closed": 1,
+        "weighted": false,
+        "points": [
+          {
+            "t": "2026-11-02T00:00:00Z",
+            "total": 1,
+            "closed": 0,
+            "open": 1
+          },
+          {
+            "t": "2026-11-03T00:00:00Z",
+            "total": 1,
+            "closed": 1,
+            "open": 0
+          },
+          {
+            "t": "2026-11-03T06:00:00Z",
+            "total": 2,
+            "closed": 1,
+            "open": 1
+          },
+          {
+            "t": "2026-11-04T00:00:00Z",
+            "total": 2,
+            "closed": 1,
+            "open": 1
+          }
+        ]
+      }
+    ]
   }
 }

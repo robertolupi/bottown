@@ -20,6 +20,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/stats"
 )
 
 // liveTailLines is how many rendered log lines a live run carries, as in
@@ -44,6 +45,9 @@ type Fixture struct {
 	// view draws the window the answer names. Without one, the answer is
 	// an empty timeline of the window asked for.
 	Timeline *Timeline `json:"timeline,omitempty"`
+	// Stats is GET /api/stats, whatever window it asks for. Without one,
+	// the answer is empty statistics of the window asked for.
+	Stats *stats.Stats `json:"stats,omitempty"`
 	// Logs are the rendered logs by run ID: GET /api/runs/{id}/log, and a
 	// live run's or check's log_tail (its last lines) when it has one here.
 	Logs map[string][]runs.LogLine `json:"logs"`
@@ -194,6 +198,7 @@ func (s *PreviewServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/milestones", s.handleMilestones)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/timeline", s.handleTimelineView)
+	mux.HandleFunc("GET /api/stats", s.handleStatsView)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleIssue)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleTimeline)
@@ -331,6 +336,23 @@ func (s *PreviewServer) handleTimelineView(w http.ResponseWriter, r *http.Reques
 		tl := BuildTimeline(&activity.Activity{Window: win}, nil, now)
 		tl.Open = r.URL.Query().Get("until") == ""
 		return tl
+	}))
+}
+
+// handleStatsView serves the fixture's statistics, or empty ones for the
+// window asked for.
+func (s *PreviewServer) handleStatsView(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	win, err := statsWindow(r, now)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any {
+		if fx.Stats != nil {
+			return fx.Stats
+		}
+		return stats.Compute(&activity.Activity{Window: win}, stats.Facts{}, now)
 	}))
 }
 

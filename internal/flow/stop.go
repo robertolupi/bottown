@@ -17,7 +17,7 @@ import (
 const commentPrefix = "**bottown flow: "
 
 // StopReasons are the reasons a flow stops with.
-var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, VerifierUndecided, ConflictsWithMain, ChangesRequested, ChecksFailed, ActorBusy}
+var StopReasons = []StopReason{ReadyToMerge, OutOfRounds, RunFailed, VerifierUndecided, ConflictsWithMain, ChangesRequested, ChecksFailed, ActorBusy, Merged}
 
 // stopBody is the issue comment for a stop.
 func stopBody(reason StopReason, detail string, pr int64) string {

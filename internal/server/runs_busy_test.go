@@ -27,6 +27,8 @@ func TestRunConcurrency(t *testing.T) {
 			_, _ = io.WriteString(w, `{"name":"demo","default_branch":"main"}`)
 		case "GET /api/v1/repos/bottown/demo/issues/7", "GET /api/v1/repos/bottown/demo/issues/8", "GET /api/v1/repos/bottown/demo/issues/9":
 			_, _ = io.WriteString(w, `{"number":7,"state":"open","title":"An issue"}`)
+		case "GET /api/v1/repos/bottown/demo/issues/10":
+			_, _ = io.WriteString(w, `{"number":10,"state":"closed","title":"A closed issue"}`)
 		case "GET /api/v1/repos/bottown/demo/pulls/12":
 			_, _ = io.WriteString(w, `{"number":12,"state":"open","poster":{"login":"claude"},"head":{"ref":"issue/7","sha":"h1"}}`)
 		default:
@@ -84,6 +86,7 @@ func TestRunConcurrency(t *testing.T) {
 		{"verify", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusCreated, "", ""},
 		{"second verify at the head", `{"kind":"verify","actor":"codex","repo":"demo","pr":12}`, http.StatusConflict, "same target", ""},
 		{"implement while verifying", `{"kind":"implement","actor":"codex","repo":"demo","issue":9}`, http.StatusCreated, "", ""},
+		{"closed issue", `{"kind":"implement","actor":"claude","repo":"demo","issue":10}`, http.StatusConflict, "issue #10 is closed", ErrorCodeIssueClosed},
 	} {
 		w := do(c.body)
 		if w.Code != c.code || !strings.Contains(w.Body.String(), c.msg) {

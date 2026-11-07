@@ -106,6 +106,15 @@ func (f *fakeForge) EditIssue(_ context.Context, n int64, title, body string) er
 	return nil
 }
 
+func (f *fakeForge) AddLabel(_ context.Context, n int64, label string) error {
+	if slices.Contains(f.issues[n].Labels, label) {
+		return nil
+	}
+	f.issues[n].Labels = append(f.issues[n].Labels, label)
+	f.writes = append(f.writes, fmt.Sprintf("label #%d %s", n, label))
+	return nil
+}
+
 func (f *fakeForge) BlockedBy(_ context.Context, n int64) ([]int64, error) {
 	return slices.Clone(f.deps[n]), nil
 }
@@ -218,6 +227,64 @@ func withPlan(src string) *fakeForge {
 	f := newFake()
 	f.files[planFile] = string(md(src))
 	return f
+}
+
+const sizedPlan = `+++
+title = "Demo epic"
+kickoff = 1
+design = "docs/d.md"
++++
+
+The overview.
+
+## Alpha
+
+'''issue
+key = "a"
+size = "L"
+'''
+
+Body of a.
+`
+
+func TestApplySetsSizeLabel(t *testing.T) {
+	f := withPlan(sizedPlan)
+	_, out := mustApply(t, f, nil)
+	if got := f.issues[3].Labels; !slices.Equal(got, []string{"size/L"}) {
+		t.Errorf("#3 labels = %v, want [size/L]\n%s", got, out)
+	}
+	// A second apply does not add the label again.
+	before := len(f.writes)
+	mustApply(t, f, nil)
+	if after := f.writes[before:]; slices.ContainsFunc(after, func(w string) bool { return strings.HasPrefix(w, "label") }) {
+		t.Errorf("second apply wrote labels again: %v", after)
+	}
+	// The owner's own size label is never overwritten: the size/* set is an
+	// exclusive set, so the write would drop it. It is flagged instead.
+	f.issues[3].Labels = []string{"size/M"}
+	before = len(f.writes)
+	rep, out := mustApply(t, f, nil)
+	if got := f.issues[3].Labels; !slices.Equal(got, []string{"size/M"}) {
+		t.Errorf("#3 labels = %v after the owner set size/M, want it left alone\n%s", got, out)
+	}
+	if after := f.writes[before:]; slices.ContainsFunc(after, func(w string) bool { return strings.HasPrefix(w, "label") }) {
+		t.Errorf("apply rewrote the owner's size label: %v", after)
+	}
+	if !slices.ContainsFunc(rep.Flags, func(s string) bool { return strings.Contains(s, "size/M") && strings.Contains(s, "size/L") }) {
+		t.Errorf("apply did not flag the owner's size/M against the plan's size/L: %v", rep.Flags)
+	}
+}
+
+func TestApplyPlansSizeLabel(t *testing.T) {
+	// A dry run lists the size label write and writes nothing.
+	f := withPlan(sizedPlan)
+	rep, out := mustApply(t, f, func(o *ApplyOptions) { o.DryRun = true })
+	if !slices.ContainsFunc(rep.Changes, func(s string) bool { return strings.Contains(s, "size/L") }) {
+		t.Errorf("dry run changes %v do not list the size label write\n%s", rep.Changes, out)
+	}
+	if _, ok := f.issues[3]; ok {
+		t.Errorf("dry run created #3: %+v", f.issues[3])
+	}
 }
 
 func TestApplyFirstAndIdempotent(t *testing.T) {
