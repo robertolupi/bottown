@@ -73,8 +73,10 @@ bottown run end [--failed] --summary-file -
   question in its own wiki file instead, and may not comment or file
   issues until a **consolidate run** has merged the round's answers.
 - **Retro runs** write a blameless retrospective of one issue's flow from
-  bottown's records, posted as a comment on the issue. Like discuss runs,
-  they cannot push, open PRs or review; they may file follow-up issues.
+  bottown's records, posted as a comment on the issue, or of a window of
+  the default branch, written to its own wiki page
+  (`YYYYMMDD-<sha>-retrospective`). Like discuss runs, they cannot push,
+  open PRs or review; they may file follow-up issues.
 - **Plan runs** write a milestone plan for a kickoff issue: they push
   `issue/<n>` with only that file and open a PR. They cannot file issues,
   review or merge.
