@@ -167,7 +167,9 @@ func TestFlowLauncherRecord(t *testing.T) {
 			l := &flowLauncher{bin: bin, instance: "dev", repo: "demo", dir: dir, logDir: dir, runsDir: dir, owner: "owner",
 				c: client.New(issueServer(t).URL, "k").WithTimeout(time.Minute), rounds: 2, timeout: time.Hour, checkTimeout: time.Minute}
 			done := make(chan milestone.Outcome, 1)
-			go func() { done <- l.Flow(context.Background(), milestone.FlowRequest{Issue: 4, Implement: "claude", Verify: "agy"}) }()
+			go func() {
+				done <- l.Flow(context.Background(), milestone.FlowRequest{Issue: 4, Implement: "claude", Verify: "agy"})
+			}()
 
 			info := filepath.Join(dir, "flow-4.json")
 			waitFor := func(what string, ok func() bool) {
