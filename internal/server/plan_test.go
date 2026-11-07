@@ -31,6 +31,8 @@ func TestPlanRun(t *testing.T) {
 		switch p := r.Method + " " + r.URL.Path; p {
 		case "GET /api/v1/repos/bottown/demo":
 			_, _ = io.WriteString(w, `{"name":"demo","default_branch":"main"}`)
+		case "GET /api/v1/repos/bottown/demo/pulls":
+			_, _ = io.WriteString(w, `[]`)
 		case "GET /api/v1/repos/bottown/demo/issues/7":
 			_, _ = io.WriteString(w, `{"number":7,"state":"open","title":"Kickoff"}`)
 		case "GET /api/v1/repos/bottown/demo/issues/8":

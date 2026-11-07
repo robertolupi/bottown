@@ -704,7 +704,7 @@ into `milestone/<E>` first, `!<P2>` may no longer merge cleanly into
 
 - In a single-issue `bottown flow` targeting `main`, a base conflict starts
   an implement round to resolve it, up to `--rounds` such rounds per flow
-  command, and stops (`conflicts with main`) when they are used or one
+  command, and stops (`conflicts with base`) when they are used or one
   pushes nothing.
 - In `bottown milestone run`, because `bottown` itself advanced
   `milestone/<E>`, the scheduler **automatically runs a conflict-resolution

@@ -290,11 +290,12 @@ func (s *Server) ComputeMilestones(ctx context.Context) ([]MilestoneGroup, error
 		groups = append(groups, g)
 	}
 
-	// Branches: an epic's base is milestone/<E> once it exists (§3.3).
+	// Branches: a plan's base is milestone/<slug> once it exists, as runs
+	// on its children find it (server.runBase).
 	for _, g := range groups {
 		g.Base = "main"
-		if g.Epic != nil {
-			if br, err := s.branch(ctx, fmt.Sprintf("milestone/%d", g.Epic.Number)); err == nil && br.Name != "" {
+		if g.Epic != nil && g.Plan != "" {
+			if br, err := s.branch(ctx, "milestone/"+g.Plan); err == nil && br.Name != "" {
 				g.Base = br.Name
 			}
 		}

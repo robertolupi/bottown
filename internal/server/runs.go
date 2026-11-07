@@ -152,7 +152,7 @@ func (s *Server) postRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("run created", "run", run.ID, "kind", run.Kind, "actor", run.Actor, "spec", run.Spec, "repo", run.Org+"/"+run.Repo,
-		"issue", run.Issue, "pr", run.PR, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
+		"issue", run.Issue, "pr", run.PR, "base", run.Base, "sha", run.SHA, "allow_same_family", run.AllowSameFamily,
 		"critical", run.Critical, "serialize_actor", req.SerializeActor, "interactive", run.Interactive, "started_by", run.StartedBy)
 	writeJSON(w, http.StatusCreated, RunResponse{Run: run, Key: key})
 }
@@ -215,6 +215,9 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			return run, re
 		}
 		run.Issue, run.Branch = req.Issue, fmt.Sprintf("issue/%d", req.Issue)
+		if run.Base, err = s.runBase(api, run.Org, run.Repo, is, repo.DefaultBranch); err != nil {
+			return run, err
+		}
 
 	case policy.Verify:
 		if req.PR <= 0 {

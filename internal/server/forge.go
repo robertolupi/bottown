@@ -766,12 +766,18 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	if err != nil {
 		return PRCreateOut{}, err
 	}
-	repo, _, err := c.GetRepo(run.Org, run.Repo)
-	if err != nil {
-		return PRCreateOut{}, err
+	// The PR merges into the run's base (runBase), or, for a run recorded
+	// before runs kept one, the default branch.
+	base := run.Base
+	if base == "" {
+		repo, _, err := c.GetRepo(run.Org, run.Repo)
+		if err != nil {
+			return PRCreateOut{}, err
+		}
+		base = repo.DefaultBranch
 	}
 	pr, _, err := c.CreatePullRequest(run.Org, run.Repo, sdk.CreatePullRequestOption{
-		Head: run.Branch, Base: repo.DefaultBranch, Title: in.Title, Body: prBody(in, *run),
+		Head: run.Branch, Base: base, Title: in.Title, Body: prBody(in, *run),
 	})
 	alreadyOpen := false
 	if err != nil {
@@ -780,7 +786,7 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 			return PRCreateOut{}, err
 		}
 		for _, existing := range prs {
-			if existing.Head != nil && existing.Base != nil && existing.Head.Ref == run.Branch && existing.Base.Ref == repo.DefaultBranch {
+			if existing.Head != nil && existing.Base != nil && existing.Head.Ref == run.Branch && existing.Base.Ref == base {
 				pr, alreadyOpen = existing, true
 				break
 			}
@@ -791,7 +797,7 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	}
 	s.toolAudit(p, "", "pr_create", "allow", fmt.Sprintf("#%d", pr.Index))
 	s.recordOutcome(run.ID, secrets.OutcomePROpened)
-	out := PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: repo.DefaultBranch, AlreadyOpen: alreadyOpen}
+	out := PRCreateOut{Number: pr.Index, URL: pr.HTMLURL, Head: run.Branch, Base: base, AlreadyOpen: alreadyOpen}
 	if pr.Head != nil {
 		out.HeadSHA = pr.Head.Sha
 	}

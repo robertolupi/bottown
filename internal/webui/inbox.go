@@ -26,7 +26,7 @@ type InboxItemKind string
 const (
 	InboxReadyToMerge      InboxItemKind = "ready_to_merge"
 	InboxMergeBase         InboxItemKind = "merge_base"
-	InboxConflictsWithMain InboxItemKind = "conflicts_with_main"
+	InboxConflictsWithBase InboxItemKind = "conflicts_with_base"
 	InboxStoppedFlow       InboxItemKind = "stopped_flow"
 	InboxBrokenRun         InboxItemKind = "broken_run"
 	InboxDiscussAnswer     InboxItemKind = "discuss_answer"
@@ -236,7 +236,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		}
 		items = append(items, InboxItem{
 			ID:          fmt.Sprintf("conflicts-pr-%d", pr.Number),
-			Kind:        InboxConflictsWithMain,
+			Kind:        InboxConflictsWithBase,
 			Title:       fmt.Sprintf("PR !%d conflicts with %s", pr.Number, base),
 			Description: description,
 			Target:      fmt.Sprintf("!%d", pr.Number),

@@ -166,7 +166,7 @@
     },
     {
       "id": "conflict:58",
-      "kind": "conflicts_with_main",
+      "kind": "conflicts_with_base",
       "title": "!58 conflicts with main",
       "description": "main moved since the approval. Re-run the flow to bring main in.",
       "target": "!58",

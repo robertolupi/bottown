@@ -202,7 +202,7 @@ round whose prompt names them and asks the implementer to merge the base,
 resolve them, run the checks and push; the flow then gates and verifies the
 new head as usual. These conflict rounds are counted by the flow itself,
 apart from the review rounds, up to `--rounds` per flow command. The flow
-stops as "conflicts with main", reporting the conflicting files, when they
+stops as "conflicts with base", naming the base and the conflicting files, when they
 are used or when one pushes no new commit; the owner then resolves them or
 starts an implement run.
 
@@ -219,7 +219,7 @@ the owner sees it in Forgejo and in the UI:
 | run failed | a run failed, crashed or timed out | read its handover, and the run log and the harness's last error line that the stop names; fix the issue text or the environment, then re-run the flow (with another actor, if the run ended before the agent did anything because its actor is out of quota or signed out) |
 | verifier undecided | the verify run ended with `COMMENT` | read why; re-run, maybe with another verifier |
 | changes requested | the head is approved, but a request for changes at an older head still blocks the merge (§3.3) | have that reviewer review again, or dismiss the review |
-| conflicts with main | merging `main` into the PR would still conflict after the flow's conflict rounds, or one pushed nothing | read the named files; start an implement run to resolve them, or re-run the flow |
+| conflicts with base | merging the PR's base (`main`, or a milestone child's `milestone/<slug>`) into it would still conflict after the flow's conflict rounds, or one pushed nothing | read the named files; start an implement run to resolve them, or re-run the flow |
 | checks failed | the post-implement checks failed at the head and no check rounds remain | read the log the stop names; fix the cause (a flake gets its own issue), then re-run, maybe with more check rounds |
 | merged | the PR was merged, or the issue closed, while the flow ran: the flow reads both before each run, and the server's refusal of a run on a closed issue stops it the same way | nothing; the work has landed |
 | actor busy | with `--serialize-actors`, the actor's other batch run, which the stop names, was still live after `--actor-wait` | see why that run has not ended; stop or revoke it, then re-run the flow |
@@ -446,7 +446,7 @@ claude and verified by agy, and so on. Nothing above stands in its way:
 - its state is the milestone's issues, their labels (§3.6), PRs and
   reviews, so it resumes from the forge like a single flow;
 - conflicts between its PRs, as the owner merges them one by one, are the
-  "conflicts with main" stop (§3.2).
+  "conflicts with base" stop (§3.2).
 
 To be designed when it is built: how pairs are chosen from the pool (always
 cross-family), the order of issues and their dependencies (Forgejo issue

@@ -110,7 +110,7 @@ func TestComputeMilestones(t *testing.T) {
 			23: {22},
 			24: {21},
 		},
-		branches: []string{"milestone/20"},
+		branches: []string{"milestone/20", "milestone/demo"},
 		prs: []*sdk.PullRequest{
 			{Index: 50, Title: "Echo PR", State: sdk.StateOpen, Poster: agy, Head: &sdk.PRBranchInfo{Ref: "issue/25", Sha: "e1"}},
 			{Index: 51, Title: "Foxtrot PR", State: sdk.StateOpen, Poster: agy, Head: &sdk.PRBranchInfo{Ref: "issue/26", Sha: "f1"}},
@@ -161,7 +161,7 @@ func TestComputeMilestones(t *testing.T) {
 		t.Fatalf("error: %s", g.Error)
 	}
 	if g.Plan != "demo" || g.Epic.Number != 20 || g.Milestone.ID != 7 || g.Kickoff.Number != 1 || g.Kickoff.Title != "Kickoff" ||
-		g.Design != "docs/d.md" || g.PlanFile != "docs/milestones/demo.md" || g.Base != "milestone/20" {
+		g.Design != "docs/d.md" || g.PlanFile != "docs/milestones/demo.md" || g.Base != "milestone/demo" {
 		t.Errorf("summary: %+v", g)
 	}
 	if len(g.Removed) != 1 || g.Removed[0].Number != 28 || g.Removed[0].Key != "h" {

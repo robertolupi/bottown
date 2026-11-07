@@ -140,7 +140,7 @@ func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err erro
 	run := created.Run
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
-		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, SHA: run.SHA,
+		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, Base: run.Base, SHA: run.SHA,
 		Interactive: true, Critical: run.Critical, Harness: run.Harness, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 		Attachments: leaseAttachments(a),
@@ -157,11 +157,11 @@ func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err erro
 			start := a.Remote + "/" + upstream
 			if _, err := runs.Git(a.Worktree, nil, "rev-parse", "--verify", "-q", "refs/remotes/"+start); err != nil {
 				top, _ := runs.Git(a.Worktree, nil, "rev-parse", "--show-toplevel")
-				base, err := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
+				def, err := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
 				if err != nil {
 					return err
 				}
-				upstream = base
+				upstream = runBase(run, def)
 				start = a.Remote + "/" + upstream
 			}
 			if _, err := runs.Git(a.Worktree, nil, "checkout", "-q", "-B", run.Branch, start); err != nil {
@@ -200,9 +200,9 @@ func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err erro
 			return err
 		}
 		top, _ := runs.Git(a.Worktree, nil, "rev-parse", "--show-toplevel")
-		base, _ := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
-		d := runs.PromptData{Title: item.Title, Body: item.Body, Base: base, Bottown: selfPath(), Remote: a.Remote, SelfEnd: true}
-		prompt, err := goalPrompt(cmd.Context(), &rk, run, d, a.Worktree, a.Remote+"/"+base, rec.Attachments, &item, nil)
+		def, _ := runs.RemoteDefaultBranch(cmd.Context(), top, a.Remote)
+		d := runs.PromptData{Title: item.Title, Body: item.Body, Base: runBase(run, def), Bottown: selfPath(), Remote: a.Remote, SelfEnd: true}
+		prompt, err := goalPrompt(cmd.Context(), &rk, run, d, a.Worktree, a.Remote+"/"+def, rec.Attachments, &item, nil)
 		if err != nil {
 			return err
 		}
