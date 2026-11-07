@@ -694,8 +694,10 @@ When child issues `#<C1>` and `#<C2>` run in parallel and `#<C1>` auto-merges
 into `milestone/<E>` first, `!<P2>` may no longer merge cleanly into
 `milestone/<E>`.
 
-- In a single-issue `bottown flow` targeting `main`, a base conflict stops
-  immediately (`conflicts with main`) because only the owner merges into `main`.
+- In a single-issue `bottown flow` targeting `main`, a base conflict starts
+  an implement round to resolve it, up to `--rounds` such rounds per flow
+  command, and stops (`conflicts with main`) when they are used or one
+  pushes nothing.
 - In `bottown milestone run`, because `bottown` itself advanced
   `milestone/<E>`, the scheduler **automatically runs a conflict-resolution
   round** on `#<C2>` if rounds remain (`roundsUsed < opts.Rounds`, where each

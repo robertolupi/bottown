@@ -245,6 +245,10 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	// fixing is the head whose failed checks the last implement round was
 	// asked to fix: if it pushed nothing, the flow stops.
 	fixing := ""
+	// resolving is the head whose conflicts with the base the last
+	// implement round was asked to resolve, and conflictRounds how many
+	// such rounds this flow has started.
+	resolving, conflictRounds := "", 0
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -303,7 +307,28 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			if files == "" {
 				files = "unknown files"
 			}
-			return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("merging %s into %s for !%d would conflict in %s; start an implement run to resolve it", pr.BaseBranch, pr.HeadBranch, pr.Number, files))
+			// An implement round resolves the conflicts. These rounds are
+			// the flow's own, bounded by Rounds; one that pushes nothing, or
+			// conflicts that outlast the rounds, stop the flow.
+			if resolving == pr.HeadSHA {
+				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("the implement round to resolve the conflicts with %s at %s pushed no new commit; merging %s into %s for !%d would still conflict in %s",
+					pr.BaseBranch, shortSHA(pr.HeadSHA), pr.BaseBranch, pr.HeadBranch, pr.Number, files))
+			}
+			if conflictRounds >= opts.Rounds {
+				return s.stop(ctx, result, ConflictsWithMain, fmt.Sprintf("merging %s into %s for !%d would conflict in %s, and %d conflict rounds are used; start an implement run to resolve it",
+					pr.BaseBranch, pr.HeadBranch, pr.Number, files, conflictRounds))
+			}
+			conflictRounds++
+			if err := s.API.Comment(ctx, opts.Repo, opts.Issue, fmt.Sprintf("**bottown flow: conflicts with %s** on !%d at %s, in %s; starting implement round %d of %d to resolve them.",
+				pr.BaseBranch, pr.Number, shortSHA(pr.HeadSHA), files, conflictRounds, opts.Rounds)); err != nil {
+				return result, err
+			}
+			resolving = pr.HeadSHA
+			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue, Note: conflictNote(pr, merge.Conflicts)}); err != nil {
+				return s.runFailure(ctx, result, err)
+			}
+			resuming = false
+			continue
 		}
 		if merge.Behind && merge.Clean && opts.Attended {
 			yes, err := s.confirmMerge(pr)
@@ -535,6 +560,15 @@ func failedNote(head string, o CheckOutcome) string {
 	}
 	return fmt.Sprintf("This is an implement round to fix failed checks. bottown flow ran the post-implement checks (the repository's e2e commands) at `%s`, the pull request's head, in a clean worktree, and they failed:\n\n```\n%s\n```\n\nThe full log is `%s`: read it at the lines above. Fix the failure, push, and comment on the pull request with what changed; the flow runs the checks again at your new head before a verifier sees it.",
 		head, summary, o.Log)
+}
+
+func conflictNote(pr server.PROut, conflicts []string) string {
+	files := "files git did not name"
+	if len(conflicts) > 0 {
+		files = "`" + strings.Join(conflicts, "`, `") + "`"
+	}
+	return fmt.Sprintf("This is an implement round to resolve merge conflicts. `%s` has moved since pull request !%d branched from it, and merging it into `%s` at `%s` conflicts in %s, so bottown flow cannot merge it for you.\n\nFetch the forge remote and merge its `%s` into your branch (`git fetch bottown && git merge bottown/%s`), resolve the conflicts keeping the intent of both sides, run the repository's checks, push, and comment on the pull request with how you resolved them. Merge; do not rebase or force-push. The flow then checks and verifies your new head.",
+		pr.BaseBranch, pr.Number, pr.HeadBranch, pr.HeadSHA, files, pr.BaseBranch, pr.BaseBranch)
 }
 
 // waitForPush lets Forgejo finish updating mergeability and reviews after a
