@@ -900,6 +900,12 @@ bottown debate ISSUE --actors claude,codex --consolidate agy [--raw] [QUESTION]
   the page and the round number, without a summary. Any actor may
   consolidate: the answers are already independent, so no family rule
   applies.
+- **A run's job is its file.** When a debate run's harness exits cleanly,
+  the launcher lists the wiki: if the run's file (`r<N>-<actor>.md`, or
+  `r<N>-consolidated.md`) is not there, the run ends `failed` with the
+  observed cause `no_output` naming the file, and a consolidate run's
+  comment says the round is not consolidated (#391). If the wiki cannot be
+  listed, the run's outcome stands, with a warning.
 
 ## Activity
 

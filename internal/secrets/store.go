@@ -163,6 +163,10 @@ const (
 	FailureExpired = "expired"
 	// FailureReported: the agent ended its run as failed; Summary says why.
 	FailureReported = "reported"
+	// FailureNoOutput: the harness exited cleanly, but the run did not
+	// write what was its one job, a debate run's file in the wiki;
+	// Detail names the file.
+	FailureNoOutput = "no_output"
 )
 
 // MaxFailureDetail bounds a stored failure's detail, in bytes.

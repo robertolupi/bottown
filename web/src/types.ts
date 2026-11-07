@@ -244,7 +244,8 @@ export type FailureCause =
   | 'stopped'
   | 'interrupted'
   | 'expired'
-  | 'reported';
+  | 'reported'
+  | 'no_output';
 
 export interface RunFailure {
   cause: FailureCause | string;

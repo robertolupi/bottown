@@ -358,10 +358,11 @@ const failureLabels: Record<string, string> = {
   interrupted: 'Interrupted',
   expired: 'Key expired while live',
   reported: 'Agent ended the run as failed',
+  no_output: 'Wrote no output',
 };
 
 // Causes whose detail adds to their label; the others' repeats it.
-const failureDetailed = new Set(['startup', 'timeout', 'interrupted', 'expired']);
+const failureDetailed = new Set(['startup', 'timeout', 'interrupted', 'expired', 'no_output']);
 
 // describeRunFailure explains a failed or revoked run for the history: what
 // bottown observed (the recorded failure) apart from what the agent

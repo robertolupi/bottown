@@ -607,6 +607,15 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	if o.interactive {
 		status = askOutcome(cmd, status)
 	}
+	// A debate run that exited cleanly did its job only if its file is in
+	// the wiki (#391).
+	var noOutput *secrets.Failure
+	if status == runs.StatusSucceeded {
+		if noOutput = checkDebateFile(ctx, rc, run, errOut); noOutput != nil {
+			status = runs.StatusFailed
+			fmt.Fprintf(errOut, "run %s: %s\n", run.ID, noOutput.Detail)
+		}
+	}
 
 	logBytes, _ := os.ReadFile(logPath)
 	summary := h.Summary(logBytes)
@@ -626,6 +635,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 	digest = secrets.Digest{Summary: cleanSummary(rec, summary), Usage: h.Usage(logBytes)}
 	if status != runs.StatusSucceeded {
 		digest.Failure = observedFailure(ctx.Err(), rec.StopRequested, code, time.Since(started))
+		if digest.Failure == nil {
+			digest.Failure = noOutput
+		}
 		if digest.Failure == nil && reportedFailed {
 			digest.Failure = &secrets.Failure{Cause: secrets.FailureReported, Detail: "the agent ended the run as failed"}
 		}
