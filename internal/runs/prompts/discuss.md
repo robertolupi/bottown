@@ -86,6 +86,7 @@ author clearly wants a yes, stop and re-attack it from outside its framing.
   what are the risks and open questions?
 {{- end}}
 - If the owner is in the conversation, discuss it with them there.
+{{- template "batch" .}}
 
 ## Done means
 

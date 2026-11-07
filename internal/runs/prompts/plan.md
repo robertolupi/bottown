@@ -81,6 +81,7 @@ model family approves it and the owner merges it, the owner's
   merge. Do not change code, docs or anything else outside the plan file;
   if the plan needs other changes first, say so in the plan or in a
   comment.
+{{- template "batch" .}}
 
 ## Done means
 

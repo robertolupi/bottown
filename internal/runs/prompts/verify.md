@@ -71,6 +71,7 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
   exits. Check layout claims against the metrics; `--selector` and
   `--eval` measure more.
 {{- end}}
+{{- template "batch" .}}
 
 ## Done means
 
