@@ -206,11 +206,19 @@ key, since a run key may not list runs or read the audit log, into
   partial, which the prompt repeats: verify runs but no implement or plan
   run, or a pull request whose own last commit (its head, or the first
   parent below the merges, such as the flow's "Merge main into" commits)
-  is by an author with no implement or plan run in the evidence.
+  is by an author with no implement or plan run in the evidence, or
+  commit statuses it could not read. Each run counts its policy denials
+  and, apart, its harness denials: the transcript's `error` lines that
+  start with `denied:`, tool calls the harness refused before the policy
+  saw them. Below the runs, each of the flow's pull requests lists every
+  commit status (context, state, time, description, creator) at its
+  commits and at the heads its verify runs saw, oldest first, and flags a
+  context with more than one status at one commit (checks that overlapped
+  or ran again), saying so when they include a success and a failure.
 - `runs.json`: each run's server record and digest (summary, usage,
   observed failure), the launcher's local record if this checkout launched
-  it (exit code, stop request, notes, handover; never the key), and its
-  policy denials and rejections.
+  it (exit code, stop request, notes, handover; never the key), its
+  policy denials and rejections, and its harness denial count.
 - `transcripts/<id>.jsonl`: the run's log, as one `runs.LogLine` JSON line
   per message, tool call, tool output or status event, the format the web
   UI's log view uses for every harness, with each text field cut at 4000

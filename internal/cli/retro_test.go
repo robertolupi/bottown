@@ -50,7 +50,7 @@ func TestGatherRetro(t *testing.T) {
 		{Run: "r-4d", Op: "api", Decision: "deny"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	n, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-3c", ws, list, audit, nil, nil)
+	n, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-3c", ws, list, audit, nil, nil, prStatuses{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestGatherRetro(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# Evidence for the retro of #7",
-		"| `r-1a` | implement | claude (anthropic) | #7 | 2026-11-01T10:00:00Z | 1m30s | failed: harness_exit | - | 1 | transcripts/r-1a.jsonl | prompts/r-1a.md |",
+		"| `r-1a` | implement | claude (anthropic) | #7 | 2026-11-01T10:00:00Z | 1m30s | failed: harness_exit | - | 1 | 0 | transcripts/r-1a.jsonl | prompts/r-1a.md |",
 		"| `r-2b` | verify | codex (openai) | !9 @ 0123456789 |",
 	} {
 		if !strings.Contains(string(readme), want) {
@@ -113,7 +113,7 @@ func TestGatherRetro(t *testing.T) {
 	}
 
 	// A flow bottown never ran still gets its (empty) evidence.
-	n, _, err = gatherRetro(dir, server.NewRetroFlow(99, false, ""), "r-3c", ws, list, audit, nil, nil)
+	n, _, err = gatherRetro(dir, server.NewRetroFlow(99, false, ""), "r-3c", ws, list, audit, nil, nil, prStatuses{})
 	if err != nil || n != 0 {
 		t.Fatalf("gatherRetro(99) = %d, %v", n, err)
 	}
@@ -146,7 +146,7 @@ func TestGatherRetroPRDiscussions(t *testing.T) {
 		{Run: secrets.Run{ID: "r-7g", Kind: policy.Discuss, Actor: "kimi", Issue: 13, Created: t0.Add(7 * time.Minute)}, State: "ended"},
 	}
 	dir := filepath.Join(t.TempDir(), retroDir)
-	if _, _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{13}, nil); err != nil {
+	if _, _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{13}, nil, prStatuses{}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
@@ -186,7 +186,7 @@ func TestGatherRetroOnPR(t *testing.T) {
 		t.Helper()
 		flow, prs := retroFlowOf(n, heads)
 		dir := filepath.Join(t.TempDir(), retroDir)
-		if _, _, err := gatherRetro(dir, flow, "r-self", ws, list, nil, prs, nil); err != nil {
+		if _, _, err := gatherRetro(dir, flow, "r-self", ws, list, nil, prs, nil, prStatuses{}); err != nil {
 			t.Fatal(err)
 		}
 		var got []retroRun
@@ -233,7 +233,7 @@ func TestGatherRetroGaps(t *testing.T) {
 	gather := func(list []server.RunItem, tips []prTip) ([]string, string) {
 		t.Helper()
 		dir := filepath.Join(t.TempDir(), retroDir)
-		_, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{9}, tips)
+		_, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{9}, tips, prStatuses{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,6 +266,59 @@ func TestGatherRetroGaps(t *testing.T) {
 	tip.Author = "claude"
 	if gaps, readme = gather(append([]server.RunItem{impl}, verifies...), []prTip{tip}); gaps != nil || strings.Contains(readme, "WARNING") {
 		t.Errorf("whole evidence warns: %q:\n%s", gaps, readme)
+	}
+}
+
+// The README counts a transcript's harness denials apart from the policy's,
+// lists each pull request's commit statuses, and flags a context with two
+// statuses at one commit, a success and a failure, as two overlapping flow
+// checks leave.
+func TestGatherRetroStatusesAndHarnessDenials(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	if err := ws.Save(runs.Record{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Family: "anthropic", Harness: "claude", Issue: 7, Branch: "issue/7", Started: t0}); err != nil {
+		t.Fatal(err)
+	}
+	log := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"make e2e > $TMPDIR/e2e.log"}}]}}
+{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":"t1","message":"A variable in this command can't be checked before it runs"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"A variable in this command can't be checked before it runs"}]}}
+`
+	if err := os.WriteFile(filepath.Join(ws.RunsDir, "r-1a.log"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := []server.RunItem{{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Family: "anthropic", Issue: 7, Branch: "issue/7", Created: t0}, State: "ended"}}
+	const head = "18e3f21618aabbcc"
+	sts := prStatuses{Statuses: []prStatus{
+		{PR: 9, SHA: head, Context: "bottown/e2e", State: "failure", Description: "make e2e failed after 1m53s", Creator: "owner", Created: t0.Add(56*time.Minute + 7*time.Second)},
+		{PR: 9, SHA: head, Context: "bottown/e2e", State: "success", Description: "make e2e passed in 2m05s", Creator: "owner", Created: t0.Add(55*time.Minute + 42*time.Second)},
+		{PR: 9, SHA: head, Context: "bottown/check", State: "success", Description: "make check | passed", Creator: "claude", Created: t0.Add(50 * time.Minute)},
+		{PR: 9, SHA: "0123456789abcdef", Context: "bottown/check", State: "failure", Creator: "claude", Created: t0.Add(20 * time.Minute)},
+	}}
+	dir := filepath.Join(t.TempDir(), retroDir)
+	if _, _, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, list, nil, []int64{9}, nil, sts); err != nil {
+		t.Fatal(err)
+	}
+	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "| `r-1a` | implement | claude (anthropic) | #7 | 2026-11-01T10:00:00Z | - | - | - | 0 | 1 | transcripts/r-1a.jsonl | - |\n" +
+		"\n## Commit statuses\n\n"
+	if !strings.Contains(string(readme), want) {
+		t.Errorf("README lacks %q:\n%s", want, readme)
+	}
+	want = "### !9\n\n| commit | context | state | created | description | creator |\n|---|---|---|---|---|---|\n" +
+		"| `0123456789` | bottown/check | failure | 2026-11-01T10:20:00Z | - | claude |\n" +
+		"| `18e3f21618` | bottown/check | success | 2026-11-01T10:50:00Z | make check \\| passed | claude |\n" +
+		"| `18e3f21618` | bottown/e2e | success | 2026-11-01T10:55:42Z | make e2e passed in 2m05s | owner |\n" +
+		"| `18e3f21618` | bottown/e2e | failure | 2026-11-01T10:56:07Z | make e2e failed after 1m53s | owner |\n" +
+		"\n> [!WARNING]\n> - `18e3f21618` has 2 `bottown/e2e` statuses, a success and a failure: checks overlapped, or ran again, at that commit.\n"
+	if !strings.HasSuffix(string(readme), want) {
+		t.Errorf("README does not end with %q:\n%s", want, readme)
+	}
+	var got []retroRun
+	if b, err := os.ReadFile(filepath.Join(dir, "runs.json")); err != nil || json.Unmarshal(b, &got) != nil || len(got) != 1 || got[0].HarnessDenials != 1 {
+		t.Errorf("runs.json = %+v, %v; want one run with 1 harness denial", got, err)
 	}
 }
 

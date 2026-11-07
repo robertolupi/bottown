@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,7 @@ import (
 // on, gathered by the launcher with the owner key (the run's own key may
 // not list runs or read the audit log) into the run's scratch directory:
 //
-//	retro/README.md                 the runs at a glance, and the files
+//	retro/README.md                 the runs at a glance, the PRs' commit statuses, and the files
 //	retro/runs.json                 each run: the server's record and digest, the local record, its denials
 //	retro/transcripts/<id>.jsonl    the run's log, one normalized line per message or tool call
 //	retro/prompts/<id>.md           the goal prompt the run was given
@@ -70,6 +71,10 @@ type retroRun struct {
 	Local *retroLocal `json:"local,omitempty"`
 	// Denials are the policy refusals the server kept for the run.
 	Denials []server.AuditEntry `json:"denials,omitempty"`
+	// HarnessDenials are the tool calls the run's harness refused (its
+	// transcript's error lines that start with "denied:"), which the
+	// policy never saw.
+	HarnessDenials int `json:"harness_denials,omitempty"`
 	// Transcript and Prompt are the run's files in the evidence, relative
 	// to it; empty when there is none.
 	Transcript string `json:"transcript,omitempty"`
@@ -95,10 +100,11 @@ type retroLocal struct {
 // server's cross-family rule does. Local files come from ws; the server's
 // records from runList (GET /v1/runs?history=1), the denials from audit
 // (GET /v1/audit?decision=deny,reject), and forgePRs are the pull requests
-// Forgejo has from the flow's branch, and tips their heads' own commits.
-// It also returns the gaps it sees in the evidence (retroGaps), which the
-// README and the prompt warn of.
-func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64, tips []prTip) (int, []string, error) {
+// Forgejo has from the flow's branch, tips their heads' own commits, and
+// sts the commit statuses at their commits. It also returns the gaps it
+// sees in the evidence (retroGaps, and the statuses it could not read),
+// which the README and the prompt warn of.
+func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Workspace, runList []server.RunItem, audit []server.AuditEntry, forgePRs []int64, tips []prTip, sts prStatuses) (int, []string, error) {
 	if err := os.RemoveAll(dir); err != nil {
 		return 0, nil, err
 	}
@@ -173,10 +179,11 @@ func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Worksp
 		r := &out[i]
 		if b, err := runs.ReadLog(ws.Path(r.ID, ".log")); err == nil && len(b) > 0 {
 			rel := filepath.Join("transcripts", r.ID+".jsonl")
-			if err := writeTranscript(filepath.Join(dir, rel), r.Harness, b); err != nil {
+			denied, err := writeTranscript(filepath.Join(dir, rel), r.Harness, b)
+			if err != nil {
 				return 0, nil, err
 			}
-			r.Transcript = rel
+			r.Transcript, r.HarnessDenials = rel, denied
 		}
 		if b, err := os.ReadFile(ws.Path(r.ID, ".prompt.md")); err == nil {
 			rel := filepath.Join("prompts", r.ID+".md")
@@ -193,8 +200,26 @@ func gatherRetro(dir string, flow server.RetroFlow, self string, ws *runs.Worksp
 	if err := os.WriteFile(filepath.Join(dir, "runs.json"), append(b, '\n'), 0o600); err != nil {
 		return 0, nil, err
 	}
-	gaps := retroGaps(out, tips)
-	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out, gaps)), 0o600)
+	gaps := append(retroGaps(out, tips), sts.Errors...)
+	return len(out), gaps, os.WriteFile(filepath.Join(dir, "README.md"), []byte(retroReadme(flow, out, gaps, sts.Statuses)), 0o600)
+}
+
+// prStatus is a commit status at one of a flow pull request's commits.
+type prStatus struct {
+	PR          int64
+	SHA         string
+	Context     string
+	State       string
+	Description string
+	Creator     string
+	Created     time.Time
+}
+
+// prStatuses are the commit statuses at the flow's pull requests' commits,
+// and why some could not be read.
+type prStatuses struct {
+	Statuses []prStatus
+	Errors   []string
 }
 
 // prTip is a pull request's head and its own last commit: the head or,
@@ -249,14 +274,19 @@ func orEmptyRuns(rs []retroRun) []retroRun {
 }
 
 // writeTranscript writes a run's log as JSON lines of runs.LogLine, each
-// text field bounded by maxTranscriptField.
-func writeTranscript(path, harness string, log []byte) error {
+// text field bounded by maxTranscriptField, and returns how many tool calls
+// the harness denied.
+func writeTranscript(path, harness string, log []byte) (int, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	enc := json.NewEncoder(f)
+	denied := 0
 	for _, l := range runs.RenderLog(harness, log) {
+		if l.Kind == runs.LineError && strings.HasPrefix(l.Text, "denied:") {
+			denied++
+		}
 		for _, s := range []*string{&l.Text, &l.Detail, &l.Parameters, &l.Output} {
 			if len(*s) > maxTranscriptField {
 				kept := secrets.TruncateUTF8(*s, maxTranscriptField)
@@ -270,12 +300,13 @@ func writeTranscript(path, harness string, log []byte) error {
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	return err
+	return denied, err
 }
 
 // retroReadme is the evidence's index: the runs, oldest first, and where
-// to read more. The gaps, from retroGaps, come first, as a warning.
-func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string) string {
+// to read more, then the pull requests' commit statuses (sts). The gaps,
+// from retroGaps, come first, as a warning.
+func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string, sts []prStatus) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Evidence for the retro of %s\n\n", flow)
 	if len(gaps) > 0 {
@@ -295,15 +326,17 @@ func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string) string {
 	}
 	if len(rs) == 0 {
 		fmt.Fprintf(&b, "bottown has no record of a run on %s.\n", what)
+		writeStatuses(&b, sts)
 		return b.String()
 	}
 	b.WriteString("The runs that worked " + what + ", oldest first. `runs.json`\n" +
 		"has each run in full: the server's record and digest (summary, usage, observed failure),\n" +
-		"the launcher's record, and the policy refusals (denials). Transcripts are JSON lines,\n" +
+		"the launcher's record, and the policy refusals (denials). Harness denials are the tool calls\n" +
+		"the run's harness refused: its transcript's `error` lines that start with `denied:`. Transcripts are JSON lines,\n" +
 		"one per assistant message, tool call or status event, the same format for every harness:\n" +
 		"`kind` (text, tool, output, error, status, plain), `tool`, `state`, `text`, `parameters`, `output`.\n\n")
-	b.WriteString("| run | kind | actor | target | created | duration | status | outcome | denials | transcript | prompt |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| run | kind | actor | target | created | duration | status | outcome | denials | harness denials | transcript | prompt |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range rs {
 		target := fmt.Sprintf("#%d", r.Issue)
 		if r.PR > 0 {
@@ -328,11 +361,67 @@ func retroReadme(flow server.RetroFlow, rs []retroRun, gaps []string) string {
 		if transcript == "" {
 			transcript = "none"
 		}
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %d | %s | %s |\n",
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s | %s | %s | %s | %d | %d | %s | %s |\n",
 			r.ID, r.Kind, actor, target, r.Created.Format(time.RFC3339), orDash(r.Duration), status,
-			orDash(r.Outcome), len(r.Denials), transcript, orDash(r.Prompt))
+			orDash(r.Outcome), len(r.Denials), r.HarnessDenials, transcript, orDash(r.Prompt))
 	}
+	writeStatuses(&b, sts)
 	return b.String()
+}
+
+// writeStatuses writes each pull request's commit statuses, oldest first,
+// and flags a context with more than one status at a commit (checks that
+// overlapped, or re-ran, at one head), and one with a success and a failure.
+func writeStatuses(b *strings.Builder, sts []prStatus) {
+	if len(sts) == 0 {
+		return
+	}
+	sts = slices.Clone(sts)
+	slices.SortStableFunc(sts, func(x, y prStatus) int {
+		if c := cmp.Compare(x.PR, y.PR); c != 0 {
+			return c
+		}
+		return x.Created.Compare(y.Created)
+	})
+	b.WriteString("\n## Commit statuses\n\n" +
+		"The statuses at the flow's pull requests' commits and at every head a run saw, oldest first:\n" +
+		"`bottown/check` from `bottown check` in a run, `bottown/e2e` from the flow's own checks.\n")
+	type key struct{ sha, context string }
+	for i := 0; i < len(sts); {
+		pr := sts[i].PR
+		fmt.Fprintf(b, "\n### !%d\n\n", pr)
+		b.WriteString("| commit | context | state | created | description | creator |\n|---|---|---|---|---|---|\n")
+		var keys []key
+		byKey := map[key][]string{}
+		for ; i < len(sts) && sts[i].PR == pr; i++ {
+			st := sts[i]
+			k := key{st.SHA, st.Context}
+			if _, ok := byKey[k]; !ok {
+				keys = append(keys, k)
+			}
+			byKey[k] = append(byKey[k], st.State)
+			fmt.Fprintf(b, "| `%s` | %s | %s | %s | %s | %s |\n", short(st.SHA), st.Context, st.State,
+				st.Created.Format(time.RFC3339), orDash(strings.ReplaceAll(st.Description, "|", `\|`)), orDash(st.Creator))
+		}
+		var flags []string
+		for _, k := range keys {
+			states := byKey[k]
+			if len(states) < 2 {
+				continue
+			}
+			f := fmt.Sprintf("`%s` has %d `%s` statuses", short(k.sha), len(states), k.context)
+			if slices.Contains(states, "success") && (slices.Contains(states, "failure") || slices.Contains(states, "error")) {
+				f += ", a success and a failure"
+			}
+			flags = append(flags, f+": checks overlapped, or ran again, at that commit.")
+		}
+		if len(flags) > 0 {
+			b.WriteString("\n> [!WARNING]\n")
+			for _, f := range flags {
+				b.WriteString("> - " + f + "\n")
+			}
+		}
+	}
 }
 
 // collectRetro gathers the evidence for retro run run into dir with the
@@ -367,8 +456,92 @@ func collectRetro(ctx context.Context, rc *runContext, run secrets.Run, dir stri
 			}
 		}
 	}
-	n, gaps, err := gatherRetro(dir, flow, run.ID, rc.ws, list, audit, prs, tips)
+	var sts prStatuses
+	for _, h := range heads {
+		if slices.Contains(prs, h.Number) {
+			sts.add(ctx, rc, h, list)
+		}
+	}
+	n, gaps, err := gatherRetro(dir, flow, run.ID, rc.ws, list, audit, prs, tips, sts)
 	return flow, n, gaps, err
+}
+
+// add reads the commit statuses at h's commits, its head, and the heads
+// its verify runs saw (a force push may have dropped them from it). What it
+// cannot read it records in Errors rather than costing the run its evidence.
+func (s *prStatuses) add(ctx context.Context, rc *runContext, h prHead, list []server.RunItem) {
+	shas, err := prCommits(ctx, rc, h.Number)
+	if err != nil {
+		s.Errors = append(s.Errors, fmt.Sprintf("The commits of pull request !%d could not be listed (%v): its commit statuses below are only those at the heads the runs saw.", h.Number, err))
+	}
+	shas = append(shas, h.Head.Sha)
+	for _, it := range list {
+		if it.Run.PR == h.Number { // a verify run, pinned to the head it saw
+			shas = append(shas, it.Run.SHA)
+		}
+	}
+	seen := map[string]bool{"": true}
+	for _, sha := range shas {
+		if seen[sha] {
+			continue
+		}
+		seen[sha] = true
+		got, err := commitStatuses(ctx, rc, sha)
+		if err != nil {
+			s.Errors = append(s.Errors, fmt.Sprintf("The commit statuses at `%s` of pull request !%d could not be read: %v.", short(sha), h.Number, err))
+			continue
+		}
+		for _, st := range got {
+			st.PR = h.Number
+			s.Statuses = append(s.Statuses, st)
+		}
+	}
+}
+
+// prCommits is the SHAs of pull request n's commits.
+func prCommits(ctx context.Context, rc *runContext, n int64) ([]string, error) {
+	var out []string
+	for page := 1; ; page++ {
+		var cs []struct{ Sha string }
+		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/pulls/%d/commits?stat=false&verification=false&files=false&limit=50&page=%d", rc.org, rc.repo, n, page)
+		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &cs); err != nil {
+			return out, err
+		}
+		for _, c := range cs {
+			out = append(out, c.Sha)
+		}
+		if len(cs) < 50 {
+			return out, nil
+		}
+	}
+}
+
+// commitStatuses is every status at sha, not only the newest per context.
+func commitStatuses(ctx context.Context, rc *runContext, sha string) ([]prStatus, error) {
+	var out []prStatus
+	for page := 1; ; page++ {
+		var sts []struct {
+			Status      string
+			Context     string
+			Description string
+			Created     time.Time `json:"created_at"`
+			Creator     *struct{ Login string }
+		}
+		path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/commits/%s/statuses?limit=50&page=%d", rc.org, rc.repo, sha, page)
+		if err := callServer(ctx, rc.inst, rc.key, "GET", path, nil, &sts); err != nil {
+			return nil, err
+		}
+		for _, st := range sts {
+			p := prStatus{SHA: sha, Context: st.Context, State: st.Status, Description: st.Description, Created: st.Created}
+			if st.Creator != nil {
+				p.Creator = st.Creator.Login
+			}
+			out = append(out, p)
+		}
+		if len(sts) < 50 {
+			return out, nil
+		}
+	}
 }
 
 // prHead is a pull request's number, head branch and head commit.

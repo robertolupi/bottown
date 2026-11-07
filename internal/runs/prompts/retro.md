@@ -33,15 +33,22 @@ stops.
 {{- if .Evidence}}
 
 bottown gathered what it recorded of the flow's {{.EvidenceRuns}} run(s) in
-`{{.Evidence}}`. Start with its `README.md`: the runs, oldest first, and the
-files.
+`{{.Evidence}}`. Start with its `README.md`: the runs, oldest first, the
+files, and the commit statuses at the pull requests' commits.
 
 - `runs.json`: each run in full. The server's record (kind, actor, family,
   model, target, SHA, created and ended, status, outcome) and its digest:
   the agent's summary, the usage its harness reported, and the failure the
   launcher observed. The launcher's record (exit code, stop requests, the
   owner's note, the flow's note on checks, the agent's handover). The
-  policy refusals (`denials`).
+  policy refusals (`denials`), and the count of tool calls the harness
+  refused (`harness_denials`, the transcript's `error` lines that start
+  with `denied:`), which the policy never saw. Both cost a run retries.
+- The README's commit statuses: every `bottown/check` and `bottown/e2e`
+  status at each pull request's commits, with its time, description and
+  creator. A context flagged with more than one status at one commit means
+  checks overlapped or ran again there; a success and a failure at one
+  head is a fact the timeline must explain.
 - `transcripts/<run>.jsonl`: the run's log, one JSON line per assistant
   message, tool call, tool output or status event, in the same format for
   every harness. Long fields are cut. Interactive runs have none.
