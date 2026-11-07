@@ -115,6 +115,10 @@ log as a transcript in one format for every harness) into the run's scratch
 directory. The agent reads them with the issue and PR threads, and posts the
 retro as a comment on the issue; it may file follow-up issues.
 
+ISSUE may be a pull request: one from an issue/M branch stands for issue M's
+flow, and one from another branch for that pull request's runs. The retro is
+posted on the number given.
+
 The worktree is detached at the default branch's head, and the run cannot push,
 open pull requests or review. Drafts the agent writes there (a design note, a
 proposal) keep the worktree, whatever the outcome. Run it with -I to discuss
@@ -704,11 +708,12 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		// Like attachments, missing evidence does not stop the run: the
 		// prompt says why, and the forge's threads are still there.
 		d.Evidence = filepath.Join(rec.TmpDir, retroDir)
-		n, err := collectRetro(ctx, rc, run, d.Evidence)
+		flow, n, err := collectRetro(ctx, rc, run, d.Evidence)
 		if err != nil {
 			d.Evidence, d.EvidenceError = "", err.Error()
 		}
 		d.EvidenceRuns = n
+		d.RetroPR, d.RetroIssue, d.RetroBranch = flow.PR, flow.Issue, flow.Branch
 	}
 	// Attachments never stop a launched run: a failure is in the prompt
 	// instead.
@@ -1565,7 +1570,7 @@ func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
 			return nil, err
 		}
 		for _, pr := range prs {
-			if n, ok := issueBranchNumber(pr.Head.Ref); ok {
+			if n, ok := server.IssueBranchNumber(pr.Head.Ref); ok {
 				open[n] = true
 			}
 		}
@@ -1573,12 +1578,6 @@ func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
 			return open, nil
 		}
 	}
-}
-
-// issueBranchNumber is n for a branch issue/<n>.
-func issueBranchNumber(ref string) (int64, bool) {
-	n, err := strconv.ParseInt(strings.TrimPrefix(ref, "issue/"), 10, 64)
-	return n, err == nil && n > 0 && strings.HasPrefix(ref, "issue/")
 }
 
 // gcFlowLogs removes the logs flows leave in ws, and returns how many:

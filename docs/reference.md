@@ -183,12 +183,19 @@ not warn about it.
 
 `bottown run retro -a ACTOR [-I] ISSUE` starts a run that writes a
 blameless retrospective of an issue's flow from bottown's records. The flow
-is every run whose issue is N, whose pull request is N, or whose branch is
-`issue/N`, and every run on one of the issue's pull requests (those Forgejo
-has from `issue/N`, open or closed, or that a run's record ties to that
-branch), such as a discuss run on the PR: its implement, plan, discuss and
-verify runs, live or ended, purged runs' digests included; earlier retros
-too, but not the retro itself.
+of issue N is every run whose issue is N or whose branch is `issue/N`, and
+every run on one of the issue's pull requests (those Forgejo has from
+`issue/N`, open or closed, or that a run's record ties to that branch),
+such as a discuss run on the PR: its implement, plan, discuss and verify
+runs, live or ended, purged runs' digests included; earlier retros too, but
+not the retro itself.
+
+N may be a pull request. One from an `issue/M` branch stands for issue M's
+flow: the evidence is M's, and the prompt says the target is PR N of issue
+M. One from another branch is a flow of its own: the runs on that pull
+request or its head branch. Either way the retro is posted on N. The
+launcher's selection of runs and the server's cross-family check below use
+the same definition of the flow (`server.RetroFlow`).
 
 Before the agent starts, the launcher gathers that evidence with the owner
 key, since a run key may not list runs or read the audit log, into
@@ -216,7 +223,7 @@ it has uncommitted changes, even if the run succeeded. In the web UI's run
 history a retro is a standalone row, as a discuss run is.
 
 As with verify, the server refuses a retro by an actor of the same family
-as one of the issue's implement or plan runs unless `--allow-same-family`
+as one of the flow's implement or plan runs unless `--allow-same-family`
 is given, and records the override on the run. Retros start only from
 the main checkout: `run start` in an actor worktree does not take them,
 since the actor's credential cannot gather the evidence.

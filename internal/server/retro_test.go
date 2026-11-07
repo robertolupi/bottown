@@ -31,6 +31,10 @@ func TestRetroRun(t *testing.T) {
 			_, _ = io.WriteString(w, `{"name":"main","commit":{"id":"abc123"}}`)
 		case "GET /api/v1/repos/bottown/demo/issues/7", "GET /api/v1/repos/bottown/demo/issues/8":
 			_, _ = io.WriteString(w, `{"number":7,"state":"closed","title":"Done"}`)
+		case "GET /api/v1/repos/bottown/demo/issues/9":
+			_, _ = io.WriteString(w, `{"number":9,"state":"closed","title":"Done","pull_request":{"merged":true}}`)
+		case "GET /api/v1/repos/bottown/demo/pulls/9":
+			_, _ = io.WriteString(w, `{"number":9,"state":"closed","head":{"ref":"issue/7","sha":"def"}}`)
 		default:
 			t.Errorf("unexpected upstream request %s", p)
 			w.WriteHeader(http.StatusNotFound)
@@ -110,6 +114,17 @@ func TestRetroRun(t *testing.T) {
 	same, w := create(`{"kind":"retro","actor":"claude","repo":"demo","issue":7,"allow_same_family":true}`)
 	if w.Code != http.StatusCreated || !same.AllowSameFamily {
 		t.Errorf("same-family retro with the override = %d (%s), want 201 recording it", w.Code, w.Body.String())
+	}
+	// !9 is #7's pull request: a retro on it covers #7's flow, so the
+	// rule holds there too.
+	if _, w := create(`{"kind":"retro","actor":"claude","repo":"demo","issue":9}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "implementer claude of !9 of #7") {
+		t.Errorf("same-family retro on the PR = %d (%s), want 409 naming the implementer", w.Code, w.Body.String())
+	}
+	if onPR, w := create(`{"kind":"retro","actor":"claude","repo":"demo","issue":9,"allow_same_family":true}`); w.Code != http.StatusCreated || !onPR.AllowSameFamily || onPR.Issue != 9 {
+		t.Errorf("same-family retro on the PR with the override = %d (%s), want 201 on !9 recording it", w.Code, w.Body.String())
+	}
+	if onPR, w := create(`{"kind":"retro","actor":"codex","repo":"demo","issue":9}`); w.Code != http.StatusCreated || onPR.AllowSameFamily {
+		t.Errorf("cross-family retro on the PR = %d (%s), want 201", w.Code, w.Body.String())
 	}
 	// claude implemented nothing on #8.
 	if other, w := create(`{"kind":"retro","actor":"claude","repo":"demo","issue":8}`); w.Code != http.StatusCreated || other.AllowSameFamily {
