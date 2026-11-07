@@ -52,7 +52,7 @@ bottown comment [N] [--repo R] --body-file -
 bottown review submit --event APPROVED|REQUEST_CHANGES|COMMENT --commit SHA --body-file -
 bottown api METHOD PATH [--data JSON]
 bottown check [--e2e | --report] [--json]
-bottown wiki list | read PATH | put PATH [--base SHA] --file F
+bottown wiki list | read PATH | put PATH [--base SHA] --file F | rm PATH --base SHA
 bottown run end [--failed] --summary-file -
 ```
 
@@ -85,7 +85,7 @@ bottown run end [--failed] --summary-file -
   issue or a design document wins over it. Leave the blocks between
   `<!-- bottown:<name>:generated -->` markers alone: bottown rewrites them.
   Runs read the wiki; which runs may write it, and where, is the server's
-  call (`put` says when it refuses).
+  call (`put` and `rm` say when they refuse).
 - **Review follow-ups** happen in a new implement run on the same issue: it
   resumes `issue/<n>`. Every new head needs a new verify run.
 

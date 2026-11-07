@@ -30,7 +30,7 @@ const (
 
 // WikiRule grants reads, writes or both on wiki paths matching Pattern
 // (segments, "*" one, a trailing "**" any number) to the principals in Who
-// (WikiOwner, WikiActor, or a run role).
+// (WikiOwner, WikiActor, or a run role). A delete is a write.
 type WikiRule struct {
 	Name    string
 	Who     []string

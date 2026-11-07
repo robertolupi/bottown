@@ -1287,6 +1287,32 @@ func TestE2E(t *testing.T) {
 		if out := a.mustCmd(demo, "wiki", "generate"); !strings.Contains(out, "nothing to regenerate") {
 			t.Errorf("second generate: %s", out)
 		}
+		// The owner deletes a page with wiki rm: the same commit drops it
+		// from Home's backlinks.
+		a.mustCmd(demo, "wiki", "put", "Home", "--file", write("home.md", "# Home\n"))
+		a.mustCmd(demo, "wiki", "put", "Scratch", "--file", write("scratch.md", "Back to [[Home]].\n"))
+		if out := a.mustCmd(demo, "wiki", "read", "Home"); !strings.Contains(out, "[Scratch](Scratch)") {
+			t.Fatalf("Home before rm: %s", out)
+		}
+		var scratch struct{ SHA string }
+		if out := a.mustCmd(demo, "wiki", "read", "Scratch", "--json"); json.Unmarshal([]byte(out), &scratch) != nil {
+			t.Fatalf("read Scratch: %s", out)
+		}
+		if out, err := agent("wiki", "rm", "Scratch", "--base", scratch.SHA); err == nil {
+			t.Errorf("agent rm outside a run: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "rm", "Scratch", "--base", scratch.SHA); !strings.Contains(out, "deleted Scratch.md") || !strings.Contains(out, "Home.md") {
+			t.Errorf("rm: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "read", "Home"); strings.Contains(out, "Scratch") {
+			t.Errorf("Home after rm: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "list"); strings.Contains(out, "Scratch") {
+			t.Errorf("list after rm: %s", out)
+		}
+		if out := a.mustCmd(demo, "wiki", "generate", "--check"); !strings.Contains(out, "no stale generated blocks") {
+			t.Errorf("check after rm: %s", out)
+		}
 	})
 
 	t.Run("bottown check records statuses on the PR", func(t *testing.T) {

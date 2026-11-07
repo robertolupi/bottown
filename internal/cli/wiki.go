@@ -149,6 +149,50 @@ The commit also regenerates every generated block in the wiki.`,
 	put.Flags().StringVarP(&message, "message", "m", "", "commit message (default: Update <page>)")
 	put.Flags().BoolVar(&putJSON, "json", false, "print JSON")
 
+	var rmBase, rmMessage string
+	var rmJSON bool
+	rm := &cobra.Command{
+		Use:   "rm PATH --base SHA [-m MSG]",
+		Short: "Delete a wiki file, if it has not changed since you read it",
+		Long: `Delete a wiki file (PATH: a file, or a page's slug, as read takes it).
+Like put, the delete is a compare-and-swap: --base is the blob SHA read
+printed, and the delete fails with a conflict when the file's text has
+changed since (changes to generated blocks alone are no conflict).
+
+The commit also regenerates every generated block in the wiki, so backlinks
+drop the deleted page and the health page lists links to it as broken.
+Wiki-Health.md is bottown's and cannot be deleted.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if rmBase == "" {
+				return errors.New("--base is required: the blob SHA `bottown wiki read` printed")
+			}
+			c, r, err := wikiCaller(g, repo)
+			if err != nil {
+				return err
+			}
+			var out server.WikiRmOut
+			err = c.Call(cmd.Context(), "DELETE", "/v1/wiki/file", server.WikiRmIn{Repo: r, Path: args[0], Base: rmBase, Message: rmMessage}, &out)
+			if errors.Is(err, client.ErrWikiConflict) {
+				return fmt.Errorf("%w\n(read the file again with `bottown wiki read %s`, and delete it with its new --base if you still mean to)", err, args[0])
+			}
+			if err != nil {
+				return err
+			}
+			if rmJSON {
+				return printJSON(cmd, out)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted %s in %s\n", out.Path, shortSHA(out.Commit))
+			if others := without(out.Changed, out.Path); len(others) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "regenerated blocks in: %s\n", strings.Join(others, ", "))
+			}
+			return nil
+		},
+	}
+	rm.Flags().StringVar(&rmBase, "base", "", "the blob SHA you read (from wiki read); required")
+	rm.Flags().StringVarP(&rmMessage, "message", "m", "", "commit message (default: Delete <page>)")
+	rm.Flags().BoolVar(&rmJSON, "json", false, "print JSON")
+
 	var check, genJSON bool
 	generate := &cobra.Command{
 		Use:   "generate [--check]",
@@ -184,7 +228,7 @@ lists the stale blocks and fails when there are any.`,
 	generate.Flags().BoolVar(&check, "check", false, "write nothing; list the stale blocks and fail if there are any")
 	generate.Flags().BoolVar(&genJSON, "json", false, "print JSON")
 
-	w.AddCommand(list, read, put, generate)
+	w.AddCommand(list, read, put, rm, generate)
 	return w
 }
 

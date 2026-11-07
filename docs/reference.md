@@ -344,6 +344,7 @@ wiki is reached only through bottown's wiki store
 bottown wiki list
 bottown wiki read PATH              # content to stdout; its blob SHA to stderr
 bottown wiki put PATH [--base SHA] [--file F|-] [-m MSG]
+bottown wiki rm PATH --base SHA [-m MSG]
 bottown wiki generate [--check]
 ```
 
@@ -371,6 +372,13 @@ as the owner (`--repo` outside a checkout).
   Without `--base` a put creates the file, and fails if it exists. A push
   that loses a race, for example with the owner saving in the web UI, is
   rebuilt on the new head and retried, so it never overwrites that edit.
+- **Deletes are too.** `rm PATH --base SHA` removes the file under the same
+  compare-and-swap (a missing file is a 404), and regenerates the whole
+  wiki in the same commit: backlinks drop the deleted page, and links to
+  it show on the health page as broken. It is a write under the wiki
+  rules, so by default the owner's alone. `Wiki-Health.md` cannot be
+  deleted, since the generator recreates it. The audit log records
+  `wiki_rm` entries, as it does `wiki_put`.
 - **Path-scoped policy.** `policy.WikiRules` grants reads and writes by
   principal (the owner, an actor outside a run, or a run's role) and path,
   first match wins. The default: the owner reads and writes everything;
