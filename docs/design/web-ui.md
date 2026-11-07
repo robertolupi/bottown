@@ -139,20 +139,24 @@ bottown flow 51 --implement claude --verify kimi
 **Post-implement checks.** Before a verifier sees a new head, the flow
 runs the e2e commands `.bottown.toml` names on `main` (§4.4; default `make
 e2e`) itself, with no agent involved: in a clean worktree of the
-workspace's mirror detached at H (`.bottown/runs/flow-<issue>-<sha>`,
+workspace's mirror detached at H (`.bottown/runs/flow-<issue>-<sha>-<check>`,
 removed afterwards), one command after another with `sh -c`, stopping at
 the first failure, within `--check-timeout`. When the e2e suite takes a
 host-wide lock (#158), it does so in the suite, so the flow's checks wait
 for other suites like any other. The log goes next to the run records,
-`.bottown/runs/flow-<issue>-<sha>.e2e.log`, written as the commands write
+`.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log`, written as the commands write
 it, and the result is the commit status `bottown/e2e` on H, written by the
 owner (description ending "(flow)"), which `pr show` lists next to the
 agents' own reports. While the checks run, the flow holds a flock on
-`.bottown/runs/flow-<issue>-<sha>.e2e.check`, a record of the issue, PR,
+`.bottown/runs/flow-<issue>-<sha>-<check>.e2e.check`, a record of the issue, PR,
 head, commands and time limit, and removes it after; the lock, not a pid,
-marks them live, so a record a killed flow left is stale. Live Runs and
-the terminal tail show the checks with a live tail of their log, like a
-run (§4.2).
+marks them live, so a record a killed flow left is stale. `<check>` is a
+random id per check, so two checks at the same head (overlapping flows)
+neither share nor overwrite a worktree or log; a check removes the check
+worktrees whose record is no longer held (what interrupted checks left),
+and a resumed flow cites the newest log at H of a check that has ended.
+Live Runs and the terminal tail show the checks with a live tail of their
+log, like a run (§4.2).
 
 - **Passed:** the verify run starts, and its prompt says the checks passed
   at H, with the log. The verifier still runs `bottown check` (`make
@@ -511,7 +515,7 @@ shows them while they run, as `live_checks` in `GET /api/status` and `GET
 time against the flow's `--check-timeout`, and the live tail of their log
 in plain lines. A check sits under its flow when the UI started that flow,
 whose step then reads "post-implement checks at <sha>", and on its own
-otherwise. Its id, `flow-<issue>-<sha>.e2e`, names its log for `GET
+otherwise. Its id, `flow-<issue>-<sha>-<check>.e2e`, names its log for `GET
 /api/runs/{id}/log` and the raw link.
 
 **Terminal tail.** `bottown flow`, and a batch `bottown run implement`,

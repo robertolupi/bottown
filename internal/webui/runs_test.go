@@ -274,7 +274,7 @@ func TestRuns_LiveChecks(t *testing.T) {
 		}
 		t.Cleanup(release)
 	}
-	id := "flow-60-1a2b3c4d5e.e2e"
+	id := "flow-60-1a2b3c4d5e-0f1e2d3c.e2e"
 	hold(runs.CheckRecord{ID: id, Repo: "bottown", Issue: 60, PR: 61, SHA: "1a2b3c4d5e6f", Commands: []string{"make e2e"},
 		Started: started, Expires: started.Add(time.Hour)}, "==> [e2e] make e2e\n=== RUN   TestE2E\n")
 	hold(runs.CheckRecord{ID: "flow-7-ffffffffff.e2e", Repo: "other", Issue: 7, Started: started}, "elsewhere\n")
@@ -314,7 +314,7 @@ func TestRuns_LiveChecks(t *testing.T) {
 	if err != nil || !ok || fmt.Sprint(lines) != fmt.Sprint(want) {
 		t.Fatalf("check log: %+v, %v, %v", lines, ok, err)
 	}
-	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e"} {
+	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e", "flow-60-1a2b-xyz.e2e"} {
 		if _, _, err := s.ComputeRunLog(ctx, bad); err == nil {
 			t.Errorf("log id %q accepted", bad)
 		}

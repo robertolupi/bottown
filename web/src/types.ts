@@ -182,7 +182,7 @@ export interface LiveRunInfo {
 
 // A flow's post-implement checks (the repository's e2e commands) while they
 // run: not a run, but shown with a live tail like one. Its id,
-// flow-<issue>-<sha>.e2e, names its log for GET /api/runs/{id}/log.
+// flow-<issue>-<sha>-<check>.e2e, names its log for GET /api/runs/{id}/log.
 export interface LiveCheckInfo {
   id: string;
   issue?: number;

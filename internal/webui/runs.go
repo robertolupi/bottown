@@ -85,7 +85,7 @@ type FlowInfo struct {
 // commands) while they run: not a run, but shown with a live tail like
 // one. GET /api/runs/{id}/log serves its log.
 type LiveCheckInfo struct {
-	ID         string         `json:"id"` // flow-<issue>-<sha>.e2e
+	ID         string         `json:"id"` // flow-<issue>-<sha>-<check>.e2e
 	Issue      int64          `json:"issue,omitempty"`
 	IssueURL   string         `json:"issue_url,omitempty"`
 	IssueTitle string         `json:"issue_title,omitempty"`

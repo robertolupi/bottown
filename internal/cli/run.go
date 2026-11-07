@@ -1474,7 +1474,7 @@ started in their own worktrees are left alone. Live runs are never purged;
 warning; run ls lists it as unknown.
 
 gc also removes the logs flows leave: bottown flow's e2e logs
-(.bottown/runs/flow-<issue>-<sha>.e2e.log) once the issue's PR is merged or
+(.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log) once the issue's PR is merged or
 closed, or with --older-than once they are that old, and the web UI's flow
 logs (.bottown/flow-<issue>.log) once that flow is not running.`,
 		Args: cobra.NoArgs,
@@ -1590,7 +1590,7 @@ func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
 
 // gcFlowLogs removes the logs flows leave in ws, and returns how many:
 //
-//   - <runs>/flow-<issue>-<sha>.e2e.log, bottown flow's e2e log for one PR
+//   - <runs>/flow-<issue>-<sha>-<check>.e2e.log, bottown flow's e2e log for one PR
 //     head, once the issue has no open PR (in open), or once it is at least
 //     olderThan old when olderThan is set. While the PR is open the log is
 //     kept: a resumed flow points to it rather than checking again.
