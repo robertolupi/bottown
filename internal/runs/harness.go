@@ -44,6 +44,11 @@ type PromptData struct {
 	MilestonesDir              string // plan: where the repository keeps milestone plans
 	WebPreview                 bool   // implement, verify: the repository has fixtures for `bottown web preview`
 	Reviewed                   bool   // verify: the PR already has reviews, so `pr show --since-review` applies
+	// Retro: the directory of the flow's evidence and how many runs it
+	// holds, or why it could not be gathered.
+	Evidence      string
+	EvidenceRuns  int
+	EvidenceError string
 	// The issue or PR whose attachments were fetched for the run, with
 	// their local paths, or why they could not be listed.
 	AttachmentsOf    int64
@@ -52,7 +57,7 @@ type PromptData struct {
 }
 
 // Prompt renders the goal prompt for kind (a run role: "implement",
-// "verify", "discuss" or "plan").
+// "verify", "discuss", "plan" or "retro").
 func Prompt(kind string, d PromptData) (string, error) {
 	var b bytes.Buffer
 	if err := prompts.ExecuteTemplate(&b, kind+".md", d); err != nil {
@@ -76,7 +81,7 @@ type Launch struct {
 	// model (see SplitActorSpec); empty uses the harness's default.
 	Spec  string
 	Allow []string // extra allowed tools (claude syntax)
-	// ReadOnly runs (discuss) must not change the worktree: no file-editing
+	// ReadOnly runs (discuss; not retro, which may draft notes) must not change the worktree: no file-editing
 	// tools are pre-approved, and edits are not auto-accepted.
 	ReadOnly bool
 	TmpDir   string // scratch directory for the run

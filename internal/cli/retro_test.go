@@ -1,0 +1,151 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
+	"github.com/robertolupi/bottown/internal/server"
+)
+
+// gatherRetro writes the flow's runs, oldest first, with their local
+// records (never the key), denials, prompts and normalized transcripts, and
+// leaves out other issues' runs and the retro run itself.
+func TestGatherRetro(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	ended := t0.Add(90 * time.Second)
+	code := 1
+	if err := ws.Save(runs.Record{
+		ID: "r-1a", Kind: policy.Implement, Actor: "claude", Family: "anthropic", Harness: "script",
+		Issue: 7, Branch: "issue/7", Status: runs.StatusFailed, ExitCode: &code, Started: t0, Ended: &ended,
+		Key: "secret-run-key", FlowNote: "checks failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("a b ", (maxTranscriptField+100)/4)
+	for name, body := range map[string]string{
+		"r-1a.log":       "pushed the branch\n" + long + "\n",
+		"r-1a.prompt.md": "You are claude.",
+	} {
+		if err := os.WriteFile(filepath.Join(ws.RunsDir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := []server.RunItem{
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Retro, Actor: "codex", Issue: 7, Created: t0.Add(time.Hour)}, State: "active"},
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", Family: "openai", PR: 9, Branch: "issue/7", SHA: "0123456789abcdef", Created: t0.Add(time.Minute), Status: "succeeded", Outcome: "approved"}, State: "ended"},
+		{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Family: "anthropic", Issue: 7, Branch: "issue/7", Created: t0, Ended: &ended, Status: "failed",
+			Digest: secrets.Digest{Summary: "tried", Failure: &secrets.Failure{Cause: secrets.FailureHarnessExit}}}, State: "ended"},
+		{Run: secrets.Run{ID: "r-4d", Kind: policy.Implement, Actor: "claude", Issue: 8, Branch: "issue/8", Created: t0}, State: "ended"},
+	}
+	audit := []server.AuditEntry{
+		{Run: "r-1a", Op: "api", Decision: "deny", Rule: "role-implement-review"},
+		{Run: "r-4d", Op: "api", Decision: "deny"},
+	}
+	dir := filepath.Join(t.TempDir(), retroDir)
+	n, err := gatherRetro(dir, 7, "r-3c", ws, list, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("gatherRetro found %d runs, want 2", n)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "runs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "secret-run-key") {
+		t.Errorf("runs.json holds the run key:\n%s", b)
+	}
+	var got []retroRun
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "r-1a" || got[1].ID != "r-2b" {
+		t.Fatalf("runs = %+v, want r-1a then r-2b", got)
+	}
+	impl := got[0]
+	if impl.Duration != "1m30s" || impl.Summary != "tried" || impl.Failure == nil || len(impl.Denials) != 1 ||
+		impl.Local == nil || impl.Local.FlowNote != "checks failed" || *impl.Local.ExitCode != 1 ||
+		impl.Transcript != "transcripts/r-1a.jsonl" || impl.Prompt != "prompts/r-1a.md" || impl.Harness != "script" {
+		t.Errorf("implement run = %+v", impl)
+	}
+	if v := got[1]; v.Local != nil || v.Transcript != "" || v.Outcome != "approved" {
+		t.Errorf("verify run = %+v, want no local files", v)
+	}
+
+	tr, err := os.ReadFile(filepath.Join(dir, impl.Transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(tr)), "\n")
+	var first, second runs.LogLine
+	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &first) != nil || json.Unmarshal([]byte(lines[1]), &second) != nil {
+		t.Fatalf("transcript = %s", tr)
+	}
+	if first.Text != "pushed the branch" || !strings.HasSuffix(second.Text, "… [102 bytes cut]") {
+		t.Errorf("transcript lines = %+v, %q", first, second.Text)
+	}
+	if p, _ := os.ReadFile(filepath.Join(dir, impl.Prompt)); string(p) != "You are claude." {
+		t.Errorf("prompt = %q", p)
+	}
+
+	readme, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# Evidence for the retro of #7",
+		"| `r-1a` | implement | claude (anthropic) | #7 | 2026-11-01T10:00:00Z | 1m30s | failed: harness_exit | - | 1 | transcripts/r-1a.jsonl | prompts/r-1a.md |",
+		"| `r-2b` | verify | codex (openai) | !9 @ 0123456789 |",
+	} {
+		if !strings.Contains(string(readme), want) {
+			t.Errorf("README lacks %q:\n%s", want, readme)
+		}
+	}
+
+	// A flow bottown never ran still gets its (empty) evidence.
+	n, err = gatherRetro(dir, 99, "r-3c", ws, list, audit)
+	if err != nil || n != 0 {
+		t.Fatalf("gatherRetro(99) = %d, %v", n, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "runs.json")); strings.TrimSpace(string(b)) != "[]" {
+		t.Errorf("runs.json for #99 = %s, want []", b)
+	}
+}
+
+// A retro's worktree stays when the agent left drafts in it; other kinds'
+// worktrees are not kept for that.
+func TestKeepRetroDrafts(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runs.Git(dir, nil, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	if keepRetroDrafts(policy.Retro, dir) {
+		t.Error("clean retro worktree kept")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "retro-notes.md"), []byte("draft"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !keepRetroDrafts(policy.Retro, dir) {
+		t.Error("retro worktree with a draft not kept")
+	}
+	if keepRetroDrafts(policy.Discuss, dir) {
+		t.Error("discuss worktree kept for its changes")
+	}
+}
+
+func TestRetroHandover(t *testing.T) {
+	text := handoverText(runs.Record{ID: "r-1", Kind: policy.Retro, Actor: "codex", Family: "openai", Issue: 7, SHA: "abc"}, runs.StatusSucceeded, 0, "posted")
+	if !strings.Contains(text, "Retrospective against `abc`, the default branch's head.") {
+		t.Errorf("retro handover:\n%s", text)
+	}
+}

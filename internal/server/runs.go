@@ -25,7 +25,7 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind  string `json:"kind"` // implement | verify | discuss | plan
+	Kind  string `json:"kind"` // implement | verify | discuss | plan | retro
 	Actor string `json:"actor"`
 	Spec  string `json:"spec,omitempty"` // the harness's model, recorded as given
 	Repo  string `json:"repo"`           // name within the org
@@ -229,12 +229,13 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 		}
 		run.PR, run.SHA, run.Branch = req.PR, pr.Head.Sha, pr.Head.Ref
 
-	case policy.Discuss:
+	case policy.Discuss, policy.Retro:
 		// Any issue or pull request, open or closed: discussing changes
-		// nothing but the comments. The run reads the default branch's
-		// current code, recorded as its SHA.
+		// nothing but the comments, and a retro looks back at finished
+		// work. The run reads the default branch's current code, recorded
+		// as its SHA.
 		if req.Issue <= 0 {
-			return run, runErr(http.StatusBadRequest, "discuss runs need an issue or pull request number")
+			return run, runErr(http.StatusBadRequest, "%s runs need an issue or pull request number", req.Kind)
 		}
 		if _, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue); forgejo.IsNotFound(resp, err) {
 			return run, runErr(http.StatusNotFound, "issue #%d not found", req.Issue)
@@ -249,11 +250,49 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			return run, fmt.Errorf("default branch %s has no commit", repo.DefaultBranch)
 		}
 		run.Issue, run.SHA = req.Issue, b.Commit.ID
+		if req.Kind == policy.Retro {
+			// The cross-family rule, as for verify: a model looking back on
+			// its own family's work is the weakest reviewer of it.
+			st, err := s.Store.Read()
+			if err != nil {
+				return run, err
+			}
+			if same := sameFamilyImplementers(st, run, actor.Family); len(same) > 0 {
+				if !req.AllowSameFamily {
+					return run, runErr(http.StatusConflict,
+						"%s and the implementer %s of #%d are both %s; pass allow_same_family (--allow-same-family) to override",
+						actor.Name, strings.Join(same, ", "), req.Issue, actor.Family)
+				}
+				run.AllowSameFamily = true
+			}
+		}
 
 	default:
-		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan)
+		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan, policy.Retro)
 	}
 	return run, nil
+}
+
+// sameFamilyImplementers are the actors of family whose implement or plan
+// runs, live or ended, worked retro's target: the issue, or a pull request
+// on its issue/<N> branch.
+func sameFamilyImplementers(st secrets.State, retro secrets.Run, family string) []string {
+	branch := fmt.Sprintf("issue/%d", retro.Issue)
+	var names []string
+	for _, rs := range []map[string]secrets.Run{st.Runs, st.History} {
+		for _, r := range rs {
+			if r.Org != retro.Org || r.Repo != retro.Repo || r.Family != family ||
+				(r.Kind != policy.Implement && r.Kind != policy.Plan) ||
+				(r.Issue != retro.Issue && r.Branch != branch) {
+				continue
+			}
+			if !slices.Contains(names, r.Actor) {
+				names = append(names, r.Actor)
+			}
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 func newRunID() string {
