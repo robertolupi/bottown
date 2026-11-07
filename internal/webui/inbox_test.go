@@ -35,6 +35,7 @@ type fixtureForge struct {
 	issues     []*sdk.Issue
 	comments   map[int64][]*sdk.Comment
 	statuses   map[string][]*sdk.Status // by commit
+	requests   map[string]int           // by path, when non-nil
 }
 
 func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
@@ -51,6 +52,9 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 
 		w.Header().Set("Content-Type", "application/json")
 		p := r.URL.Path
+		if fix.requests != nil {
+			fix.requests[p]++
+		}
 
 		owner, _ := fix.whoami["actor"].(string)
 		if (fakeAPI{

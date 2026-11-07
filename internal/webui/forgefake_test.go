@@ -59,6 +59,12 @@ func (f fakeAPI) serve(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		out = f.prOut(r, pr)
+	case "/v1/forge/pr/gate":
+		if f.pr(num) == nil {
+			http.NotFound(w, r)
+			return true
+		}
+		out = serverapi.GateOut{Failed: []string{}, Checks: []serverapi.GateStatus{}}
 	case "/v1/forge/issues":
 		items := []serverapi.IssueItem{}
 		state := q.Get("state")
