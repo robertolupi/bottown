@@ -75,6 +75,41 @@ func TestConsolidatedText(t *testing.T) {
 	}
 }
 
+// A debate run that exits cleanly without writing its file in the wiki
+// did not do its job: a consolidate run's handover says the round is not
+// consolidated (#391).
+func TestDebateFileFailure(t *testing.T) {
+	files := []server.WikiFile{{Path: "reviews/7-t/r1-claude.md"}, {Path: "reviews/7-t/r1-codex.md"}}
+	cons := secrets.Run{Kind: policy.Consolidate, Actor: "agy", Org: "bottown", Repo: "demo", Debate: &secrets.Debate{Name: "7-t", Round: 1}}
+	f := debateFileFailure(cons, files)
+	if f == nil || f.Cause != secrets.FailureNoOutput || !strings.Contains(f.Detail, "reviews/7-t/r1-consolidated.md") {
+		t.Fatalf("consolidate run without its file: %+v", f)
+	}
+	rec := runs.Record{ID: "r-1", Kind: policy.Consolidate, Actor: "agy", Family: "google"}
+	status := runs.StatusSucceeded
+	if f != nil {
+		status = runs.StatusFailed
+	}
+	if got := consolidatedText(rec, cons, status, 0); !strings.Contains(got, "is not consolidated by this run") {
+		t.Errorf("succeeded run without its consolidation:\n%s", got)
+	}
+	if f := debateFileFailure(cons, append(files, server.WikiFile{Path: "reviews/7-t/r1-consolidated.md"})); f != nil {
+		t.Errorf("consolidate run with its file: %+v", f)
+	}
+
+	disc := secrets.Run{Kind: policy.Discuss, Actor: "kimi", Debate: &secrets.Debate{Name: "7-t", Round: 1}}
+	if f := debateFileFailure(disc, files); f == nil || !strings.Contains(f.Detail, "reviews/7-t/r1-kimi.md") {
+		t.Errorf("discuss run without its answer: %+v", f)
+	}
+	disc.Actor = "codex"
+	if f := debateFileFailure(disc, files); f != nil {
+		t.Errorf("discuss run with its answer: %+v", f)
+	}
+	if f := debateFileFailure(secrets.Run{Kind: policy.Discuss, Actor: "kimi"}, nil); f != nil {
+		t.Errorf("discuss run outside a debate: %+v", f)
+	}
+}
+
 // The consolidate run fetches the mirror again: the round's runs may have
 // let the default branch move past the round's fetch (#388).
 func TestConsolidateOpts(t *testing.T) {

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -243,4 +245,36 @@ func consolidatedText(rec runs.Record, run secrets.Run, status string, code int)
 		fmt.Fprintf(&b, "Round %d of the debate is not consolidated by this run. The debate so far: [%s](%s).\n", run.Debate.Round, page, link)
 	}
 	return b.String()
+}
+
+// debateFileFailure is why a debate run (a discuss run of a round, or a
+// consolidate run) that exited cleanly did not do its one job: files, the
+// wiki's, do not hold the file its prompt named (#391). It is nil when the
+// file is there, or the run is not a debate run.
+func debateFileFailure(run secrets.Run, files []server.WikiFile) *secrets.Failure {
+	if run.Debate == nil || (run.Kind != policy.Discuss && run.Kind != policy.Consolidate) {
+		return nil
+	}
+	file := debatePrompt(run, nil).File
+	if slices.ContainsFunc(files, func(f server.WikiFile) bool { return f.Path == file }) {
+		return nil
+	}
+	return &secrets.Failure{Cause: secrets.FailureNoOutput, Detail: fmt.Sprintf("the run did not write %s in the wiki", file)}
+}
+
+// checkDebateFile is debateFileFailure against the wiki as the server has
+// it once run has ended. When the wiki cannot be listed, the run's outcome
+// stands, with a warning.
+func checkDebateFile(ctx context.Context, rc *runContext, run secrets.Run, errOut io.Writer) *secrets.Failure {
+	if run.Debate == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var ls server.WikiListOut
+	if err := callServer(ctx, rc.inst, rc.key, "GET", "/v1/wiki/files?"+repoQuery(rc.repo).Encode(), nil, &ls); err != nil {
+		fmt.Fprintf(errOut, "warning: list the wiki for the debate run's file: %v\n", err)
+		return nil
+	}
+	return debateFileFailure(run, ls.Files)
 }
