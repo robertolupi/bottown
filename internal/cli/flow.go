@@ -12,6 +12,7 @@ import (
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/flow"
 	"github.com/robertolupi/bottown/internal/policy"
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 func newFlow(g *globals) *cobra.Command {
@@ -24,7 +25,9 @@ func newFlow(g *globals) *cobra.Command {
 		Short: "Drive one issue through implement and cross-family verify",
 		Long: `Drive one issue through implement and cross-family verify runs, until its
 pull request is ready to merge or the flow stops; rerunning the command
-resumes from where the forge says the issue stands.
+resumes from where the forge says the issue stands. One flow drives an
+issue at a time: it holds .bottown/runs/flow-<repo>-<issue>.lock while it
+lives, and a second flow on the issue refuses, naming the first's pid.
 
 After each implement run, before a verifier sees a new head, the flow runs
 the post-implement checks itself: the e2e commands .bottown.toml names on
@@ -64,6 +67,11 @@ nothing.`,
 				Checker: flowChecker{ws: rc.ws},
 				In:      cmd.InOrStdin(),
 				Out:     cmd.OutOrStdout(),
+				// One flow per issue: the lock in the checkout's runs dir
+				// is the web UI's too.
+				Lock: func(repo string, issue int64) (func(), error) {
+					return runs.HoldFlow(rc.ws.RunsDir, repo, issue)
+				},
 			}
 			// An attended flow on a terminal shows its runs' and its
 			// post-implement checks' live tail, under the flow's state; its
