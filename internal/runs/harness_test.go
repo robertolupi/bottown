@@ -188,6 +188,18 @@ func TestImplementPromptFollowUp(t *testing.T) {
 	}
 }
 
+func TestImplementPromptPart(t *testing.T) {
+	p, err := Prompt("implement", PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 9, Bottown: "/b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"`Closes\n    #9`", "add `--part`", "`Part of #9`", "the issue stays open"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("implement prompt lacks %q:\n%s", want, p)
+		}
+	}
+}
+
 func TestPromptsNameForgeRemote(t *testing.T) {
 	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro"} {
 		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Remote: "bottown-test"})

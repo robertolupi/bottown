@@ -125,6 +125,18 @@ enforced:
    them passes. Forgejo also has no API for minting a web session, so bottown
    signs in through the form.
 
+8. **A PR's last closing or reopening reference wins at merge, comments
+   included.** Forgejo records a `close`/`fix`/`resolve` or `reopen`
+   keyword before `#N` in a PR's description or in any comment on it as a
+   cross-reference with that action. At merge, Forgejo keeps only the
+   latest such reference per issue and applies it. !324's description ended
+   with `Closes #312`, but the approving verifier's comment said "Reopen
+   #312 after merging" (a `reopens` reference), so the merge applied
+   the reopen to #312, which was open, and recorded no close or reopen
+   event. Found on 2026-11-07
+   (#327). A PR that does part of an issue links it with `pr create
+   --part` (`Part of #N`, not a keyword) instead.
+
 ## Which instance a command talks to
 
 Commands resolve the instance in this order:

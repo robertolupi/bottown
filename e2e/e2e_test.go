@@ -2282,6 +2282,118 @@ fi`
 			assertStopComment(issue, "ready to merge")
 		})
 
+		t.Run("retro by issue and by PR number", func(t *testing.T) {
+			// A small flow: claude implements, agy verifies, codex
+			// discusses the PR. A retro on the issue and one on the PR
+			// look back on the same flow (#328: a PR target once missed
+			// the implement runs).
+			issue := newIssue("flow retro")
+			dir := t.TempDir()
+			out, err := withHarness(flowScript(dir, "approve"), "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
+			if err != nil || !strings.Contains(out, "ready to merge") {
+				t.Fatalf("flow for the retro: %v\n%s", err, out)
+			}
+			var prs []struct {
+				Number int64
+				Head   struct{ Ref string }
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/pulls?state=open&limit=50", nil, &prs)
+			var pr int64
+			for _, p := range prs {
+				if p.Head.Ref == fmt.Sprintf("issue/%d", issue) {
+					pr = p.Number
+				}
+			}
+			if pr == 0 {
+				t.Fatalf("no open PR from issue/%d: %+v", issue, prs)
+			}
+			if out, err := withHarness("echo discussed", "run", "discuss", "-a", "codex", fmt.Sprint(pr)); err != nil || !strings.Contains(out, "succeeded") {
+				t.Fatalf("discuss the PR: %v\n%s", err, out)
+			}
+
+			// claude implemented: its retro is refused on either number
+			// without the override, and starts no run.
+			before := a.mustCmd(demo, "run", "ls")
+			for _, n := range []int64{issue, pr} {
+				out, err := withHarness("exit 9", "run", "retro", "-a", "claude", fmt.Sprint(n))
+				if err == nil || !strings.Contains(out, "both anthropic") || !strings.Contains(out, "--allow-same-family") {
+					t.Errorf("same-family retro on %d without the override: %v\n%s", n, err, out)
+				}
+			}
+			if after := a.mustCmd(demo, "run", "ls"); len(strings.Split(after, "\n")) != len(strings.Split(before, "\n")) {
+				t.Errorf("refused retros changed the runs:\nbefore: %s\nafter: %s", before, after)
+			}
+
+			// The stub retro keeps a copy of its evidence.
+			evidence := func(tag string, args ...string) ([]map[string]any, string) {
+				t.Helper()
+				script := fmt.Sprintf(`set -e; cp "$TMPDIR/retro/runs.json" '%[1]s/runs-%[2]s.json'; cp "$TMPDIR/retro/README.md" '%[1]s/README-%[2]s.md'; echo retro done`, dir, tag)
+				out, err := withHarness(script, append([]string{"run", "retro"}, args...)...)
+				if err != nil || !strings.Contains(out, "succeeded") {
+					t.Fatalf("run retro %s: %v\n%s", strings.Join(args, " "), err, out)
+				}
+				b, err := os.ReadFile(filepath.Join(dir, "runs-"+tag+".json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var rs []map[string]any
+				if err := json.Unmarshal(b, &rs); err != nil {
+					t.Fatalf("runs.json of the %s retro: %v\n%s", tag, err, b)
+				}
+				readme, err := os.ReadFile(filepath.Join(dir, "README-"+tag+".md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return rs, string(readme)
+			}
+			byIssue, issueReadme := evidence("issue", "-a", "codex", fmt.Sprint(issue))
+			byPR, prReadme := evidence("pr", "-a", "claude", "--allow-same-family", fmt.Sprint(pr))
+
+			// The flow's runs, oldest first, as "kind actor id"; the PR
+			// retro's evidence also has the issue retro, which looked back
+			// on the same flow.
+			row := regexp.MustCompile("(?m)^\\| `(r-[0-9a-f]+)` \\| (\\w+) \\| (\\w+) ")
+			flowRuns := func(tag string, rs []map[string]any, readme string) (fromJSON, fromReadme []string) {
+				t.Helper()
+				for _, r := range rs {
+					if r["kind"] != "retro" {
+						fromJSON = append(fromJSON, fmt.Sprintf("%v %v %v", r["kind"], r["actor"], r["id"]))
+					}
+				}
+				for _, m := range row.FindAllStringSubmatch(readme, -1) {
+					if m[2] != "retro" {
+						fromReadme = append(fromReadme, m[2]+" "+m[3]+" "+m[1])
+					}
+				}
+				if strings.Contains(readme, "looks partial") {
+					t.Errorf("the %s retro's evidence looks partial:\n%s", tag, readme)
+				}
+				return fromJSON, fromReadme
+			}
+			issueJSON, issueRows := flowRuns("issue", byIssue, issueReadme)
+			prJSON, prRows := flowRuns("pr", byPR, prReadme)
+			kinds := func(rs []string) []string {
+				var out []string
+				for _, r := range rs {
+					f := strings.Fields(r)
+					out = append(out, f[0]+" "+f[1])
+				}
+				return out
+			}
+			if want := []string{"implement claude", "verify agy", "discuss codex"}; !slices.Equal(kinds(issueJSON), want) {
+				t.Errorf("runs of the issue retro: %v, want %v", issueJSON, want)
+			}
+			if !slices.Equal(issueJSON, prJSON) || !slices.Equal(issueJSON, issueRows) || !slices.Equal(issueJSON, prRows) {
+				t.Errorf("the retros' evidence differs:\nissue runs.json %v\nissue README    %v\nPR runs.json    %v\nPR README       %v", issueJSON, issueRows, prJSON, prRows)
+			}
+			if len(byIssue) != 3 || len(byPR) != 4 {
+				t.Errorf("runs.json lengths: issue %d, PR %d; want 3 and 4 (the PR retro sees the issue retro)", len(byIssue), len(byPR))
+			}
+			if want := fmt.Sprintf("The retro is on pull request !%d, from `issue/%d`: the evidence is the flow of issue #%d.", pr, issue, issue); !strings.Contains(prReadme, want) {
+				t.Errorf("PR retro's README lacks %q:\n%s", want, prReadme)
+			}
+		})
+
 		t.Run("follow-up round", func(t *testing.T) {
 			issue := newIssue("flow follow-up")
 			dir := t.TempDir()

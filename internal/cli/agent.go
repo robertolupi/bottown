@@ -577,9 +577,9 @@ Without an earlier review it shows the full diff.`,
 	show.MarkFlagsMutuallyExclusive("since-review", "stat")
 
 	var title, body, bodyFile string
-	var createJSON bool
+	var createJSON, part bool
 	create := &cobra.Command{
-		Use:   "create --title T [--body B | --body-file F|-]",
+		Use:   "create --title T [--body B | --body-file F|-] [--part]",
 		Short: "Open a pull request from this implement run's branch (push it first)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -592,7 +592,7 @@ Without an earlier review it shows the full diff.`,
 				return err
 			}
 			var out server.PRCreateOut
-			if err := a.call(cmd.Context(), "POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b}, &out); err != nil {
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/pr", server.PRCreateIn{Title: title, Body: b, Part: part}, &out); err != nil {
 				return err
 			}
 			if createJSON {
@@ -610,6 +610,7 @@ Without an earlier review it shows the full diff.`,
 	create.Flags().StringVar(&title, "title", "", "title (required)")
 	create.Flags().StringVar(&body, "body", "", "description")
 	create.Flags().StringVar(&bodyFile, "body-file", "", "read the description from a file, or - for stdin")
+	create.Flags().BoolVar(&part, "part", false, "the PR does part of the issue: link it with \"Part of #N\" instead of \"Closes #N\", so merging it leaves the issue open")
 	create.Flags().BoolVar(&createJSON, "json", false, "print JSON")
 	_ = create.MarkFlagRequired("title")
 

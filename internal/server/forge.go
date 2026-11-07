@@ -249,7 +249,8 @@ func ChangesRequested(reviews []ReviewOut) int {
 // PRCreateIn is the input of pr create.
 type PRCreateIn struct {
 	Title string `json:"title" jsonschema:"pull request title"`
-	Body  string `json:"body,omitempty" jsonschema:"description; bottown appends 'Closes #<issue>'"`
+	Body  string `json:"body,omitempty" jsonschema:"description; bottown appends 'Closes #<issue>', or 'Part of #<issue>' with part"`
+	Part  bool   `json:"part,omitempty" jsonschema:"the PR does part of the issue: link it with 'Part of #<issue>', so merging it leaves the issue open"`
 }
 
 // PRCreateOut is a created or already-open pull request.
@@ -764,9 +765,8 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 	if err != nil {
 		return PRCreateOut{}, err
 	}
-	body := strings.TrimSpace(in.Body) + fmt.Sprintf("\n\nCloses #%d\n\n_bottown %s run %s (%s, %s)_", run.Issue, run.Kind, run.ID, run.Actor, run.Family)
 	pr, _, err := c.CreatePullRequest(run.Org, run.Repo, sdk.CreatePullRequestOption{
-		Head: run.Branch, Base: repo.DefaultBranch, Title: in.Title, Body: body,
+		Head: run.Branch, Base: repo.DefaultBranch, Title: in.Title, Body: prBody(in, *run),
 	})
 	alreadyOpen := false
 	if err != nil {
@@ -791,6 +791,18 @@ func (s *Server) opPRCreate(ctx context.Context, p secrets.Principal, in PRCreat
 		out.HeadSHA = pr.Head.Sha
 	}
 	return out, nil
+}
+
+// prBody is the description pr create opens a PR with: the actor's text,
+// the link to the run's issue, and the run. "Closes #N" closes the issue
+// when the PR merges into the default branch; "Part of #N" is not a Forgejo
+// keyword, so it only references the issue.
+func prBody(in PRCreateIn, run secrets.Run) string {
+	link := "Closes"
+	if in.Part {
+		link = "Part of"
+	}
+	return strings.TrimSpace(in.Body) + fmt.Sprintf("\n\n%s #%d\n\n_bottown %s run %s (%s, %s)_", link, run.Issue, run.Kind, run.ID, run.Actor, run.Family)
 }
 
 func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn) ([]PRItem, error) {
