@@ -162,6 +162,8 @@ func TestCheckRejects(t *testing.T) {
 			[]string{`p.md:7: "## A": toml:`}},
 		{"missing key", "", head + "## A\n'''issue\ndepends = []\n'''\nBody.\n",
 			[]string{`p.md:6: "## A": issue block: key is required`}},
+		{"bad size", "", head + "## A\n'''issue\nkey = \"a\"\nsize = \"Huge\"\n'''\nBody.\n",
+			[]string{`p.md:6: "## A": issue block: size "Huge" must be one of S, M, L, XL`}},
 		{"empty body", "", head + "## A\n'''issue\nkey = \"a\"\n'''\n\n  \n## B\n'''issue\nkey = \"b\"\n'''\nB.\n",
 			[]string{"p.md:5: a: the issue body is empty"}},
 		{"invalid key", "", head + "## A\n'''issue\nkey = \"Not_Kebab\"\n'''\nBody.\n",

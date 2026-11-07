@@ -111,7 +111,10 @@ type apiIssue struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	PullRequest *struct{} `json:"pull_request"`
-	Milestone   *struct {
+	Labels      []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+	Milestone *struct {
 		ID    int64  `json:"id"`
 		Title string `json:"title"`
 		State string `json:"state"`
@@ -121,6 +124,9 @@ type apiIssue struct {
 func (is apiIssue) forge() *milestone.ForgeIssue {
 	out := &milestone.ForgeIssue{Number: is.Number, Title: is.Title, Body: is.Body,
 		Closed: is.State == "closed", Poster: is.User.Login, PR: is.PullRequest != nil}
+	for _, l := range is.Labels {
+		out.Labels = append(out.Labels, l.Name)
+	}
 	if m := is.Milestone; m != nil {
 		out.Milestone = &milestone.ForgeMilestone{ID: m.ID, Title: m.Title, Closed: m.State == "closed"}
 	}
@@ -178,6 +184,11 @@ func (f *proxyForge) CreateIssue(ctx context.Context, title, body string, ms int
 func (f *proxyForge) EditIssue(ctx context.Context, n int64, title, body string) error {
 	in := map[string]any{"title": title, "body": body}
 	return f.call(ctx, "PATCH", f.repoPath(fmt.Sprintf("/issues/%d", n)), in, nil)
+}
+
+func (f *proxyForge) AddLabel(ctx context.Context, n int64, label string) error {
+	in := map[string]any{"labels": []string{label}}
+	return f.call(ctx, "POST", f.repoPath(fmt.Sprintf("/issues/%d/labels", n)), in, nil)
 }
 
 func (f *proxyForge) BlockedBy(ctx context.Context, n int64) ([]int64, error) {

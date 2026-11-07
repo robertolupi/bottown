@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/stats"
 )
 
 // fixturesDir is the repository's web/fixtures, which `bottown web
@@ -217,6 +218,16 @@ func TestPreviewRoutes(t *testing.T) {
 	}
 	if code, _ := c.do(http.MethodGet, "/api/timeline?since=nonsense", ""); code != http.StatusBadRequest {
 		t.Errorf("timeline with a bad since: %d", code)
+	}
+
+	// The fixture's statistics, whatever window is asked for.
+	var sts stats.Stats
+	c.get("/api/stats?since=2026-01-01T00:00:00Z", &sts)
+	if fx.Stats == nil || len(sts.Issues) != len(fx.Stats.Issues) || len(sts.Breakdowns) == 0 || len(sts.Milestones) == 0 {
+		t.Errorf("stats: %d issues, %d breakdowns, %d milestones", len(sts.Issues), len(sts.Breakdowns), len(sts.Milestones))
+	}
+	if code, _ := c.do(http.MethodGet, "/api/stats?since=nonsense", ""); code != http.StatusBadRequest {
+		t.Errorf("stats with a bad since: %d", code)
 	}
 
 	var issue IssueDetails

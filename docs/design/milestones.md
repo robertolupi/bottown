@@ -237,6 +237,10 @@ Add `policy.Plan` and `/bottown-plan`.
        `key` in the same file or `"#<N>"` referencing an existing issue in
        the same repository. Duplicate entries, self-dependencies, and
        `"#<kickoff>"` (depending on the kickoff issue itself) are errors.
+     - `size` (optional string): the planner's size proposal for this issue,
+       one of `S`, `M`, `L`, `XL`. `apply` sets it as the issue's `size/<S>`
+       label, and the owner reviews it with the plan; the Stats view uses
+       the label as the issue's estimate (see the statistics design).
 5. **Issue body:**
    - Everything after the closing fence of the `issue` block up to the next
      `## ` heading (or EOF), with leading and trailing blank lines trimmed

@@ -621,8 +621,9 @@ In-harness runs (started with a harness's slash commands) leave no log:
 history shows them from the server's record and their handover comment,
 marked interactive, with no usage.
 
-**Stats** come later: success rate per actor and kind, rounds per issue,
-and usage per issue.
+**Stats.** The Stats tab (§4.7) shows the per-issue/PR metric vector, the
+breakdowns, the size estimate against the measured diff, and the milestone
+burndown and burnup, from `GET /api/stats`.
 
 **Retention.** Records and logs, the flows' logs included
 ([reference.md](../reference.md#what-run-gc-removes) lists what it removes when), stay on the
@@ -752,6 +753,28 @@ window: every run on one time scale, from `GET /api/timeline`
 
 Every interval and number comes from the server; the view draws them and
 derives nothing.
+
+### 4.7 Stats
+
+A fourth tab, **Stats** (`#stats`), answers the owner's questions about the
+fam's work from `GET /api/stats` ([reference](../reference.md#activity),
+`internal/stats`), built on the same activity derivation as the Timeline so
+the two cannot disagree. It follows the ground rules of #309: show
+coverage next to every number, never turn missing data into zero, never
+add up across vendors, and report counts and n until a group is big
+enough. No prompt, scheduler or pairing rule reads these numbers; they are
+for the owner's judgment alone.
+
+- **Range.** Last 30 days (the default), 7 or 90 days, or a custom from and
+  to, with the same control as the Timeline.
+- **Per issue and PR:** the metric vector, each row linking to the issue
+  and PR in Forgejo. Sizes are the owner's labels, never points.
+- **Breakdowns:** the vector by implementer actor, family, verifier family,
+  pair, size and milestone, each cell with its n and the median and range.
+- **Size label vs measured:** a small confusion table of each size label
+  against the measured buckets, for merged PRs with a diff.
+- **Milestone burndown and burnup:** plain SVG, one chart per milestone,
+  counting or size-weighted as the labels allow.
 
 ## 5. Actions
 
@@ -1108,10 +1131,10 @@ Each phase is one issue, small enough for one implement run:
    actions that start, stop and clean up flows and runs (§5).
 6. **`.bottown.toml`** with after-pull steps (§4.4).
 7. **Audit:** `GET /v1/audit`, and policy denials shown in the run views.
+8. **Milestones** (§3.7, §4.6) and the **Stats** tab (§4.7).
 
 Later, each with its own design: the run detail view with the full
-transcript, stats, the queue and its labels (§3.6), milestones (§3.7),
-and declared checks (§4.5).
+transcript, the queue and its labels (§3.6), and declared checks (§4.5).
 
 ## 10. Out of scope
 

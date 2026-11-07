@@ -73,6 +73,9 @@ type Run struct {
 	Usage *secrets.Usage `json:"usage,omitempty"`
 	// UsageReported: the harness reported tokens or a cost.
 	UsageReported bool `json:"usage_reported"`
+	// Failure is the observed cause of a failed run (a secrets.Failure
+	// cause), empty when the run succeeded or nothing was observed.
+	Failure string `json:"failure,omitempty"`
 }
 
 // Coverage counts the runs that reported usage, for "n of m runs
@@ -96,6 +99,14 @@ func CoverageOf(runs []Run) Coverage {
 // usageReported is whether u has tokens or a cost.
 func usageReported(u *secrets.Usage) bool {
 	return u != nil && (u.InputTokens != nil || u.OutputTokens != nil || u.CacheReadTokens != nil || u.CacheWriteTokens != nil || u.CostUSD != nil)
+}
+
+// failureCause is f's cause, or empty when f is nil.
+func failureCause(f *secrets.Failure) string {
+	if f == nil {
+		return ""
+	}
+	return f.Cause
 }
 
 // Thread is one flow thread: an issue's work on one PR, or before any.
@@ -401,6 +412,7 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 			State: r.State, Status: r.Status, Outcome: r.Outcome, Created: r.Created, Ended: r.Ended, Purged: r.Purged,
 			Issue: rt.Issue, PR: rt.PR, ThreadKey: rt.Key, Interactive: r.Interactive,
 			Usage: r.Digest.Usage, UsageReported: usageReported(r.Digest.Usage),
+			Failure: failureCause(r.Digest.Failure),
 		})
 	}
 	a.Usage = CoverageOf(a.Runs)

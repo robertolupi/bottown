@@ -106,6 +106,15 @@ func (f *fakeForge) EditIssue(_ context.Context, n int64, title, body string) er
 	return nil
 }
 
+func (f *fakeForge) AddLabel(_ context.Context, n int64, label string) error {
+	if slices.Contains(f.issues[n].Labels, label) {
+		return nil
+	}
+	f.issues[n].Labels = append(f.issues[n].Labels, label)
+	f.writes = append(f.writes, fmt.Sprintf("label #%d %s", n, label))
+	return nil
+}
+
 func (f *fakeForge) BlockedBy(_ context.Context, n int64) ([]int64, error) {
 	return slices.Clone(f.deps[n]), nil
 }
@@ -218,6 +227,37 @@ func withPlan(src string) *fakeForge {
 	f := newFake()
 	f.files[planFile] = string(md(src))
 	return f
+}
+
+func TestApplySetsSizeLabel(t *testing.T) {
+	const sized = `+++
+title = "Demo epic"
+kickoff = 1
+design = "docs/d.md"
++++
+
+The overview.
+
+## Alpha
+
+'''issue
+key = "a"
+size = "L"
+'''
+
+Body of a.
+`
+	f := withPlan(sized)
+	_, out := mustApply(t, f, nil)
+	if got := f.issues[3].Labels; !slices.Equal(got, []string{"size/L"}) {
+		t.Errorf("#3 labels = %v, want [size/L]\n%s", got, out)
+	}
+	// A second apply does not add the label again.
+	before := len(f.writes)
+	mustApply(t, f, nil)
+	if after := f.writes[before:]; slices.ContainsFunc(after, func(w string) bool { return strings.HasPrefix(w, "label") }) {
+		t.Errorf("second apply wrote labels again: %v", after)
+	}
 }
 
 func TestApplyFirstAndIdempotent(t *testing.T) {

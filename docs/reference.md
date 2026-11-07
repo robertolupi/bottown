@@ -510,3 +510,28 @@ window `open`) lays the activity out for the web UI's Timeline tab
 
 A run, check or wait still going is `live` and ends at the server's now;
 in an open window the view grows it with the clock.
+
+**Statistics.** `GET /api/stats?since=&until=` serves the web UI's Stats
+tab (`webui.ComputeStats`, `internal/stats`), built on the same activity
+derivation plus the issues' size labels and milestones and the merged PRs'
+diffs. Its window parses as the timeline's, but `since` defaults to thirty
+days before `until`. It follows the ground rules of #309: every number
+carries its coverage, missing data stays missing rather than becoming
+zero, and tokens are never added up across model families.
+
+- **Per issue/PR vector:** its size label and milestone, lead time (issue
+  created to PR merged) and cycle time (first run to merged), agent time by
+  run kind, implement and check rounds, verifier rejections by verifier
+  family, failed runs by cause, the owner's observable touches (interactive
+  runs and flow stops), reported usage by model family with "n of m runs
+  reported", and the measured diff of a merged PR (added and deleted lines
+  and files touched, lock files excluded, `internal/diffstat`).
+- **Breakdowns:** the vector grouped by implementer actor, implementer
+  family, verifier family, pair, size and milestone; each cell gives its
+  n and the median, minimum and maximum, never a mean, and never a ranking.
+- **Size table:** each size label against the measured buckets (S ≤ 20,
+  M ≤ 100, L ≤ 400 changed lines, XL above), for merged PRs with a diff.
+- **Milestones:** each milestone's burndown (open over time) and burnup
+  (closed versus total scope over time) from its issues' created and close
+  times, weighted by size label when every issue has one and by count
+  otherwise, so scope added late shows as a rising total.

@@ -33,6 +33,9 @@ type Forge interface {
 	Issues(ctx context.Context) ([]*ForgeIssue, error)
 	CreateIssue(ctx context.Context, title, body string, milestone int64) (int64, error)
 	EditIssue(ctx context.Context, n int64, title, body string) error
+	// AddLabel adds one label to issue n; adding one it already has is a
+	// no-op.
+	AddLabel(ctx context.Context, n int64, label string) error
 	// BlockedBy lists the issues n depends on (Forgejo's dependencies).
 	BlockedBy(ctx context.Context, n int64) ([]int64, error)
 	AddBlockedBy(ctx context.Context, n, dep int64) error
@@ -47,6 +50,7 @@ type ForgeIssue struct {
 	Closed    bool
 	Poster    string
 	PR        bool
+	Labels    []string
 	Milestone *ForgeMilestone // nil if none
 }
 
@@ -735,6 +739,9 @@ func (a *applier) execute(ctx context.Context) error {
 			a.rep.Writes++
 			fmt.Fprintf(w, "updated %s\n", c.ref())
 		}
+		if err := a.setSize(ctx, c); err != nil {
+			return err
+		}
 	}
 	epicBody := func() string {
 		content := a.epicContent()
@@ -786,6 +793,25 @@ func (a *applier) execute(ctx context.Context) error {
 			fmt.Fprintf(w, "#%d: blocked by #%d\n", from, to)
 		}
 	}
+	return nil
+}
+
+// setSize adds the size label the plan proposes for c, if any, once. A
+// changed proposal adds the new label; removing the old one is the owner's.
+func (a *applier) setSize(ctx context.Context, c *child) error {
+	if c.Size == "" || c.cur == nil {
+		return nil
+	}
+	label := SizeLabelName(c.Size)
+	if slices.Contains(c.cur.Labels, label) {
+		return nil
+	}
+	if err := a.f.AddLabel(ctx, c.cur.Number, label); err != nil {
+		return fmt.Errorf("labelling %s %s: %w", c.ref(), label, err)
+	}
+	c.cur.Labels = append(c.cur.Labels, label)
+	a.rep.Writes++
+	fmt.Fprintf(a.o.Out, "%s: label %s\n", c.ref(), label)
 	return nil
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/diffstat"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -875,7 +876,7 @@ func printPRShow(out io.Writer, p server.PROut, diff, stat, full bool) {
 		)
 	}
 	if diff || stat {
-		files := parseDiff(p.Diff)
+		files := diffstat.Parse(p.Diff)
 		if full {
 			for i := range files {
 				files[i].Collapsed = false
