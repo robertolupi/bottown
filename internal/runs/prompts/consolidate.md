@@ -32,7 +32,18 @@ what are the risks and open questions?{{end}}
   - `{{.}}`
 {{- end}}
 {{- end}}
-- Write the consolidation in the wiki, in one file, written once:
+- Write the consolidation in the wiki, in one file, written once.
+{{- if .TmpDir}} Write
+  it with your file tools (not a shell heredoc) to
+  `{{.TmpDir}}/consolidation.md`, this run's scratch directory, the one
+  place outside the worktree you may write, then put it:
+
+  ```
+  {{.Bottown}} wiki put {{.Debate.File}} -m "Round {{.Debate.Round}}: consolidated" --file {{.TmpDir}}/consolidation.md
+  ```
+
+  Only a short consolidation, a few paragraphs, may go inline instead:
+{{- end}}
 
   ```
   {{.Bottown}} wiki put {{.Debate.File}} -m "Round {{.Debate.Round}}: consolidated" --file - <<'EOF'
@@ -43,6 +54,7 @@ what are the risks and open questions?{{end}}
   bottown stamps it, then rewrites the debate's page, `{{.Debate.Page}}`,
   from it in the same commit, and posts the link on the issue when this
   run ends. Do not comment on the issue yourself.
+{{- template "batch" .}}
 
 ## Done means
 

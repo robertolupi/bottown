@@ -34,7 +34,18 @@ what are the risks and open questions?{{end}}
   - `{{.}}`
 {{- end}}
 {{- end}}
-- Your answer goes in the wiki, in one file, written once:
+- Your answer goes in the wiki, in one file, written once.
+{{- if .TmpDir}} Write it with
+  your file tools (not a shell heredoc) to `{{.TmpDir}}/answer.md`, this
+  run's scratch directory, the one place outside the worktree you may
+  write, then put it:
+
+  ```
+  {{.Bottown}} wiki put {{.Debate.File}} -m "Round {{.Debate.Round}}: {{.Actor}}'s answer" --file {{.TmpDir}}/answer.md
+  ```
+
+  Only a short answer, a few paragraphs, may go inline instead:
+{{- end}}
 
   ```
   {{.Bottown}} wiki put {{.Debate.File}} -m "Round {{.Debate.Round}}: {{.Actor}}'s answer" --file - <<'EOF'
@@ -45,6 +56,7 @@ what are the risks and open questions?{{end}}
   bottown stamps it with the round, your actor and model, this run and
   the commit you read. It cannot be changed once written, so write it
   only when it is final.
+{{- template "batch" .}}
 
 ## Done means
 

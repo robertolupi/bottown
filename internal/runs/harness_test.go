@@ -119,6 +119,52 @@ func TestClaudeIsolationAndEnv(t *testing.T) {
 	}
 }
 
+// A read-only claude run may write and edit its scratch directory, and no
+// other file (#392); without a scratch directory it may write none.
+func TestClaudeReadOnlyWritesOnlyTmpDir(t *testing.T) {
+	allowedTools := func(l Launch) []string {
+		c, _ := (claudeHarness{}).Command(t.Context(), l)
+		for i, a := range c.Args {
+			if a == "--allowedTools" && i+1 < len(c.Args) {
+				return strings.Split(c.Args[i+1], ",")
+			}
+		}
+		t.Fatalf("no --allowedTools: %s", c.Args)
+		return nil
+	}
+	fileRules := func(tools []string) []string {
+		return slices.DeleteFunc(tools, func(t string) bool {
+			return !strings.HasPrefix(t, "Write") && !strings.HasPrefix(t, "Edit")
+		})
+	}
+	tmp := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k", ReadOnly: true}
+
+	ro := base
+	ro.TmpDir = tmp
+	got := fileRules(allowedTools(ro))
+	want := []string{"Write(/" + tmp + "/**)", "Edit(/" + tmp + "/**)"}
+	if resolved != tmp {
+		// macOS: /var/folders/… is /private/var/folders/….
+		want = append(want, "Write(/"+resolved+"/**)", "Edit(/"+resolved+"/**)")
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("read-only file rules = %q, want %q", got, want)
+	}
+	if got := fileRules(allowedTools(base)); len(got) != 0 {
+		t.Errorf("read-only run without a TmpDir may write %q", got)
+	}
+	rw := base
+	rw.ReadOnly, rw.TmpDir = false, tmp
+	if got := fileRules(allowedTools(rw)); !slices.Equal(got, []string{"Edit", "Write"}) {
+		t.Errorf("writable run file rules = %q, want unscoped Edit and Write", got)
+	}
+}
+
 func TestClaudeDefaultAllowedTools(t *testing.T) {
 	c, _ := (claudeHarness{}).Command(t.Context(), Launch{Dir: t.TempDir(), Prompt: "p", MCPConfig: "/m.json", RunID: "r-1", Key: "k"})
 	var allowed string
@@ -242,6 +288,50 @@ func TestDebatePrompts(t *testing.T) {
 	for _, want := range []string{"consolidator", "`reviews/7-t/r1-codex.md`", "/b wiki put reviews/7-t/r1-consolidated.md", "`Review-7-t`", "Review the issue"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("consolidate prompt lacks %q:\n%s", want, p)
+		}
+	}
+
+	// With a scratch directory, a long body goes to a file there and to
+	// `wiki put --file` (#392); the heredoc stays for short ones.
+	d.TmpDir, c.TmpDir = "/tmp/r-1", "/tmp/r-1"
+	for _, tc := range []struct {
+		kind string
+		d    PromptData
+		want string
+	}{
+		{"debate", d, "/b wiki put reviews/7-t/r2-claude.md -m \"Round 2: claude's answer\" --file /tmp/r-1/answer.md"},
+		{"consolidate", c, "/b wiki put reviews/7-t/r1-consolidated.md -m \"Round 1: consolidated\" --file /tmp/r-1/consolidation.md"},
+	} {
+		p, err := Prompt(tc.kind, tc.d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{tc.want, "(not a shell heredoc)", "Only a short", "--file - <<'EOF'"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s prompt with a TmpDir lacks %q:\n%s", tc.kind, want, p)
+			}
+		}
+	}
+}
+
+// Batch prompts say nobody can approve a permission request; interactive
+// ones do not.
+func TestBatchPromptsSayNobodyApproves(t *testing.T) {
+	const line = "nobody can approve a permission\n  request"
+	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro", "debate", "consolidate"} {
+		for _, batch := range []bool{true, false} {
+			d := PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/b", Batch: batch,
+				Debate: &DebatePrompt{Round: 1, File: "f.md"}}
+			p, err := Prompt(kind, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(p, line); got != batch {
+				t.Errorf("%s prompt (batch %v) has the approval line: %v\n%s", kind, batch, got, p)
+			}
+			if batch && !strings.Contains(p, "can and say what is missing and what blocked it.\n\n## Done means") {
+				t.Errorf("%s prompt: the approval line is not the last of its list:\n%s", kind, p)
+			}
 		}
 	}
 }

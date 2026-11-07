@@ -64,6 +64,7 @@ Resolve issue #{{.Issue}} in `{{.Repo}}`: **{{.Title}}**
   exits. Check layout claims against the metrics; `--selector` and
   `--eval` measure more.
 {{- end}}
+{{- template "batch" .}}
 
 ## Done means
 

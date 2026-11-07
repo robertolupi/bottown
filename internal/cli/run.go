@@ -778,6 +778,7 @@ func renderPrompt(ctx context.Context, rc *runContext, run secrets.Run, rec runs
 		Title: item.Title, Body: item.Body, Base: base,
 		Bottown: selfPath(), Remote: rc.inst.Remote(), Question: rec.Question, Message: rec.Message,
 		FlowNote: rec.FlowNote, ChecksPassed: rec.ChecksPassed,
+		TmpDir: rec.TmpDir, Batch: !rec.Interactive,
 	}
 	if run.Kind == policy.Retro && run.Window != nil {
 		d.Window, d.WindowSince, d.WindowBase, d.WindowPage = true, run.Window.Since, run.Window.Base, run.Window.Page
