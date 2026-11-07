@@ -32,12 +32,15 @@ import (
 // A put is a compare-and-swap: it names the blob it read (--base), and
 // fails with a conflict when the page's text has changed since. Changes to
 // generated blocks alone are no conflict. A push that loses a race (the
-// owner editing in the web UI) is rebuilt on the new head and retried.
+// owner editing in the web UI) is rebuilt on the new head and retried. A
+// delete is the same compare-and-swap, and regenerates the wiki's blocks in
+// its commit.
 //
-//	GET  /v1/wiki/files?repo=
-//	GET  /v1/wiki/file?repo=&path=        (path: a file, or a page's slug)
-//	PUT  /v1/wiki/file  {repo, path, content, base, message}
-//	POST /v1/wiki/generate {repo, check}
+//	GET    /v1/wiki/files?repo=
+//	GET    /v1/wiki/file?repo=&path=        (path: a file, or a page's slug)
+//	PUT    /v1/wiki/file  {repo, path, content, base, message}
+//	DELETE /v1/wiki/file  {repo, path, base, message}
+//	POST   /v1/wiki/generate {repo, check}
 
 // ErrorCodeWikiConflict is a put refused because the page changed since
 // the writer read it.
@@ -120,6 +123,19 @@ func (s *Server) wikiRoutes(mux *http.ServeMux) {
 			return
 		}
 		out, err := s.opWikiPut(r.Context(), Who(r.Context()), in)
+		var ce *wikiConflict
+		if errors.As(err, &ce) {
+			writeErrorCode(w, http.StatusConflict, ErrorCodeWikiConflict, err.Error())
+			return
+		}
+		writeOp(w, out, err)
+	})))
+	mux.Handle("DELETE /v1/wiki/file", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in WikiRmIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opWikiRm(r.Context(), Who(r.Context()), in)
 		var ce *wikiConflict
 		if errors.As(err, &ce) {
 			writeErrorCode(w, http.StatusConflict, ErrorCodeWikiConflict, err.Error())
@@ -450,6 +466,86 @@ func (s *Server) opWikiPut(ctx context.Context, p secrets.Principal, in WikiPutI
 	if commit != "" {
 		s.toolAudit(p, full, "wiki_put", "allow", fmt.Sprintf("%s at %s", out.Path, shortCommit(commit)))
 	}
+	return out, nil
+}
+
+// WikiRmIn deletes one file. Base is the blob SHA the writer read; it is
+// required.
+type WikiRmIn struct {
+	Repo    string `json:"repo,omitempty"`
+	Path    string `json:"path"`
+	Base    string `json:"base"`
+	Message string `json:"message,omitempty"`
+}
+
+// WikiRmOut is the commit a delete made.
+type WikiRmOut struct {
+	Repo    string   `json:"repo"`
+	Path    string   `json:"path"`
+	Commit  string   `json:"commit"`
+	Changed []string `json:"changed"` // every file the commit changed: the deleted one, and regenerated blocks
+}
+
+// opWikiRm deletes a file, a compare-and-swap like a put, and regenerates
+// the wiki's blocks in the same commit.
+func (s *Server) opWikiRm(ctx context.Context, p secrets.Principal, in WikiRmIn) (WikiRmOut, error) {
+	org, repo, err := s.resolveRepo(p, in.Repo)
+	if err != nil {
+		return WikiRmOut{}, err
+	}
+	full := org + "/" + repo
+	file, err := cleanWikiPath(in.Path)
+	if err != nil {
+		return WikiRmOut{}, err
+	}
+	if in.Base == "" {
+		return WikiRmOut{}, ferr(http.StatusBadRequest, "base is required: the blob SHA wiki read printed")
+	}
+	if err := requireWrite(p); err != nil {
+		return WikiRmOut{}, err
+	}
+	out := WikiRmOut{Repo: full}
+	commit, changed, err := s.wikiCommit(ctx, p, org, repo, false, func(st *wikiState) (*wikiChange, error) {
+		f, exists := wiki.Resolve(st.files(), file)
+		if err := s.wikiAllow(p, full, "wiki_rm", true, f); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ferr(http.StatusNotFound, "wiki file %s not found in %s", file, full)
+		}
+		if f == wiki.HealthPage {
+			return nil, ferr(http.StatusBadRequest, "%s is bottown's: the generator recreates it", f)
+		}
+		out.Path = f
+		if cur := st.blobs[f]; in.Base != cur {
+			// A change to generated blocks alone is not a conflict.
+			old, ok := blob(ctx, st.gitDir, in.Base)
+			if !ok || !sameText(string(old), string(st.tree[f])) {
+				return nil, &wikiConflict{fmt.Sprintf("%s changed since blob %s (now %s): read it again before deleting it", f, shortCommit(in.Base), shortCommit(cur))}
+			}
+		}
+		tree := maps.Clone(st.tree)
+		delete(tree, f)
+		files := wiki.Generate(tree, s.wikiOptions(org, repo)).Changed
+		msg := in.Message
+		if msg == "" {
+			msg = "Delete " + wiki.WebPath(f)
+		}
+		return &wikiChange{files: files, remove: []string{f}, msg: msg}, nil
+	})
+	if err != nil {
+		var ce *wikiConflict
+		if errors.As(err, &ce) {
+			s.toolAudit(p, full, "wiki_rm", "deny", err.Error())
+		}
+		return WikiRmOut{}, err
+	}
+	if commit == "" {
+		// wikiCommit asks nothing of a wiki that does not exist yet.
+		return WikiRmOut{}, ferr(http.StatusNotFound, "wiki file %s not found in %s: the wiki has no pages yet", file, full)
+	}
+	out.Commit, out.Changed = commit, changed
+	s.toolAudit(p, full, "wiki_rm", "allow", fmt.Sprintf("%s at %s", out.Path, shortCommit(commit)))
 	return out, nil
 }
 

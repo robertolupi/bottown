@@ -373,6 +373,109 @@ func TestWikiGenerate(t *testing.T) {
 	}
 }
 
+// TestWikiRm: a delete is a compare-and-swap, and its commit regenerates
+// the other pages' blocks.
+func TestWikiRm(t *testing.T) {
+	w := newWikiRepo(t, true)
+	ctx := context.Background()
+	if _, err := w.s.opWikiPut(ctx, owner, WikiPutIn{Repo: "demo", Path: "Idea.md", Content: "# Idea\n\nBack to [Home](Home).\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.read("Home").Content, "**Linked from:** [Idea](Idea)") {
+		t.Fatalf("Home before = %q", w.read("Home").Content)
+	}
+	idea := w.read("Idea")
+	// The owner edits Idea's text: a delete at the old blob is a conflict.
+	w.commit("Idea.md", idea.Content+"Owner's line.\n", "owner edits Idea")
+	if _, err := w.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Idea", Base: idea.SHA}); status(err) != http.StatusConflict {
+		t.Fatalf("stale delete: %v", err)
+	}
+	if _, err := w.s.opWikiRead(ctx, owner, "demo", "Idea"); err != nil {
+		t.Fatalf("a refused delete removed the page: %v", err)
+	}
+	// A change to Idea's generated blocks alone since the read is no
+	// conflict: Other links to Idea, and a put refreshes Idea's backlinks.
+	idea = w.read("Idea")
+	if _, err := w.s.opWikiPut(ctx, owner, WikiPutIn{Repo: "demo", Path: "Other.md", Content: "See [Idea](Idea).\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if w.read("Idea").SHA == idea.SHA {
+		t.Fatal("Idea's backlinks were not refreshed")
+	}
+	before := w.head()
+	rm, err := w.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Idea", Base: idea.SHA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rm.Path != "Idea.md" || strings.Join(rm.Changed, ",") != "Home.md,Idea.md,Wiki-Health.md" {
+		t.Fatalf("rm = %+v", rm)
+	}
+	// One commit: the file is gone, Home's backlinks drop it, and the health
+	// page reports Other's link as broken.
+	if parent := w.git("--git-dir", w.gitDir, "rev-parse", rm.Commit+"^"); parent != before || w.head() != rm.Commit {
+		t.Fatalf("rm commit %s on %s, head %s; want one commit on %s", rm.Commit, parent, w.head(), before)
+	}
+	if _, err := w.s.opWikiRead(ctx, owner, "demo", "Idea"); status(err) != http.StatusNotFound {
+		t.Fatalf("read after rm: %v", err)
+	}
+	if got := w.read("Home").Content; !strings.Contains(got, wiki.Open("backlinks")+"\n_No other page links here._") {
+		t.Fatalf("Home after rm = %q", got)
+	}
+	if got := w.read("Wiki-Health").Content; !strings.Contains(got, "Idea") || !strings.Contains(got, "broken-link") {
+		t.Fatalf("health after rm = %q", got)
+	}
+	if check, err := w.s.opWikiGenerate(ctx, owner, WikiGenerateIn{Repo: "demo", Check: true}); err != nil || len(check.Stale) != 0 {
+		t.Fatalf("check after rm = %+v, %v", check, err)
+	}
+	// Missing files, the health page and bad requests.
+	if _, err := w.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Idea", Base: idea.SHA}); status(err) != http.StatusNotFound {
+		t.Fatalf("delete of a missing file: %v", err)
+	}
+	health := w.read("Wiki-Health")
+	if _, err := w.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Wiki-Health", Base: health.SHA}); status(err) != http.StatusBadRequest {
+		t.Fatalf("delete of the health page: %v", err)
+	}
+	for _, in := range []WikiRmIn{{Path: "Home"}, {Path: "../x.md", Base: health.SHA}} {
+		in.Repo = "demo"
+		if _, err := w.s.opWikiRm(ctx, owner, in); status(err) != http.StatusBadRequest {
+			t.Errorf("rm %+v: %v, want 400", in, err)
+		}
+	}
+	// A wiki that does not exist has nothing to delete.
+	none := newWikiRepo(t, false)
+	if _, err := none.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Home", Base: health.SHA}); status(err) != http.StatusNotFound {
+		t.Fatalf("delete in a missing wiki: %v", err)
+	}
+}
+
+// TestWikiRmRetriesOnRace: the owner saves a page in the web UI while a
+// delete is in flight; the delete is rebuilt on the new head and keeps it.
+func TestWikiRmRetriesOnRace(t *testing.T) {
+	w := newWikiRepo(t, true)
+	ctx := context.Background()
+	if _, err := w.s.opWikiPut(ctx, owner, WikiPutIn{Repo: "demo", Path: "Idea.md", Content: "idea, back to [Home](Home)\n"}); err != nil {
+		t.Fatal(err)
+	}
+	idea := w.read("Idea")
+	w.beforePush = func() { w.commit("Owner.md", "made in the UI, links [Home](Home)\n", "owner in the UI") }
+	rm, err := w.s.opWikiRm(ctx, owner, WikiRmIn{Repo: "demo", Path: "Idea", Base: idea.SHA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.read("Owner.md").Content, "made in the UI") {
+		t.Fatal("the owner's edit was lost")
+	}
+	if _, err := w.s.opWikiRead(ctx, owner, "demo", "Idea"); status(err) != http.StatusNotFound {
+		t.Fatalf("Idea survived the retried delete: %v", err)
+	}
+	if got := w.read("Home").Content; !strings.Contains(got, "**Linked from:** [Owner](Owner)\n") {
+		t.Fatalf("the retried delete did not see the new head: %q", got)
+	}
+	if parent := w.git("--git-dir", w.gitDir, "rev-parse", rm.Commit+"^"); !strings.Contains(w.git("--git-dir", w.gitDir, "log", "-1", "--format=%s", parent), "owner in the UI") {
+		t.Fatalf("rm commit's parent is %s, not the owner's edit", parent)
+	}
+}
+
 // TestWikiAccess: runs and actors read; only the owner writes, by default.
 func TestWikiAccess(t *testing.T) {
 	w := newWikiRepo(t, true)
@@ -384,6 +487,13 @@ func TestWikiAccess(t *testing.T) {
 		if _, err := w.s.opWikiPut(ctx, p, WikiPutIn{Repo: "demo", Path: "Idea.md", Content: "x\n"}); status(err) != http.StatusForbidden {
 			t.Errorf("%s put: %v, want 403", p.Actor, err)
 		}
+		home := w.read("Home")
+		if _, err := w.s.opWikiRm(ctx, p, WikiRmIn{Repo: "demo", Path: "Home", Base: home.SHA}); status(err) != http.StatusForbidden {
+			t.Errorf("%s rm: %v, want 403", p.Actor, err)
+		}
+	}
+	if _, err := w.s.opWikiRead(ctx, owner, "demo", "Home"); err != nil {
+		t.Errorf("a refused delete removed Home: %v", err)
 	}
 	if _, err := w.s.opWikiRead(ctx, claude, "other", "Home"); status(err) != http.StatusForbidden {
 		t.Errorf("run reads another repo's wiki: %v", err)
