@@ -3743,6 +3743,131 @@ fi`
 		}
 	})
 
+	// A milestone child that lands after a sibling landed is merged only at
+	// a landing commit the check group passed at (design §6): milestone
+	// merge lands through land.Land, as milestone run does.
+	t.Run("milestone merge lands a sibling at a checked combined head", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+		impl := strings.TrimSpace(a.mustCmd("", "credential", "key", "claude", "--full"))
+		ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex", "--full"))
+		const branch = "milestone/landing"
+
+		// The checks name the group they run in the check's log, and the
+		// milestone policy runs check alone.
+		ownerGit("fetch", "-q", remote)
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, ".bottown.toml"), []byte("check = [\"echo check\"]\ne2e = [\"echo e2e\"]\n"), 0o644)
+		git(t, demo, "add", ".bottown.toml")
+		git(t, demo, "commit", "-q", "--allow-empty", "-m", "milestone landing checks")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/"+branch)
+
+		type pull struct {
+			Number         int64
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		// open files a child issue and its approved PR into the milestone
+		// branch, changing file, from the branch's tip now.
+		open := func(file string) (issue int64, prPath string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "milestone landing " + file}, &is)
+			head := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/"+branch)
+			os.WriteFile(filepath.Join(demo, file), []byte(file+"\n"), 0o644)
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "add "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+head); err != nil {
+				t.Fatalf("push %s: %v\n%s", head, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": head, "base": branch, "title": "milestone landing " + file, "body": "Add " + file + ".",
+			}, &pr)
+			prPath = fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": pr.Head.Sha}, nil)
+			return is.Number, prPath
+		}
+		statuses := func(sha string) map[string]string {
+			t.Helper()
+			var cs []struct {
+				Context string
+				Status  string `json:"status"`
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/commits/"+sha+"/statuses", nil, &cs)
+			out := map[string]string{}
+			for _, s := range cs {
+				out[s.Context] = s.Status
+			}
+			return out
+		}
+
+		// Both children are ready from the same tip; the first lands, and
+		// the second is then behind its sibling's merge.
+		first, p1 := open("first.txt")
+		second, p2 := open("second.txt")
+		if out, err := a.cmd(demo, "milestone", "merge", fmt.Sprint(first)); err != nil {
+			t.Fatalf("milestone merge #%d: %v\n%s", first, err, out)
+		}
+		var landed1 pull
+		a.mustAPI(owner, "GET", p1, nil, &landed1)
+		if !landed1.Merged {
+			t.Fatalf("#%d's PR not merged", first)
+		}
+		var before pull
+		a.mustAPI(owner, "GET", p2, nil, &before)
+		out, err := a.cmd(demo, "milestone", "merge", fmt.Sprint(second))
+		if err != nil {
+			t.Fatalf("milestone merge #%d behind its sibling: %v\n%s", second, err, out)
+		}
+		var landed2 pull
+		a.mustAPI(owner, "GET", p2, nil, &landed2)
+		if !landed2.Merged || landed2.MergeCommitSHA == before.Head.Sha {
+			t.Fatalf("#%d's PR merged=%v at %s, want a landing commit past its head %s:\n%s", second, landed2.Merged, landed2.MergeCommitSHA, before.Head.Sha, out)
+		}
+		ownerGit("fetch", "-q", remote)
+		landing := landed2.MergeCommitSHA
+		if parents := strings.Fields(ownerGit("rev-list", "--parents", "-n1", landing)); len(parents) != 3 || parents[1] != landed1.MergeCommitSHA || parents[2] != before.Head.Sha {
+			t.Errorf("the landing commit's parents %v, want the sibling's merge %s and the head %s", parents[1:], landed1.MergeCommitSHA, before.Head.Sha)
+		}
+		if tip := ownerGit("rev-parse", remote+"/"+branch); tip != landing {
+			t.Errorf("%s at %s, want the landing commit %s", branch, tip, landing)
+		}
+		for _, f := range []string{"first.txt", "second.txt"} {
+			ownerGit("cat-file", "-e", landing+":"+f)
+		}
+		st := statuses(landing)
+		if st["bottown/check"] != "success" {
+			t.Errorf("bottown/check at the landing commit %s = %q, want success (%v)", landing, st["bottown/check"], st)
+		}
+		if _, ok := st["bottown/e2e"]; ok {
+			t.Errorf("the milestone landing ran e2e at %s: %v", landing, st)
+		}
+		var is struct{ State string }
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", second), nil, &is)
+		if is.State != "closed" {
+			t.Errorf("#%d is %s after its landing", second, is.State)
+		}
+		// Landing it again reports it merged.
+		if out := a.mustCmd(demo, "milestone", "merge", fmt.Sprint(second)); !strings.Contains(out, "already merged") {
+			t.Errorf("milestone merge on a merged child:\n%s", out)
+		}
+	})
+
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {
 		if out, err := exec.Command("docker", "restart", a.cfg.Container()).CombinedOutput(); err != nil {
 			t.Fatalf("docker restart: %v %s", err, out)

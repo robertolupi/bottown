@@ -53,9 +53,26 @@ failing, and, for a milestone child, closes and comments on `#<C>` if it
 is still open, so a call that stopped after the merge is finished by the
 next. Run keys and actor keys are refused (403).
 
-`bottown milestone merge C [--sha SHA] [--repo R]` (owner only) calls it
-for the open PR from `issue/<C>`, with `--sha` defaulting to the PR's
-current head, so the owner can merge a child by hand. Since the merge is
-fast-forward-only, a child whose head does not contain its milestone
-branch's tip is refused as `base_moved` until its head is brought up to
-date.
+Its callers reach it through [`land.Land`](../land.md), which builds the
+landing commit and checks it first.
+
+`bottown milestone merge C [--sha SHA] [--check-timeout 1h] [--repo R]`
+(owner only) lands the open PR from `issue/<C>` by hand, through the same
+call as [milestone run](milestone-run.md): `land.Land` with the
+`Milestone` policy builds the landing commit on the milestone branch's
+tip, runs the `check` group at it and records `bottown/check` there, and
+then merges that commit here. So a child merged by hand is also checked
+at the combined head, behind whatever siblings landed since its approval.
+`--sha`, if given, is the head the PR must be at. It prints Land's
+outcome; on a conflict, an approval that does not carry to the landing
+commit, or failed checks (the line names the check's log) it merges
+nothing and exits 1. A child whose PR is merged already is not checked
+again: it calls this endpoint once more, which closes `#<C>` if an
+earlier call stopped after the merge, and reports the PR as merged; it
+fails if that call does.
+
+When milestone run lands a child and the outcome is a conflict or a lost
+approval, it sends the child back to its flow once per invocation, which
+starts a conflict round and then a verify, and lands it again; the second
+time it stops as `merge failed` ([milestone run](milestone-run.md)).
+`milestone merge` repairs nothing.
