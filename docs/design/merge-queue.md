@@ -129,8 +129,10 @@ server operations. For one candidate, in order:
 6. **Land** (`POST /v1/forge/pr/merge`, generalized, §9): as `manager`,
    merge the PR **fast-forward-only** at `HeadCommitId` = the landing
    commit. The landing commit contains the base's tip, so the base moves
-   to it; if the base moved since step 3, Forgejo refuses, atomically,
-   and the result is **BaseMoved**: Land goes back to step 2, a bounded
+   to it; if the base moved since step 3, Forgejo refuses, atomically
+   (with a 500, §4.1), the server re-reads the base and finds its tip no
+   longer an ancestor of the landing commit, and the result is
+   **BaseMoved**: Land goes back to step 2, a bounded
    number of times (three), then reports. On a `milestone/*` base the
    server then closes the child issue and comments on it, as today; on
    `main`, Forgejo applies the PR's `Closes #N`.
@@ -158,6 +160,24 @@ this design assumes of the style: the PR is marked merged with the landing
 commit as its merge commit, `Closes #N` closes the issue, the protection
 of `main` counts an approval that `ReconcileCarries` undismissed, and a
 base that moved makes the merge fail with 409.
+
+**What the spike found (#406):** all of it holds but the status. Over a
+moved base Forgejo refuses the merge and leaves the base and the PR as
+they were, but its merge API does not map
+`ErrMergeDivergingFastForwardOnly`, so it answers **500** with an empty
+message, which looks like any other server error. The owner chose
+(2026-11-08) to keep the style and classify the refusal by reading after
+it: when the fast-forward-only merge fails with a 409 or a 500, the server
+re-reads the base, and the result is **BaseMoved** only if the base's tip
+is no longer an ancestor of the landing commit; otherwise the failure is
+reported as an error, not retried. This is a read after a refused merge,
+not a check before an unsafe one, so the race below does not arise: the
+merge that ran was the compare-and-swap, and it refused. The owner also
+avoids landing PRs on `main` by hand while a `milestone run` is going.
+The spike's e2e test (`fast-forward-only landing`) keeps both behaviours
+asserted, so a Forgejo upgrade that changes them fails `make e2e`. A
+fresh repository already allows the style, so provisioning needs no
+change for it.
 
 **There is no fallback that this design authorizes.** A server-side check
 that the base's tip is an ancestor of the head, followed by an ordinary
@@ -411,7 +431,9 @@ Settled by the owner in this issue's discussion, 2026-11-08:
 2. **Base guard:** fast-forward-only landing of a base-first landing
    commit, spiked first. An ancestor pre-check before a merge-commit
    merge is not a fallback (§4.1): a failed spike stops the plan for a
-   redesign that keeps the base guard atomic.
+   redesign that keeps the base guard atomic. After the spike (#406)
+   found a moved base refused with 500, not 409, the owner kept the
+   style, with the refusal classified by re-reading the base (§4.1).
 3. **Milestone policy:** `check` at the combined head, `e2e` at finish.
 4. **Flow:** no clean base merges at all; conflict rounds stay, and come
    before the approved stop (§7).

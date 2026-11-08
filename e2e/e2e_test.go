@@ -3480,18 +3480,22 @@ fi`
 			landing := land(issue, prn, prPath, head)
 			moved := pushMain("ff-race-main.txt", []byte("main moved under the landing\n"))
 			code, b := merge(prPath, landing)
-			if code != 409 {
-				t.Errorf("race-409: fast-forward-only merge over a moved base: %d %s, want 409", code, b)
-				// Forgejo's log says what the API did not.
-				logs, _ := exec.Command("docker", "logs", "--tail", "200", a.cfg.Container()).CombinedOutput()
-				for _, l := range strings.Split(string(logs), "\n") {
-					if strings.Contains(strings.ToLower(l), "merge") {
-						t.Logf("forgejo: %s", l)
-					}
-				}
+			// Forgejo 15 refuses with a 500 and no message: its merge API
+			// does not map ErrMergeDivergingFastForwardOnly. Design §4.1
+			// therefore reads the base after a refusal: the refusal is
+			// "base moved" only when the base's tip is no longer an
+			// ancestor of the landing commit.
+			t.Logf("fast-forward-only merge over a moved base: %d %s", code, b)
+			if code != 409 && code != 500 {
+				t.Errorf("race-refused: fast-forward-only merge over a moved base: %d %s, want 409 or 500", code, b)
 			}
-			if tip := mainTip(); tip != moved {
+			tip := mainTip()
+			if tip != moved {
 				t.Errorf("race-main-untouched: main at %s, want %s", tip, moved)
+			}
+			ownerGit(nil, "fetch", "-q", remote)
+			if err := exec.Command("git", "-C", demo, "merge-base", "--is-ancestor", tip, landing).Run(); err == nil {
+				t.Errorf("race-base-moved: main's tip %s is an ancestor of the landing commit %s after the refusal", tip, landing)
 			}
 			var pr pull
 			a.mustAPI(owner, "GET", prPath, nil, &pr)
