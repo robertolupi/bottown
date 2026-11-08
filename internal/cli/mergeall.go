@@ -35,7 +35,9 @@ combined commit, and merge fast-forward-only as the manager.
 First it fetches the default branch from the forge and fast-forwards the
 local main of the owner's checkout; it stops when main has diverged or has
 uncommitted changes while checked out. It does it again when the batch is
-done, so the checkout holds what landed. It never runs after_pull.
+done, so the checkout holds what landed. It never runs after_pull. With
+--repo R for another repository of the instance, the base is R's default
+branch on the forge and the local checkout is left alone.
 
 With no arguments the batch is every open pull request into the default
 branch that pr list assesses approved, not a draft, with no live run or
@@ -43,7 +45,8 @@ held flow lock, and not part of a milestone (a child issue's pull request,
 or a milestone/* head). Those land through milestone run, or by naming
 them: arguments restrict the batch to those numbers, milestone pull
 requests included, and one that is not a candidate is reported and
-skipped.
+skipped. A named pull request lands into its own base, a milestone/*
+branch included, not into the default branch.
 
 Each round it orders the remaining candidates (land.Order, with fresh
 trial merges): those whose base merges cleanly first, then the fewest
@@ -73,11 +76,24 @@ Owner only.`,
 				return err
 			}
 			ctx, out := cmd.Context(), cmd.OutOrStdout()
-			base, err := syncMainCheckout(ctx, out, rc.ws.Top, rc.inst.Remote(), dryRun)
-			if err != nil {
-				return err
+			pf := newProxyForge(rc.inst.ServerURL(), rc.key, rc.org, rc.repo)
+			// The base is the repository's default branch on the forge. Only
+			// this checkout's own repository has a local branch of it to
+			// fast-forward.
+			base := ""
+			if rc.repo == rc.checkout {
+				if base, err = syncMainCheckout(ctx, out, rc.ws.Top, rc.inst.Remote(), dryRun); err != nil {
+					return err
+				}
+			} else {
+				if base, _, err = pf.DefaultBranch(ctx); err != nil {
+					return err
+				}
+				if dryRun {
+					fmt.Fprintf(out, "%s: not this checkout's repository; would leave its local branches alone\n", rc.repo)
+				}
 			}
-			owner, err := newProxyForge(rc.inst.ServerURL(), rc.key, rc.org, rc.repo).ownerLogin(ctx)
+			owner, err := pf.ownerLogin(ctx)
 			if err != nil {
 				return fmt.Errorf("finding the owner's login: %w", err)
 			}
@@ -85,13 +101,14 @@ Owner only.`,
 				out: out, repo: rc.repo, owner: owner, base: base, api: client.New(rc.inst.ServerURL(), rc.key).WithTimeout(5 * time.Minute),
 				ws: rc.ws, actor: actor, verify: verify, dryRun: dryRun,
 				timeout: time.Hour, checkTimeout: defaultCheckTimeout,
+				rounds: repairRounds, checkRounds: flow.DefaultCheckRounds,
 			}
 			m.runFlow = mergeAllFlow(cmd, g, rc, m)
 			landed, err := m.run(ctx, numbers)
 			if err != nil {
 				return err
 			}
-			if !dryRun {
+			if !dryRun && rc.repo == rc.checkout {
 				if _, err := syncMainCheckout(ctx, out, rc.ws.Top, rc.inst.Remote(), false); err != nil {
 					return err
 				}
@@ -223,6 +240,10 @@ type mergeAll struct {
 
 	timeout      time.Duration
 	checkTimeout time.Duration
+	// rounds and checkRounds are the repair flow's budgets, as `bottown
+	// flow`'s --rounds and --check-rounds.
+	rounds      int
+	checkRounds int
 
 	// runFlow runs the flow's supervisor in-process on one issue, for the
 	// --actor repair. Tests replace it.
@@ -231,6 +252,10 @@ type mergeAll struct {
 	// over ws. Tests replace it.
 	checker flow.Checker
 }
+
+// repairRounds is the review budget of a repair flow, as `bottown flow`'s
+// --rounds default.
+const repairRounds = 3
 
 // landChecker is the checker the landing primitive runs the policy's
 // groups with.
@@ -618,34 +643,55 @@ func labelValue(labels []string, prefix string) string {
 	return ""
 }
 
-// mergeAllFlow builds the in-process flow supervisor that repairs one
-// candidate, running its implement and verify runs through the CLI's run
-// launcher.
-func mergeAllFlow(cmd *cobra.Command, g *globals, rc *runContext, m *mergeAll) func(context.Context, int64, string, string) error {
+// repairSupervisor is the in-process flow supervisor that repairs one
+// candidate: the flow over api and runner, with the landing checks, the
+// output and the issue's flow lock.
+func (m *mergeAll) repairSupervisor(api flow.API, runner flow.Runner) *flow.Supervisor {
+	return &flow.Supervisor{
+		API:     api,
+		Runner:  runner,
+		Checker: m.landChecker(),
+		Out:     m.out,
+		Lock: func(repo string, issue int64) (func(), error) {
+			return runs.HoldFlow(m.ws.RunsDir, repo, issue)
+		},
+	}
+}
+
+// repairOptions are the flow options a repair runs with: the review and
+// check budgets, the run timeouts, and no serialization (a repair is the
+// only run merge-all starts).
+func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Options {
+	return flow.Options{
+		Issue: issue, Repo: m.repo, Implement: implement, Verify: verify,
+		Rounds: m.rounds, CheckRounds: m.checkRounds, Timeout: m.timeout, CheckTimeout: m.checkTimeout,
+	}
+}
+
+// repairFlow is the --actor repair: the flow's supervisor over api and
+// runner, run on each candidate's issue. Tests call it with the fake
+// server as a flow.API and a recording flow.RunnerFunc, so the real
+// supervisor and its options run.
+func repairFlow(m *mergeAll, api flow.API, runner flow.Runner) func(context.Context, int64, string, string) error {
+	sup := m.repairSupervisor(api, runner)
 	return func(ctx context.Context, issue int64, implement, verify string) error {
-		sup := &flow.Supervisor{
-			API:     flow.NewClient(rc.inst, rc.key),
-			Checker: flowChecker{ws: rc.ws},
-			Out:     m.out,
-			Lock: func(repo string, issue int64) (func(), error) {
-				return runs.HoldFlow(rc.ws.RunsDir, repo, issue)
-			},
-			Runner: flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {
-				target := req.Issue
-				if req.PR > 0 {
-					target = req.PR
-				}
-				previous := cmd.Context()
-				cmd.SetContext(ctx)
-				err := startRun(cmd, g, req.Kind, fmt.Sprint(target), flowRunOpts(req, "", nil))
-				cmd.SetContext(previous)
-				return err
-			}),
-		}
-		_, err := sup.Run(ctx, flow.Options{
-			Issue: issue, Repo: rc.repo, Implement: implement, Verify: verify,
-			Rounds: 3, Timeout: m.timeout, CheckTimeout: m.checkTimeout,
-		})
+		_, err := sup.Run(ctx, m.repairOptions(issue, implement, verify))
 		return err
 	}
+}
+
+// mergeAllFlow is repairFlow over the owner's server client and the CLI's
+// run launcher.
+func mergeAllFlow(cmd *cobra.Command, g *globals, rc *runContext, m *mergeAll) func(context.Context, int64, string, string) error {
+	return repairFlow(m, flow.NewClient(rc.inst, rc.key), flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {
+		target := req.Issue
+		if req.PR > 0 {
+			target = req.PR
+		}
+		previous := cmd.Context()
+		cmd.SetContext(ctx)
+		err := startRun(cmd, g, req.Kind, fmt.Sprint(target), flowRunOpts(req, "", nil))
+		cmd.SetContext(previous)
+		return err
+	}))
 }

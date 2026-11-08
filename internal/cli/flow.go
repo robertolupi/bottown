@@ -129,7 +129,7 @@ base cleanly is gated and verified at its own head, with no merge commit.`,
 	cmd.Flags().StringVar(&verify, "verify", "", "actor from another family that verifies the PR (required); ACTOR:MODEL as for --implement. The family is the actor's, whatever the model")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "review rounds: the flow stops at this many requests for changes, so at most this many implement runs answer reviews, the first included")
-	cmd.Flags().IntVar(&checkRounds, "check-rounds", 2, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
+	cmd.Flags().IntVar(&checkRounds, "check-rounds", flow.DefaultCheckRounds, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", defaultCheckTimeout, "time limit for the post-implement checks at each head; running out is a failure")
 	cmd.Flags().BoolVar(&serializeActors, "serialize-actors", false, "start each run only when its actor has no other live batch run, waiting until then (by default an actor's runs on different issues run concurrently)")

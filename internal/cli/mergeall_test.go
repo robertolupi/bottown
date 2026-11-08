@@ -7,17 +7,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/robertolupi/bottown/internal/client"
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -36,6 +40,11 @@ type fakePR struct {
 	reviewer   string
 	draft      bool
 	merged     bool
+	// reviews is the pull request's review history, when a test sets one;
+	// assessment then computes the decision from it (internal/review), as
+	// the server does. behind says the base has moved past the head.
+	reviews []review.Review
+	behind  bool
 }
 
 // fakeForge is a fake bottown server: the reads merge-all makes, and the
@@ -52,6 +61,11 @@ type fakeForge struct {
 	conflicts map[int64][]string
 	files     map[int64][]string
 	lost      map[int64]bool
+	// actors are the instance's actors, for the repair flow's families.
+	actors []server.ActorInfo
+	// gates is the newest commit status per SHA, from /v1/forge/status.
+	gates    map[string]server.CommitStatus
+	comments []string
 
 	landings []string
 	merges   []string
@@ -61,7 +75,14 @@ type fakeForge struct {
 
 func newFakeForge(t *testing.T) *fakeForge {
 	f := &fakeForge{t: t, prs: map[int64]*fakePR{}, issues: map[int64]server.IssueOut{},
-		conflicts: map[int64][]string{}, files: map[int64][]string{}, lost: map[int64]bool{}}
+		conflicts: map[int64][]string{}, files: map[int64][]string{}, lost: map[int64]bool{},
+		gates: map[string]server.CommitStatus{},
+		actors: []server.ActorInfo{
+			{Name: "amy", Family: "google"},
+			{Name: "nick", Family: "deepseek"},
+			{Name: "vera", Family: "anthropic"},
+			{Name: "claude", Family: "anthropic"},
+		}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -110,7 +131,7 @@ func (f *fakeForge) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(server.PRMergeStatus{
 			HeadSHA: p.headSHA, Clean: len(f.conflicts[p.number]) == 0,
-			Conflicts: f.conflicts[p.number], Files: f.files[p.number],
+			Behind: p.behind, Conflicts: f.conflicts[p.number], Files: f.files[p.number],
 		})
 	case "/v1/forge/pr/landing":
 		var in server.PRLandingIn
@@ -131,10 +152,21 @@ func (f *fakeForge) handle(w http.ResponseWriter, r *http.Request) {
 		f.merges = append(f.merges, fmt.Sprintf("!%d@%s", in.Number, in.HeadSHA))
 		p.merged = true
 		_ = json.NewEncoder(w).Encode(server.LandOut{Number: in.Number, HeadSHA: in.HeadSHA, MergeCommit: in.HeadSHA})
+	case "/v1/forge/pr/carries":
+		_ = json.NewEncoder(w).Encode(struct{}{})
+	case "/v1/forge/pr/gate":
+		_ = json.NewEncoder(w).Encode(server.GateOut{Failed: f.gateFailures()})
+	case "/v1/actors":
+		_ = json.NewEncoder(w).Encode(f.actors)
+	case "/v1/forge/comment":
+		var in server.CommentIn
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.comments = append(f.comments, in.Body)
 	case "/v1/forge/status":
 		var in server.CommitStatusIn
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		f.statuses = append(f.statuses, fmt.Sprintf("%s@%s:%s", in.Check, in.SHA, in.State))
+		f.gates[in.SHA] = server.CommitStatus{Context: "bottown/" + in.Check, State: in.State, Description: in.Description, Creator: "owner", Gate: true}
 	case "/v1/forge/issue":
 		n := int64(atoiOrZero(r.URL.Query().Get("number")))
 		is, ok := f.issues[n]
@@ -167,15 +199,99 @@ func (f *fakeForge) prItem(p *fakePR) server.PRItem {
 func (f *fakeForge) prOut(p *fakePR) server.PROut {
 	a := f.assessment(p)
 	return server.PROut{Number: p.number, Title: p.title, State: "open", Merged: p.merged, Author: p.author,
-		HeadBranch: p.headBranch, HeadSHA: p.headSHA, BaseBranch: p.baseBranch, Assessment: a}
+		HeadBranch: p.headBranch, HeadSHA: p.headSHA, BaseBranch: p.baseBranch, Mergeable: true,
+		Assessment: a, Checks: f.checks(p.headSHA)}
 }
 
 func (f *fakeForge) assessment(p *fakePR) review.Assessment {
+	if len(p.reviews) > 0 {
+		return review.Assess(p.headSHA, slices.Clone(p.reviews), review.Policy{Author: p.author, Owner: "owner", Families: f.families()})
+	}
 	a := review.Assessment{Decision: p.decision}
 	if p.reviewer != "" {
 		a.Review = &review.Review{Reviewer: p.reviewer, State: review.StateApproved, CommitID: p.headSHA, Official: true}
 	}
 	return a
+}
+
+// families are the actors' model families, as the flow's check reads them.
+func (f *fakeForge) families() map[string]string {
+	out := map[string]string{}
+	for _, a := range f.actors {
+		out[a.Name] = a.Family
+	}
+	return out
+}
+
+// checks is the newest recorded status at sha, as the PR read reports it.
+func (f *fakeForge) checks(sha string) []server.CommitStatus {
+	if st, ok := f.gates[sha]; ok {
+		return []server.CommitStatus{st}
+	}
+	return nil
+}
+
+// gateFailures are the commits where the flow's checks failed.
+func (f *fakeForge) gateFailures() []string {
+	failed := []string{}
+	for sha, st := range f.gates {
+		if st.State == "failure" {
+			failed = append(failed, sha)
+		}
+	}
+	return failed
+}
+
+// approve adds an official approval by reviewer at commit.
+func (f *fakeForge) approve(p *fakePR, reviewer, commit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p.reviews = append(p.reviews, review.Review{ID: int64(len(p.reviews) + 1), Reviewer: reviewer,
+		State: review.StateApproved, CommitID: commit, Official: true})
+}
+
+// flowAPI is a flow.Client over the fake server, as a repair's supervisor
+// builds the real one.
+func (f *fakeForge) flowAPI(t *testing.T) flow.API {
+	t.Helper()
+	u, err := url.Parse(f.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return flow.NewClient(config.Instance{Name: "test", ServerPort: port}, "k")
+}
+
+// repairRuns is the recording Runner the repair tests use: an implement run
+// resolves the conflict and pushes a new head, and a verify run approves it,
+// as the agents' runs would.
+type repairRuns struct {
+	f      *fakeForge
+	kinds  []string
+	pushes int
+}
+
+func (r *repairRuns) Run(_ context.Context, req flow.RunRequest) error {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	r.kinds = append(r.kinds, req.Kind)
+	p := r.f.prs[1]
+	switch req.Kind {
+	case policy.Implement:
+		r.pushes++
+		delete(r.f.conflicts, 1)
+		p.headSHA = fmt.Sprintf("push-%d", r.pushes)
+		for i := range p.reviews {
+			p.reviews[i].Stale = p.reviews[i].CommitID != p.headSHA
+		}
+	case policy.Verify:
+		p.reviews = append(p.reviews, review.Review{ID: int64(len(p.reviews) + 1), Reviewer: req.Actor,
+			State: review.StateApproved, CommitID: req.SHA, Official: true})
+	}
+	return nil
 }
 
 // okChecker is a checker that passes or fails every group without running
@@ -195,6 +311,22 @@ func (c *okChecker) Check(_ context.Context, r flow.CheckRequest) (flow.CheckOut
 	return o, nil
 }
 
+// headChecker passes every group except at one head, where it fails: the
+// checker a repair test gives the flow to spend a check round.
+type headChecker struct {
+	failHead string
+}
+
+func (c *headChecker) LogPath(flow.CheckRequest) string { return "checks.log" }
+func (c *headChecker) Check(_ context.Context, r flow.CheckRequest) (flow.CheckOutcome, error) {
+	pass := r.SHA != c.failHead
+	o := flow.CheckOutcome{Passed: pass, Description: "checked", Log: "checks.log"}
+	for _, g := range r.Groups {
+		o.Groups = append(o.Groups, flow.GroupOutcome{Group: g, Passed: pass})
+	}
+	return o, nil
+}
+
 // newMergeAlly builds a mergeAll over the fake server.
 func newMergeAlly(t *testing.T, f *fakeForge, out *bytes.Buffer, actor, verify string) *mergeAll {
 	return &mergeAll{
@@ -202,6 +334,7 @@ func newMergeAlly(t *testing.T, f *fakeForge, out *bytes.Buffer, actor, verify s
 		ws:    &runs.Workspace{RunsDir: t.TempDir()},
 		actor: actor, verify: verify, checker: &okChecker{passes: true},
 		timeout: time.Hour, checkTimeout: time.Minute,
+		rounds: repairRounds, checkRounds: flow.DefaultCheckRounds,
 	}
 }
 
@@ -343,6 +476,70 @@ func TestMergeAllRepairPairAndReland(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(f.landings, ","), "!1@repaired") {
 		t.Errorf("the landing was not built on the repaired head: %v", f.landings)
+	}
+}
+
+// TestMergeAllRepairFlowRunsImplementAndVerify drives the real flow
+// supervisor through the repair: an approved PR that conflicts once a
+// sibling landed gets an implement round and then a verify run (not a
+// ready-to-merge stop at the unchanged head), and merge-all lands it at
+// the repaired head.
+func TestMergeAllRepairFlowRunsImplementAndVerify(t *testing.T) {
+	f := newFakeForge(t)
+	p := f.add(&fakePR{number: 1, author: "amy", headBranch: "issue/10", headSHA: "h1", baseBranch: "main", behind: true})
+	f.approve(p, "vera", "h1")
+	f.conflicts[1] = []string{"a.go"}
+	f.files[1] = []string{"a.go"}
+	f.issues[10] = server.IssueOut{Number: 10, Author: "owner", State: "open"}
+
+	var out bytes.Buffer
+	m := newMergeAlly(t, f, &out, "nick", "vera")
+	runs := &repairRuns{f: f}
+	m.runFlow = repairFlow(m, f.flowAPI(t), runs)
+	ok, err := m.run(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{policy.Implement, policy.Verify}; !slices.Equal(runs.kinds, want) {
+		t.Errorf("the repair ran %v, want %v\n%s", runs.kinds, want, out.String())
+	}
+	if !ok || !f.prs[1].merged {
+		t.Errorf("the repaired PR did not land:\n%s", out.String())
+	}
+	if !slices.Contains(f.landings, "!1@push-1") {
+		t.Errorf("the landing was not built on the repaired head: %v", f.landings)
+	}
+}
+
+// TestMergeAllRepairFlowRetriesFailedChecks is the CheckRounds case: the
+// first post-implement check after the conflict round fails, so the repair
+// spends a check round on a second implement run instead of stopping at
+// `checks failed`, and lands at the head that passes.
+func TestMergeAllRepairFlowRetriesFailedChecks(t *testing.T) {
+	f := newFakeForge(t)
+	p := f.add(&fakePR{number: 1, author: "amy", headBranch: "issue/10", headSHA: "h1", baseBranch: "main", behind: true})
+	f.approve(p, "vera", "h1")
+	f.conflicts[1] = []string{"a.go"}
+	f.files[1] = []string{"a.go"}
+	f.issues[10] = server.IssueOut{Number: 10, Author: "owner", State: "open"}
+
+	var out bytes.Buffer
+	m := newMergeAlly(t, f, &out, "nick", "vera")
+	m.checker = &headChecker{failHead: "push-1"}
+	runs := &repairRuns{f: f}
+	m.runFlow = repairFlow(m, f.flowAPI(t), runs)
+	ok, err := m.run(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{policy.Implement, policy.Implement, policy.Verify}; !slices.Equal(runs.kinds, want) {
+		t.Errorf("the repair ran %v, want %v\n%s", runs.kinds, want, out.String())
+	}
+	if !ok || !f.prs[1].merged {
+		t.Errorf("the repaired PR did not land:\n%s", out.String())
+	}
+	if !slices.Contains(f.landings, "!1@push-2") {
+		t.Errorf("the landing was not built on the head that passed the checks: %v", f.landings)
 	}
 }
 

@@ -21,6 +21,10 @@ When the batch is done it fast-forwards it again, so the checkout holds
 what landed. It never runs `.bottown.toml`'s `after_pull` (`make install`
 here): upgrading prod stays the owner's command.
 
+With `--repo R` for another repository of the instance, the base is R's
+default branch on the forge, and the command leaves the local checkout's
+branches alone: it holds no local copy of R.
+
 ## The batch
 
 With no arguments the batch is every open pull request into the default
@@ -33,9 +37,12 @@ land through [milestone run](runs/milestone-run.md), or by naming them.
 
 Pull request numbers as arguments restrict the batch to those numbers,
 milestone pull requests included; one that is not an open, approved,
-synced, unheld, non-draft candidate is reported and skipped. A pull
-request approved after the command starts waits for the next invocation,
-and each candidate is revalidated just before it is touched.
+synced, unheld, non-draft candidate is reported and skipped. A named pull
+request lands into its own base, a `milestone/*` branch included, not into
+the default branch: the batch filter, not the landing, is what keeps the
+default run on the default branch. A pull request approved after the
+command starts waits for the next invocation, and each candidate is
+revalidated just before it is touched.
 
 ## The order
 
