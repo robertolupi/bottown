@@ -51,3 +51,18 @@ true, Land takes the lock again and revalidates from step 1; false returns
 the original outcome. Callers bound their own repairs. Failed checks and
 other refusals never invoke repair. Land itself does not comment or launch
 agent runs; callers own those decisions.
+
+The web inbox shows every approved candidate as **Ready to land**, even
+when behind its base. **Land** calls `POST /api/actions/land` with
+`{number, head_sha}` and starts a background worker using the Main policy:
+both check and e2e groups run at the combined tree. A moved offered head
+is refused. Conflicts, lost approvals and failed checks stop the landing
+for the owner, without an automatic repair flow.
+
+The worker outlives the UI server. Its record and log are stored as
+`.bottown/runs/land-<PR>.json` and `.log`; Live Runs shows the landing,
+its log and a Stop control. A milestone child's node shows its active
+landing like its flow. The log remains available after the worker exits.
+Merging in Forgejo instead skips these checks at the combined tree, as
+the inbox item explains. The old PR-first merge action and
+`POST /v1/forge/pr/merge-base` are removed; the GET status read remains.
