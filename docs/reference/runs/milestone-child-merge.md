@@ -1,5 +1,8 @@
 # The landing merge
 
+The shared [landing primitive](../land.md) describes the host-side steps,
+policies and outcomes; command integration is separate work.
+
 `POST /v1/forge/pr/merge` (owner only; `{"repo", "number", "head_sha"}`)
 is the one operation through which bottown merges a pull request, and it
 acts as the `manager` account, which nothing else in the server uses. It

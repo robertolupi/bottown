@@ -8,6 +8,7 @@ only their topic's file.
 - [Forge reads and pagination](forge-reads.md)
 - [Issue attachments](issue-attachments.md)
 - [Closing keywords on pull requests](closing-keywords.md)
+- [The landing primitive](land.md) (`internal/land`, policies and outcomes)
 - [The landing commit](landing.md) (`POST /v1/forge/pr/landing`)
 - [Checks](checks.md) (`bottown check`, `.bottown.toml`)
 - [Linux e2e](linux-e2e.md) (`make e2e-linux`)
