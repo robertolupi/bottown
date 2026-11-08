@@ -175,11 +175,11 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("POST /v1/forge/pr/merge", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var in MilestoneMergeIn
+		var in LandIn
 		if !decode(w, r, &in) {
 			return
 		}
-		out, err := s.opMilestoneMerge(r.Context(), Who(r.Context()), in)
+		out, err := s.opLand(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -243,7 +243,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func writeOp(w http.ResponseWriter, out any, err error) {
 	if err != nil {
-		writeError(w, errStatus(err), err.Error())
+		writeErrorCode(w, errStatus(err), errCode(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

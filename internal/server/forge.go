@@ -30,13 +30,28 @@ const maxDiffBytes = 200 << 10
 // forgeError carries the HTTP status a REST caller should see.
 type forgeError struct {
 	status int
+	code   string // ErrorCode*, if a client branches on it
 	msg    string
 }
 
 func (e *forgeError) Error() string { return e.msg }
 
 func ferr(status int, format string, args ...any) error {
-	return &forgeError{status, fmt.Sprintf(format, args...)}
+	return &forgeError{status: status, msg: fmt.Sprintf(format, args...)}
+}
+
+// ferrCode is ferr with an error code (ErrorCode*) clients can branch on.
+func ferrCode(status int, code, format string, args ...any) error {
+	return &forgeError{status: status, code: code, msg: fmt.Sprintf(format, args...)}
+}
+
+// errCode is err's error code, or "".
+func errCode(err error) string {
+	var fe *forgeError
+	if errors.As(err, &fe) {
+		return fe.code
+	}
+	return ""
 }
 
 func errStatus(err error) int {

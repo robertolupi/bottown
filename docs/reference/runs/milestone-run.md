@@ -60,7 +60,10 @@ Then it loops, rebuilding everything from the forge each time:
 5. **Results:** when a flow exits, run reads its stop, the owner's last
    stop comment on the child since the flow started:
    - `ready to merge`: run merges the PR with `POST /v1/forge/pr/merge` at
-     its head, which closes the child and may make others ready. If a
+     its head, which closes the child and may make others ready. The
+     merge is fast-forward-only ([the landing merge](milestone-child-merge.md)),
+     so a head that does not contain the milestone branch's tip is refused
+     as `base_moved`, and the child stops as `merge failed`. If a
      final PR is open, run comments on it that its head has not been
      gated, so the owner does not merge it; finish re-gates it later.
    - `agent did nothing`: the marker's actor leaves the pool until run
