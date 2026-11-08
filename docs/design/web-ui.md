@@ -192,21 +192,22 @@ it does today. The supervisor then starts a new verify run at the new head
 and does not count it as a round.
 
 The PR's base can move too. The supervisor tests the merge with `git
-merge-tree --write-tree` on the forge's refs, without a worktree. When the
-branch is behind and the merge is clean, an attended CLI flow asks `Merge
-main into issue/<n> for !N? [Y/n]`; the default is yes. An unattended flow
-leaves the choice to an owner-inbox action. On yes, bottown creates a
-two-parent commit saying the merge was automatic and pushes it as the owner.
-The unchanged-patch approval rule below then carries its approval over, and
-the flow continues at the new head. When the merge would conflict, the flow
-comments on the issue with the conflicting files and starts an implement
-round whose prompt names them and asks the implementer to merge the base,
-resolve them, run the checks and push; the flow then gates and verifies the
-new head as usual. These conflict rounds are counted by the flow itself,
-apart from the review rounds, up to `--rounds` per flow command. The flow
-stops as "conflicts with base", naming the base and the conflicting files, when they
-are used or when one pushes no new commit; the owner then resolves them or
-starts an implement run.
+merge-tree --write-tree` on the forge's refs, without a worktree, ahead of
+the `ready to merge` stop (once any request for changes at the head has
+been answered). The flow never merges a clean base into the PR: when the
+branch is behind and the trial merge is clean, an unapproved PR is gated
+and verified at its own head, and an approved PR stops `ready to merge` at
+its own head, noting in its detail that it is behind its base cleanly and
+that `bottown merge-all` lands it. When the merge would conflict, even if
+the PR is already approved, the flow comments on the issue with the
+conflicting files and starts an implement round whose prompt names them
+and asks the implementer to merge the base, resolve them, run the checks
+and push; the flow then gates and verifies the new head as usual. These
+conflict rounds are counted by the flow itself, apart from the review
+rounds, up to `--rounds` per flow command. The flow stops as "conflicts
+with base", naming the base and the conflicting files, when they are used
+or when one pushes no new commit; the owner then resolves them or starts
+an implement run.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
 action (the UI offers it); a flow never starts one.
@@ -238,14 +239,14 @@ again:
    naming the run (the supervisor never runs two steps of one issue at
    once).
 2. No open PR from `issue/<n>` → implement.
-3. An open PR at head H, by its review assessment (below):
-   - the PR is behind and a trial merge is clean → offer to merge the base;
+3. An open PR at head H, by its review assessment (below) and trial merge:
+   - changes requested at H → a follow-up implement run, if rounds are
+     left;
    - the trial merge conflicts → an implement run to resolve them, if
      this flow's conflict rounds are left, else stop with the conflicting
      files;
-   - approved → stop: ready to merge;
-   - changes requested at H → a follow-up implement run, if rounds are
-     left;
+   - approved → stop: ready to merge (noting in the detail when the PR is
+     behind its base cleanly);
    - changes requested at an older head, while H is approved → stop:
      changes requested;
    - commented → stop: verifier undecided;

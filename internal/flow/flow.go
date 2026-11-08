@@ -3,7 +3,6 @@
 package flow
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -90,14 +89,7 @@ type Options struct {
 	// actor is still busy after it. It must be positive when
 	// SerializeActors is set.
 	ActorWait time.Duration
-	// Attended flows ask on In before merging a clean, behind base; the
-	// others leave that to the owner inbox.
-	Attended bool
-	// MergeMilestoneBase merges a clean, behind base into the head without
-	// asking, attended or not, when the PR's base is a milestone/* branch.
-	// It does nothing for any other base: the default branch stays the
-	// owner's to merge.
-	MergeMilestoneBase bool
+	Attended  bool
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -155,28 +147,111 @@ type RunRequest struct {
 	Round, Rounds int
 }
 
-// CheckRequest is the post-implement checks at one PR head.
+// The check groups a checker can run: the repository's check and e2e
+// commands, from .bottown.toml on its default branch. Each is recorded as
+// the owner's bottown/<group> commit status.
+const (
+	GroupCheck = "check"
+	GroupE2E   = "e2e"
+)
+
+// CheckRequest is the checks to run at one PR head.
 type CheckRequest struct {
 	Repo  string
 	Issue int64
 	PR    int64
 	SHA   string
+	// Groups are the check groups to run, in order (GroupCheck, GroupE2E);
+	// none is GroupE2E alone, the flow's post-implement checks.
+	Groups []string
 }
 
-// CheckOutcome is how the post-implement checks went.
-type CheckOutcome struct {
-	// Skipped: the repository names no post-implement checks.
+// RunGroups is req's groups: GroupE2E when it names none.
+func (req CheckRequest) RunGroups() []string {
+	if len(req.Groups) == 0 {
+		return []string{GroupE2E}
+	}
+	return req.Groups
+}
+
+// GroupOutcome is how one check group went.
+type GroupOutcome struct {
+	Group string
+	// Skipped: the repository names no commands for the group; Description
+	// says so, and there is no log.
 	Skipped bool
 	Passed  bool
 	// Description is the commit status's: the commands and how long they
 	// took, or which one failed. Summary adds the first failing lines.
 	Description string
 	Summary     string
-	Log         string // the full log's path
+	Log         string // the group's full log's path
 }
 
-// Checker runs the post-implement checks (the repository's e2e commands)
-// in a clean worktree at a PR head, with no agent involved.
+// CheckOutcome is how the checks went.
+type CheckOutcome struct {
+	// Skipped: the repository names no commands for any requested group.
+	Skipped bool
+	Passed  bool
+	// Description, Summary and Log are the failed group's, else the last
+	// one's that ran; with more than one group, Description is those of
+	// the groups listed, each after its group's name.
+	Description string
+	Summary     string
+	Log         string
+	// Groups are the requested groups that ran or were skipped, in order;
+	// those after a failed group did not run and are not listed.
+	Groups []GroupOutcome
+}
+
+// Ran is the groups that ran, skipped ones left out.
+func (o CheckOutcome) Ran() []string {
+	var out []string
+	for _, g := range o.Groups {
+		if !g.Skipped {
+			out = append(out, g.Group)
+		}
+	}
+	return out
+}
+
+// Failed is the group that failed, or "".
+func (o CheckOutcome) Failed() string {
+	for _, g := range o.Groups {
+		if !g.Skipped && !g.Passed {
+			return g.Group
+		}
+	}
+	return ""
+}
+
+// GateRecorder records a check group's result at a commit as the owner's
+// bottown/<check> status, with the gate mark.
+type GateRecorder interface {
+	RecordGate(ctx context.Context, repo, sha, check, state, description string) error
+}
+
+// RecordChecks records each group of o that ran as its status at sha,
+// through rec: the path the flow's e2e gate records its result by.
+func RecordChecks(ctx context.Context, rec GateRecorder, repo, sha string, o CheckOutcome) error {
+	for _, g := range o.Groups {
+		if g.Skipped {
+			continue
+		}
+		state := "failure"
+		if g.Passed {
+			state = "success"
+		}
+		if err := rec.RecordGate(ctx, repo, sha, g.Group, state, g.Description); err != nil {
+			return fmt.Errorf("recording the %s checks at %s: %w", g.Group, shortSHA(sha), err)
+		}
+	}
+	return nil
+}
+
+// Checker runs check groups (by default the repository's e2e commands,
+// the flow's post-implement checks) in a clean worktree at a PR head,
+// with no agent involved.
 type Checker interface {
 	Check(context.Context, CheckRequest) (CheckOutcome, error)
 	// LogPath is where Check keeps req's log, for a resumed flow.
@@ -205,15 +280,13 @@ type API interface {
 	ReconcileCarries(context.Context, string, int64) error
 	LiveRuns(context.Context, string) ([]secrets.Run, error)
 	Comment(context.Context, string, int64, string) error
-	// RecordGate writes the post-implement checks' result at sha as the
-	// flow's bottown/e2e commit status.
-	RecordGate(ctx context.Context, repo, sha, state, description string) error
+	// RecordGate writes a check group's result at sha as the flow's
+	// bottown/<check> commit status.
+	GateRecorder
 	// GateFailures lists the PR's commits where they failed.
 	GateFailures(ctx context.Context, repo string, pr int64) ([]string, error)
-	// PRMergeStatus trial-merges the PR's base into its head; MergeBase
-	// pushes that merge when the head is still the one given.
+	// PRMergeStatus trial-merges the PR's base into its head.
 	PRMergeStatus(context.Context, string, int64) (server.PRMergeStatus, error)
-	MergeBase(context.Context, string, int64, string) (server.PRMergeOut, error)
 }
 
 // Supervisor drives one issue. RetryDelay is how long a flow that
@@ -226,7 +299,7 @@ type Supervisor struct {
 	API     API
 	Runner  Runner
 	Checker Checker
-	In      io.Reader // the owner's answers, for an attended flow
+	In      io.Reader
 	Out     io.Writer
 	// Pause, if set, is called before a prompt that reads In, and the
 	// function it returns after the answer: a live terminal tail gives
@@ -238,7 +311,6 @@ type Supervisor struct {
 	// rather than starting runs beside this one's.
 	Lock func(repo string, issue int64) (release func(), err error)
 
-	answers *bufio.Reader
 	// now and after, if set, replace time.Now and time.After in the wait
 	// for a busy actor (tests).
 	now   func() time.Time
@@ -344,10 +416,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		// A request for changes at the head is answered first: merging the
-		// base now would push a head that dismisses the request unanswered,
-		// and the flow would start a verifier on the rejected patch. The
-		// base is merged after the implement round pushes its fix.
+		// A request for changes at the head is answered first: a conflict
+		// round waits until the implement round pushes its fix, so the
+		// rejected patch is addressed before resolving base conflicts.
 		changesAtHead := pr.Assessment.Decision == review.ChangesRequested && pr.Assessment.AtHead(pr.HeadSHA)
 		if changesAtHead {
 			merge.Behind = false
@@ -380,24 +451,6 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			resuming = false
 			continue
 		}
-		if merge.Behind && merge.Clean && (opts.Attended || autoMerge(opts, pr)) {
-			yes := autoMerge(opts, pr)
-			if !yes {
-				if yes, err = s.confirmMerge(pr); err != nil {
-					return result, err
-				}
-			}
-			if yes {
-				merged, err := s.API.MergeBase(ctx, opts.Repo, pr.Number, merge.HeadSHA)
-				if err != nil {
-					return result, err
-				}
-				if s.Out != nil {
-					fmt.Fprintf(s.Out, "flow #%d: merged %s into %s for !%d at %s\n", opts.Issue, pr.BaseBranch, pr.HeadBranch, pr.Number, shortSHA(merged.HeadSHA))
-				}
-				continue
-			}
-		}
 		if !pr.Mergeable && !(merge.Behind && merge.Clean) && !changesAtHead {
 			if !resuming {
 				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("!%d no longer merges cleanly into %s; rerun the flow to resolve it", pr.Number, pr.BaseBranch))
@@ -420,6 +473,17 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			detail := fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA))
 			if assessment.Reason != "" {
 				detail += ": " + assessment.Reason
+			}
+			if merge.Behind && merge.Clean {
+				base := pr.BaseBranch
+				if base == "" {
+					base = "main"
+				}
+				n := merge.BehindCommits
+				if n <= 0 {
+					n = 1
+				}
+				detail += fmt.Sprintf(": behind `%s` by %d commits, cleanly; `bottown merge-all` lands it", base, n)
 			}
 			return s.stop(ctx, result, ReadyToMerge, detail)
 		case assessment.Decision == review.ChangesRequested && !assessment.AtHead(pr.HeadSHA):
@@ -522,50 +586,12 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 }
 
-// autoMerge reports whether the flow merges pr's clean, behind base
-// without asking: only with Options.MergeMilestoneBase, and only into a
-// milestone/* base.
-func autoMerge(opts Options, pr server.PROut) bool {
-	return opts.MergeMilestoneBase && strings.HasPrefix(pr.BaseBranch, "milestone/")
-}
-
-// confirmMerge asks the owner whether to merge the base into pr's branch.
-// The default is yes: an empty line, y or yes is yes. Anything else is no,
-// and so is end of input with no answer, so a closed stdin never merges.
-func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
-	if s.In == nil {
-		return false, nil
-	}
-	if s.Pause != nil {
-		defer s.Pause()()
-	}
-	if s.Out != nil {
-		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [Y/n] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
-	}
-	if s.answers == nil {
-		s.answers = bufio.NewReader(s.In)
-	}
-	answer, err := s.answers.ReadString('\n')
-	if errors.Is(err, io.EOF) && answer == "" {
-		return false, nil
-	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "", "y", "yes":
-		return true, nil
-	default:
-		return false, nil
-	}
-}
-
 // gate is the post-implement checks at pr's head: the flow's recorded
 // status there, else a new check, which it records. The status, not this
 // process, is the flow's memory, so a resumed flow does not check a head
 // twice.
 func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (CheckOutcome, error) {
-	req := CheckRequest{Repo: opts.Repo, Issue: opts.Issue, PR: pr.Number, SHA: pr.HeadSHA}
+	req := CheckRequest{Repo: opts.Repo, Issue: opts.Issue, PR: pr.Number, SHA: pr.HeadSHA, Groups: []string{GroupE2E}}
 	if st, ok := gateStatus(pr); ok {
 		return CheckOutcome{Passed: st.State == "success", Description: st.Description, Log: s.Checker.LogPath(req)}, nil
 	}
@@ -583,8 +609,8 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	if outcome.Passed {
 		state = "success"
 	}
-	if err := s.API.RecordGate(ctx, opts.Repo, pr.HeadSHA, state, outcome.Description); err != nil {
-		return outcome, fmt.Errorf("recording the post-implement checks at %s: %w", shortSHA(pr.HeadSHA), err)
+	if err := RecordChecks(ctx, s.API, opts.Repo, pr.HeadSHA, outcome); err != nil {
+		return outcome, err
 	}
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks %s at %s; log: %s\n", opts.Issue, state, shortSHA(pr.HeadSHA), outcome.Log)
@@ -610,6 +636,15 @@ func RunCheck(ctx context.Context, c Checker, req CheckRequest, timeout time.Dur
 		outcome.Passed, outcome.Skipped = false, false
 		outcome.Description = fmt.Sprintf("timed out after %s; %s", timeout, outcome.Description)
 		outcome.Summary = outcome.Description + "\n" + outcome.Summary
+		// The group that was running when time ran out is the failed one.
+		for i := len(outcome.Groups) - 1; i >= 0; i-- {
+			if g := &outcome.Groups[i]; !g.Skipped {
+				g.Passed = false
+				g.Description = fmt.Sprintf("timed out after %s; %s", timeout, g.Description)
+				g.Summary = g.Description + "\n" + g.Summary
+				break
+			}
+		}
 	}
 	return outcome, nil
 }

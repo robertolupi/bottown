@@ -85,11 +85,13 @@ type FlowInfo struct {
 	Label     string `json:"label"` // "#51 · round 2/3 · verifying with kimi"
 }
 
-// LiveCheckInfo is a flow's post-implement checks (the repository's e2e
-// commands) while they run: not a run, but shown with a live tail like
-// one. GET /api/runs/{id}/log serves its log.
+// LiveCheckInfo is a flow's check group (its post-implement checks are the
+// repository's e2e commands; a gate may run its check commands too) while
+// it runs: not a run, but shown with a live tail like one. GET
+// /api/runs/{id}/log serves its log.
 type LiveCheckInfo struct {
-	ID         string         `json:"id"` // flow-<issue>-<sha>-<check>.e2e
+	ID         string         `json:"id"`    // flow-<issue>-<sha>-<check>.<group>
+	Group      string         `json:"group"` // check or e2e
 	Issue      int64          `json:"issue,omitempty"`
 	IssueURL   string         `json:"issue_url,omitempty"`
 	IssueTitle string         `json:"issue_title,omitempty"`
@@ -562,8 +564,13 @@ func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
 	now := time.Now().UTC()
 	live := []LiveCheckInfo{}
 	for _, c := range s.liveCheckRecords() {
+		group := c.Group
+		if group == "" {
+			group = "e2e" // a record from before groups
+		}
 		info := LiveCheckInfo{
 			ID:       c.ID,
+			Group:    group,
 			Issue:    c.Issue,
 			PR:       c.PR,
 			SHA:      c.SHA,

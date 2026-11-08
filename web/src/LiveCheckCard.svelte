@@ -1,6 +1,6 @@
 <script lang="ts">
-  // A flow's post-implement checks while they run (§4.2): the PR head they
-  // check, their commands, elapsed time against the flow's check timeout,
+  // A flow's check group while it runs (§4.2): the post-implement checks
+  // (e2e), or a gate's check commands; the PR head they check, their commands, elapsed time against the flow's check timeout,
   // and the live tail of their log, as a run's card shows its own.
   import type { LiveCheckInfo } from './types';
   import { formatElapsed } from './format';
@@ -31,7 +31,7 @@
       {#if check.pr && check.pr_url}
         <TargetLink href={check.pr_url} label={`!${check.pr}`} />
       {/if}
-      <span class="badge badge-neutral">post-implement checks</span>
+      <span class="badge badge-neutral">{check.group === 'check' ? 'check commands' : 'post-implement checks'}</span>
       <span class="badge instance-badge" title={check.sha}>at {check.sha.slice(0, 10)}</span>
       {#each check.commands as command (command)}
         <code class="check-command">{command}</code>
