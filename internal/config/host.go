@@ -26,7 +26,7 @@ func ValidInstance(name string) error {
 }
 
 // Instance is the host-side record of one bottown installation. It holds no
-// secrets: those live in the Keychain (or the fallback secret store).
+// secrets: those live in hostctl's secret file beside it.
 type Instance struct {
 	Name        string `toml:"name"`
 	ForgejoPort int    `toml:"forgejo_port"`

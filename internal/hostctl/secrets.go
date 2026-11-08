@@ -28,16 +28,75 @@ const (
 	AccountAPIKey   = "api-key"
 )
 
-// OpenSecrets returns the macOS Keychain on darwin, or a 0600 JSON file in
-// dir elsewhere or when $BOTTOWN_SECRET_STORE=file.
+// OpenSecrets returns the instance's secret store: a 0600 JSON file in dir.
+//
+// Earlier versions kept the secrets in the macOS login Keychain, whose
+// security command can stall on a locked keychain or a prompt. On darwin,
+// the first use of an instance that has no file yet copies its Keychain
+// items into the file, once; afterwards the Keychain is not read again.
+// $BOTTOWN_SECRET_STORE=file skips that import.
 func OpenSecrets(instance, dir string) Secrets {
+	f := FileSecrets{Path: filepath.Join(dir, "host-secrets.json")}
 	if runtime.GOOS == "darwin" && os.Getenv("BOTTOWN_SECRET_STORE") != "file" {
-		return Keychain{Service: "bottown-" + instance}
+		return importing{file: f, legacy: Keychain{Service: "bottown-" + instance}}
 	}
-	return FileSecrets{Path: filepath.Join(dir, "host-secrets.json")}
+	return f
 }
 
-// Keychain stores generic passwords via /usr/bin/security.
+// legacyAccounts are the accounts an import copies from the Keychain.
+var legacyAccounts = []string{AccountPassword, AccountAPIKey}
+
+// importing is a FileSecrets that first imports the legacy store's items
+// when its file does not exist yet.
+type importing struct {
+	file   FileSecrets
+	legacy interface {
+		Get(account string) (string, bool, error)
+	}
+}
+
+// load imports the legacy items into a file that does not exist yet. A
+// failed import writes nothing, so the next use tries again.
+func (s importing) load() error {
+	if _, err := os.Stat(s.file.Path); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	m := map[string]string{}
+	for _, a := range legacyAccounts {
+		v, ok, err := s.legacy.Get(a)
+		if err != nil {
+			return fmt.Errorf("importing the Keychain's secrets into %s: %w", s.file.Path, err)
+		}
+		if ok {
+			m[a] = v
+		}
+	}
+	return s.file.save(m)
+}
+
+func (s importing) Get(account string) (string, bool, error) {
+	if err := s.load(); err != nil {
+		return "", false, err
+	}
+	return s.file.Get(account)
+}
+
+func (s importing) Set(account, value string) error {
+	if err := s.load(); err != nil {
+		return err
+	}
+	return s.file.Set(account, value)
+}
+
+func (s importing) Delete(account string) error {
+	if err := s.load(); err != nil {
+		return err
+	}
+	return s.file.Delete(account)
+}
+
+// Keychain reads generic passwords via /usr/bin/security. Only the import
+// of the secrets earlier versions kept there uses it.
 type Keychain struct {
 	Service string
 	Bin     string        // defaults to "security"
@@ -98,19 +157,6 @@ func (k Keychain) Get(account string) (string, bool, error) {
 	return strings.TrimRight(out, "\n"), true, nil
 }
 
-func (k Keychain) Set(account, value string) error {
-	_, err := k.security("add-generic-password", account, "-U", "-l", k.Service+" "+account, "-w", value)
-	return err
-}
-
-func (k Keychain) Delete(account string) error {
-	_, err := k.security("delete-generic-password", account)
-	if errors.Is(err, errKeychainNotFound) {
-		return nil
-	}
-	return err
-}
-
 // FileSecrets is the fallback store.
 type FileSecrets struct{ Path string }
 
@@ -134,7 +180,21 @@ func (f FileSecrets) save(m map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(f.Path, b, 0o600)
+	// Write and rename, so a credential helper running at the same time
+	// never reads a half-written file.
+	tmp, err := os.CreateTemp(filepath.Dir(f.Path), ".host-secrets-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), f.Path)
 }
 
 func (f FileSecrets) Get(account string) (string, bool, error) {
