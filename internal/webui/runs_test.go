@@ -274,9 +274,10 @@ func TestRuns_LiveChecks(t *testing.T) {
 		}
 		t.Cleanup(release)
 	}
-	id := "flow-60-1a2b3c4d5e-0f1e2d3c.e2e"
-	hold(runs.CheckRecord{ID: id, Repo: "bottown", Issue: 60, PR: 61, SHA: "1a2b3c4d5e6f", Commands: []string{"make e2e"},
-		Started: started, Expires: started.Add(time.Hour)}, "==> [e2e] make e2e\n=== RUN   TestE2E\n")
+	// A gate's check group: its log is .check.log, as an e2e group's is .e2e.log.
+	id := "flow-60-1a2b3c4d5e-0f1e2d3c.check"
+	hold(runs.CheckRecord{ID: id, Group: "check", Repo: "bottown", Issue: 60, PR: 61, SHA: "1a2b3c4d5e6f", Commands: []string{"make check"},
+		Started: started, Expires: started.Add(time.Hour)}, "==> [check] make check\n=== RUN   TestE2E\n")
 	hold(runs.CheckRecord{ID: "flow-7-ffffffffff.e2e", Repo: "other", Issue: 7, Started: started}, "elsewhere\n")
 	if err := os.WriteFile(filepath.Join(runsDir, "flow-8-eeeeeeeeee.e2e"+runs.CheckRecordSuffix), []byte(`{"id":"flow-8-eeeeeeeeee.e2e"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -298,8 +299,8 @@ func TestRuns_LiveChecks(t *testing.T) {
 		t.Fatalf("live checks = %+v", checks)
 	}
 	c := checks[0]
-	want := []runs.LogLine{{Kind: runs.LinePlain, Text: "==> [e2e] make e2e"}, {Kind: runs.LinePlain, Text: "=== RUN   TestE2E"}}
-	if c.ID != id || c.Issue != 60 || c.IssueTitle != "Add the thing" || c.PR != 61 || !strings.HasSuffix(c.PRURL, "/bottown/bottown/pulls/61") ||
+	want := []runs.LogLine{{Kind: runs.LinePlain, Text: "==> [check] make check"}, {Kind: runs.LinePlain, Text: "=== RUN   TestE2E"}}
+	if c.ID != id || c.Group != "check" || c.Issue != 60 || c.IssueTitle != "Add the thing" || c.PR != 61 || !strings.HasSuffix(c.PRURL, "/bottown/bottown/pulls/61") ||
 		c.Timeout != formatDuration(time.Hour) || len(c.Commands) != 1 || fmt.Sprint(c.LogTail) != fmt.Sprint(want) {
 		t.Fatalf("live check = %+v", c)
 	}
@@ -314,7 +315,7 @@ func TestRuns_LiveChecks(t *testing.T) {
 	if err != nil || !ok || fmt.Sprint(lines) != fmt.Sprint(want) {
 		t.Fatalf("check log: %+v, %v, %v", lines, ok, err)
 	}
-	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e", "flow-60-1a2b-xyz.e2e"} {
+	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e", "flow-60-1a2b-xyz.e2e", "flow-60-1a2b.lint"} {
 		if _, _, err := s.ComputeRunLog(ctx, bad); err == nil {
 			t.Errorf("log id %q accepted", bad)
 		}

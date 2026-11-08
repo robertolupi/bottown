@@ -14,6 +14,8 @@ import (
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/land"
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
@@ -53,56 +55,107 @@ design document exists.`,
 
 func newMilestoneMerge(g *globals) *cobra.Command {
 	var sha, repo string
+	var checkTimeout time.Duration
 	c := &cobra.Command{
-		Use:   "merge <issue> [--sha SHA] [--repo R]",
-		Short: "Merge a milestone child's approved PR into its milestone branch, as the manager",
-		Long: `Merge the open pull request from issue/<issue> into its milestone/* base,
-as the manager account, then close the issue and comment on it with what
-was merged (POST /v1/forge/pr/merge). The server refuses unless the base is
-a milestone/* branch, the PR's head is SHA, and the review assessment
-reports the PR approved at that head (a verifier of another family than
-the author's, or the owner). --sha defaults to the PR's current head.
+		Use:   "merge <issue> [--sha SHA] [--check-timeout D] [--repo R]",
+		Short: "Land a milestone child's approved PR on its milestone branch, as the manager",
+		Long: `Land the open pull request from issue/<issue> on its milestone/* base, as
+milestone run does (internal/land, the milestone policy): build the
+landing commit, the base's tip merged with the PR's head; run the check
+group at it, recording bottown/check there; and merge it fast-forward-only
+as the manager account, which closes the issue and comments on it with
+what was merged. So a child merged by hand is checked at the combined
+head too. Land refuses unless the review assessment reports the PR
+approved (a verifier of another family than the author's, or the owner),
+and stops, merging nothing, when the base conflicts with the head, the
+approval does not carry to the landing commit, or the checks fail there.
+When the base moves during the checks, it builds and checks the landing
+again. --sha, if given, is the head the PR must be at.
 
-Merging again reports the PR as already merged. Owner only.`,
+Landing again reports the PR as already merged, without checking it again,
+and closes the issue if an earlier call stopped after the merge. Owner only.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
 			if err != nil || issue <= 0 {
 				return fmt.Errorf("invalid issue number %q", args[0])
 			}
-			_, inst, _, name, key, err := ownerRepo(g, repo)
+			rc, err := openRunContextRepo(g, repo)
 			if err != nil {
 				return err
 			}
-			c := client.New(inst.ServerURL(), key).WithTimeout(time.Minute)
-			out, err := milestoneMerge(cmd.Context(), c, name, issue, sha)
-			if err != nil {
-				return err
-			}
+			c := client.New(rc.inst.ServerURL(), rc.key).WithTimeout(5 * time.Minute)
 			w := cmd.OutOrStdout()
-			if out.AlreadyMerged {
-				fmt.Fprintf(w, "!%d was already merged into %s at %s\n", out.Number, out.Base, shortSHA(out.HeadSHA))
-			} else {
-				fmt.Fprintf(w, "merged !%d into %s at %s as the manager\n", out.Number, out.Base, shortSHA(out.HeadSHA))
+			fmt.Fprintf(w, "landing #%d's PR: checking the combined head before the merge\n", issue)
+			l, err := milestoneLand(cmd.Context(), c, flowChecker{ws: rc.ws}, rc.ws.RunsDir, checkTimeout, rc.repo, issue, sha)
+			if err != nil {
+				return err
 			}
-			if out.IssueClosed {
-				fmt.Fprintf(w, "closed #%d\n", out.Issue)
+			fmt.Fprintln(w, l.Reason)
+			if l.Kind != milestone.Landed {
+				return fmt.Errorf("landing #%d stopped: %s", issue, l.Reason)
 			}
+			fmt.Fprintf(w, "merged !%d into %s at %s as the manager\n", l.Merge.PR, l.Merge.Base, shortSHA(l.Merge.HeadSHA))
 			return nil
 		},
 	}
 	c.Flags().StringVar(&sha, "sha", "", "the head the PR must be at (default: its current head)")
+	c.Flags().DurationVar(&checkTimeout, "check-timeout", defaultCheckTimeout, "the time limit for the checks at the landing commit")
 	c.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
 	return c
 }
 
-// milestoneMerge merges issue's open PR at sha, or at its current head when
-// sha is empty.
-func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue int64, sha string) (server.MilestoneMergeOut, error) {
+// milestoneLand lands child issue's PR on its milestone branch through
+// land.Land with the milestone policy: the check group at the landing
+// commit, then the fast-forward-only merge as the manager, which closes
+// the child. The PR's head must be sha, unless sha is empty. A PR merged
+// already is not checked again: the landing merge is called once more to
+// close its child if an earlier call stopped after the merge, and it is
+// reported as landed.
+func milestoneLand(ctx context.Context, c *client.Client, checker flow.Checker, runsDir string, checkTimeout time.Duration, repo string, issue int64, sha string) (milestone.Landing, error) {
+	pr, err := childPR(ctx, c, repo, issue)
+	if err != nil {
+		return milestone.Landing{}, err
+	}
+	merge := milestone.Merge{PR: pr.Number, HeadSHA: pr.HeadSHA, Base: pr.BaseBranch}
+	if pr.Merged {
+		// The landing merge is idempotent: on a merged PR it finishes what an
+		// earlier call may have stopped short of, closing the child issue.
+		var out server.LandOut
+		in := server.LandIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: pr.HeadSHA}
+		if err := c.Call(ctx, "POST", "/v1/forge/pr/merge", in, &out); err != nil {
+			return milestone.Landing{}, fmt.Errorf("finishing !%d's merge: %w", pr.Number, err)
+		}
+		reason := fmt.Sprintf("!%d was already merged", pr.Number)
+		if out.IssueClosed {
+			reason += fmt.Sprintf("; closed #%d", out.Issue)
+		}
+		return milestone.Landing{Kind: milestone.Landed, Merge: merge, Reason: reason}, nil
+	}
+	if sha != "" && sha != pr.HeadSHA {
+		return milestone.Landing{}, fmt.Errorf("!%d's head is %s, not %s", pr.Number, shortSHA(pr.HeadSHA), shortSHA(sha))
+	}
+	oc := land.Land(ctx, c, checker, land.Policy{Repo: repo, RunsDir: runsDir, Kind: land.Milestone, CheckTimeout: checkTimeout},
+		server.PROut{Number: pr.Number, HeadBranch: pr.HeadBranch, HeadSHA: pr.HeadSHA, BaseBranch: pr.BaseBranch})
+	l := milestone.Landing{Kind: milestone.LandFailed, Merge: merge, Reason: oc.String()}
+	switch o := oc.(type) {
+	case land.Landed:
+		l.Kind, l.Merge.HeadSHA = milestone.Landed, o.Head
+	case land.Conflict, land.NeedsVerify:
+		l.Kind = milestone.LandRepair
+	case land.ChecksFailed:
+		l.Kind = milestone.LandChecksFailed
+	}
+	return l, nil
+}
+
+// childPR is issue's open PR from issue/<issue>, or, with none open, its
+// merged one.
+func childPR(ctx context.Context, c *client.Client, repo string, issue int64) (server.PRItem, error) {
 	q := url.Values{"repo": {repo}, "state": {"all"}}
 	var prs []server.PRItem
 	if err := c.Call(ctx, "GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
-		return server.MilestoneMergeOut{}, err
+		return server.PRItem{}, err
 	}
 	branch := fmt.Sprintf("issue/%d", issue)
 	var pr *server.PRItem
@@ -116,19 +169,13 @@ func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue in
 		if pr == nil || (p.State == "open" && pr.State != "open") {
 			pr = p
 		} else if p.State == "open" && pr.State == "open" {
-			return server.MilestoneMergeOut{}, fmt.Errorf("more than one open PR from %s", branch)
+			return server.PRItem{}, fmt.Errorf("more than one open PR from %s", branch)
 		}
 	}
 	if pr == nil {
-		return server.MilestoneMergeOut{}, fmt.Errorf("no open pull request from %s", branch)
+		return server.PRItem{}, fmt.Errorf("no open pull request from %s", branch)
 	}
-	if sha == "" {
-		sha = pr.HeadSHA
-	}
-	var out server.MilestoneMergeOut
-	in := server.MilestoneMergeIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: sha}
-	err := c.Call(ctx, "POST", "/v1/forge/pr/merge", in, &out)
-	return out, err
+	return *pr, nil
 }
 
 func newMilestoneApply(g *globals) *cobra.Command {

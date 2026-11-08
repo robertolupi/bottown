@@ -15,21 +15,29 @@ import (
 type fakeChecker struct {
 	check   func(context.Context, CheckRequest) (CheckOutcome, error)
 	checked []string
+	groups  []string // each request's groups, joined
 }
 
 func (c *fakeChecker) Check(ctx context.Context, req CheckRequest) (CheckOutcome, error) {
 	c.checked = append(c.checked, req.SHA)
+	c.groups = append(c.groups, strings.Join(req.Groups, "+"))
 	return c.check(ctx, req)
 }
 
 func (c *fakeChecker) LogPath(req CheckRequest) string { return "/runs/flow-9-" + req.SHA + ".e2e.log" }
 
+// e2eOnly is o as a checker reports the e2e group alone.
+func e2eOnly(o CheckOutcome) CheckOutcome {
+	o.Groups = []GroupOutcome{{Group: GroupE2E, Passed: o.Passed, Description: o.Description, Summary: o.Summary, Log: o.Log}}
+	return o
+}
+
 func passing(ctx context.Context, req CheckRequest) (CheckOutcome, error) {
-	return CheckOutcome{Passed: true, Description: "passed: make e2e in 4m10s", Log: "/runs/flow-9-" + req.SHA + ".e2e.log"}, nil
+	return e2eOnly(CheckOutcome{Passed: true, Description: "passed: make e2e in 4m10s", Log: "/runs/flow-9-" + req.SHA + ".e2e.log"}), nil
 }
 
 func failing(ctx context.Context, req CheckRequest) (CheckOutcome, error) {
-	return CheckOutcome{Description: "failed: make e2e (exit 2) after 3m", Summary: "  1204  --- FAIL: TestE2E/flow", Log: "/runs/flow-9-" + req.SHA + ".e2e.log"}, nil
+	return e2eOnly(CheckOutcome{Description: "failed: make e2e (exit 2) after 3m", Summary: "  1204  --- FAIL: TestE2E/flow", Log: "/runs/flow-9-" + req.SHA + ".e2e.log"}), nil
 }
 
 func gateOptions() Options {
@@ -80,8 +88,10 @@ func TestGatePassStartsVerify(t *testing.T) {
 	if err != nil || result.Reason != ReadyToMerge || kinds(reqs) != "implement,verify" {
 		t.Fatalf("result = %+v, error = %v, runs = %s", result, err, kinds(reqs))
 	}
-	if strings.Join(checker.checked, ",") != "h1" || api.gate["h1"].State != "success" {
-		t.Fatalf("checked %v, gate %+v", checker.checked, api.gate)
+	// The flow's gate runs the e2e group alone, and records it as bottown/e2e.
+	if strings.Join(checker.checked, ",") != "h1" || strings.Join(checker.groups, ",") != "e2e" ||
+		api.gate["h1"].State != "success" || api.gate["h1"].Context != "bottown/e2e" {
+		t.Fatalf("checked %v groups %v, gate %+v", checker.checked, checker.groups, api.gate)
 	}
 	v := reqs[1]
 	if !v.ChecksPassed || !strings.Contains(v.Note, "`h1`") || !strings.Contains(v.Note, "/runs/flow-9-h1.e2e.log") || !strings.Contains(v.Note, "passed: make e2e") {
@@ -168,7 +178,7 @@ func TestGateFixRoundWithoutPush(t *testing.T) {
 func TestGateResumeFollowsHeadStatus(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		api := &fakeAPI{open: true, pr: openPR()}
-		_ = api.RecordGate(context.Background(), "demo", "h1", "success", "passed: make e2e in 4m")
+		_ = api.RecordGate(context.Background(), "demo", "h1", "e2e", "success", "passed: make e2e in 4m")
 		checker := &fakeChecker{check: failing}
 		var reqs []RunRequest
 		runner := pushingRunner(api, &reqs, func() string { return "APPROVED" })
@@ -183,7 +193,7 @@ func TestGateResumeFollowsHeadStatus(t *testing.T) {
 	t.Run("failure with rounds left", func(t *testing.T) {
 		api := &fakeAPI{open: true, pr: openPR()}
 		api.pr.HeadSHA = "h0"
-		_ = api.RecordGate(context.Background(), "demo", "h0", "failure", "failed: make e2e (exit 2)")
+		_ = api.RecordGate(context.Background(), "demo", "h0", "e2e", "failure", "failed: make e2e (exit 2)")
 		checker := &fakeChecker{check: passing}
 		var reqs []RunRequest
 		runner := pushingRunner(api, &reqs, func() string { return "APPROVED" })
@@ -198,7 +208,7 @@ func TestGateResumeFollowsHeadStatus(t *testing.T) {
 	t.Run("failure out of rounds", func(t *testing.T) {
 		api := &fakeAPI{open: true, pr: openPR()}
 		for _, sha := range []string{"h0", "h1"} {
-			_ = api.RecordGate(context.Background(), "demo", sha, "failure", "failed: make e2e (exit 2)")
+			_ = api.RecordGate(context.Background(), "demo", sha, "e2e", "failure", "failed: make e2e (exit 2)")
 		}
 		checker := &fakeChecker{check: passing}
 		called := false
@@ -228,7 +238,7 @@ func TestGateSkippedAndTimeout(t *testing.T) {
 		api := &fakeAPI{}
 		checker := &fakeChecker{check: func(ctx context.Context, req CheckRequest) (CheckOutcome, error) {
 			<-ctx.Done()
-			return CheckOutcome{Description: "failed: make e2e (exit -1)", Log: "/runs/x.e2e.log"}, ctx.Err()
+			return e2eOnly(CheckOutcome{Description: "failed: make e2e (exit -1)", Log: "/runs/x.e2e.log"}), ctx.Err()
 		}}
 		var reqs []RunRequest
 		runner := pushingRunner(api, &reqs, func() string { return "APPROVED" })
@@ -251,4 +261,51 @@ func TestGateSkippedAndTimeout(t *testing.T) {
 			t.Fatalf("result = %+v, gate = %v", result, api.gate)
 		}
 	})
+}
+
+type recorded struct{ sha, check, state, description string }
+
+type fakeRecorder []recorded
+
+func (r *fakeRecorder) RecordGate(_ context.Context, _, sha, check, state, description string) error {
+	*r = append(*r, recorded{sha, check, state, description})
+	return nil
+}
+
+// RecordChecks records each group that ran as its own status, and not a
+// skipped one; a timeout fails the group that was running.
+func TestRecordChecks(t *testing.T) {
+	o := CheckOutcome{Groups: []GroupOutcome{
+		{Group: GroupCheck, Passed: true, Description: "passed: make check in 1m"},
+		{Group: GroupE2E, Description: "failed: make e2e (exit 2) after 3m"},
+	}}
+	if o.Failed() != GroupE2E || strings.Join(o.Ran(), ",") != "check,e2e" {
+		t.Fatalf("failed %q, ran %v", o.Failed(), o.Ran())
+	}
+	var rec fakeRecorder
+	if err := RecordChecks(context.Background(), &rec, "demo", "h1", o); err != nil {
+		t.Fatal(err)
+	}
+	want := fakeRecorder{{"h1", "check", "success", "passed: make check in 1m"}, {"h1", "e2e", "failure", "failed: make e2e (exit 2) after 3m"}}
+	if len(rec) != 2 || rec[0] != want[0] || rec[1] != want[1] {
+		t.Fatalf("recorded %+v", rec)
+	}
+
+	rec = nil
+	skipped := CheckOutcome{Groups: []GroupOutcome{{Group: GroupCheck, Skipped: true}, {Group: GroupE2E, Passed: true, Description: "passed: make e2e in 3m"}}}
+	if err := RecordChecks(context.Background(), &rec, "demo", "h1", skipped); err != nil || len(rec) != 1 || rec[0].check != "e2e" {
+		t.Fatalf("recorded %+v, %v", rec, err)
+	}
+
+	checker := &fakeChecker{check: func(ctx context.Context, req CheckRequest) (CheckOutcome, error) {
+		<-ctx.Done()
+		return CheckOutcome{Groups: []GroupOutcome{
+			{Group: GroupCheck, Passed: true, Description: "passed: make check in 1m"},
+			{Group: GroupE2E, Passed: true, Description: "passed: make e2e in 1ms"},
+		}}, ctx.Err()
+	}}
+	out, err := RunCheck(context.Background(), checker, CheckRequest{SHA: "h1", Groups: []string{GroupCheck, GroupE2E}}, 5*time.Millisecond)
+	if err != nil || out.Passed || out.Failed() != GroupE2E || !out.Groups[0].Passed || !strings.HasPrefix(out.Groups[1].Description, "timed out after 5ms") {
+		t.Fatalf("timed out: %+v, %v", out, err)
+	}
 }

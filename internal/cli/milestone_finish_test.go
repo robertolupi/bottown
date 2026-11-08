@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,8 @@ func TestMilestoneFinishGateFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "/runs/flow-7-abc.e2e.log") {
 		t.Fatalf("err = %v, want the failure with the log", err)
 	}
-	if len(checker.reqs) != 1 || checker.reqs[0] != (flow.CheckRequest{Repo: "demo", Issue: 7, SHA: finishHead}) {
+	// Finish runs the e2e group alone.
+	if len(checker.reqs) != 1 || !reflect.DeepEqual(checker.reqs[0], flow.CheckRequest{Repo: "demo", Issue: 7, SHA: finishHead, Groups: []string{flow.GroupE2E}}) {
 		t.Errorf("checks %+v", checker.reqs)
 	}
 	if len(api.prs) != 0 {

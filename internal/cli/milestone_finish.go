@@ -108,7 +108,7 @@ func milestoneFinish(ctx context.Context, w io.Writer, api milestoneAPI, checker
 		fmt.Fprintf(w, "%s already contains %s: %s\n", m.Branch, m.Base, short(m.HeadSHA))
 	}
 	fmt.Fprintf(w, "e2e checks on %s at %s\n", m.Branch, short(m.HeadSHA))
-	o, err := flow.RunCheck(ctx, checker, flow.CheckRequest{Repo: repo, Issue: m.Epic, SHA: m.HeadSHA}, timeout)
+	o, err := flow.RunCheck(ctx, checker, flow.CheckRequest{Repo: repo, Issue: m.Epic, SHA: m.HeadSHA, Groups: []string{flow.GroupE2E}}, timeout)
 	if err != nil {
 		return err
 	}

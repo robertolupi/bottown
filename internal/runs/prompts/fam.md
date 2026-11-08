@@ -63,6 +63,10 @@ bottown run end [--failed] --summary-file -
 - **Verifiers** review exactly the commit the run pinned, with one verdict.
   They cannot push. A verifier must be from another model family than the
   author; only the owner can waive that.
+- **The owner lands approved pull requests** with `{{.Bottown}} merge-all`,
+  one at a time, each checked at the combined commit before it merges. An
+  approved PR behind the default branch cleanly waits for it; the flow no
+  longer merges the base into a PR.
 - **Discuss runs** review and discuss one issue without implementing it: the
   worktree is detached at the default branch, and the answer goes in a
   comment on the issue. They cannot push, open PRs or review. A critical

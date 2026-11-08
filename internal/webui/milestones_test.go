@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -223,6 +224,28 @@ func TestComputeMilestones(t *testing.T) {
 	if sc := g.Scheduler; sc == nil || sc.ID != "milestone-demo" || sc.Parallel != 2 ||
 		!slices.Equal(sc.Pool, []string{"claude=*", "agy=1"}) || sc.Log != ".bottown/milestone-demo.log" || !strings.HasPrefix(sc.Elapsed, "3m") {
 		t.Errorf("scheduler: %+v", sc)
+	}
+
+	// A child's landing replaces its approved state with a running node.
+	if err := os.MkdirAll(filepath.Dir(s.landingPath(50, ".json")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(LandingRecord{Number: 50, Issue: 25, PID: os.Getpid(), StartedAt: now})
+	if err := os.WriteFile(s.landingPath(50, ".json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	landingGroups, err := s.ComputeMilestones(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundLanding := false
+	for _, node := range landingGroups[0].Nodes {
+		if node.Number == 25 {
+			foundLanding = node.Status == NodeRunning && node.Run != nil && node.Run.Kind == "land" && node.Run.ID == "land-50"
+		}
+	}
+	if !foundLanding {
+		t.Fatalf("landing missing from milestone node: %+v", landingGroups[0].Nodes)
 	}
 
 	loose := groups[1]

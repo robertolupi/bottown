@@ -188,6 +188,28 @@ func (c *Client) BranchHead(owner, repo, branch string) (string, error) {
 	return b.Commit, err
 }
 
+// OpenPRDrafts maps each of the repository's open pull requests to
+// Forgejo's draft flag. The SDK's PullRequest lacks the field.
+func (c *Client) OpenPRDrafts(owner, repo string) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	for page := 1; ; page++ {
+		var prs []struct {
+			Number int64 `json:"number"`
+			Draft  bool  `json:"draft"`
+		}
+		path := fmt.Sprintf("/repos/%s/%s/pulls?state=open&limit=50&page=%d", url.PathEscape(owner), url.PathEscape(repo), page)
+		if err := c.do(http.MethodGet, path, nil, &prs); err != nil {
+			return nil, err
+		}
+		for _, pr := range prs {
+			out[pr.Number] = pr.Draft
+		}
+		if len(prs) < 50 {
+			return out, nil
+		}
+	}
+}
+
 // BranchInfo is a branch's head commit and whether a protection rule
 // covers it.
 type BranchInfo struct {

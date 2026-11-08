@@ -35,3 +35,12 @@ stays `succeeded`. Under the testing hook `BOTTOWN_HARNESS_CMD`, a script
 that exits 0 is not checked, as its log is not the harness's stream.
 `run failed` stays for a run that failed after a tool call, crashed, or
 timed out.
+
+When an open pull request has no standing `REQUEST_CHANGES` at its head,
+the flow checks the trial merge into its base before checking whether the
+PR is approved: a conflicting base starts a conflict implement round (up
+to `--rounds`, then stops `conflicts with base`), even when the PR is
+already approved, while a clean base is never merged into the PR. An
+approved PR that is behind its base cleanly stops `ready to merge` at its
+own head, and its detail adds `: behind \`<base>\` by K commits, cleanly;
+\`bottown merge-all\` lands it`.

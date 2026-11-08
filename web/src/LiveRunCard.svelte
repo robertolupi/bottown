@@ -37,12 +37,12 @@
         {/if}
       {/if}
       <span class="badge badge-neutral">{run.kind}</span>
-      <span class="badge repo-badge">{run.actor} ({run.family})</span>
+      <span class="badge repo-badge">{run.actor}{run.family ? ` (${run.family})` : ''}</span>
       {#if run.spec}<span class="badge instance-badge" title="model">model {run.spec}</span>{/if}
-      <span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>
+      {#if run.kind !== 'land'}<span class="badge instance-badge">{run.interactive ? 'interactive' : 'batch'}</span>{/if}
     </div>
     <div class="run-card-actions">
-      <span class="run-timer">{formatElapsed(run.created, now)} / {run.timeout}</span>
+      <span class="run-timer">{formatElapsed(run.created, now)}{run.timeout ? ` / ${run.timeout}` : ''}</span>
       <button class="btn btn-sm btn-danger" onclick={() => onStop(run.id)}>
         {stopLabel}
       </button>

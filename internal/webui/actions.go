@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/runs"
-	serverapi "github.com/robertolupi/bottown/internal/server"
 )
 
 // FlowRequest specifies parameters to start an issue flow.
@@ -45,12 +43,6 @@ type GCRequest struct {
 	Failed bool `json:"failed,omitempty"`
 }
 
-// MergeBaseRequest confirms the clean merge offered by an inbox item.
-type MergeBaseRequest struct {
-	Number  int64  `json:"number"`
-	HeadSHA string `json:"head_sha"`
-}
-
 // FlowRecord is persisted in .bottown/flow-<issue>.json when a flow is started.
 type FlowRecord struct {
 	Issue     int64     `json:"issue"`
@@ -60,20 +52,6 @@ type FlowRecord struct {
 	Timeout   string    `json:"timeout"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
-}
-
-// ExecuteMergeBase performs the clean base merge offered by the inbox.
-func (s *Server) ExecuteMergeBase(ctx context.Context, req MergeBaseRequest) (string, error) {
-	if req.Number <= 0 || req.HeadSHA == "" {
-		return "", errors.New("PR number and head_sha are required")
-	}
-	_, repo := s.orgAndRepo()
-	in := serverapi.PRMergeIn{Target: serverapi.Target{Repo: repo, Number: req.Number}, HeadSHA: req.HeadSHA}
-	var out serverapi.PRMergeOut
-	if err := s.callServer(ctx, http.MethodPost, "/v1/forge/pr/merge-base", in, &out); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Merged the base into !%d at %s", req.Number, shortSHA(out.HeadSHA)), nil
 }
 
 // ExecuteFlow starts a background `bottown flow` process that outlives the UI.
@@ -212,6 +190,9 @@ func (s *Server) ExecuteRun(ctx context.Context, req RunActionRequest) (string, 
 // milestone run (milestone-SLUG).
 func (s *Server) ExecuteStop(ctx context.Context, id string) (string, error) {
 	id = strings.TrimSpace(id)
+	if strings.HasPrefix(id, "land-") {
+		return s.stopLanding(id)
+	}
 	if id == "" {
 		return "", errors.New("run or flow ID is required")
 	}
