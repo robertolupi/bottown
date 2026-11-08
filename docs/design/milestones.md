@@ -57,6 +57,9 @@ steps**:
   cross-family `APPROVED` review at its exact head SHA. Landing
   `milestone/<epic>` into `main` remains a single pull request authored by
   `manager` that the owner reviews, approves, and merges in Forgejo.
+  *Superseded in part by [the merge queue design](merge-queue.md) (§7):
+  once it is built, `bottown` merges into `main` as `manager` when the
+  owner runs `bottown merge-all`, and only through its landing step.*
 
 ---
 

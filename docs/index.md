@@ -18,6 +18,11 @@ full, then only the document, or section, your work needs.
   applied as an epic of dependency-wired child issues (a DAG in the web
   UI), then run on a protected `milestone/<epic>` branch that auto-merges
   verified child PRs. Its status line says what is built.
+- [The merge queue](design/merge-queue.md): read for how approved pull
+  requests land: one landing step for `main` and `milestone/*` (a
+  base-first landing commit, the checks at it, a fast-forward-only merge
+  as `manager`), `bottown merge-all`, and why the flow no longer merges a
+  base into a PR. Its status line says what is built.
 - History, not kept current; read only for how something came to be:
   [Iteration 1](history/iteration-1.md) (the first issue through runs,
   actors as forge identities, permanent actor worktrees, in-harness runs),
