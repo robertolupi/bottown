@@ -20,6 +20,7 @@ import (
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/flow"
+	"github.com/robertolupi/bottown/internal/land"
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
@@ -47,11 +48,16 @@ closed. Ready children are dispatched in issue order, at most --parallel at
 a time: each gets an implementer and a verifier of another family from
 --agents, recorded on it as implement/<actor> and verify/<actor> labels
 (a child that has them keeps its pair while both are in the pool), and a
-` + "`bottown flow N --unattended --merge-milestone-base`" + ` process of its own,
+` + "`bottown flow N --unattended`" + ` process of its own,
 logged to .bottown/flow-<N>.log. When a flow stops ready to merge, run
-merges the PR into milestone/<slug> as the manager, which closes the child
-and may make others ready; if a final PR is open, it comments there that
-its head is no longer gated. An actor whose agent did nothing is removed
+lands the PR on milestone/<slug> as ` + "`bottown milestone merge`" + ` does: the
+check group at the landing commit, the branch's tip merged with the PR's
+head, then the merge as the manager, which closes the child and may make
+others ready; children ready together land in merge-all's order. If a
+final PR is open, it comments there that its head is no longer gated. A
+child whose landing conflicts, or whose approval does not carry to the
+landing commit, goes back to its flow once (its pair kept); the second
+time, and on failed checks, it stops. An actor whose agent did nothing is removed
 from the pool until run exits, and its child stays stopped; any other stop
 leaves the child to the owner.
 
@@ -104,7 +110,8 @@ agent did nothing; 1 otherwise.`,
 			}
 			c := client.New(rc.inst.ServerURL(), rc.key).WithTimeout(5 * time.Minute)
 			api := milestoneClient{c: c}
-			f := &runForge{proxyForge: pf, api: api, c: c, slug: args[0]}
+			f := &runForge{proxyForge: pf, api: api, c: c, slug: args[0],
+				checker: flowChecker{ws: rc.ws}, runsDir: rc.ws.RunsDir, checkTimeout: checkTimeout}
 			l := &flowLauncher{bin: bin, instance: rc.inst.Name, repo: rc.repo, dir: top, logDir: rc.ws.Dir, runsDir: rc.ws.RunsDir, owner: owner, c: c,
 				rounds: rounds, timeout: timeout, checkTimeout: checkTimeout}
 			_, err = milestone.Run(ctx, f, milestone.RunOptions{
@@ -134,6 +141,11 @@ type runForge struct {
 	api  milestoneClient
 	c    *client.Client
 	slug string
+	// checker, runsDir and checkTimeout are land's: the check group at each
+	// landing commit, and where it takes the child's flow lock.
+	checker      flow.Checker
+	runsDir      string
+	checkTimeout time.Duration
 }
 
 func (f *runForge) in() server.MilestoneIn { return server.MilestoneIn{Repo: f.repo, Slug: f.slug} }
@@ -177,13 +189,41 @@ func (f *runForge) SetPair(ctx context.Context, n int64, implement, verify strin
 	return f.call(ctx, "POST", path, map[string]any{"labels": add}, nil)
 }
 
-func (f *runForge) Merge(ctx context.Context, n int64) (milestone.Merge, error) {
-	out, err := milestoneMerge(ctx, f.c, f.repo, n, "")
-	var ae *client.APIError
-	if errors.As(err, &ae) && ae.Message != "" {
-		err = errors.New(ae.Message)
+func (f *runForge) Land(ctx context.Context, n int64) milestone.Landing {
+	l, err := milestoneLand(ctx, f.c, f.checker, f.runsDir, f.checkTimeout, f.repo, n, "")
+	if err != nil {
+		var ae *client.APIError
+		if errors.As(err, &ae) && ae.Message != "" {
+			err = errors.New(ae.Message)
+		}
+		return milestone.Landing{Kind: milestone.LandFailed, Reason: err.Error()}
 	}
-	return milestone.Merge{PR: out.Number, HeadSHA: out.HeadSHA, Base: out.Base}, err
+	return l
+}
+
+// Order orders the children ns by their PRs, as merge-all does
+// (land.Order): from a trial merge of the milestone branch into each.
+func (f *runForge) Order(ctx context.Context, ns []int64) ([]int64, error) {
+	cands := make([]land.Candidate, 0, len(ns))
+	issue := map[int64]int64{}
+	for _, n := range ns {
+		pr, err := childPR(ctx, f.c, f.repo, n)
+		if err != nil {
+			return nil, fmt.Errorf("#%d: %w", n, err)
+		}
+		q := url.Values{"repo": {f.repo}, "number": {fmt.Sprint(pr.Number)}}
+		var st server.PRMergeStatus
+		if err := f.c.Call(ctx, "GET", "/v1/forge/pr/merge-base?"+q.Encode(), nil, &st); err != nil {
+			return nil, fmt.Errorf("trial merge of !%d: %w", pr.Number, err)
+		}
+		cands = append(cands, land.Candidate{PR: pr.Number, Clean: st.Clean, Files: st.Files})
+		issue[pr.Number] = n
+	}
+	out := make([]int64, 0, len(ns))
+	for _, c := range land.Order(cands) {
+		out = append(out, issue[c.PR])
+	}
+	return out, nil
 }
 
 func (f *runForge) FinalPR(ctx context.Context) (int64, error) {
@@ -236,7 +276,7 @@ func (l *flowLauncher) Flow(ctx context.Context, req milestone.FlowRequest) mile
 	}
 	defer log.Close()
 	cmd := exec.Command(l.bin, "-i", l.instance, "flow", fmt.Sprint(req.Issue),
-		"--implement", req.Implement, "--verify", req.Verify, "--unattended", "--merge-milestone-base",
+		"--implement", req.Implement, "--verify", req.Verify, "--unattended",
 		"--repo", l.repo, "--rounds", fmt.Sprint(l.rounds), "--timeout", l.timeout.String(), "--check-timeout", l.checkTimeout.String())
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = l.dir, os.Environ(), log, log
 	// A group of its own, as the web UI starts flows, so the UI's stop

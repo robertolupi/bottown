@@ -765,8 +765,12 @@ func TestGCFlowLogs(t *testing.T) {
 	flowLog := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".log") }
 	flowInfo := func(issue int) string { return filepath.Join(dir, "flow-"+strconv.Itoa(issue)+".json") }
 
+	checkLog := filepath.Join(ws.RunsDir, "flow-1-aaaaaaa-0a1b2c3d.check.log")
+	keptCheckLog := filepath.Join(ws.RunsDir, "flow-2-bbbbbbb-1a2b3c4d.check.log")
 	write(e2e(1, "aaaaaaa-0a1b2c3d"), "merged PR", time.Minute)       // no open PR: removed
+	write(checkLog, "merged PR, check group", time.Minute)            // removed too
 	write(e2e(2, "bbbbbbb-1a2b3c4d"), "open PR, recent", time.Minute) // kept
+	write(keptCheckLog, "open PR, recent", time.Minute)               // kept
 	write(e2e(2, "ccccccc"), "open PR, old", 200*time.Hour)           // before check ids; removed with --older-than
 	write(filepath.Join(ws.RunsDir, "flow-x.e2e.log"), "", 0)         // not a flow's: kept
 	write(flowLog(3), "no record", 0)                                 // removed
@@ -776,15 +780,15 @@ func TestGCFlowLogs(t *testing.T) {
 	write(flowInfo(5), `{"issue": 5, "pid": `+strconv.Itoa(os.Getpid())+`}`, 0)
 	write(filepath.Join(dir, "run-implement-6.log"), "", 0) // not a flow log: kept
 
-	if n := gcFlowLogs(ws, map[int64]bool{2: true}, 0, now, io.Discard); n != 3 {
-		t.Errorf("without --older-than removed %d logs, want 3", n)
+	if n := gcFlowLogs(ws, map[int64]bool{2: true}, 0, now, io.Discard); n != 4 {
+		t.Errorf("without --older-than removed %d logs, want 4", n)
 	}
-	for _, p := range []string{e2e(1, "aaaaaaa-0a1b2c3d"), flowLog(3), flowLog(4), flowInfo(4)} {
+	for _, p := range []string{e2e(1, "aaaaaaa-0a1b2c3d"), checkLog, flowLog(3), flowLog(4), flowInfo(4)} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s survives gc: %v", filepath.Base(p), err)
 		}
 	}
-	for _, p := range []string{e2e(2, "bbbbbbb-1a2b3c4d"), e2e(2, "ccccccc"), flowLog(5), flowInfo(5),
+	for _, p := range []string{e2e(2, "bbbbbbb-1a2b3c4d"), keptCheckLog, e2e(2, "ccccccc"), flowLog(5), flowInfo(5),
 		filepath.Join(ws.RunsDir, "flow-x.e2e.log"), filepath.Join(dir, "run-implement-6.log")} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("gc removed %s: %v", filepath.Base(p), err)

@@ -135,31 +135,36 @@
   },
   "inbox": [
     {
-      "id": "merge-base:99",
-      "kind": "merge_base",
-      "title": "Merge main into issue/99 for !99",
-      "description": "The branch is behind and the merge is clean",
+      "id": "ready-to-land-pr-99",
+      "kind": "ready_to_land",
+      "title": "PR !99 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!99",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/99",
       "issue": 99,
       "issue_title": "Bring the export branch up to date",
       "head_sha": "9e1d2c3456789012345678901234567890abcdef",
       "action": {
-        "label": "Merge main",
-        "command": "bottown flow merge-base !99"
+        "label": "Land",
+        "command": "bottown land !99"
       },
       "created": "2026-11-02T08:12:00Z"
     },
     {
-      "id": "ready:100",
-      "kind": "ready_to_merge",
-      "title": "!100 is approved and ready to merge",
-      "description": "Review and merge it in Forgejo.",
+      "id": "ready-to-land-pr-100",
+      "kind": "ready_to_land",
+      "title": "PR !100 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!100",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/100",
       "issue": 100,
       "issue_title": "Demo issue 100",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !100"
+      }
     },
     {
       "id": "conflict:101",
@@ -217,15 +222,20 @@
       "created": "2026-11-02T08:11:00Z"
     },
     {
-      "id": "ready:106",
-      "kind": "ready_to_merge",
-      "title": "!106 is approved and ready to merge",
-      "description": "Approved at 4b81f0a2c9 by agy (google): approval at 7d27b2e carried over: same patch rebased onto e50b14a",
+      "id": "ready-to-land-pr-106",
+      "kind": "ready_to_land",
+      "title": "PR !106 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!106",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/106",
       "issue": 106,
       "issue_title": "Demo issue 106",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !106"
+      }
     },
     {
       "id": "conflict:107",
@@ -283,15 +293,20 @@
       "created": "2026-11-02T08:11:00Z"
     },
     {
-      "id": "ready:112",
-      "kind": "ready_to_merge",
-      "title": "!112 is approved and ready to merge",
-      "description": "Review and merge it in Forgejo.",
+      "id": "ready-to-land-pr-112",
+      "kind": "ready_to_land",
+      "title": "PR !112 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!112",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/112",
       "issue": 112,
       "issue_title": "Demo issue 112",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !112"
+      }
     },
     {
       "id": "conflict:113",
@@ -349,15 +364,20 @@
       "created": "2026-11-02T08:11:00Z"
     },
     {
-      "id": "ready:118",
-      "kind": "ready_to_merge",
-      "title": "!118 is approved and ready to merge",
-      "description": "Review and merge it in Forgejo.",
+      "id": "ready-to-land-pr-118",
+      "kind": "ready_to_land",
+      "title": "PR !118 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!118",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/118",
       "issue": 118,
       "issue_title": "Demo issue 118",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !118"
+      }
     },
     {
       "id": "conflict:119",
@@ -415,15 +435,20 @@
       "created": "2026-11-02T08:11:00Z"
     },
     {
-      "id": "ready:124",
-      "kind": "ready_to_merge",
-      "title": "!124 is approved and ready to merge",
-      "description": "Review and merge it in Forgejo.",
+      "id": "ready-to-land-pr-124",
+      "kind": "ready_to_land",
+      "title": "PR !124 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!124",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/124",
       "issue": 124,
       "issue_title": "Demo issue 124",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !124"
+      }
     },
     {
       "id": "conflict:125",
@@ -505,7 +530,7 @@
         "round": 1,
         "max_rounds": 3,
         "step": "implementing with claude",
-        "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude"
+        "label": "#42 · round 1/3 · implementing with claude"
       },
       "log_tail": [],
       "denials": []
@@ -536,7 +561,7 @@
         "round": 2,
         "max_rounds": 3,
         "step": "verifying with kimi",
-        "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi"
+        "label": "#51 · round 2/3 · verifying with kimi"
       },
       "log_tail": [],
       "denials": [
@@ -580,7 +605,7 @@
       "round": 1,
       "max_rounds": 3,
       "step": "implementing with claude",
-      "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude",
+      "label": "#42 · round 1/3 · implementing with claude",
       "waiting": false
     },
     {
@@ -590,7 +615,7 @@
       "round": 2,
       "max_rounds": 3,
       "step": "verifying with kimi",
-      "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi",
+      "label": "#51 · round 2/3 · verifying with kimi",
       "waiting": false
     },
     {
@@ -600,7 +625,7 @@
       "round": 1,
       "max_rounds": 3,
       "step": "waiting for a run slot",
-      "label": "#53 \u00b7 round 1/3 \u00b7 waiting for a run slot",
+      "label": "#53 · round 1/3 · waiting for a run slot",
       "waiting": true
     }
   ],
@@ -1150,7 +1175,7 @@
       },
       {
         "kind": "status",
-        "text": "result: success \u00b7 31 turns \u00b7 $1.84"
+        "text": "result: success · 31 turns · $1.84"
       }
     ],
     "r-2b3c4d5e": [
@@ -1218,7 +1243,7 @@
       },
       {
         "kind": "tool",
-        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row\u2026",
+        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row…",
         "tool": "mcp_bottown_comment",
         "tool_class": "forge"
       },
@@ -1232,7 +1257,7 @@
     "40": {
       "issue": 40,
       "title": "Paginate the export endpoint",
-      "body": "Exports return every row at once. Page them with an opaque cursor.\n\n## Acceptance\n- `GET /export?cursor=\u2026` returns at most 500 rows and a `next` cursor.\n- Rows inserted during a paged read are not skipped.",
+      "body": "Exports return every row at once. Page them with an opaque cursor.\n\n## Acceptance\n- `GET /export?cursor=…` returns at most 500 rows and a `next` cursor.\n- Rows inserted during a paged read are not skipped.",
       "state": "closed",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/40"
     },

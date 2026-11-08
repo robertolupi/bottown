@@ -42,6 +42,9 @@ var (
 	// ErrIssueClosed is an implement or plan run refused because its issue
 	// is closed.
 	ErrIssueClosed = errors.New("issue is closed")
+	// ErrBaseMoved is a landing merge refused because the base moved since
+	// the landing commit was built: build it again on the new base.
+	ErrBaseMoved = errors.New("the base moved")
 )
 
 // APIError is a non-2xx answer from the server.
@@ -78,6 +81,8 @@ func (e *APIError) Is(target error) bool {
 		return e.Code == server.ErrorCodeWikiConflict
 	case ErrIssueClosed:
 		return e.Code == server.ErrorCodeIssueClosed
+	case ErrBaseMoved:
+		return e.Code == server.ErrorCodeBaseMoved
 	}
 	return false
 }

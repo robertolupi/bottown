@@ -192,21 +192,22 @@ it does today. The supervisor then starts a new verify run at the new head
 and does not count it as a round.
 
 The PR's base can move too. The supervisor tests the merge with `git
-merge-tree --write-tree` on the forge's refs, without a worktree. When the
-branch is behind and the merge is clean, an attended CLI flow asks `Merge
-main into issue/<n> for !N? [Y/n]`; the default is yes. An unattended flow
-leaves the choice to an owner-inbox action. On yes, bottown creates a
-two-parent commit saying the merge was automatic and pushes it as the owner.
-The unchanged-patch approval rule below then carries its approval over, and
-the flow continues at the new head. When the merge would conflict, the flow
-comments on the issue with the conflicting files and starts an implement
-round whose prompt names them and asks the implementer to merge the base,
-resolve them, run the checks and push; the flow then gates and verifies the
-new head as usual. These conflict rounds are counted by the flow itself,
-apart from the review rounds, up to `--rounds` per flow command. The flow
-stops as "conflicts with base", naming the base and the conflicting files, when they
-are used or when one pushes no new commit; the owner then resolves them or
-starts an implement run.
+merge-tree --write-tree` on the forge's refs, without a worktree, ahead of
+the `ready to merge` stop (once any request for changes at the head has
+been answered). The flow never merges a clean base into the PR: when the
+branch is behind and the trial merge is clean, an unapproved PR is gated
+and verified at its own head, and an approved PR stops `ready to merge` at
+its own head, noting in its detail that it is behind its base cleanly and
+that `bottown merge-all` lands it. When the merge would conflict, even if
+the PR is already approved, the flow comments on the issue with the
+conflicting files and starts an implement round whose prompt names them
+and asks the implementer to merge the base, resolve them, run the checks
+and push; the flow then gates and verifies the new head as usual. These
+conflict rounds are counted by the flow itself, apart from the review
+rounds, up to `--rounds` per flow command. The flow stops as "conflicts
+with base", naming the base and the conflicting files, when they are used
+or when one pushes no new commit; the owner then resolves them or starts
+an implement run.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
 action (the UI offers it); a flow never starts one.
@@ -238,14 +239,14 @@ again:
    naming the run (the supervisor never runs two steps of one issue at
    once).
 2. No open PR from `issue/<n>` → implement.
-3. An open PR at head H, by its review assessment (below):
-   - the PR is behind and a trial merge is clean → offer to merge the base;
+3. An open PR at head H, by its review assessment (below) and trial merge:
+   - changes requested at H → a follow-up implement run, if rounds are
+     left;
    - the trial merge conflicts → an implement run to resolve them, if
      this flow's conflict rounds are left, else stop with the conflicting
      files;
-   - approved → stop: ready to merge;
-   - changes requested at H → a follow-up implement run, if rounds are
-     left;
+   - approved → stop: ready to merge (noting in the detail when the PR is
+     behind its base cleanly);
    - changes requested at an older head, while H is approved → stop:
      changes requested;
    - commented → stop: verifier undecided;
@@ -474,8 +475,7 @@ be recomputed.
 
 | Item | Shown when | Goes away when |
 |---|---|---|
-| Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), it merges cleanly, and it is not behind | merged or closed, the head moves, a request for changes, or it starts to conflict |
-| Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR or its issue | the owner clicks **Merge main**, the head or base moves, or a run starts |
+| Ready to land | an open PR into main or milestone/* has an approved review assessment (§3.3), including when behind or conflicting | merged or closed, or its approval no longer counts |
 | Conflicts with main | an open PR no longer merges cleanly; the description names conflicting files when the trial merge found them | an implement run resolves them, or the PR is closed |
 | Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided), or the flow's post-implement checks failed at the head (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself, and keeps a dead run's record when it cannot revoke it; `run stop --revoke ID`, or `run gc --orphans`, ends a live run that no local launcher holds) |
@@ -486,11 +486,12 @@ Actor-filed issues are hidden by default. The **Show actor-filed issues**
 checkbox reveals them; the inbox count and inbox-zero state follow the
 current filter.
 
-Each row links to the issue or PR in Forgejo (merging happens there) and
-offers the matching bottown action (§5): re-run the flow, end or clean up
-the run. Issue-backed rows show the full issue title next to the reference.
-Once repositories declare checks (§4.5), "ready to merge" also requires them
-to pass.
+Each row links to the issue or PR in Forgejo and offers the matching
+bottown action (§5): Land the PR, re-run the flow, or end or clean up the
+run. **Land** starts a background landing with the Main policy: check and
+e2e at the combined tree, with a record, log and stop control under Live
+Runs. Merging in Forgejo instead skips these checks, as the item explains.
+Issue-backed rows show the full issue title next to the reference.
 
 ### 4.2 Runs
 
@@ -885,12 +886,14 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
-- **PR base merges.** Owner-only `GET /v1/forge/pr/merge-base` reports
-  whether the PR is behind, whether `merge-tree` was clean, and any
-  conflicting files. `POST` takes the offered head SHA, repeats the check,
-  creates the automatic merge commit and pushes it without force. A moved
-  head, a conflict, or a live run on the PR, its issue or its branch is
-  refused.
+- **Landing.** **Land** posts the PR number and offered head SHA to
+  `POST /api/actions/land`. A background worker runs `land.Land` with the
+  Main policy (check and e2e at the combined tree). Its record and log
+  appear under Live Runs with a stop control; milestone child nodes show
+  their landing like their flow. The inbox warns that merging in Forgejo
+  instead skips the checks at the combined tree. Owner-only
+  `GET /v1/forge/pr/merge-base` still reports behind and conflict status;
+  the PR-first merge POST and inbox action are removed.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when

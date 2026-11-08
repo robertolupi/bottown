@@ -19,7 +19,7 @@ func newFlow(g *globals) *cobra.Command {
 	var implement, verify, repo, message string
 	var rounds, checkRounds int
 	var timeout, checkTimeout, actorWait time.Duration
-	var serializeActors, unattended, mergeMilestoneBase bool
+	var serializeActors, unattended bool
 	cmd := &cobra.Command{
 		Use:   "flow N --implement ACTOR[:MODEL] --verify ACTOR[:MODEL]",
 		Short: "Drive one issue through implement and cross-family verify",
@@ -43,13 +43,11 @@ rounds count against --check-rounds, not --rounds. A repository whose
 
 When the PR's base has moved and merging it into the branch would conflict,
 the flow starts an implement round with the conflicting files in its
-prompt, asking the implementer to merge the base and resolve them. Up to
---rounds such rounds run in one flow, apart from the review rounds; the
-flow stops (conflicts with base) when they are used, or when one pushes
-nothing. When the merge would be clean, the flow asks before merging the
-base into the branch; with --merge-milestone-base it merges a milestone/*
-base without asking, attended or not. Any other base, the default branch
-included, is still the owner's to merge.`,
+prompt, asking the implementer to merge the base and resolve them, even
+when the PR is already approved. Up to --rounds such rounds run in one
+flow, apart from the review rounds; the flow stops (conflicts with base)
+when they are used, or when one pushes nothing. A PR that is behind its
+base cleanly is gated and verified at its own head, with no merge commit.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := parseNumber(args[0])
@@ -119,7 +117,7 @@ included, is still the owner's to merge.`,
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
 				Issue: issue, Repo: repo, Implement: implement, Verify: verify,
 				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, SerializeActors: serializeActors, ActorWait: actorWait,
-				Attended: !unattended, MergeMilestoneBase: mergeMilestoneBase,
+				Attended: !unattended,
 			})
 			if err == nil {
 				fmt.Fprintf(supervisor.Out, "flow #%d stopped: %s\n", result.Issue, result.Reason)
@@ -131,14 +129,13 @@ included, is still the owner's to merge.`,
 	cmd.Flags().StringVar(&verify, "verify", "", "actor from another family that verifies the PR (required); ACTOR:MODEL as for --implement. The family is the actor's, whatever the model")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository name within the instance's org (default: this checkout)")
 	cmd.Flags().IntVar(&rounds, "rounds", 3, "review rounds: the flow stops at this many requests for changes, so at most this many implement runs answer reviews, the first included")
-	cmd.Flags().IntVar(&checkRounds, "check-rounds", 2, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
+	cmd.Flags().IntVar(&checkRounds, "check-rounds", flow.DefaultCheckRounds, "implement runs the flow starts to fix failed post-implement checks; it stops when the checks fail again after these")
 	cmd.Flags().DurationVar(&timeout, "timeout", time.Hour, "time limit for each run")
 	cmd.Flags().DurationVar(&checkTimeout, "check-timeout", defaultCheckTimeout, "time limit for the post-implement checks at each head; running out is a failure")
 	cmd.Flags().BoolVar(&serializeActors, "serialize-actors", false, "start each run only when its actor has no other live batch run, waiting until then (by default an actor's runs on different issues run concurrently)")
 	cmd.Flags().DurationVar(&actorWait, "actor-wait", 2*time.Hour, "with --serialize-actors, how long to wait for an actor's other batch run to end before stopping (actor busy)")
-	cmd.Flags().BoolVar(&unattended, "unattended", false, "leave clean base merges to the owner inbox")
+	cmd.Flags().BoolVar(&unattended, "unattended", false, "plain output with no live terminal tail")
 	_ = cmd.Flags().MarkHidden("unattended")
-	cmd.Flags().BoolVar(&mergeMilestoneBase, "merge-milestone-base", false, "when the PR's base is a milestone/* branch that has moved and merges cleanly, merge it into the branch without asking, attended or not")
 	cmd.Flags().StringVarP(&message, "message", "m", "", `a note added to the goal prompt of every run the flow starts, implement and verify, e.g. "also read the epic #123"`)
 	_ = cmd.MarkFlagRequired("implement")
 	_ = cmd.MarkFlagRequired("verify")

@@ -138,31 +138,36 @@
   },
   "inbox": [
     {
-      "id": "merge-base:56",
-      "kind": "merge_base",
-      "title": "Merge main into issue/41 for !56",
-      "description": "The branch is behind and the merge is clean",
+      "id": "ready-to-land-pr-56",
+      "kind": "ready_to_land",
+      "title": "PR !56 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!56",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/56",
       "issue": 41,
       "issue_title": "Refresh export caches",
       "head_sha": "9e1d2c3456789012345678901234567890abcdef",
       "action": {
-        "label": "Merge main",
-        "command": "bottown flow merge-base !56"
+        "label": "Land",
+        "command": "bottown land !56"
       },
       "created": "2026-11-02T09:45:00Z"
     },
     {
-      "id": "ready:55",
-      "kind": "ready_to_merge",
-      "title": "!55 is approved and ready to merge",
-      "description": "claude approved the head 9e1d2c3. Review and merge it in Forgejo.",
+      "id": "ready-to-land-pr-55",
+      "kind": "ready_to_land",
+      "title": "PR !55 is ready to land",
+      "description": "Approved. Merging in Forgejo instead skips the checks at the combined tree.",
       "target": "!55",
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/55",
       "issue": 40,
       "issue_title": "Paginate the export endpoint",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "head_sha": "abc123",
+      "action": {
+        "label": "Land",
+        "command": "bottown land !55"
+      }
     },
     {
       "id": "conflict:58",
@@ -321,6 +326,30 @@
       "timeout": "120m",
       "log_tail": [],
       "denials": []
+    },
+    {
+      "id": "land-59",
+      "target": "!59",
+      "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/59",
+      "pr": 59,
+      "issue": 52,
+      "kind": "land",
+      "actor": "bottown",
+      "family": "",
+      "harness": "",
+      "interactive": false,
+      "created": "2026-11-02T10:38:00Z",
+      "expires": "0001-01-01T00:00:00Z",
+      "elapsed": "2m 0s",
+      "timeout": "",
+      "log_tail": [
+        {
+          "kind": "text",
+          "text": "Running checks at the landing commit"
+        }
+      ],
+      "denials": [],
+      "issue_title": "API keys per client"
     }
   ],
   "active_flows": [
@@ -368,27 +397,33 @@
   "live_checks": [
     {
       "id": "flow-56-7c1d2e3f4a.e2e",
+      "group": "e2e",
       "issue": 56,
       "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/56",
       "issue_title": "Compress websocket payloads",
       "pr": 62,
       "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/62",
       "sha": "7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d",
-      "commands": ["make e2e"],
+      "commands": [
+        "make e2e"
+      ],
       "created": "2026-11-05T11:52:00Z",
       "elapsed": "4m 05s",
       "timeout": "60m",
       "log_tail": []
     },
     {
-      "id": "flow-64-9e8d7c6b5a.e2e",
+      "id": "flow-64-9e8d7c6b5a.check",
+      "group": "check",
       "issue": 64,
       "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/64",
       "issue_title": "Started from a terminal: a flow the UI did not start",
       "pr": 65,
       "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/65",
       "sha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
-      "commands": ["make e2e-setup", "make e2e"],
+      "commands": [
+        "make check"
+      ],
       "created": "2026-11-05T11:54:30Z",
       "elapsed": "1m 35s",
       "log_tail": []
@@ -903,7 +938,7 @@
           "title": "API keys per client",
           "url": "http://127.0.0.1:3030/bottown/demo/issues/52",
           "state": "open",
-          "status": "approved",
+          "status": "running",
           "layer": 1,
           "depends_on": [
             40
@@ -915,6 +950,13 @@
             "url": "http://127.0.0.1:3030/bottown/demo/pulls/59",
             "state": "open",
             "review": "approved"
+          },
+          "run": {
+            "id": "land-59",
+            "kind": "land",
+            "actor": "bottown",
+            "created": "2026-11-02T10:38:00Z",
+            "elapsed": "2m 0s"
           }
         },
         {
@@ -971,7 +1013,12 @@
       "scheduler": {
         "id": "milestone-v0-3",
         "agents": "codex=*,kimi=1,agy:gemini-3.8-flash=1,claude=2",
-        "pool": ["codex=*", "kimi=1", "agy:gemini-3.8-flash=1", "claude=2"],
+        "pool": [
+          "codex=*",
+          "kimi=1",
+          "agy:gemini-3.8-flash=1",
+          "claude=2"
+        ],
         "parallel": 2,
         "started_at": "2026-11-02T10:12:00Z",
         "elapsed": "31m 40s",
@@ -981,24 +1028,68 @@
   ],
   "logs": {
     "flow-56-7c1d2e3f4a.e2e": [
-      { "kind": "plain", "text": "bottown flow: post-implement checks for #56 (!62) at 7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d, 2026-11-05T12:52:00+01:00" },
-      { "kind": "plain", "text": "==> [e2e] make e2e" },
-      { "kind": "plain", "text": "go test -tags e2e -count=1 -timeout 30m -v ./e2e/" },
-      { "kind": "plain", "text": "=== RUN   TestE2E" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/up_from_nothing,_then_idempotent" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/accounts,_org_and_labels_match_the_spec" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/policy_and_protection_bound_the_bots" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/run_keys:_role,_repo_scope,_family_rule,_lifecycle" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness" },
-      { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness/approve_first_time" }
+      {
+        "kind": "plain",
+        "text": "bottown flow: e2e commands for #56 (!62) at 7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d, 2026-11-05T12:52:00+01:00"
+      },
+      {
+        "kind": "plain",
+        "text": "==> [e2e] make e2e"
+      },
+      {
+        "kind": "plain",
+        "text": "go test -tags e2e -count=1 -timeout 30m -v ./e2e/"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/up_from_nothing,_then_idempotent"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/accounts,_org_and_labels_match_the_spec"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/policy_and_protection_bound_the_bots"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/run_keys:_role,_repo_scope,_family_rule,_lifecycle"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/flow_with_a_scripted_harness"
+      },
+      {
+        "kind": "plain",
+        "text": "=== RUN   TestE2E/flow_with_a_scripted_harness/approve_first_time"
+      }
     ],
-    "flow-64-9e8d7c6b5a.e2e": [
-      { "kind": "plain", "text": "bottown flow: post-implement checks for #64 (!65) at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d, 2026-11-05T12:54:30+01:00" },
-      { "kind": "plain", "text": "==> [e2e] make e2e-setup" },
-      { "kind": "plain", "text": "docker pull codeberg.org/forgejo/forgejo:13" },
-      { "kind": "plain", "text": "<== passed in 41s (exit 0)" },
-      { "kind": "plain", "text": "==> [e2e] make e2e" },
-      { "kind": "plain", "text": "=== RUN   TestE2E" }
+    "flow-64-9e8d7c6b5a.check": [
+      {
+        "kind": "plain",
+        "text": "bottown flow: check commands for #64 (!65) at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d, 2026-11-05T12:54:30+01:00"
+      },
+      {
+        "kind": "plain",
+        "text": "==> [check] make check"
+      },
+      {
+        "kind": "plain",
+        "text": "gofmt -l . && go mod tidy -diff"
+      },
+      {
+        "kind": "plain",
+        "text": "go vet ./... && go vet -tags e2e ./..."
+      },
+      {
+        "kind": "plain",
+        "text": "go test -race ./..."
+      }
     ],
     "r-5f6a7b8c": [
       {
@@ -1252,6 +1343,12 @@
         "kind": "text",
         "text": "Streaming fits: the writer already flushes per row, and the largest export is 2 GB."
       }
+    ],
+    "land-59": [
+      {
+        "kind": "text",
+        "text": "Running checks at the landing commit"
+      }
     ]
   },
   "raw_logs": {
@@ -1310,8 +1407,8 @@
     },
     "52": {
       "issue": 52,
-      "title": "Audit log streaming",
-      "body": "Stream audit log events over websockets.",
+      "title": "API keys per client",
+      "body": "API keys per client",
       "state": "open",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/52"
     },
@@ -1335,6 +1432,13 @@
       "body": "Enable permessage-deflate compression on websockets.",
       "state": "open",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/56"
+    },
+    "41": {
+      "issue": 41,
+      "title": "Refresh export caches",
+      "body": "Refresh export caches",
+      "state": "open",
+      "url": "http://127.0.0.1:3030/bottown/demo/issues/41"
     }
   },
   "timelines": {
@@ -2286,7 +2390,7 @@
       "mean": 0.4765740740740741
     }
   },
-  "stats":   {
+  "stats": {
     "window": {
       "since": "2026-11-02T00:00:00Z",
       "until": "2026-11-04T00:00:00Z"
