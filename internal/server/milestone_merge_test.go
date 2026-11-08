@@ -29,6 +29,7 @@ type fakeMergeForge struct {
 	mu       sync.Mutex
 	base     string
 	head     string
+	headRef  string // the PR's head branch; issue/7 when empty
 	merged   bool
 	closed   bool // issue #7
 	reviews  []map[string]any
@@ -56,10 +57,14 @@ func (f *fakeMergeForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if f.merged {
 			state = "closed"
 		}
+		ref := f.headRef
+		if ref == "" {
+			ref = "issue/7"
+		}
 		pr := map[string]any{
 			"number": 20, "title": "child", "state": state, "merged": f.merged,
 			"user": map[string]string{"login": "claude"},
-			"head": map[string]string{"ref": "issue/7", "sha": f.head},
+			"head": map[string]string{"ref": ref, "sha": f.head},
 			"base": map[string]string{"ref": f.base},
 		}
 		if f.merged {
@@ -289,6 +294,37 @@ func TestLandDefaultBranchClosesNothing(t *testing.T) {
 	}
 	if !again.AlreadyMerged || again.Issue != 0 || len(f.writes) != 0 {
 		t.Errorf("again = %+v, writes %v; want already merged, nothing written", again, f.writes)
+	}
+}
+
+// A milestone merge from a branch that is not issue/<n>, n positive, closes
+// nothing, and its repeat reports it merged.
+func TestLandMilestoneNonChildClosesNothing(t *testing.T) {
+	for _, ref := range []string{"feature/x", "issue/-7", "issue/0", "issue/99999999999999999999", "issue/7a"} {
+		t.Run(ref, func(t *testing.T) {
+			f := &fakeMergeForge{base: "milestone/m", head: mergeHead, headRef: ref, reviews: []map[string]any{approval("codex", mergeHead)}}
+			s := mergeServer(t, f)
+			in := LandIn{Target: Target{Repo: "demo", Number: 20}, HeadSHA: mergeHead}
+			out, err := s.opLand(t.Context(), secrets.Principal{Actor: "owner"}, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := LandOut{Number: 20, Base: "milestone/m", HeadSHA: mergeHead, MergeCommit: "mmmmmmm"}
+			if out != want {
+				t.Errorf("out = %+v, want %+v", out, want)
+			}
+			if got := strings.Join(f.writes, "\n"); got != "tok_manager POST /api/v1/repos/bottown/demo/pulls/20/merge" {
+				t.Errorf("writes:\n%s\nwant only the merge", got)
+			}
+			f.writes = nil
+			again, err := s.opLand(t.Context(), secrets.Principal{Actor: "owner"}, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !again.AlreadyMerged || again.Issue != 0 || len(f.writes) != 0 {
+				t.Errorf("again = %+v, writes %v; want already merged, nothing written", again, f.writes)
+			}
+		})
 	}
 }
 

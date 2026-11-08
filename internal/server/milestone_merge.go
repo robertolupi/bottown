@@ -98,7 +98,9 @@ func (s *Server) opLand(ctx context.Context, p secrets.Principal, in LandIn) (La
 	}
 	out := LandOut{Number: n, Base: base, HeadSHA: head}
 	if milestone {
-		out.Issue, _ = childIssue(pr.Head.Ref)
+		if n, ok := childIssue(pr.Head.Ref); ok {
+			out.Issue = n
+		}
 	}
 	if pr.HasMerged {
 		// A repeated call: finish closing the child if an earlier one
@@ -222,14 +224,18 @@ func (s *Server) closeChild(mc *forgejo.Client, org, repo string, out LandOut) (
 	return true, nil
 }
 
-// childIssue is the issue number of an issue/<n> branch.
+// childIssue is the issue number of an issue/<n> branch, n positive; any
+// other branch, issue/-7 or an overflowing number included, has none.
 func childIssue(branch string) (int64, bool) {
 	v, ok := strings.CutPrefix(branch, "issue/")
 	if !ok {
 		return 0, false
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
-	return n, err == nil && n > 0
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func deref(s *string) string {
