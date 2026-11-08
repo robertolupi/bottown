@@ -58,10 +58,12 @@ func newMilestoneMerge(g *globals) *cobra.Command {
 		Short: "Merge a milestone child's approved PR into its milestone branch, as the manager",
 		Long: `Merge the open pull request from issue/<issue> into its milestone/* base,
 as the manager account, then close the issue and comment on it with what
-was merged (POST /v1/forge/pr/merge). The server refuses unless the base is
-a milestone/* branch, the PR's head is SHA, and the review assessment
-reports the PR approved at that head (a verifier of another family than
-the author's, or the owner). --sha defaults to the PR's current head.
+was merged (POST /v1/forge/pr/merge, the landing merge). The server refuses
+unless the PR's head is SHA and the review assessment reports the PR
+approved at that head (a verifier of another family than the author's, or
+the owner). It merges fast-forward-only, so the head must contain the
+base's tip; when the base moved, it refuses with base_moved. --sha defaults
+to the PR's current head.
 
 Merging again reports the PR as already merged. Owner only.`,
 		Args: cobra.ExactArgs(1),
@@ -98,11 +100,11 @@ Merging again reports the PR as already merged. Owner only.`,
 
 // milestoneMerge merges issue's open PR at sha, or at its current head when
 // sha is empty.
-func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue int64, sha string) (server.MilestoneMergeOut, error) {
+func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue int64, sha string) (server.LandOut, error) {
 	q := url.Values{"repo": {repo}, "state": {"all"}}
 	var prs []server.PRItem
 	if err := c.Call(ctx, "GET", "/v1/forge/prs?"+q.Encode(), nil, &prs); err != nil {
-		return server.MilestoneMergeOut{}, err
+		return server.LandOut{}, err
 	}
 	branch := fmt.Sprintf("issue/%d", issue)
 	var pr *server.PRItem
@@ -116,17 +118,17 @@ func milestoneMerge(ctx context.Context, c *client.Client, repo string, issue in
 		if pr == nil || (p.State == "open" && pr.State != "open") {
 			pr = p
 		} else if p.State == "open" && pr.State == "open" {
-			return server.MilestoneMergeOut{}, fmt.Errorf("more than one open PR from %s", branch)
+			return server.LandOut{}, fmt.Errorf("more than one open PR from %s", branch)
 		}
 	}
 	if pr == nil {
-		return server.MilestoneMergeOut{}, fmt.Errorf("no open pull request from %s", branch)
+		return server.LandOut{}, fmt.Errorf("no open pull request from %s", branch)
 	}
 	if sha == "" {
 		sha = pr.HeadSHA
 	}
-	var out server.MilestoneMergeOut
-	in := server.MilestoneMergeIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: sha}
+	var out server.LandOut
+	in := server.LandIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: sha}
 	err := c.Call(ctx, "POST", "/v1/forge/pr/merge", in, &out)
 	return out, err
 }

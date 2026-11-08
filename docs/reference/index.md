@@ -15,7 +15,7 @@ only their topic's file.
   - [Reusing an issue branch](runs/issue-branch.md)
   - [A run's base](runs/base.md)
   - [Milestone branch and finish](runs/milestone-branch.md)
-  - [Merging a milestone child](runs/milestone-child-merge.md)
+  - [The landing merge](runs/milestone-child-merge.md) (`POST /v1/forge/pr/merge`)
   - [Milestone run](runs/milestone-run.md)
   - [Scratch directories](runs/scratch-directories.md)
   - [What run gc removes](runs/gc.md)

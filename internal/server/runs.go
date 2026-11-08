@@ -71,6 +71,9 @@ const (
 	// ErrorCodeIssueClosed is an implement or plan run refused because its
 	// issue is closed: a flow whose PR was merged mid-flow stops as merged.
 	ErrorCodeIssueClosed = "issue_closed"
+	// ErrorCodeBaseMoved is a landing merge Forgejo refused because the
+	// base's tip is no longer an ancestor of the landing commit.
+	ErrorCodeBaseMoved = "base_moved"
 )
 
 // RunResponse is a created run and its key. The key is returned once.

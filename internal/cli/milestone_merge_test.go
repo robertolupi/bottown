@@ -12,7 +12,7 @@ import (
 )
 
 func TestMilestoneMerge(t *testing.T) {
-	var got []server.MilestoneMergeIn
+	var got []server.LandIn
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v1/forge/prs":
@@ -21,10 +21,10 @@ func TestMilestoneMerge(t *testing.T) {
 				{"number":5,"state":"open","head_branch":"issue/7","head_sha":"cur"},
 				{"number":6,"state":"closed","head_branch":"issue/9","head_sha":"x"}]`)
 		case "POST /v1/forge/pr/merge":
-			var in server.MilestoneMergeIn
+			var in server.LandIn
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			got = append(got, in)
-			_ = json.NewEncoder(w).Encode(server.MilestoneMergeOut{Number: in.Number, HeadSHA: in.HeadSHA})
+			_ = json.NewEncoder(w).Encode(server.LandOut{Number: in.Number, HeadSHA: in.HeadSHA})
 		default:
 			http.NotFound(w, r)
 		}
