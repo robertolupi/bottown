@@ -42,5 +42,5 @@ PR is approved: a conflicting base starts a conflict implement round (up
 to `--rounds`, then stops `conflicts with base`), even when the PR is
 already approved, while a clean base is never merged into the PR. An
 approved PR that is behind its base cleanly stops `ready to merge` at its
-own head, and its detail adds `: behind \`<base>\`, cleanly; \`bottown
-merge-all\` lands it`.
+own head, and its detail adds `: behind \`<base>\` by K commits, cleanly;
+\`bottown merge-all\` lands it`.

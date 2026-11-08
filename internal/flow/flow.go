@@ -479,7 +479,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				if base == "" {
 					base = "main"
 				}
-				detail += fmt.Sprintf(": behind `%s`, cleanly; `bottown merge-all` lands it", base)
+				n := merge.BehindCommits
+				if n <= 0 {
+					n = 1
+				}
+				detail += fmt.Sprintf(": behind `%s` by %d commits, cleanly; `bottown merge-all` lands it", base, n)
 			}
 			return s.stop(ctx, result, ReadyToMerge, detail)
 		case assessment.Decision == review.ChangesRequested && !assessment.AtHead(pr.HeadSHA):

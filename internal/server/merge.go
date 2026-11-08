@@ -22,11 +22,12 @@ import (
 // PRMergeStatus is the result of merging the base into a PR head without a
 // worktree. HeadSHA and BaseSHA identify the forge refs that were tested.
 type PRMergeStatus struct {
-	Behind    bool     `json:"behind"`
-	Clean     bool     `json:"clean"`
-	HeadSHA   string   `json:"head_sha"`
-	BaseSHA   string   `json:"base_sha"`
-	Conflicts []string `json:"conflicts,omitempty"`
+	Behind        bool     `json:"behind"`
+	BehindCommits int      `json:"behind_commits,omitempty"`
+	Clean         bool     `json:"clean"`
+	HeadSHA       string   `json:"head_sha"`
+	BaseSHA       string   `json:"base_sha"`
+	Conflicts     []string `json:"conflicts,omitempty"`
 	// Files are the paths the PR's own delta touches, from the merge base
 	// to the head, a rename counted as both paths. merge-all orders the
 	// batch by their overlap (design §5.2).
@@ -123,6 +124,11 @@ func (s *Server) prMergeState(ctx context.Context, p secrets.Principal, in Targe
 		return state, nil
 	}
 	state.Behind = true
+	behindCount, err := mergeGit(ctx, gitDir, nil, nil, "rev-list", "--count", state.HeadSHA+".."+state.BaseSHA)
+	if err != nil {
+		return mergeState{}, err
+	}
+	state.BehindCommits, _ = strconv.Atoi(strings.TrimSpace(behindCount))
 	merged, err := gitmerge.MergeTree(ctx, gitDir, state.HeadSHA, state.BaseSHA)
 	if err != nil {
 		return mergeState{}, err

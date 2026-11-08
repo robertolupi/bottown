@@ -2866,7 +2866,7 @@ fi`
 			assertStopComment(issue, "ready to merge")
 			var comments []struct{ Body string }
 			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
-			want := "behind `main`, cleanly; `bottown merge-all` lands it"
+			want := "behind `main` by 1 commits, cleanly; `bottown merge-all` lands it"
 			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, want) {
 				t.Errorf("stop comment lacks %q: %+v", want, comments)
 			}

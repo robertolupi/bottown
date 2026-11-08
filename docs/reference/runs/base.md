@@ -32,11 +32,11 @@ is "conflicts with base" and names the base; stops flows wrote before as
 When a pull request's base has moved and the trial merge is clean, the
 flow does not merge the base into the PR: an unapproved PR is gated and
 verified at its own head, and an approved PR stops `ready to merge` at its
-own head with `: behind \`<base>\`, cleanly; \`bottown merge-all\` lands
-it` in its detail. When the trial merge would conflict, the flow starts a
-conflict implement round (up to `--rounds`) ahead of the `ready to merge`
-stop, so an approved PR whose base later conflicts gets a conflict round
-before any verify.
+own head with `: behind \`<base>\` by K commits, cleanly; \`bottown
+merge-all\` lands it` in its detail. When the trial merge would conflict,
+the flow starts a conflict implement round (up to `--rounds`) ahead of the
+`ready to merge` stop, so an approved PR whose base later conflicts gets a
+conflict round before any verify.
 
 While a request for changes stands at the head, the flow does not start a
 conflict round: the implement round answers the request first, and any

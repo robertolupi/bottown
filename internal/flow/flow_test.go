@@ -629,7 +629,7 @@ func TestFlowBehindCleanApprovedStopsReadyToMerge(t *testing.T) {
 	for _, pr := range []server.PROut{openPR(), milestonePR()} {
 		for _, attended := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/attended=%v", pr.BaseBranch, attended), func(t *testing.T) {
-				api := &fakeAPI{open: true, pr: pr, merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
+				api := &fakeAPI{open: true, pr: pr, merge: server.PRMergeStatus{Behind: true, BehindCommits: 2, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
 				approve(api)
 				opts := testOptions()
 				opts.Attended = attended
@@ -649,7 +649,7 @@ func TestFlowBehindCleanApprovedStopsReadyToMerge(t *testing.T) {
 				if got := out.String(); strings.Contains(got, "[Y/n]") || strings.Contains(got, "Merge ") {
 					t.Fatalf("output = %q, want no merge prompt or merge", got)
 				}
-				want := fmt.Sprintf("!12 is approved at h1: behind `%s`, cleanly; `bottown merge-all` lands it", pr.BaseBranch)
+				want := fmt.Sprintf("!12 is approved at h1: behind `%s` by 2 commits, cleanly; `bottown merge-all` lands it", pr.BaseBranch)
 				if result.Detail != want {
 					t.Fatalf("detail = %q, want %q", result.Detail, want)
 				}
@@ -665,7 +665,7 @@ func TestFlowBehindCleanUnapprovedGatedAndVerifiedAtOwnHead(t *testing.T) {
 	for _, pr := range []server.PROut{openPR(), milestonePR()} {
 		for _, attended := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/attended=%v", pr.BaseBranch, attended), func(t *testing.T) {
-				api := &fakeAPI{open: true, pr: pr, merge: server.PRMergeStatus{Behind: true, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
+				api := &fakeAPI{open: true, pr: pr, merge: server.PRMergeStatus{Behind: true, BehindCommits: 3, Clean: true, HeadSHA: "h1", BaseSHA: "b2"}}
 				checker := &fakeChecker{check: passing}
 				opts := gateOptions()
 				opts.Attended = attended
@@ -696,7 +696,7 @@ func TestFlowBehindCleanUnapprovedGatedAndVerifiedAtOwnHead(t *testing.T) {
 				if got := out.String(); strings.Contains(got, "[Y/n]") || strings.Contains(got, "merged ") {
 					t.Fatalf("output = %q, want no merge prompt or merge", got)
 				}
-				want := fmt.Sprintf("!12 is approved at h1: behind `%s`, cleanly; `bottown merge-all` lands it", pr.BaseBranch)
+				want := fmt.Sprintf("!12 is approved at h1: behind `%s` by 3 commits, cleanly; `bottown merge-all` lands it", pr.BaseBranch)
 				if result.Detail != want {
 					t.Fatalf("detail = %q, want %q", result.Detail, want)
 				}
