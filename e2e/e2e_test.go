@@ -2800,7 +2800,7 @@ fi`
 			assertStopComment(issue, "ready to merge")
 		})
 
-		t.Run("clean merge of main keeps the approval", func(t *testing.T) {
+		t.Run("approved PR behind clean main stops ready to merge at own head", func(t *testing.T) {
 			remote := "bottown-" + a.name
 			ownerGit := func(args ...string) {
 				t.Helper()
@@ -2810,7 +2810,7 @@ fi`
 					t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 				}
 			}
-			issue := newIssue("flow clean merge of main")
+			issue := newIssue("flow clean behind main")
 			dir := t.TempDir()
 			script := flowScript(dir, "approve")
 			out, err := withHarness(script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
@@ -2842,42 +2842,33 @@ fi`
 				t.Fatal(err)
 			}
 			git(t, demo, "add", name)
-			git(t, demo, "commit", "-qm", "main moves for clean merge")
+			git(t, demo, "commit", "-qm", "main moves cleanly")
 			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
 
 			out, err = withHarnessInput("y\n", script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
 			if err != nil || !strings.Contains(out, "ready to merge") {
-				t.Fatalf("flow after clean merge: %v\n%s", err, out)
+				t.Fatalf("flow when behind clean main: %v\n%s", err, out)
 			}
-			if !strings.Contains(out, fmt.Sprintf("Merge main into %s for !%d? [Y/n]", branch, prn)) {
-				t.Errorf("flow did not ask for confirmation:\n%s", out)
+			if strings.Contains(out, "[Y/n]") || strings.Contains(out, "Merge main into") {
+				t.Errorf("flow asked for or performed a clean merge:\n%s", out)
 			}
 			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
-				t.Error("the clean merge cost another implement or verify run")
+				t.Error("behind clean main cost another implement or verify run")
 			}
 			var pr struct {
 				Head struct{ Sha string }
 			}
 			prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
 			a.mustAPI(owner, "GET", prPath, nil, &pr)
-			if pr.Head.Sha == old {
-				t.Fatalf("PR head stayed at %s", old)
-			}
-			ownerGit("fetch", "-q", remote)
-			if parents := strings.Fields(git(t, demo, "show", "-s", "--format=%P", pr.Head.Sha)); len(parents) != 2 || parents[0] != old {
-				t.Fatalf("merge parents = %v, want old head %s and main", parents, old)
-			}
-			if author := git(t, demo, "show", "-s", "--format=%an", pr.Head.Sha); author != "bottown" {
-				t.Errorf("merge author = %q, want bottown", author)
-			}
-			if message := git(t, demo, "show", "-s", "--format=%B", pr.Head.Sha); !strings.Contains(message, "Automatic clean merge by bottown") {
-				t.Errorf("merge message = %q", message)
+			if pr.Head.Sha != old {
+				t.Fatalf("PR head moved from %s to %s", old, pr.Head.Sha)
 			}
 			assertStopComment(issue, "ready to merge")
 			var comments []struct{ Body string }
 			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
-			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "carried over") {
-				t.Errorf("approval did not carry over: %+v", comments)
+			want := "behind `main` by 1 commits, cleanly; `bottown merge-all` lands it"
+			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, want) {
+				t.Errorf("stop comment lacks %q: %+v", want, comments)
 			}
 			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
 				code, b := a.api(owner, "POST", prPath+"/merge", map[string]any{"Do": "merge", "delete_branch_after_merge": true})
@@ -2885,7 +2876,7 @@ fi`
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatalf("owner merge after automatic clean merge: %d %s", code, b)
+					t.Fatalf("owner merge: %d %s", code, b)
 				}
 			}
 		})

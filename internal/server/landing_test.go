@@ -452,6 +452,20 @@ func TestPRMergeBaseFiles(t *testing.T) {
 	if !slices.Equal(status.Files, want) {
 		t.Fatalf("files = %v, want %v", status.Files, want)
 	}
+	if status.Behind || status.BehindCommits != 0 {
+		t.Fatalf("status = %+v, want not behind", status)
+	}
+
+	gitDirBehind, _, _ := landingRepo(t)
+	fBehind := &landingForge{gitDir: gitDirBehind, baseRef: "main", headRef: "issue/1", title: "the PR"}
+	sBehind := landingServer(t, fBehind)
+	statusBehind, err := sBehind.opPRMergeStatus(t.Context(), secrets.Principal{Actor: "rlupi"}, Target{Repo: "demo", Number: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !statusBehind.Behind || !statusBehind.Clean || statusBehind.BehindCommits != 1 {
+		t.Fatalf("status = %+v, want behind cleanly by 1 commit", statusBehind)
+	}
 }
 
 // TestPRLandingActorsRefused checks an actor's and a run's key get 403 on
