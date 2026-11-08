@@ -32,6 +32,8 @@ import {
   selectDefaultActors,
   standaloneLiveChecks,
   standaloneLiveRuns,
+  statusDue,
+  statusRefreshMs,
   toggleExpandedThread,
   updateLogTailFollow,
 } from '../src/state.ts';
@@ -151,6 +153,14 @@ test('parseLivePollSnapshot and nextPollDelayMs handle active and idle polling s
   const checking = parseLivePollSnapshot({ live_runs: [], live_checks: [{ id: 'flow-1-ab.e2e' }], active_flows: [] });
   assert.equal(checking.liveChecks.length, 1);
   assert.equal(nextPollDelayMs(checking.liveRuns, checking.activeFlows, checking.liveChecks), 2500);
+});
+
+test('statusDue reloads status that is never loaded or older than statusRefreshMs', () => {
+  const now = 1_000_000;
+  assert.equal(statusDue(0, now), true);
+  assert.equal(statusDue(now, now), false);
+  assert.equal(statusDue(now - statusRefreshMs + 1, now), false);
+  assert.equal(statusDue(now - statusRefreshMs, now), true);
 });
 
 test('buildFlowActionPayload and buildRunActionPayload normalize action requests', () => {
