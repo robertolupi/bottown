@@ -59,6 +59,14 @@ var ErrIssueClosed = errors.New("issue is closed")
 // maxRetryDelay bounds the wait between tries of a run whose actor is busy.
 const maxRetryDelay = time.Minute
 
+// DefaultCheckRounds is how many implement runs a flow starts to answer
+// failed post-implement checks when its caller names no budget:
+// `bottown flow`'s --check-rounds default, and the one a caller running
+// the supervisor in-process (bottown merge-all's repair) uses too, so a
+// first failure after a conflict round starts a fix round rather than
+// stopping at `checks failed`.
+const DefaultCheckRounds = 2
+
 // ErrHeadMoved marks a verify run creation refused because the PR's head is
 // no longer the SHA the flow asked for: what the flow gated is not what the
 // verifier would review.

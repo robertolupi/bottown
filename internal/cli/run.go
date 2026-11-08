@@ -231,6 +231,9 @@ type runContext struct {
 	org  string
 	repo string // name within org
 	key  string // owner API key
+	// checkout is the checkout's own repository name within the org, which
+	// --repo may point past.
+	checkout string
 }
 
 func openRunContext(g *globals) (*runContext, error) {
@@ -252,7 +255,11 @@ func openRunContextRepo(g *globals, repoOverride string) (*runContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &runContext{inst: inst, ws: ws, org: org, repo: name, key: key}, nil
+	checkout := name
+	if full, ok := repoOnInstance(top, inst); ok {
+		_, checkout, _ = strings.Cut(full, "/")
+	}
+	return &runContext{inst: inst, ws: ws, org: org, repo: name, key: key, checkout: checkout}, nil
 }
 
 // ownerRepo resolves the main checkout an owner command runs in, its

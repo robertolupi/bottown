@@ -1,7 +1,8 @@
 # The landing merge
 
 The shared [landing primitive](../land.md) describes the host-side steps,
-policies and outcomes; command integration is separate work.
+policies and outcomes; [`bottown merge-all`](../merge-all.md), milestone run
+and milestone merge are its callers.
 
 `POST /v1/forge/pr/merge` (owner only; `{"repo", "number", "head_sha"}`)
 is the one operation through which bottown merges a pull request, and it
@@ -27,7 +28,10 @@ head to Forgejo (`HeadCommitId`). That is Forgejo's compare-and-swap on the
 base: the merge succeeds only when the base's tip is an ancestor of that
 exact head, which a [landing commit](../landing.md) built on the base's
 tip is, and the base then moves to the head. No merge commit is built at
-merge time, so the tree that lands is the tree that was checked. When the
+merge time, so the tree that lands is the tree that was checked. Forgejo
+recomputes a pull request's mergeability asynchronously after a push, so a
+merge right after the landing push can be refused with 405 until it
+settles; the server waits and tries again, bounded (30 seconds). When the
 base moved since the landing commit was built, Forgejo refuses (Forgejo 15
 answers 500 with no message); the server then reads the base in the
 forge's repository and, if its tip is no longer an ancestor of the head,

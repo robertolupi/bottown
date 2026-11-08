@@ -374,6 +374,7 @@ type PRItem struct {
 	HeadSHA     string `json:"head_sha,omitempty"`
 	BaseBranch  string `json:"base_branch,omitempty"`
 	Mergeable   bool   `json:"mergeable"`
+	Draft       bool   `json:"draft,omitempty"`     // Forgejo's draft flag; the SDK's PullRequest lacks it
 	Milestone   string `json:"milestone,omitempty"` // the milestone's title
 	ReviewState string `json:"review_state"`
 	// ReviewReason says why, when an approval carried over (internal/review).
@@ -856,9 +857,14 @@ func (s *Server) opPRList(ctx context.Context, p secrets.Principal, in PRListIn)
 	if err != nil {
 		return nil, err
 	}
+	drafts, err := c.OpenPRDrafts(org, repo)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]PRItem, 0, len(prs))
 	for _, pr := range prs {
 		item := NewPRItem(pr)
+		item.Draft = drafts[pr.Index]
 		if pr.HasMerged {
 			item.ReviewState = "merged"
 		} else if pr.State == sdk.StateClosed {

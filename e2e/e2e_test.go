@@ -3511,6 +3511,238 @@ fi`
 		})
 	})
 
+	t.Run("merge-all lands approved PRs", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+		impl := strings.TrimSpace(a.mustCmd("", "credential", "key", "claude", "--full"))
+		ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex", "--full"))
+
+		// The check command waits on a gate, so a landing's checks can be
+		// held open while the test moves main under them.
+		gateDir := t.TempDir()
+		gate, started := filepath.Join(gateDir, "gate"), filepath.Join(gateDir, "started")
+		checkCmd := fmt.Sprintf("touch %s; while [ ! -e %s ]; do sleep 0.1; done; echo check", started, gate)
+		if err := os.WriteFile(gate, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		lines := func(first, last string) string {
+			var b strings.Builder
+			b.WriteString(first + "\n")
+			for i := 2; i <= 19; i++ {
+				fmt.Fprintf(&b, "%d\n", i)
+			}
+			b.WriteString("20\n" + last + "\n")
+			return b.String()
+		}
+		pushMain := func(files map[string]string, msg string) string {
+			t.Helper()
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			for name, content := range files {
+				if err := os.WriteFile(filepath.Join(demo, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				git(t, demo, "add", name)
+			}
+			git(t, demo, "commit", "-q", "-m", msg)
+			sha := git(t, demo, "rev-parse", "HEAD")
+			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+			return sha
+		}
+
+		// The repository's check and e2e commands, so both gate statuses are
+		// recorded at every landing commit.
+		pushMain(map[string]string{
+			".bottown.toml": "check = [" + strconv.Quote(checkCmd) + "]\ne2e = [\"echo e2e\"]\n",
+			"a.txt":         "a\n", "b.txt": "b\n", "d.txt": "d\n", "ctx.txt": lines("1", "21"),
+		}, "merge-all setup")
+
+		type pull struct {
+			Number         int64
+			State          string
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		open := func(file, content string) (prn int64, prPath, head string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "merge-all " + file}, &is)
+			branch := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			if err := os.WriteFile(filepath.Join(demo, file), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "change "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+branch); err != nil {
+				t.Fatalf("push %s: %v\n%s", branch, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": branch, "base": "main", "title": "merge-all " + file,
+				"body": fmt.Sprintf("Change %s.\n\nCloses #%d", file, is.Number),
+			}, &pr)
+			return pr.Number, fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number), pr.Head.Sha
+		}
+		approve := func(prPath, head string) {
+			t.Helper()
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": head}, nil)
+		}
+		get := func(prPath string) pull {
+			t.Helper()
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			return pr
+		}
+		verifyRuns := func() int {
+			t.Helper()
+			req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs?repo=demo", nil)
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var rs []struct{ Kind string }
+			if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&rs) != nil {
+				t.Fatalf("runs: %d", resp.StatusCode)
+			}
+			n := 0
+			for _, r := range rs {
+				if r.Kind == "verify" {
+					n++
+				}
+			}
+			return n
+		}
+		statuses := func(sha string) map[string]string {
+			t.Helper()
+			var cs []struct {
+				Context string
+				Status  string `json:"status"`
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/commits/"+sha+"/statuses", nil, &cs)
+			out := map[string]string{}
+			for _, s := range cs {
+				out[s.Context] = s.Status
+			}
+			return out
+		}
+
+		pr1, p1, h1 := open("a.txt", "a1\n")
+		pr2, p2, h2 := open("b.txt", "b1\n")
+		pr3, p3, h3 := open("ctx.txt", lines("1", "pr")) // changes the last line
+		// main moves: d.txt, and ctx.txt's line 18, which is inside the
+		// context of PR3's change to line 21 (but far enough that the merge
+		// is clean), so PR3's landing patch is no longer its head's and the
+		// approval does not carry.
+		before := pushMain(map[string]string{"d.txt": "d2\n", "ctx.txt": strings.Replace(lines("1", "21"), "18\n", "18m\n", 1)}, "main moves")
+		approve(p1, h1)
+		approve(p2, h2)
+		approve(p3, h3)
+
+		// Two approved PRs behind main land, with no new verify run.
+		verifyBefore := verifyRuns()
+		out, err := a.cmd(demo, "merge-all", fmt.Sprint(pr1), fmt.Sprint(pr2))
+		if err != nil {
+			t.Fatalf("merge-all !%d !%d: %v\n%s", pr1, pr2, err, out)
+		}
+		if verifyAfter := verifyRuns(); verifyAfter != verifyBefore {
+			t.Errorf("merge-all started %d verify run(s)", verifyAfter-verifyBefore)
+		}
+		landed1, landed2 := get(p1), get(p2)
+		for _, pr := range []pull{landed1, landed2} {
+			if !pr.Merged {
+				t.Fatalf("PR !%d not merged:\n%s", pr.Number, out)
+			}
+			st := statuses(pr.MergeCommitSHA)
+			for _, ctx := range []string{"bottown/check", "bottown/e2e"} {
+				if st[ctx] != "success" {
+					t.Errorf("PR !%d: status %s at %s = %q, want success (%v)", pr.Number, ctx, pr.MergeCommitSHA, st[ctx], st)
+				}
+			}
+		}
+		ownerGit("fetch", "-q", remote)
+		subjects := strings.Split(ownerGit("log", "--first-parent", "--format=%s", before+".."+remote+"/main"), "\n")
+		merges := 0
+		for _, s := range subjects {
+			if strings.HasPrefix(s, "Merge !") {
+				merges++
+			}
+		}
+		if merges != 2 {
+			t.Errorf("main's first-parent history between %s and the tip has %d landing merges, want 2: %v", before[:8], merges, subjects)
+		}
+
+		// A third whose context main edited is reported needs verify.
+		out, err = a.cmd(demo, "merge-all", fmt.Sprint(pr3))
+		if err == nil {
+			t.Errorf("merge-all on a lost carry exited 0:\n%s", out)
+		}
+		if !strings.Contains(out, "needs verify") {
+			t.Errorf("merge-all did not report needs verify:\n%s", out)
+		}
+		if get(p3).Merged {
+			t.Error("the lost-carry PR merged")
+		}
+
+		// main moving during a landing's checks: the landing is rebuilt on
+		// the new base and lands at a new landing commit.
+		pr4, p4, h4 := open("e.txt", "e1\n")
+		approve(p4, h4)
+		_ = os.Remove(gate)
+		_ = os.Remove(started)
+		cmd := exec.Command(bin, "merge-all", fmt.Sprint(pr4))
+		cmd.Env, cmd.Dir = a.env(), demo
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		var landing1 string
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+			if head := get(p4).Head.Sha; head != h4 {
+				landing1 = head
+				break
+			}
+			if time.Now().After(deadline) {
+				cmd.Process.Kill()
+				t.Fatalf("no landing commit for !%d:\n%s", pr4, buf.String())
+			}
+		}
+		moved := pushMain(map[string]string{"f.txt": "f1\n"}, "main moves during checks")
+		if err := os.WriteFile(gate, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("merge-all over a moved base: %v\n%s", err, buf.String())
+		}
+		final := get(p4)
+		if !final.Merged {
+			t.Fatalf("PR !%d not merged after main moved during the checks:\n%s", pr4, buf.String())
+		}
+		if final.MergeCommitSHA == landing1 {
+			t.Errorf("landing commit %s was not rebuilt on the new base", landing1)
+		}
+		ownerGit("fetch", "-q", remote)
+		if parent := ownerGit("rev-parse", final.MergeCommitSHA+"^1"); parent != moved {
+			t.Errorf("the rebuilt landing commit's first parent is %s, want the moved main tip %s", parent, moved)
+		}
+	})
+
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {
 		if out, err := exec.Command("docker", "restart", a.cfg.Container()).CombinedOutput(); err != nil {
 			t.Fatalf("docker restart: %v %s", err, out)
