@@ -186,8 +186,11 @@ the landing merge of design §4 step 6 and §9, keeping the route
   carried approvals (`undismissCarried`) before merging, so Forgejo's
   protection counts them;
 - merge as `manager` with `Style: fast-forward-only` and `HeadCommitId`;
-  a 409 from Forgejo because the base moved is returned as its own
-  condition (`base_moved`), distinct from the other refusals;
+  Forgejo 15 refuses a moved base with a 500 and no message (the spike,
+  design §4.1), so on a 409 or 500 re-read the base: if its tip is no
+  longer an ancestor of the landing commit, return its own condition
+  (`base_moved`), distinct from the other refusals; otherwise return
+  Forgejo's error;
 - close and comment on the child issue only when the base is
   `milestone/*` and the head is `issue/<N>`; on the default branch rely on
   the PR's closing keywords and never close an issue from a branch name;
@@ -197,6 +200,8 @@ This issue starts only after the spike passed. If it failed, this issue
 waits for the redesign of design §4.1, and is rewritten to its atomic
 guard; it is never built on an ancestor check followed by a merge-commit
 merge, which lets a base commit that moved in between land unchecked.
+The spike (#406) found only the status wrong (500, not 409); the owner
+kept the style with the read-after classification above (design §4.1).
 `bottown milestone merge` keeps working unchanged through the operation.
 
 ### Acceptance criteria
