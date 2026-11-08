@@ -155,28 +155,111 @@ type RunRequest struct {
 	Round, Rounds int
 }
 
-// CheckRequest is the post-implement checks at one PR head.
+// The check groups a checker can run: the repository's check and e2e
+// commands, from .bottown.toml on its default branch. Each is recorded as
+// the owner's bottown/<group> commit status.
+const (
+	GroupCheck = "check"
+	GroupE2E   = "e2e"
+)
+
+// CheckRequest is the checks to run at one PR head.
 type CheckRequest struct {
 	Repo  string
 	Issue int64
 	PR    int64
 	SHA   string
+	// Groups are the check groups to run, in order (GroupCheck, GroupE2E);
+	// none is GroupE2E alone, the flow's post-implement checks.
+	Groups []string
 }
 
-// CheckOutcome is how the post-implement checks went.
-type CheckOutcome struct {
-	// Skipped: the repository names no post-implement checks.
+// RunGroups is req's groups: GroupE2E when it names none.
+func (req CheckRequest) RunGroups() []string {
+	if len(req.Groups) == 0 {
+		return []string{GroupE2E}
+	}
+	return req.Groups
+}
+
+// GroupOutcome is how one check group went.
+type GroupOutcome struct {
+	Group string
+	// Skipped: the repository names no commands for the group; Description
+	// says so, and there is no log.
 	Skipped bool
 	Passed  bool
 	// Description is the commit status's: the commands and how long they
 	// took, or which one failed. Summary adds the first failing lines.
 	Description string
 	Summary     string
-	Log         string // the full log's path
+	Log         string // the group's full log's path
 }
 
-// Checker runs the post-implement checks (the repository's e2e commands)
-// in a clean worktree at a PR head, with no agent involved.
+// CheckOutcome is how the checks went.
+type CheckOutcome struct {
+	// Skipped: the repository names no commands for any requested group.
+	Skipped bool
+	Passed  bool
+	// Description, Summary and Log are the failed group's, else the last
+	// one's that ran; with more than one group, Description is those of
+	// the groups listed, each after its group's name.
+	Description string
+	Summary     string
+	Log         string
+	// Groups are the requested groups that ran or were skipped, in order;
+	// those after a failed group did not run and are not listed.
+	Groups []GroupOutcome
+}
+
+// Ran is the groups that ran, skipped ones left out.
+func (o CheckOutcome) Ran() []string {
+	var out []string
+	for _, g := range o.Groups {
+		if !g.Skipped {
+			out = append(out, g.Group)
+		}
+	}
+	return out
+}
+
+// Failed is the group that failed, or "".
+func (o CheckOutcome) Failed() string {
+	for _, g := range o.Groups {
+		if !g.Skipped && !g.Passed {
+			return g.Group
+		}
+	}
+	return ""
+}
+
+// GateRecorder records a check group's result at a commit as the owner's
+// bottown/<check> status, with the gate mark.
+type GateRecorder interface {
+	RecordGate(ctx context.Context, repo, sha, check, state, description string) error
+}
+
+// RecordChecks records each group of o that ran as its status at sha,
+// through rec: the path the flow's e2e gate records its result by.
+func RecordChecks(ctx context.Context, rec GateRecorder, repo, sha string, o CheckOutcome) error {
+	for _, g := range o.Groups {
+		if g.Skipped {
+			continue
+		}
+		state := "failure"
+		if g.Passed {
+			state = "success"
+		}
+		if err := rec.RecordGate(ctx, repo, sha, g.Group, state, g.Description); err != nil {
+			return fmt.Errorf("recording the %s checks at %s: %w", g.Group, shortSHA(sha), err)
+		}
+	}
+	return nil
+}
+
+// Checker runs check groups (by default the repository's e2e commands,
+// the flow's post-implement checks) in a clean worktree at a PR head,
+// with no agent involved.
 type Checker interface {
 	Check(context.Context, CheckRequest) (CheckOutcome, error)
 	// LogPath is where Check keeps req's log, for a resumed flow.
@@ -205,9 +288,9 @@ type API interface {
 	ReconcileCarries(context.Context, string, int64) error
 	LiveRuns(context.Context, string) ([]secrets.Run, error)
 	Comment(context.Context, string, int64, string) error
-	// RecordGate writes the post-implement checks' result at sha as the
-	// flow's bottown/e2e commit status.
-	RecordGate(ctx context.Context, repo, sha, state, description string) error
+	// RecordGate writes a check group's result at sha as the flow's
+	// bottown/<check> commit status.
+	GateRecorder
 	// GateFailures lists the PR's commits where they failed.
 	GateFailures(ctx context.Context, repo string, pr int64) ([]string, error)
 	// PRMergeStatus trial-merges the PR's base into its head; MergeBase
@@ -565,7 +648,7 @@ func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
 // process, is the flow's memory, so a resumed flow does not check a head
 // twice.
 func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (CheckOutcome, error) {
-	req := CheckRequest{Repo: opts.Repo, Issue: opts.Issue, PR: pr.Number, SHA: pr.HeadSHA}
+	req := CheckRequest{Repo: opts.Repo, Issue: opts.Issue, PR: pr.Number, SHA: pr.HeadSHA, Groups: []string{GroupE2E}}
 	if st, ok := gateStatus(pr); ok {
 		return CheckOutcome{Passed: st.State == "success", Description: st.Description, Log: s.Checker.LogPath(req)}, nil
 	}
@@ -583,8 +666,8 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	if outcome.Passed {
 		state = "success"
 	}
-	if err := s.API.RecordGate(ctx, opts.Repo, pr.HeadSHA, state, outcome.Description); err != nil {
-		return outcome, fmt.Errorf("recording the post-implement checks at %s: %w", shortSHA(pr.HeadSHA), err)
+	if err := RecordChecks(ctx, s.API, opts.Repo, pr.HeadSHA, outcome); err != nil {
+		return outcome, err
 	}
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks %s at %s; log: %s\n", opts.Issue, state, shortSHA(pr.HeadSHA), outcome.Log)
@@ -610,6 +693,15 @@ func RunCheck(ctx context.Context, c Checker, req CheckRequest, timeout time.Dur
 		outcome.Passed, outcome.Skipped = false, false
 		outcome.Description = fmt.Sprintf("timed out after %s; %s", timeout, outcome.Description)
 		outcome.Summary = outcome.Description + "\n" + outcome.Summary
+		// The group that was running when time ran out is the failed one.
+		for i := len(outcome.Groups) - 1; i >= 0; i-- {
+			if g := &outcome.Groups[i]; !g.Skipped {
+				g.Passed = false
+				g.Description = fmt.Sprintf("timed out after %s; %s", timeout, g.Description)
+				g.Summary = g.Description + "\n" + g.Summary
+				break
+			}
+		}
 	}
 	return outcome, nil
 }
