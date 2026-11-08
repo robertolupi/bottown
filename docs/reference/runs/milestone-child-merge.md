@@ -66,8 +66,10 @@ at the combined head, behind whatever siblings landed since its approval.
 `--sha`, if given, is the head the PR must be at. It prints Land's
 outcome; on a conflict, an approval that does not carry to the landing
 commit, or failed checks (the line names the check's log) it merges
-nothing and exits 1. A child whose PR is merged already is reported as
-merged.
+nothing and exits 1. A child whose PR is merged already is not checked
+again: it calls this endpoint once more, which closes `#<C>` if an
+earlier call stopped after the merge, and reports the PR as merged; it
+fails if that call does.
 
 When milestone run lands a child and the outcome is a conflict or a lost
 approval, it sends the child back to its flow once per invocation, which

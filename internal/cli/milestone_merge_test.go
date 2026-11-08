@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/flow"
 	"github.com/robertolupi/bottown/internal/milestone"
+	"github.com/robertolupi/bottown/internal/server"
 )
 
 func TestChildPR(t *testing.T) {
@@ -117,6 +119,54 @@ func TestMilestoneLandOutcomes(t *testing.T) {
 	}
 	if f.prs[1].headSHA != head || len(f.merges) != 0 {
 		t.Errorf("--sha mismatch landed: head %s, merges %v", f.prs[1].headSHA, f.merges)
+	}
+}
+
+// A merged PR whose child is still open, because the call that merged it
+// stopped before closing it, is finished by the next call: the landing
+// merge again, with no checks. Its failure is reported, not a landing.
+func TestMilestoneLandFinishesMergedChild(t *testing.T) {
+	var merges []server.LandIn
+	closed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1/forge/prs":
+			fmt.Fprint(w, `[{"number":3,"state":"closed","merged":true,"head_branch":"issue/7","head_sha":"h3","base_branch":"milestone/demo"}]`)
+		case "POST /v1/forge/pr/merge":
+			var in server.LandIn
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			merges = append(merges, in)
+			if len(merges) == 1 {
+				http.Error(w, `{"error":"close child issue #7: forge unavailable"}`, http.StatusBadGateway)
+				return
+			}
+			out := server.LandOut{Number: 3, Issue: 7, Base: "milestone/demo", HeadSHA: "h3", AlreadyMerged: true, IssueClosed: !closed}
+			closed = true
+			_ = json.NewEncoder(w).Encode(out)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	land := func() (milestone.Landing, error) {
+		return milestoneLand(t.Context(), client.New(srv.URL, "k"), &okChecker{passes: false}, t.TempDir(), time.Minute, "demo", 7, "")
+	}
+	if l, err := land(); err == nil || !strings.Contains(err.Error(), "finishing !3's merge") {
+		t.Errorf("failed closure: %+v, %v; want an error", l, err)
+	}
+	l, err := land()
+	if err != nil || l.Kind != milestone.Landed || !strings.Contains(l.Reason, "already merged; closed #7") {
+		t.Fatalf("retry: %+v, %v", l, err)
+	}
+	if want := (milestone.Merge{PR: 3, HeadSHA: "h3", Base: "milestone/demo"}); l.Merge != want {
+		t.Errorf("merge %+v, want %+v", l.Merge, want)
+	}
+	if l, err := land(); err != nil || l.Kind != milestone.Landed || strings.Contains(l.Reason, "closed") {
+		t.Errorf("third call: %+v, %v", l, err)
+	}
+	if len(merges) != 3 || merges[1].Number != 3 || merges[1].HeadSHA != "h3" || merges[1].Repo != "demo" {
+		t.Errorf("merge calls %+v", merges)
 	}
 }
 

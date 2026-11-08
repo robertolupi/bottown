@@ -72,7 +72,8 @@ approval does not carry to the landing commit, or the checks fail there.
 When the base moves during the checks, it builds and checks the landing
 again. --sha, if given, is the head the PR must be at.
 
-Landing again reports the PR as already merged. Owner only.`,
+Landing again reports the PR as already merged, without checking it again,
+and closes the issue if an earlier call stopped after the merge. Owner only.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			issue, err := strconv.ParseInt(strings.TrimPrefix(args[0], "#"), 10, 64)
@@ -108,7 +109,9 @@ Landing again reports the PR as already merged. Owner only.`,
 // land.Land with the milestone policy: the check group at the landing
 // commit, then the fast-forward-only merge as the manager, which closes
 // the child. The PR's head must be sha, unless sha is empty. A PR merged
-// already is reported as landed, and not checked again.
+// already is not checked again: the landing merge is called once more to
+// close its child if an earlier call stopped after the merge, and it is
+// reported as landed.
 func milestoneLand(ctx context.Context, c *client.Client, checker flow.Checker, runsDir string, checkTimeout time.Duration, repo string, issue int64, sha string) (milestone.Landing, error) {
 	pr, err := childPR(ctx, c, repo, issue)
 	if err != nil {
@@ -116,7 +119,18 @@ func milestoneLand(ctx context.Context, c *client.Client, checker flow.Checker, 
 	}
 	merge := milestone.Merge{PR: pr.Number, HeadSHA: pr.HeadSHA, Base: pr.BaseBranch}
 	if pr.Merged {
-		return milestone.Landing{Kind: milestone.Landed, Merge: merge, Reason: fmt.Sprintf("!%d was already merged", pr.Number)}, nil
+		// The landing merge is idempotent: on a merged PR it finishes what an
+		// earlier call may have stopped short of, closing the child issue.
+		var out server.LandOut
+		in := server.LandIn{Target: server.Target{Repo: repo, Number: pr.Number}, HeadSHA: pr.HeadSHA}
+		if err := c.Call(ctx, "POST", "/v1/forge/pr/merge", in, &out); err != nil {
+			return milestone.Landing{}, fmt.Errorf("finishing !%d's merge: %w", pr.Number, err)
+		}
+		reason := fmt.Sprintf("!%d was already merged", pr.Number)
+		if out.IssueClosed {
+			reason += fmt.Sprintf("; closed #%d", out.Issue)
+		}
+		return milestone.Landing{Kind: milestone.Landed, Merge: merge, Reason: reason}, nil
 	}
 	if sha != "" && sha != pr.HeadSHA {
 		return milestone.Landing{}, fmt.Errorf("!%d's head is %s, not %s", pr.Number, shortSHA(pr.HeadSHA), shortSHA(sha))
