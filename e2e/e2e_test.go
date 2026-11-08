@@ -3256,6 +3256,255 @@ fi`
 		}
 	})
 
+	// The merge queue's landing (docs/design/merge-queue.md §4.1) rests on
+	// Forgejo's fast-forward-only style being a compare-and-swap on the
+	// base. This spike proves it on a real instance before the merge
+	// operation is built on it.
+	t.Run("fast-forward-only landing", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(env []string, args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = append(a.env(), env...)
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+
+		// The manager never gets a bottown key: it acts on Forgejo with
+		// the token bottown keeps for it, as the merge operation will.
+		raw, err := exec.Command("docker", "exec", "-u", "git", a.cfg.Container(), "cat", "/data/bottown/secrets.json").Output()
+		if err != nil {
+			t.Fatalf("read secrets: %v", err)
+		}
+		var st struct {
+			Tokens map[string]struct{ Token string }
+		}
+		if err := json.Unmarshal(raw, &st); err != nil || st.Tokens["manager"].Token == "" {
+			t.Fatalf("no manager token: %v", err)
+		}
+		manager := st.Tokens["manager"].Token
+		forge := func(token, method, path string, body any) (int, []byte) {
+			t.Helper()
+			b, _ := json.Marshal(body)
+			req, _ := http.NewRequest(method, a.cfg.ForgejoURL()+"/api/v1"+path, bytes.NewReader(b))
+			req.Header.Set("Authorization", "token "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			out, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, out
+		}
+
+		// Assertion: allow_fast_forward_only_merge on a repository bottown created.
+		var repo struct {
+			AllowFastForwardOnly bool `json:"allow_fast_forward_only_merge"`
+		}
+		a.mustAPI(owner, "GET", "/repos/bottown/demo", nil, &repo)
+		t.Logf("allow_fast_forward_only_merge on a fresh repository: %v", repo.AllowFastForwardOnly)
+		if !repo.AllowFastForwardOnly {
+			t.Errorf("allow-ff-only: bottown/demo does not allow fast-forward-only merges")
+		}
+
+		mainTip := func() string {
+			t.Helper()
+			var br struct{ Commit struct{ ID string } }
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/branches/main", nil, &br)
+			return br.Commit.ID
+		}
+		pushMain := func(name string, content []byte) string {
+			t.Helper()
+			ownerGit(nil, "fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, name), content, 0o644)
+			git(t, demo, "add", name)
+			git(t, demo, "commit", "-q", "-m", "main moves: "+name)
+			ownerGit(nil, "push", "-q", remote, "HEAD:refs/heads/main")
+			return git(t, demo, "rev-parse", "HEAD")
+		}
+		lines := func(first, last string) []byte {
+			var b strings.Builder
+			b.WriteString(first + "\n")
+			for i := 2; i <= 19; i++ {
+				fmt.Fprintf(&b, "%d\n", i)
+			}
+			b.WriteString(last + "\n")
+			return []byte(b.String())
+		}
+		type pull struct {
+			Number         int64
+			State          string
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		type review struct {
+			ID        int64
+			State     string
+			Dismissed bool
+			CommitID  string `json:"commit_id"`
+		}
+
+		// open makes issue #N, an implementer PR from issue/N whose
+		// description ends "Closes #N" that changes the last line of file,
+		// and a verifier approval of another family at its head.
+		open := func(file string) (issue, prn int64, prPath, head string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "ff-only " + file}, &is)
+			branch := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit(nil, "fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, file), lines("1", "pr"), 0o644)
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "change "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+branch); err != nil {
+				t.Fatalf("push %s: %v\n%s", branch, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": branch, "base": "main", "title": "ff-only " + file,
+				"body": fmt.Sprintf("Change %s.\n\nCloses #%d", file, is.Number),
+			}, &pr)
+			prPath = fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "verified", "commit_id": pr.Head.Sha}, nil)
+			return is.Number, pr.Number, prPath, pr.Head.Sha
+		}
+
+		// land builds the landing commit on the forge's repository, base
+		// first (main tip, then the PR head), pushes it to the PR branch
+		// with the owner's token as bottown's automatic merge does, and
+		// undismisses the approval if Forgejo dismissed it.
+		land := func(issue, prn int64, prPath, head string) string {
+			t.Helper()
+			base := mainTip()
+			tree := strings.Fields(git(t, demo, "merge-tree", "--write-tree", base, head))[0]
+			landing := ownerGit([]string{
+				"GIT_AUTHOR_NAME=bottown", "GIT_AUTHOR_EMAIL=bottown@localhost",
+				"GIT_COMMITTER_NAME=bottown", "GIT_COMMITTER_EMAIL=bottown@localhost",
+			}, "commit-tree", tree, "-p", base, "-p", head, "-m", fmt.Sprintf("Land !%d", prn))
+			ownerGit(nil, "push", "-q", remote, landing+":refs/heads/"+fmt.Sprintf("issue/%d", issue))
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+				var pr pull
+				a.mustAPI(owner, "GET", prPath, nil, &pr)
+				if pr.Head.Sha == landing {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("PR head %s, want the landing commit %s", pr.Head.Sha, landing)
+				}
+			}
+			// Forgejo dismisses asynchronously; wait a while for it before
+			// reconciling, or the dismissal could land after.
+			dismissed := false
+			for deadline := time.Now().Add(15 * time.Second); !dismissed && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+				var rs []review
+				a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+				dismissed = len(rs) == 1 && rs[0].Dismissed
+			}
+			t.Logf("%s: Forgejo dismissed the approval on the landing push: %v", prPath, dismissed)
+			if dismissed {
+				body, _ := json.Marshal(map[string]any{"repo": "demo", "number": prn})
+				req, _ := http.NewRequest("POST", a.cfg.ServerURL()+"/v1/forge/pr/carries", bytes.NewReader(body))
+				req.Header.Set("Authorization", "Bearer "+owner)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				code := resp.StatusCode
+				if code != 200 {
+					t.Fatalf("ReconcileCarries: %d %s", code, b)
+				}
+			}
+			var rs []review
+			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+			if len(rs) != 1 || rs[0].Dismissed || rs[0].State != "APPROVED" {
+				t.Fatalf("approval not in force before the merge: %+v", rs)
+			}
+			return landing
+		}
+		// merge asks Forgejo, as manager, to fast-forward main to landing.
+		// Mergeability is recomputed asynchronously, so a 405 is retried.
+		merge := func(prPath, landing string) (int, []byte) {
+			t.Helper()
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+				code, b := forge(manager, "POST", prPath+"/merge", map[string]any{"Do": "fast-forward-only", "head_commit_id": landing})
+				if code != 405 || time.Now().After(deadline) {
+					return code, b
+				}
+			}
+		}
+
+		t.Run("lands the checked commit", func(t *testing.T) {
+			// main changes the first line of the PR's file, so the landing
+			// commit really merges, and Forgejo sees a file both changed.
+			pushMain("ff-land.txt", lines("main", "20"))
+			issue, prn, prPath, head := open("ff-land.txt")
+			landing := land(issue, prn, prPath, head)
+			code, b := merge(prPath, landing)
+			if code != 200 {
+				t.Fatalf("merge-ok: fast-forward-only merge of the approved landing commit: %d %s", code, b)
+			}
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			if !pr.Merged || pr.MergeCommitSHA != landing {
+				t.Errorf("merged-commit: PR merged=%v merge_commit_sha=%s, want the landing commit %s", pr.Merged, pr.MergeCommitSHA, landing)
+			}
+			if tip := mainTip(); tip != landing {
+				t.Errorf("main-at-landing: main at %s, want the landing commit %s", tip, landing)
+			}
+			for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+				var is struct{ State string }
+				a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", issue), nil, &is)
+				if is.State == "closed" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("issue-closed: #%d is %s after the merge", issue, is.State)
+					break
+				}
+			}
+			a.api(owner, "DELETE", fmt.Sprintf("/repos/bottown/demo/branches/issue/%d", issue), nil)
+		})
+
+		t.Run("refuses a moved base", func(t *testing.T) {
+			issue, prn, prPath, head := open("ff-race.txt")
+			landing := land(issue, prn, prPath, head)
+			moved := pushMain("ff-race-main.txt", []byte("main moved under the landing\n"))
+			code, b := merge(prPath, landing)
+			if code != 409 {
+				t.Errorf("race-409: fast-forward-only merge over a moved base: %d %s, want 409", code, b)
+				// Forgejo's log says what the API did not.
+				logs, _ := exec.Command("docker", "logs", "--tail", "200", a.cfg.Container()).CombinedOutput()
+				for _, l := range strings.Split(string(logs), "\n") {
+					if strings.Contains(strings.ToLower(l), "merge") {
+						t.Logf("forgejo: %s", l)
+					}
+				}
+			}
+			if tip := mainTip(); tip != moved {
+				t.Errorf("race-main-untouched: main at %s, want %s", tip, moved)
+			}
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			if pr.Merged || pr.State != "open" {
+				t.Errorf("race-pr-open: PR merged=%v state=%s after a refused merge", pr.Merged, pr.State)
+			}
+			// Leave the forge as the later subtests expect it.
+			a.mustAPI(owner, "PATCH", prPath, map[string]string{"state": "closed"}, nil)
+			a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/issues/%d", issue), map[string]string{"state": "closed"}, nil)
+			a.api(owner, "DELETE", fmt.Sprintf("/repos/bottown/demo/branches/issue/%d", issue), nil)
+		})
+	})
+
 	t.Run("restart keeps state and reconcile is a no-op", func(t *testing.T) {
 		if out, err := exec.Command("docker", "restart", a.cfg.Container()).CombinedOutput(); err != nil {
 			t.Fatalf("docker restart: %v %s", err, out)
