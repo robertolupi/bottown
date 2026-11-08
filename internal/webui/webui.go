@@ -78,6 +78,7 @@ type Config struct {
 
 // Server is the local HTTP server for the bottown web UI.
 type Server struct {
+	landingMu           sync.Mutex
 	cfg                 Config
 	listener            net.Listener
 	port                int
@@ -197,7 +198,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
 	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
 	mux.HandleFunc("POST /api/actions/milestone-run", s.handleActionMilestoneRun)
-	mux.HandleFunc("POST /api/actions/merge-base", s.handleActionMergeBase)
+	mux.HandleFunc("POST /api/actions/land", s.handleActionLand)
 	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
 	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
 	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
@@ -382,13 +383,13 @@ func (s *Server) handleActionRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-func (s *Server) handleActionMergeBase(w http.ResponseWriter, r *http.Request) {
-	var req MergeBaseRequest
+func (s *Server) handleActionLand(w http.ResponseWriter, r *http.Request) {
+	var req LandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
 		return
 	}
-	out, err := s.ExecuteMergeBase(r.Context(), req)
+	out, err := s.ExecuteLand(r.Context(), req)
 	res := ActionResult{Success: err == nil, Output: out}
 	if err != nil {
 		res.Error = err.Error()
@@ -574,7 +575,7 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 
 // renderRunLog renders run id's log, read as logBytes, for its harness.
 func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) []runs.LogLine {
-	if validCheckID.MatchString(id) {
+	if validCheckID.MatchString(id) || strings.HasPrefix(id, "land-") {
 		return runs.RenderLog("", logBytes) // the checks' commands' output: plain lines
 	}
 	actorMap, _ := s.fetchActorMap(ctx)

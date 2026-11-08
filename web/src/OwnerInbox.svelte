@@ -12,10 +12,10 @@
     inboxError: string | undefined;
     onGC: (includeFailed: boolean) => void;
     onStop: (runId: string) => void;
-    onMergeBase: (number: number, headSHA: string) => void;
+    onLand: (number: number, headSHA: string) => void;
   }
 
-  let { inbox, inboxError, onGC, onStop, onMergeBase }: Props = $props();
+  let { inbox, inboxError, onGC, onStop, onLand }: Props = $props();
   let showActorFiled = $state(false);
   let visibleInbox = $derived(filterInboxItems(inbox, showActorFiled));
 </script>
@@ -55,10 +55,8 @@
         {#each visibleInbox as item (item.id)}
           <div class="inbox-item">
             <div class="inbox-badge-col">
-              {#if item.kind === 'ready_to_merge'}
-                <span class="badge badge-success">ready to merge</span>
-              {:else if item.kind === 'merge_base'}
-                <span class="badge badge-accent">clean base merge</span>
+              {#if item.kind === 'ready_to_land'}
+                <span class="badge badge-success">ready to land</span>
               {:else if item.kind === 'conflicts_with_base'}
                 <span class="badge badge-error">conflicts with base</span>
               {:else if item.kind === 'stopped_flow'}
@@ -100,8 +98,8 @@
                       onGC(resolved.includeFailed);
                     } else if (resolved && 'modal' in resolved && resolved.modal === 'stop') {
                       onStop(resolved.stopRunId);
-                    } else if (resolved && 'action' in resolved && resolved.action === 'merge-base') {
-                      onMergeBase(resolved.number, resolved.headSHA);
+                    } else if (resolved && 'action' in resolved && resolved.action === 'land') {
+                      onLand(resolved.number, resolved.headSHA);
                     }
                   }}
                 >

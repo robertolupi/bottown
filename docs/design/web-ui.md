@@ -475,8 +475,7 @@ be recomputed.
 
 | Item | Shown when | Goes away when |
 |---|---|---|
-| Ready to merge | an open PR's review assessment is approved (§3.3: a qualifying approval at the current head, from another family, the owner, or an owner-allowed same-family verify run, and no request for changes), it merges cleanly, and it is not behind | merged or closed, the head moves, a request for changes, or it starts to conflict |
-| Merge base | an open PR is behind its base and the trial merge is clean, with no live run for the PR or its issue | the owner clicks **Merge main**, the head or base moves, or a run starts |
+| Ready to land | an open PR into main or milestone/* has an approved review assessment (§3.3), including when behind or conflicting | merged or closed, or its approval no longer counts |
 | Conflicts with main | an open PR no longer merges cleanly; the description names conflicting files when the trial merge found them | an implement run resolves them, or the PR is closed |
 | Stopped flow | a run failed, or the PR's review assessment is changes requested (out of rounds, or held back) or commented (verifier undecided), or the flow's post-implement checks failed at the head (§3.2, §3.3) | the flow is re-run, or the issue is closed |
 | Broken run | a run is dead (its harness exited without `run end`), its key expired while it was live, or a failed run left its worktree behind | the run is ended or cleaned up (`run gc` ends a run whose key expired, which can no longer `run end` itself, and keeps a dead run's record when it cannot revoke it; `run stop --revoke ID`, or `run gc --orphans`, ends a live run that no local launcher holds) |
@@ -487,11 +486,12 @@ Actor-filed issues are hidden by default. The **Show actor-filed issues**
 checkbox reveals them; the inbox count and inbox-zero state follow the
 current filter.
 
-Each row links to the issue or PR in Forgejo (merging happens there) and
-offers the matching bottown action (§5): re-run the flow, end or clean up
-the run. Issue-backed rows show the full issue title next to the reference.
-Once repositories declare checks (§4.5), "ready to merge" also requires them
-to pass.
+Each row links to the issue or PR in Forgejo and offers the matching
+bottown action (§5): Land the PR, re-run the flow, or end or clean up the
+run. **Land** starts a background landing with the Main policy: check and
+e2e at the combined tree, with a record, log and stop control under Live
+Runs. Merging in Forgejo instead skips these checks, as the item explains.
+Issue-backed rows show the full issue title next to the reference.
 
 ### 4.2 Runs
 
@@ -886,12 +886,14 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
-- **PR base merges.** Owner-only `GET /v1/forge/pr/merge-base` reports
-  whether the PR is behind, whether `merge-tree` was clean, and any
-  conflicting files. `POST` takes the offered head SHA, repeats the check,
-  creates the automatic merge commit and pushes it without force. A moved
-  head, a conflict, or a live run on the PR, its issue or its branch is
-  refused.
+- **Landing.** **Land** posts the PR number and offered head SHA to
+  `POST /api/actions/land`. A background worker runs `land.Land` with the
+  Main policy (check and e2e at the combined tree). Its record and log
+  appear under Live Runs with a stop control; milestone child nodes show
+  their landing like their flow. The inbox warns that merging in Forgejo
+  instead skips the checks at the combined tree. Owner-only
+  `GET /v1/forge/pr/merge-base` still reports behind and conflict status;
+  the PR-first merge POST and inbox action are removed.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when

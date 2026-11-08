@@ -13,7 +13,7 @@ import (
 )
 
 // TestInboxSharedReviewCases checks the inbox for each shared review
-// fixture on a mergeable PR with no live runs: approved is ready to merge, a
+// fixture on a mergeable PR with no live runs: approved is ready to land, a
 // request for changes or a comment is a stopped flow (changes requested,
 // verifier undecided), and needing a review is nothing for the owner.
 func TestInboxSharedReviewCases(t *testing.T) {
@@ -56,7 +56,7 @@ func TestInboxSharedReviewCases(t *testing.T) {
 			title := ""
 			switch tc.Want {
 			case review.Approved:
-				want, title = InboxReadyToMerge, "ready to merge"
+				want, title = InboxReadyToLand, "ready to land"
 			case review.ChangesRequested:
 				want, title = InboxStoppedFlow, "changes requested"
 			case review.Commented:
@@ -71,10 +71,10 @@ func TestInboxSharedReviewCases(t *testing.T) {
 			if len(items) != 1 || items[0].Kind != want || !strings.Contains(items[0].Title, title) {
 				t.Fatalf("items = %+v, want one %s (%s)", items, want, title)
 			}
-			if carried := want == InboxReadyToMerge && !tc.WantAtHead; carried != strings.Contains(items[0].Description, "carried over") {
+			if carried := want == InboxReadyToLand && !tc.WantAtHead; carried != strings.Contains(items[0].Description, "carried over") {
 				t.Fatalf("description %q: carried over %v", items[0].Description, carried)
 			}
-			if want == InboxReadyToMerge && len(tc.Runs) > 0 && !strings.Contains(items[0].Description, "same-family override") {
+			if want == InboxReadyToLand && len(tc.Runs) > 0 && !strings.Contains(items[0].Description, "same-family override") {
 				t.Fatalf("description %q does not name the override", items[0].Description)
 			}
 		})
