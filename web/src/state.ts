@@ -200,6 +200,18 @@ export function nextPollDelayMs(
   return hasActive ? 2500 : 10000;
 }
 
+// statusRefreshMs is how old the status (the owner inbox among it) may grow
+// before a live poll reloads it with no run or flow starting or ending: the
+// forge changes without one, as when a milestone run merges a child's PR
+// just after its flow ends, or the owner merges in Forgejo.
+export const statusRefreshMs = 30000;
+
+// statusDue says whether status loaded at loadedAt (ms; 0 when never) is
+// due a reload at now.
+export function statusDue(loadedAt: number, now: number): boolean {
+  return now - loadedAt >= statusRefreshMs;
+}
+
 // actorSpec joins an actor and an optional model as ACTOR[:SPEC]; an empty
 // model leaves the host's default ([actor_models]) to the CLI.
 export function actorSpec(actor: string, model: string | undefined): string {

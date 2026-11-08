@@ -34,9 +34,12 @@
     parseIssueNumber,
     parseLivePollSnapshot,
     selectDefaultActors,
+    statusDue,
   } from './state';
 
   let status = $state<UIStatusResponse | null>(null);
+  // When status was last requested (ms), for the live poll's periodic reload.
+  let statusLoadedAt = 0;
   let loading = $state<boolean>(true);
   let refreshing = $state<boolean>(false);
   let errorMessage = $state<string | null>(null);
@@ -133,6 +136,7 @@
     if (isRefresh) refreshing = true;
     else loading = true;
     errorMessage = null;
+    statusLoadedAt = Date.now();
 
     try {
       const res = await fetch('/api/status');
@@ -161,6 +165,7 @@
   async function handleRefresh() {
     refreshing = true;
     errorMessage = null;
+    statusLoadedAt = Date.now();
     try {
       const res = await fetch('/api/actions/refresh', { method: 'POST' });
       if (!res.ok) {
@@ -373,9 +378,11 @@
 
             runHistory.reconcile(prevThreads, runHistory.threads(liveRuns, activeFlows));
 
-            // A run or flow started or ended: refresh status and history
+            // A run or flow started or ended, or status is due its periodic
+            // reload (the forge changes without one: a milestone run merges
+            // a child's PR after its flow ends): refresh status and history
             // in the background without altering the expanded flow selection.
-            if (change.status) await loadStatus(true);
+            if (change.status || statusDue(statusLoadedAt, Date.now())) await loadStatus(true);
             if (change.status || change.history) {
               timelineRefresh++;
               statsRefresh++;
