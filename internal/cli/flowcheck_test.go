@@ -126,6 +126,137 @@ func TestFlowChecker(t *testing.T) {
 	}
 }
 
+type gateRecord struct{ sha, check, state, description string }
+
+type gateRecords []gateRecord
+
+func (r *gateRecords) RecordGate(_ context.Context, _, sha, check, state, description string) error {
+	*r = append(*r, gateRecord{sha, check, state, description})
+	return nil
+}
+
+// A request for both groups runs check and then e2e in one worktree, each
+// to its own log, and each is recorded as its own status; a check failure
+// stops before e2e; a group with no commands is skipped and says so; the
+// e2e group alone, the flow's request, does not run the check commands.
+func TestFlowCheckerGroups(t *testing.T) {
+	remote, top := t.TempDir(), t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(name, s string) {
+		if err := os.WriteFile(filepath.Join(remote, name), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(remote, "init", "-q", "-b", "main")
+	// Each group leaves a marker in the worktree: e2e sees check's, so both
+	// ran in the same one.
+	write(".bottown.toml", "check = [\"echo check ok\", \"test -f fixed\", \"touch checked\"]\ne2e = [\"test -f checked\", \"echo e2e ok\"]\n")
+	git(remote, "add", ".")
+	git(remote, "commit", "-q", "-m", "init")
+	broken := git(remote, "rev-parse", "HEAD")
+	write("fixed", "\n")
+	git(remote, "add", ".")
+	git(remote, "commit", "-q", "-m", "fix")
+	fixed := git(remote, "rev-parse", "HEAD")
+	git(top, "init", "-q")
+	ws, err := runs.Open(top, "bottown", remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := flowChecker{ws: ws}
+	ctx := context.Background()
+	both := []string{flow.GroupCheck, flow.GroupE2E}
+
+	req := flow.CheckRequest{Repo: "demo", Issue: 9, PR: 12, SHA: fixed, Groups: both}
+	out, err := c.Check(ctx, req)
+	if err != nil || !out.Passed || out.Skipped || strings.Join(out.Ran(), ",") != "check,e2e" || out.Failed() != "" {
+		t.Fatalf("both groups: %+v, %v", out, err)
+	}
+	chk, e2e := out.Groups[0], out.Groups[1]
+	if !strings.HasSuffix(chk.Log, ".check.log") || !strings.HasSuffix(e2e.Log, ".e2e.log") ||
+		strings.TrimSuffix(chk.Log, ".check.log") != strings.TrimSuffix(e2e.Log, ".e2e.log") || out.Log != e2e.Log || c.LogPath(req) != e2e.Log {
+		t.Errorf("logs: check %s, e2e %s, outcome %s, LogPath %s", chk.Log, e2e.Log, out.Log, c.LogPath(req))
+	}
+	if log, _ := os.ReadFile(chk.Log); !strings.Contains(string(log), "==> [check] echo check ok") || strings.Contains(string(log), "e2e ok") {
+		t.Errorf("check log:\n%s", log)
+	}
+	if log, _ := os.ReadFile(e2e.Log); !strings.Contains(string(log), "==> [e2e] test -f checked") || !strings.Contains(string(log), "e2e ok") {
+		t.Errorf("e2e log:\n%s", log)
+	}
+	if !strings.HasPrefix(out.Description, "check: passed: echo check ok; test -f fixed; touch checked in ") ||
+		!strings.Contains(out.Description, "; e2e: passed: test -f checked; echo e2e ok in ") {
+		t.Errorf("description %q", out.Description)
+	}
+	var rec gateRecords
+	if err := flow.RecordChecks(ctx, &rec, "demo", fixed, out); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec) != 2 || rec[0].check != "check" || rec[0].state != "success" || rec[0].description != chk.Description ||
+		rec[1].check != "e2e" || rec[1].state != "success" || rec[1].sha != fixed {
+		t.Errorf("recorded %+v", rec)
+	}
+
+	// The check group fails at the broken head: e2e does not run.
+	req.SHA = broken
+	out, err = c.Check(ctx, req)
+	if err != nil || out.Passed || strings.Join(out.Ran(), ",") != "check" || out.Failed() != "check" || len(out.Groups) != 1 {
+		t.Fatalf("broken head: %+v, %v", out, err)
+	}
+	if out.Log != out.Groups[0].Log || !strings.Contains(out.Summary, "test -f fixed failed (exit 1)") || !strings.HasPrefix(out.Description, "check: failed: test -f fixed (exit 1)") {
+		t.Errorf("broken head: log %s, description %q, summary %q", out.Log, out.Description, out.Summary)
+	}
+	if logs, _ := filepath.Glob(filepath.Join(ws.RunsDir, "flow-9-"+short(broken)+"-*.e2e.log")); len(logs) != 0 {
+		t.Errorf("e2e ran after the check group failed: %v", logs)
+	}
+	rec = nil
+	if err := flow.RecordChecks(ctx, &rec, "demo", broken, out); err != nil || len(rec) != 1 || rec[0].check != "check" || rec[0].state != "failure" {
+		t.Errorf("recorded %+v, %v", rec, err)
+	}
+
+	// The flow's request, e2e alone, runs no check command: at the broken
+	// head the e2e commands fail on the missing marker, not on test -f fixed.
+	out, err = c.Check(ctx, flow.CheckRequest{Repo: "demo", Issue: 9, PR: 12, SHA: broken, Groups: []string{flow.GroupE2E}})
+	if err != nil || out.Passed || strings.Join(out.Ran(), ",") != "e2e" || !strings.HasPrefix(out.Description, "failed: test -f checked (exit 1)") {
+		t.Fatalf("e2e alone: %+v, %v", out, err)
+	}
+
+	// check = [] on the default branch: the check group is skipped and says
+	// so, and e2e runs.
+	write(".bottown.toml", "check = []\ne2e = [\"echo e2e ok\"]\n")
+	git(remote, "commit", "-q", "-am", "no check")
+	req.SHA = fixed
+	out, err = c.Check(ctx, req)
+	if err != nil || !out.Passed || out.Skipped || strings.Join(out.Ran(), ",") != "e2e" || len(out.Groups) != 2 || !out.Groups[0].Skipped {
+		t.Fatalf("no check commands: %+v, %v", out, err)
+	}
+	if !strings.HasPrefix(out.Description, "check: the repository names no check commands; e2e: passed: echo e2e ok") {
+		t.Errorf("no check commands: description %q", out.Description)
+	}
+	rec = nil
+	if err := flow.RecordChecks(ctx, &rec, "demo", fixed, out); err != nil || len(rec) != 1 || rec[0].check != "e2e" {
+		t.Errorf("recorded %+v, %v", rec, err)
+	}
+
+	// Neither group has commands: the whole check is skipped.
+	write(".bottown.toml", "check = []\ne2e = []\n")
+	git(remote, "commit", "-q", "-am", "no checks")
+	out, err = c.Check(ctx, req)
+	if err != nil || !out.Skipped || len(out.Groups) != 2 || out.Description != "check: the repository names no check commands; e2e: the repository names no e2e commands" {
+		t.Fatalf("no commands: %+v, %v", out, err)
+	}
+	if wts := git(ws.Mirror, "worktree", "list"); strings.Contains(wts, "flow-9-") {
+		t.Errorf("check worktrees left behind:\n%s", wts)
+	}
+}
+
 // Two checks at the same head (overlapping flows) get a worktree and a log
 // each: the one that ends first removes only its own worktree, and the
 // other one's commands still run in theirs. A check's cleanup removes the
@@ -297,7 +428,7 @@ func TestFlowCheckerLive(t *testing.T) {
 		t.Fatalf("live checks = %+v", live)
 	}
 	rec := live[0]
-	if rec.ID+".log" != filepath.Base(c.LogPath(req)) || rec.Issue != 9 || rec.PR != 12 || rec.SHA != head || rec.Repo != "demo" ||
+	if rec.ID+".log" != filepath.Base(c.LogPath(req)) || rec.Group != "e2e" || rec.Issue != 9 || rec.PR != 12 || rec.SHA != head || rec.Repo != "demo" ||
 		len(rec.Commands) != 1 || rec.Expires.IsZero() {
 		t.Errorf("record = %+v", rec)
 	}

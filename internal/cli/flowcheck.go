@@ -19,16 +19,21 @@ import (
 // and of bottown milestone finish.
 const defaultCheckTimeout = time.Hour
 
-// flowChecker runs the post-implement checks for bottown flow: the e2e
-// commands .bottown.toml names on the default branch (default: make e2e),
-// in a clean worktree detached at the PR head, with no agent involved. Each
-// check has a worktree and a log of its own, named for the issue, the SHA
-// and a random check id, so that two checks at the same head (overlapping
-// flows) cannot remove or overwrite each other's:
-// <runs>/flow-<issue>-<sha>-<check>, and next to it its log,
-// flow-<issue>-<sha>-<check>.e2e.log, written as the commands write it. While they run, a runs.CheckRecord marks the check
-// live, for the web UI's Live Runs and the leftover cleanup, and tail, if
-// set (an attended flow on a terminal), follows the log as it does a run's.
+// flowChecker runs the check groups a request names (the flow's
+// post-implement checks are the e2e group alone): the check and e2e
+// commands .bottown.toml names on the default branch (default: make check
+// and make e2e), one group after the other in one clean worktree detached
+// at the PR head, with no agent involved, stopping at the first group that
+// fails. A group the repository names no commands for is skipped. Each
+// check has a worktree and a log per group of its own, named for the
+// issue, the SHA and a random check id, so that two checks at the same
+// head (overlapping flows) cannot remove or overwrite each other's:
+// <runs>/flow-<issue>-<sha>-<check>, and next to it its logs,
+// flow-<issue>-<sha>-<check>.check.log and .e2e.log, written as the
+// commands write them. While a group runs, a runs.CheckRecord marks the
+// check live, for the web UI's Live Runs and the leftover cleanup, and
+// tail, if set (an attended flow on a terminal), follows the group's log
+// as it does a run's.
 type flowChecker struct {
 	ws   *runs.Workspace
 	tail *liveTail
@@ -42,17 +47,20 @@ func (c flowChecker) prefix(req flow.CheckRequest) string {
 }
 
 // checkDir matches a check worktree's name: flow-<issue>-<sha>-<check>, or,
-// before checks had ids, flow-<issue>-<sha>. Its record's id adds .e2e,
-// and its log's name .e2e.log.
+// before checks had ids, flow-<issue>-<sha>. Its records' ids add
+// .<group> (.check, .e2e), and its logs' names .<group>.log.
 var checkDir = regexp.MustCompile(`^flow-[0-9]+-[0-9a-f]+(?:-[0-9a-f]+)?$`)
 
 // LogPath is req's log for a resumed flow, which knows the head's recorded
-// result but not which check recorded it: of the logs of the checks at
-// req's head, the last written whose check is no longer live, else the
-// last written. With none, it is the name checks had before check ids.
+// result but not which check recorded it: of the logs of the last of req's
+// groups for the checks at req's head, the last written whose check is no
+// longer live, else the last written. With none, it is the name checks had
+// before check ids.
 func (c flowChecker) LogPath(req flow.CheckRequest) string {
+	groups := req.RunGroups()
+	suffix := "." + groups[len(groups)-1] + ".log"
 	prefix := c.prefix(req)
-	paths, _ := filepath.Glob(filepath.Join(c.ws.RunsDir, prefix+"-*.e2e.log"))
+	paths, _ := filepath.Glob(filepath.Join(c.ws.RunsDir, prefix+"-*"+suffix))
 	live := make(map[string]bool)
 	for _, rec := range runs.LiveChecks(c.ws.RunsDir) {
 		live[rec.ID+".log"] = true
@@ -61,7 +69,7 @@ func (c flowChecker) LogPath(req flow.CheckRequest) string {
 	var bestTime time.Time
 	bestLive := true
 	for _, p := range paths {
-		if !checkDir.MatchString(strings.TrimSuffix(filepath.Base(p), ".e2e.log")) {
+		if !checkDir.MatchString(strings.TrimSuffix(filepath.Base(p), suffix)) {
 			continue
 		}
 		fi, err := os.Stat(p)
@@ -74,12 +82,13 @@ func (c flowChecker) LogPath(req flow.CheckRequest) string {
 		}
 	}
 	if best == "" {
-		return filepath.Join(c.ws.RunsDir, prefix+".e2e.log")
+		return filepath.Join(c.ws.RunsDir, prefix+suffix)
 	}
 	return best
 }
 
 func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.CheckOutcome, error) {
+	groups := req.RunGroups()
 	var id [4]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return flow.CheckOutcome{}, err
@@ -88,7 +97,7 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	// check id, not a run id, so it does not go through Workspace.WorktreeDir.
 	name := c.prefix(req) + "-" + hex.EncodeToString(id[:])
 	dir := filepath.Join(c.ws.RunsDir, name)
-	out := flow.CheckOutcome{Log: dir + ".e2e.log"}
+	out := flow.CheckOutcome{Log: dir + "." + groups[len(groups)-1] + ".log"}
 	if err := c.ws.Sync(ctx); err != nil {
 		return out, err
 	}
@@ -100,33 +109,68 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	if err != nil {
 		return out, err
 	}
-	if len(settings.E2E) == 0 {
+	commands := map[string][]string{flow.GroupCheck: settings.Check, flow.GroupE2E: settings.E2E}
+	first := "" // the first group with commands
+	for _, g := range groups {
+		cmds, ok := commands[g]
+		if !ok {
+			return out, fmt.Errorf("unknown check group %q", g)
+		}
+		if first == "" && len(cmds) > 0 {
+			first = g
+		}
+	}
+	if first == "" {
 		out.Skipped = true
+		for _, g := range groups {
+			out.Groups = append(out.Groups, skippedGroup(g))
+		}
+		out.Description = outcomeDescription(len(groups), out.Groups)
 		return out, nil
 	}
+	out.Log = dir + "." + first + ".log"
 	if _, err := runs.Git(c.ws.Mirror, nil, "cat-file", "-e", req.SHA+"^{commit}"); err != nil {
 		return out, fmt.Errorf("the PR head %s is not in the mirror: %w", short(req.SHA), err)
 	}
-	// The record marks the check live before its worktree exists, so another
-	// check's leftover cleanup never takes the worktree for an interrupted
-	// check's.
-	started := time.Now()
-	rec := runs.CheckRecord{ID: name + ".e2e", Repo: req.Repo, Issue: req.Issue, PR: req.PR, SHA: req.SHA, Commands: settings.E2E, Started: started}
-	var limit time.Duration
-	if deadline, ok := ctx.Deadline(); ok {
-		rec.Expires, limit = deadline, deadline.Sub(started)
-	}
-	// Without it, the cleanup of a check that starts meanwhile would remove
-	// this one's worktree while its commands run: the check does not start.
+	// A group's record marks the check live while the group runs; the next
+	// group's is held before the last one's goes, so the check stays live
+	// throughout. The first record marks the check live before its worktree
+	// exists, so another check's leftover cleanup never takes the worktree
+	// for an interrupted check's. Without a record, the cleanup of a check
+	// that starts meanwhile would remove this one's worktree while its
+	// commands run: the check does not start.
 	hold := c.hold
 	if hold == nil {
 		hold = runs.HoldCheck
 	}
-	release, err := hold(c.ws.RunsDir, rec)
-	if err != nil {
-		return out, fmt.Errorf("marking the check live: %w", err)
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	mark := func(rec runs.CheckRecord) error {
+		r, err := hold(c.ws.RunsDir, rec)
+		if err != nil {
+			return fmt.Errorf("marking the check live: %w", err)
+		}
+		if release != nil {
+			release()
+		}
+		release = r
+		return nil
 	}
-	defer release()
+	record := func(g string) runs.CheckRecord {
+		rec := runs.CheckRecord{ID: name + "." + g, Group: g, Repo: req.Repo, Issue: req.Issue, PR: req.PR, SHA: req.SHA, Commands: commands[g], Started: time.Now()}
+		if deadline, ok := ctx.Deadline(); ok {
+			rec.Expires = deadline
+		}
+		return rec
+	}
+	firstRec := record(first)
+	if err := mark(firstRec); err != nil {
+		return out, err
+	}
 	c.removeLeftovers()
 	if _, err := runs.Git(c.ws.Mirror, nil, "worktree", "add", "-q", "--detach", dir, req.SHA); err != nil {
 		return out, err
@@ -138,9 +182,48 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 		}
 	}()
 
-	f, err := os.OpenFile(out.Log, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	for _, g := range groups {
+		if len(commands[g]) == 0 {
+			out.Groups = append(out.Groups, skippedGroup(g))
+			continue
+		}
+		rec := firstRec
+		if g != first {
+			rec = record(g)
+			if err := mark(rec); err != nil {
+				return out, err
+			}
+		}
+		res, err := c.runGroup(ctx, req, dir, rec, g)
+		out.Groups = append(out.Groups, res)
+		if err != nil {
+			return out, err
+		}
+		if !res.Passed || ctx.Err() != nil {
+			break
+		}
+	}
+	out.Passed = out.Failed() == ""
+	for _, g := range out.Groups {
+		if g.Skipped {
+			continue
+		}
+		out.Log, out.Summary = g.Log, g.Summary
+		if !g.Passed {
+			break
+		}
+	}
+	out.Description = outcomeDescription(len(groups), out.Groups)
+	return out, ctx.Err()
+}
+
+// runGroup runs group g's commands in dir, logging them to dir.<g>.log,
+// for a check whose live record for the group is rec.
+func (c flowChecker) runGroup(ctx context.Context, req flow.CheckRequest, dir string, rec runs.CheckRecord, g string) (flow.GroupOutcome, error) {
+	res := flow.GroupOutcome{Group: g, Log: dir + "." + g + ".log"}
+	f, err := os.OpenFile(res.Log, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
-		return out, err
+		return res, err
 	}
 	defer f.Close()
 	// Unbuffered: the live tails read the log while the commands run.
@@ -150,23 +233,46 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 	if req.PR == 0 {
 		what, target = fmt.Sprintf("#%d", req.Issue), fmt.Sprintf("#%d at %s", req.Issue, short(req.SHA))
 	}
-	l.line(fmt.Sprintf("bottown flow: post-implement checks for %s at %s, %s", what, req.SHA, started.Format(time.RFC3339)))
+	started := time.Now()
+	l.line(fmt.Sprintf("bottown flow: %s commands for %s at %s, %s", g, what, req.SHA, started.Format(time.RFC3339)))
 	if c.tail != nil {
+		var limit time.Duration
+		if deadline, ok := ctx.Deadline(); ok {
+			limit = deadline.Sub(started)
+		}
 		ended := c.tail.Follow(tailRun{
 			ID: rec.ID, Target: target,
-			Check: strings.Join(settings.E2E, "; "), Started: started, Limit: limit,
-		}, "", out.Log)
+			Check: strings.Join(rec.Commands, "; "), Started: started, Limit: limit,
+		}, "", res.Log)
 		defer ended()
 	}
-	specs := make([]checkSpec, len(settings.E2E))
-	for i, cmd := range settings.E2E {
-		specs[i] = checkSpec{"e2e", cmd}
+	specs := make([]checkSpec, len(rec.Commands))
+	for i, cmd := range rec.Commands {
+		specs[i] = checkSpec{g, cmd}
 	}
-	res := checkResult{SHA: req.SHA, Log: out.Log, Steps: runChecks(ctx, dir, specs, l, time.Now, true)}
-	out.Passed = !res.failed()
-	out.Description = res.groupDescription("e2e")
-	out.Summary = checkSummary(res)
-	return out, ctx.Err()
+	cr := checkResult{SHA: req.SHA, Log: res.Log, Steps: runChecks(ctx, dir, specs, l, time.Now, true)}
+	res.Passed = !cr.failed()
+	res.Description = cr.groupDescription(g)
+	res.Summary = checkSummary(cr)
+	return res, nil
+}
+
+// skippedGroup is group g of a repository that names no commands for it.
+func skippedGroup(g string) flow.GroupOutcome {
+	return flow.GroupOutcome{Group: g, Skipped: true, Description: fmt.Sprintf("the repository names no %s commands", g)}
+}
+
+// outcomeDescription is a check's description: for a request of one group,
+// its description, or, of more, each listed group's after its name.
+func outcomeDescription(requested int, groups []flow.GroupOutcome) string {
+	if requested == 1 && len(groups) == 1 {
+		return groups[0].Description
+	}
+	parts := make([]string, len(groups))
+	for i, g := range groups {
+		parts[i] = g.Group + ": " + g.Description
+	}
+	return strings.Join(parts, "; ")
 }
 
 // removeLeftovers removes the check worktrees in the runs directory whose
@@ -190,7 +296,9 @@ func (c flowChecker) removeLeftovers() {
 	}
 	live := make(map[string]bool)
 	for _, rec := range runs.LiveChecks(c.ws.RunsDir) {
-		live[strings.TrimSuffix(rec.ID, ".e2e")] = true
+		// The id is the worktree's name and .<group>.
+		d, _, _ := strings.Cut(rec.ID, ".")
+		live[d] = true
 	}
 	for _, d := range dirs {
 		if !live[d] {

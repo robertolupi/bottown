@@ -191,11 +191,14 @@ export interface LiveRunInfo {
   denials: Denial[];
 }
 
-// A flow's post-implement checks (the repository's e2e commands) while they
-// run: not a run, but shown with a live tail like one. Its id,
-// flow-<issue>-<sha>-<check>.e2e, names its log for GET /api/runs/{id}/log.
+// A flow's check group while it runs (its post-implement checks are the
+// repository's e2e commands; a gate may run its check commands first): not
+// a run, but shown with a live tail like one. Its id,
+// flow-<issue>-<sha>-<check>.<group>, names its log for GET /api/runs/{id}/log.
 export interface LiveCheckInfo {
   id: string;
+  group?: string; // check or e2e
+
   issue?: number;
   issue_url?: string;
   issue_title?: string;
