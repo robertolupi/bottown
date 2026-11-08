@@ -7,12 +7,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/forgejo"
 	"github.com/robertolupi/bottown/internal/gitmerge"
 	"github.com/robertolupi/bottown/internal/review"
 	"github.com/robertolupi/bottown/internal/secrets"
+)
+
+// mergeReadyRetries bounds the retries of a fast-forward-only merge Forgejo
+// refuses with 405 while it recomputes the pull request's mergeability
+// after the landing push, and mergeReadyPoll is how long to wait between
+// them.
+const (
+	mergeReadyRetries = 120
+	mergeReadyPoll    = 250 * time.Millisecond
 )
 
 // LandIn asks to land a PR on its base, the default branch or a
@@ -134,13 +144,32 @@ func (s *Server) opLand(ctx context.Context, p secrets.Principal, in LandIn) (La
 	if a.Decision != review.Approved {
 		return deny(full, ferr(http.StatusConflict, "!%d is not approved at %s: %s", n, shortCommit(head), a.Decision))
 	}
-	ok, resp, err := mc.MergePullRequest(org, repo, n, sdk.MergePullRequestOption{
-		Style:        sdk.MergeStyleFastForwardOnly,
-		HeadCommitId: head,
-	})
-	status := 0
-	if resp != nil {
-		status = resp.StatusCode
+	// Forgejo recomputes a pull request's mergeability asynchronously after
+	// the landing push, so a fast-forward-only merge can be refused with
+	// 405 while the new mergeability is not computed yet (the spike's e2e
+	// retries it). Retry a bounded number of times.
+	var (
+		ok     bool
+		status int
+	)
+	for attempt := 0; ; attempt++ {
+		ok, resp, err = mc.MergePullRequest(org, repo, n, sdk.MergePullRequestOption{
+			Style:        sdk.MergeStyleFastForwardOnly,
+			HeadCommitId: head,
+		})
+		status = 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		if status == http.StatusMethodNotAllowed && attempt < mergeReadyRetries {
+			select {
+			case <-ctx.Done():
+				return LandOut{}, ctx.Err()
+			case <-time.After(mergeReadyPoll):
+			}
+			continue
+		}
+		break
 	}
 	// The SDK reports a refusal as ok false with no error.
 	if err == nil && !ok {

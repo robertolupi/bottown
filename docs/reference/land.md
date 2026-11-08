@@ -1,10 +1,10 @@
 # Landing an approved pull request
 
 `internal/land.Land(ctx, api, checker, policy, pr)` is the shared host-side
-landing primitive for the merge-all, milestone run and milestone merge
-callers. Their command integration is separate work; this page describes
-the primitive itself. `api` is an owner-authenticated `internal/client.Client`;
-the checker is the flow's grouped checker.
+landing primitive for the [`bottown merge-all`](merge-all.md), milestone run
+and milestone merge callers; this page describes the primitive itself. `api`
+is an owner-authenticated `internal/client.Client`; the checker is the
+flow's grouped checker.
 
 `Policy` names the repository and shared runs directory, the check timeout
 (default 30 minutes), and a `Kind`: `Main` runs `check` then `e2e`;

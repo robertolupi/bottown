@@ -10,6 +10,7 @@ only their topic's file.
 - [Closing keywords on pull requests](closing-keywords.md)
 - [The landing primitive](land.md) (`internal/land`, policies and outcomes)
 - [The landing commit](landing.md) (`POST /v1/forge/pr/landing`)
+- [`bottown merge-all`](merge-all.md) (land every approved pull request)
 - [Checks](checks.md) (`bottown check`, `.bottown.toml`)
 - [Linux e2e](linux-e2e.md) (`make e2e-linux`)
 - Runs:
