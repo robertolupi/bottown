@@ -288,7 +288,7 @@ export function filterInboxItems(
 export type ResolvedInboxAction =
   | { modal: 'gc'; includeFailed: boolean }
   | { modal: 'stop'; stopRunId: string }
-  | { action: 'merge-base'; number: number; headSHA: string }
+  | { action: 'land'; number: number; headSHA: string }
   | null;
 
 export function resolveInboxAction(item: Pick<InboxItem, 'target' | 'action' | 'head_sha'>): ResolvedInboxAction {
@@ -300,10 +300,10 @@ export function resolveInboxAction(item: Pick<InboxItem, 'target' | 'action' | '
   if (cmd.includes('stop')) {
     return { modal: 'stop', stopRunId: item.target };
   }
-  if (cmd.includes('merge-base')) {
+  if (cmd.includes('land')) {
     const number = parseIssueNumber(item.target);
     if (number !== null && item.head_sha) {
-      return { action: 'merge-base', number, headSHA: item.head_sha };
+      return { action: 'land', number, headSHA: item.head_sha };
     }
   }
   return null;

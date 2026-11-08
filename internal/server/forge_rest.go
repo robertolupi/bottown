@@ -22,6 +22,9 @@ import (
 //	GET  /v1/forge/pr?repo=&number=&diff=1
 //	GET  /v1/forge/pr/carries?repo=&number=
 //	POST /v1/forge/pr/carries {repo, number} (the owner: reconcile dismissals)
+//	GET  /v1/forge/pr/merge-base?repo=&number=   (the owner: trial merge and files)
+//	POST /v1/forge/pr/landing {repo, number, head_sha}   (the owner: the landing commit)
+//	POST /v1/forge/pr/merge {repo, number, head_sha}   (the owner: merge a milestone child)
 //	POST /v1/forge/pr       {title, body}
 //	POST /v1/forge/comment  {repo, number, body}
 //	POST /v1/forge/review   {event, body, commit_id}
@@ -122,12 +125,12 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		out, err := s.opPRMergeStatus(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	}))))
-	mux.Handle("POST /v1/forge/pr/merge-base", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var in PRMergeIn
+	mux.Handle("POST /v1/forge/pr/landing", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in PRLandingIn
 		if !decode(w, r, &in) {
 			return
 		}
-		out, err := s.opPRMerge(r.Context(), Who(r.Context()), in)
+		out, err := s.opPRLanding(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("POST /v1/forge/milestone/branch", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -163,11 +166,11 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("POST /v1/forge/pr/merge", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var in MilestoneMergeIn
+		var in LandIn
 		if !decode(w, r, &in) {
 			return
 		}
-		out, err := s.opMilestoneMerge(r.Context(), Who(r.Context()), in)
+		out, err := s.opLand(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("GET /v1/forge/pr/gate", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +234,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func writeOp(w http.ResponseWriter, out any, err error) {
 	if err != nil {
-		writeError(w, errStatus(err), err.Error())
+		writeErrorCode(w, errStatus(err), errCode(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

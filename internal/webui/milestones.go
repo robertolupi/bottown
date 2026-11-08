@@ -488,6 +488,13 @@ func (s *Server) buildGraph(
 		if live != nil {
 			node.Run = &NodeRun{ID: live.ID, Kind: live.Kind, Actor: live.Actor, Created: live.Created, Elapsed: formatDuration(now.Sub(live.Created))}
 		}
+		landing := false
+		if node.PR != nil {
+			if rec := s.getLanding(node.PR.Number); rec != nil {
+				landing = true
+				node.Run = &NodeRun{ID: fmt.Sprintf("land-%d", rec.Number), Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(now.Sub(rec.StartedAt))}
+			}
+		}
 		flowRec := s.getActiveFlow(n)
 		if flowRec != nil {
 			node.Flow = &ActiveFlowRef{Implement: flowRec.Implement, Verify: flowRec.Verify}
@@ -511,7 +518,7 @@ func (s *Server) buildGraph(
 		switch {
 		case is.State == string(sdk.StateClosed):
 			node.Status = NodeClosed
-		case live != nil || flowRec != nil:
+		case live != nil || flowRec != nil || landing:
 			node.Status = NodeRunning
 		default:
 			var lastRun *serverapi.RunItem

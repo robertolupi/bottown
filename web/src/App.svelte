@@ -247,9 +247,9 @@
     showAfterPullModal = true;
   }
 
-  const handleMergeBase = (number: number, headSHA: string) =>
+  const handleLand = (number: number, headSHA: string) =>
     act(async () => {
-      const data = await postAction('/api/actions/merge-base', { number, head_sha: headSHA }, 'Merge failed');
+      const data = await postAction('/api/actions/land', { number, head_sha: headSHA }, 'Landing failed');
       actionMessage = { type: 'success', text: data.output };
       await loadStatus(true);
       await loadHistory();
@@ -475,7 +475,7 @@
         inboxError={status.inbox_error}
         onGC={openGC}
         onStop={openStop}
-        onMergeBase={handleMergeBase}
+        onLand={handleLand}
       />
 
       <RunHistory

@@ -23,19 +23,18 @@ import (
 )
 
 type fixtureForge struct {
-	mu         sync.Mutex
-	actors     []map[string]any
-	whoami     map[string]any
-	runs       []secrets.Run
-	prs        []*sdk.PullRequest
-	reviews    map[int64][]*sdk.PullReview
-	carries    map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
-	merges     map[int64]serverapi.PRMergeStatus
-	mergeCalls []serverapi.PRMergeIn
-	issues     []*sdk.Issue
-	comments   map[int64][]*sdk.Comment
-	statuses   map[string][]*sdk.Status // by commit
-	requests   map[string]int           // by path, when non-nil
+	mu       sync.Mutex
+	actors   []map[string]any
+	whoami   map[string]any
+	runs     []secrets.Run
+	prs      []*sdk.PullRequest
+	reviews  map[int64][]*sdk.PullReview
+	carries  map[int64][]review.Carry // what GET /v1/forge/pr/carries returns
+	merges   map[int64]serverapi.PRMergeStatus
+	issues   []*sdk.Issue
+	comments map[int64][]*sdk.Comment
+	statuses map[string][]*sdk.Status // by commit
+	requests map[string]int           // by path, when non-nil
 }
 
 func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
@@ -69,11 +68,6 @@ func newFixtureServer(t *testing.T, fix *fixtureForge) (*httptest.Server, int) {
 			_ = json.NewEncoder(w).Encode(fix.actors)
 		case p == "/v1/whoami":
 			_ = json.NewEncoder(w).Encode(fix.whoami)
-		case p == "/v1/forge/pr/merge-base" && r.Method == http.MethodPost:
-			var in serverapi.PRMergeIn
-			_ = json.NewDecoder(r.Body).Decode(&in)
-			fix.mergeCalls = append(fix.mergeCalls, in)
-			_ = json.NewEncoder(w).Encode(serverapi.PRMergeOut{HeadSHA: "2222333344445555666677778888999900001111"})
 		case p == "/v1/forge/pr/merge-base":
 			num, _ := strconv.ParseInt(r.URL.Query().Get("number"), 10, 64)
 			_ = json.NewEncoder(w).Encode(fix.merges[num])
@@ -138,7 +132,7 @@ func TestFetchActors_HostDefaultModels(t *testing.T) {
 	}
 }
 
-func TestInbox_ReadyToMerge(t *testing.T) {
+func TestInbox_ReadyToLand(t *testing.T) {
 	fix := defaultFixture()
 	_, port := newFixtureServer(t, fix)
 
@@ -185,16 +179,16 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Show: PR is ready to merge
+	// 1. Show: PR is ready to land
 	items, err := s.ComputeInbox(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Kind != InboxReadyToMerge || items[0].Target != "!10" {
-		t.Fatalf("expected 1 ready_to_merge item for !10, got: %+v", items)
+	if len(items) != 1 || items[0].Kind != InboxReadyToLand || items[0].Target != "!10" {
+		t.Fatalf("expected 1 ready_to_land item for !10, got: %+v", items)
 	}
 	if items[0].Issue != 10 || items[0].IssueTitle != "Feature X issue" {
-		t.Fatalf("ready_to_merge issue metadata = #%d %q, got: %+v", items[0].Issue, items[0].IssueTitle, items[0])
+		t.Fatalf("ready_to_land issue metadata = #%d %q, got: %+v", items[0].Issue, items[0].IssueTitle, items[0])
 	}
 
 	// 2. Go-away condition 1: PR merged
@@ -244,19 +238,23 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 	pr.Head.Sha = sha1
 	fix.mu.Unlock()
 
-	// 5. Go-away condition 4: Starts to conflict with main
+	// 5. A conflict does not hide an approved candidate
 	fix.mu.Lock()
 	pr.Mergeable = false
 	fix.mu.Unlock()
 
 	items, _ = s.ComputeInbox(ctx)
+	found := false
 	for _, it := range items {
-		if it.Kind == InboxReadyToMerge {
-			t.Fatalf("expected ready_to_merge to go away when conflicting, got: %+v", items)
+		if it.Kind == InboxReadyToLand {
+			found = true
 		}
 	}
+	if !found {
+		t.Fatalf("approved conflicting candidate must remain ready to land: %+v", items)
+	}
 
-	// 6. Same family rule: Approval by actor of same family does NOT make it ready to merge
+	// 6. Same family rule: Approval by actor of same family does NOT make it ready to land
 	fix.mu.Lock()
 	pr.Mergeable = true
 	fix.reviews[10] = []*sdk.PullReview{
@@ -277,7 +275,7 @@ func TestInbox_ReadyToMerge(t *testing.T) {
 	}
 }
 
-func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
+func TestInbox_CleanBehindPROffersLand(t *testing.T) {
 	fix := defaultFixture()
 	_, port := newFixtureServer(t, fix)
 	sha := "1111222233334444555566667777888899990000"
@@ -303,39 +301,16 @@ func TestInbox_CleanBehindPROffersMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Kind != InboxMergeBase || items[0].HeadSHA != sha {
-		t.Fatalf("items = %+v, want one clean merge action", items)
+	if len(items) != 1 || items[0].Kind != InboxReadyToLand || items[0].HeadSHA != sha {
+		t.Fatalf("items = %+v, want one landing action", items)
 	}
-	if items[0].Action == nil || items[0].Action.Label != "Merge main" || items[0].Title != "Merge main into issue/15 for !15" {
-		t.Fatalf("merge action = %+v, title = %q", items[0].Action, items[0].Title)
+	if items[0].Action == nil || items[0].Action.Label != "Land" || items[0].Title != "PR !15 is ready to land" {
+		t.Fatalf("landing action = %+v, title = %q", items[0].Action, items[0].Title)
 	}
-	out, err := s.ExecuteMergeBase(context.Background(), MergeBaseRequest{Number: 15, HeadSHA: items[0].HeadSHA})
-	if err != nil || !strings.Contains(out, "Merged the base into !15") {
-		t.Fatalf("ExecuteMergeBase = %q, %v", out, err)
-	}
-	if len(fix.mergeCalls) != 1 || fix.mergeCalls[0].Repo != "bottown" || fix.mergeCalls[0].Number != 15 || fix.mergeCalls[0].HeadSHA != sha {
-		t.Fatalf("merge calls = %+v", fix.mergeCalls)
+	if !strings.Contains(items[0].Description, "skips the checks at the combined tree") {
+		t.Fatal(items[0].Description)
 	}
 
-	// A live run on the PR hides the offer: a verifier records the PR, a
-	// follow-up implement run only its issue and branch.
-	for _, run := range []secrets.Run{
-		{ID: "r-verify", Kind: "verify", PR: 15, Issue: 15, Created: now, Expires: now.Add(time.Hour)},
-		{ID: "r-implement", Kind: "implement", Issue: 15, Branch: "issue/15", Created: now, Expires: now.Add(time.Hour)},
-	} {
-		fix.mu.Lock()
-		fix.runs = []secrets.Run{run}
-		fix.mu.Unlock()
-		items, err := s.ComputeInbox(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, item := range items {
-			if item.Kind == InboxMergeBase {
-				t.Fatalf("live %s run: inbox still offers %+v", run.Kind, item)
-			}
-		}
-	}
 }
 
 func TestInbox_ConflictsWithBase(t *testing.T) {
@@ -988,7 +963,7 @@ func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
 	now := time.Now()
 	sha := "1111222233334444555566667777888899990000"
 
-	// 60 filler PRs that produce no inbox items, then a ready-to-merge PR
+	// 60 filler PRs that produce no inbox items, then a ready-to-land PR
 	// that would fall off a single limit=50 page.
 	for i := 1; i <= 60; i++ {
 		fix.prs = append(fix.prs, &sdk.PullRequest{
@@ -1063,7 +1038,7 @@ func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
 
 	var ready, filed bool
 	for _, it := range items {
-		if it.Kind == InboxReadyToMerge && it.Target == "!61" {
+		if it.Kind == InboxReadyToLand && it.Target == "!61" {
 			ready = true
 		}
 		if it.Kind == InboxActorFiledIssue && it.Target == "#61" {
@@ -1071,7 +1046,7 @@ func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
 		}
 	}
 	if !ready {
-		t.Fatalf("ready-to-merge PR on page 2 missing; items: %+v", items)
+		t.Fatalf("ready-to-land PR on page 2 missing; items: %+v", items)
 	}
 	if !filed {
 		t.Fatalf("actor-filed issue on page 2 missing; items: %+v", items)

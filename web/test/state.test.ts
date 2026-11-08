@@ -289,7 +289,7 @@ test('actorModelPlaceholder shows the host default model or the harness default'
 
 test('filterInboxItems hides actor-filed issues unless requested', () => {
   const items = [
-    { id: 'ready', kind: 'ready_to_merge' },
+    { id: 'ready', kind: 'ready_to_land' },
     { id: 'filed', kind: 'actor_filed_issue' },
     { id: 'discuss', kind: 'discuss_answer' },
   ] as any[];
@@ -316,12 +316,12 @@ test('resolveInboxAction and parseIssueNumber route inbox and timeline actions',
     resolveInboxAction({
       target: '!19',
       head_sha: 'abc123',
-      action: { label: 'Merge main', command: 'bottown flow merge-base !19' },
+      action: { label: 'Land', command: 'bottown land !19' },
     }),
-    { action: 'merge-base', number: 19, headSHA: 'abc123' },
+    { action: 'land', number: 19, headSHA: 'abc123' },
   );
   assert.equal(
-    resolveInboxAction({ target: '!19', action: { label: 'Merge main', command: 'bottown flow merge-base !19' } }),
+    resolveInboxAction({ target: '!19', action: { label: 'Land', command: 'bottown land !19' } }),
     null,
   );
   assert.equal(resolveInboxAction({ target: '#10', action: undefined }), null);

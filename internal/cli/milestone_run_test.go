@@ -78,7 +78,7 @@ func TestFlowLauncher(t *testing.T) {
 				t.Errorf("detail %q lacks %q", oc.Detail, tc.inLog)
 			}
 			args, _ := os.ReadFile(filepath.Join(dir, "args"))
-			want := "-i dev flow 4 --implement claude --verify agy:fast --unattended --merge-milestone-base --repo demo --rounds 2 --timeout 1h0m0s --check-timeout 1m0s\n"
+			want := "-i dev flow 4 --implement claude --verify agy:fast --unattended --repo demo --rounds 2 --timeout 1h0m0s --check-timeout 1m0s\n"
 			if string(args) != want {
 				t.Errorf("args %q, want %q", args, want)
 			}

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/robertolupi/bottown/internal/client"
@@ -74,5 +76,26 @@ func TestFlowRepoQualifiedSharesLock(t *testing.T) {
 	var busy *runs.FlowBusyError
 	if _, err := runs.HoldFlow(dir, short, 338); !errors.As(err, &busy) {
 		t.Fatalf("second HoldFlow(%q) = %v, want *FlowBusyError", short, err)
+	}
+}
+
+func TestFlowDoesNotKnowMergeMilestoneBaseFlag(t *testing.T) {
+	cmd := newFlow(&globals{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "merge-milestone-base") {
+		t.Fatalf("flow --help still mentions --merge-milestone-base:\n%s", out.String())
+	}
+	cmd = newFlow(&globals{})
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"1", "--implement", "claude", "--verify", "agy", "--merge-milestone-base"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag: --merge-milestone-base") {
+		t.Fatalf("flow --merge-milestone-base = %v, want unknown flag", err)
 	}
 }

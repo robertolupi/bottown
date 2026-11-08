@@ -2800,7 +2800,7 @@ fi`
 			assertStopComment(issue, "ready to merge")
 		})
 
-		t.Run("clean merge of main keeps the approval", func(t *testing.T) {
+		t.Run("approved PR behind clean main stops ready to merge at own head", func(t *testing.T) {
 			remote := "bottown-" + a.name
 			ownerGit := func(args ...string) {
 				t.Helper()
@@ -2810,7 +2810,7 @@ fi`
 					t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 				}
 			}
-			issue := newIssue("flow clean merge of main")
+			issue := newIssue("flow clean behind main")
 			dir := t.TempDir()
 			script := flowScript(dir, "approve")
 			out, err := withHarness(script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
@@ -2842,42 +2842,33 @@ fi`
 				t.Fatal(err)
 			}
 			git(t, demo, "add", name)
-			git(t, demo, "commit", "-qm", "main moves for clean merge")
+			git(t, demo, "commit", "-qm", "main moves cleanly")
 			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
 
 			out, err = withHarnessInput("y\n", script, "flow", fmt.Sprint(issue), "--implement", "claude", "--verify", "agy", "--timeout", "10s")
 			if err != nil || !strings.Contains(out, "ready to merge") {
-				t.Fatalf("flow after clean merge: %v\n%s", err, out)
+				t.Fatalf("flow when behind clean main: %v\n%s", err, out)
 			}
-			if !strings.Contains(out, fmt.Sprintf("Merge main into %s for !%d? [Y/n]", branch, prn)) {
-				t.Errorf("flow did not ask for confirmation:\n%s", out)
+			if strings.Contains(out, "[Y/n]") || strings.Contains(out, "Merge main into") {
+				t.Errorf("flow asked for or performed a clean merge:\n%s", out)
 			}
 			if readCount(filepath.Join(dir, "implements")) != "1" || readCount(filepath.Join(dir, "verifies")) != "1" {
-				t.Error("the clean merge cost another implement or verify run")
+				t.Error("behind clean main cost another implement or verify run")
 			}
 			var pr struct {
 				Head struct{ Sha string }
 			}
 			prPath := fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn)
 			a.mustAPI(owner, "GET", prPath, nil, &pr)
-			if pr.Head.Sha == old {
-				t.Fatalf("PR head stayed at %s", old)
-			}
-			ownerGit("fetch", "-q", remote)
-			if parents := strings.Fields(git(t, demo, "show", "-s", "--format=%P", pr.Head.Sha)); len(parents) != 2 || parents[0] != old {
-				t.Fatalf("merge parents = %v, want old head %s and main", parents, old)
-			}
-			if author := git(t, demo, "show", "-s", "--format=%an", pr.Head.Sha); author != "bottown" {
-				t.Errorf("merge author = %q, want bottown", author)
-			}
-			if message := git(t, demo, "show", "-s", "--format=%B", pr.Head.Sha); !strings.Contains(message, "Automatic clean merge by bottown") {
-				t.Errorf("merge message = %q", message)
+			if pr.Head.Sha != old {
+				t.Fatalf("PR head moved from %s to %s", old, pr.Head.Sha)
 			}
 			assertStopComment(issue, "ready to merge")
 			var comments []struct{ Body string }
 			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", issue), nil, &comments)
-			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "carried over") {
-				t.Errorf("approval did not carry over: %+v", comments)
+			want := "behind `main` by 1 commits, cleanly; `bottown merge-all` lands it"
+			if len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, want) {
+				t.Errorf("stop comment lacks %q: %+v", want, comments)
 			}
 			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
 				code, b := a.api(owner, "POST", prPath+"/merge", map[string]any{"Do": "merge", "delete_branch_after_merge": true})
@@ -2885,7 +2876,7 @@ fi`
 					break
 				}
 				if time.Now().After(deadline) {
-					t.Fatalf("owner merge after automatic clean merge: %d %s", code, b)
+					t.Fatalf("owner merge: %d %s", code, b)
 				}
 			}
 		})
@@ -3253,6 +3244,627 @@ fi`
 		}
 		if st := ui.LoadRepoSettings(context.Background()); !st.Checked || st.Error != "" || st.Commit != br.Commit {
 			t.Errorf("repo settings: %+v, want read at %s", st, br.Commit)
+		}
+	})
+
+	// The merge queue's landing (docs/design/merge-queue.md §4.1) rests on
+	// Forgejo's fast-forward-only style being a compare-and-swap on the
+	// base. This spike proves it on a real instance before the merge
+	// operation is built on it.
+	t.Run("fast-forward-only landing", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(env []string, args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = append(a.env(), env...)
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+
+		// The manager never gets a bottown key: it acts on Forgejo with
+		// the token bottown keeps for it, as the merge operation will.
+		raw, err := exec.Command("docker", "exec", "-u", "git", a.cfg.Container(), "cat", "/data/bottown/secrets.json").Output()
+		if err != nil {
+			t.Fatalf("read secrets: %v", err)
+		}
+		var st struct {
+			Tokens map[string]struct{ Token string }
+		}
+		if err := json.Unmarshal(raw, &st); err != nil || st.Tokens["manager"].Token == "" {
+			t.Fatalf("no manager token: %v", err)
+		}
+		manager := st.Tokens["manager"].Token
+		forge := func(token, method, path string, body any) (int, []byte) {
+			t.Helper()
+			b, _ := json.Marshal(body)
+			req, _ := http.NewRequest(method, a.cfg.ForgejoURL()+"/api/v1"+path, bytes.NewReader(b))
+			req.Header.Set("Authorization", "token "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			out, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, out
+		}
+
+		// Assertion: allow_fast_forward_only_merge on a repository bottown created.
+		var repo struct {
+			AllowFastForwardOnly bool `json:"allow_fast_forward_only_merge"`
+		}
+		a.mustAPI(owner, "GET", "/repos/bottown/demo", nil, &repo)
+		t.Logf("allow_fast_forward_only_merge on a fresh repository: %v", repo.AllowFastForwardOnly)
+		if !repo.AllowFastForwardOnly {
+			t.Errorf("allow-ff-only: bottown/demo does not allow fast-forward-only merges")
+		}
+
+		mainTip := func() string {
+			t.Helper()
+			var br struct{ Commit struct{ ID string } }
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/branches/main", nil, &br)
+			return br.Commit.ID
+		}
+		pushMain := func(name string, content []byte) string {
+			t.Helper()
+			ownerGit(nil, "fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, name), content, 0o644)
+			git(t, demo, "add", name)
+			git(t, demo, "commit", "-q", "-m", "main moves: "+name)
+			ownerGit(nil, "push", "-q", remote, "HEAD:refs/heads/main")
+			return git(t, demo, "rev-parse", "HEAD")
+		}
+		lines := func(first, last string) []byte {
+			var b strings.Builder
+			b.WriteString(first + "\n")
+			for i := 2; i <= 19; i++ {
+				fmt.Fprintf(&b, "%d\n", i)
+			}
+			b.WriteString(last + "\n")
+			return []byte(b.String())
+		}
+		type pull struct {
+			Number         int64
+			State          string
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		type review struct {
+			ID        int64
+			State     string
+			Dismissed bool
+			CommitID  string `json:"commit_id"`
+		}
+
+		// open makes issue #N, an implementer PR from issue/N whose
+		// description ends "Closes #N" that changes the last line of file,
+		// and a verifier approval of another family at its head.
+		open := func(file string) (issue, prn int64, prPath, head string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "ff-only " + file}, &is)
+			branch := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit(nil, "fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			os.WriteFile(filepath.Join(demo, file), lines("1", "pr"), 0o644)
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "change "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+branch); err != nil {
+				t.Fatalf("push %s: %v\n%s", branch, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": branch, "base": "main", "title": "ff-only " + file,
+				"body": fmt.Sprintf("Change %s.\n\nCloses #%d", file, is.Number),
+			}, &pr)
+			prPath = fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "verified", "commit_id": pr.Head.Sha}, nil)
+			return is.Number, pr.Number, prPath, pr.Head.Sha
+		}
+
+		// land builds the landing commit on the forge's repository, base
+		// first (main tip, then the PR head), pushes it to the PR branch
+		// with the owner's token as bottown's automatic merge does, and
+		// undismisses the approval if Forgejo dismissed it, reporting
+		// whether it did.
+		land := func(issue, prn int64, prPath, head string) (landing string, dismissed bool) {
+			t.Helper()
+			base := mainTip()
+			tree := strings.Fields(git(t, demo, "merge-tree", "--write-tree", base, head))[0]
+			landing = ownerGit([]string{
+				"GIT_AUTHOR_NAME=bottown", "GIT_AUTHOR_EMAIL=bottown@localhost",
+				"GIT_COMMITTER_NAME=bottown", "GIT_COMMITTER_EMAIL=bottown@localhost",
+			}, "commit-tree", tree, "-p", base, "-p", head, "-m", fmt.Sprintf("Land !%d", prn))
+			ownerGit(nil, "push", "-q", remote, landing+":refs/heads/"+fmt.Sprintf("issue/%d", issue))
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+				var pr pull
+				a.mustAPI(owner, "GET", prPath, nil, &pr)
+				if pr.Head.Sha == landing {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("PR head %s, want the landing commit %s", pr.Head.Sha, landing)
+				}
+			}
+			// Forgejo dismisses asynchronously; wait a while for it before
+			// reconciling, or the dismissal could land after.
+			for deadline := time.Now().Add(15 * time.Second); !dismissed && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+				var rs []review
+				a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+				dismissed = len(rs) == 1 && rs[0].Dismissed
+			}
+			t.Logf("%s: Forgejo dismissed the approval on the landing push: %v", prPath, dismissed)
+			if dismissed {
+				body, _ := json.Marshal(map[string]any{"repo": "demo", "number": prn})
+				req, _ := http.NewRequest("POST", a.cfg.ServerURL()+"/v1/forge/pr/carries", bytes.NewReader(body))
+				req.Header.Set("Authorization", "Bearer "+owner)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				code := resp.StatusCode
+				if code != 200 {
+					t.Fatalf("ReconcileCarries: %d %s", code, b)
+				}
+			}
+			var rs []review
+			a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
+			if len(rs) != 1 || rs[0].Dismissed || rs[0].State != "APPROVED" {
+				t.Fatalf("approval not in force before the merge: %+v", rs)
+			}
+			return landing, dismissed
+		}
+		// merge asks Forgejo, as manager, to fast-forward main to landing.
+		// Mergeability is recomputed asynchronously, so a 405 is retried.
+		merge := func(prPath, landing string) (int, []byte) {
+			t.Helper()
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+				code, b := forge(manager, "POST", prPath+"/merge", map[string]any{"Do": "fast-forward-only", "head_commit_id": landing})
+				if code != 405 || time.Now().After(deadline) {
+					return code, b
+				}
+			}
+		}
+
+		t.Run("lands the checked commit", func(t *testing.T) {
+			// The PR changes the file's last line; after its approval, main
+			// changes the first, so the landing commit really merges two
+			// independent edits of one file.
+			pushMain("ff-land.txt", lines("1", "20"))
+			issue, prn, prPath, head := open("ff-land.txt")
+			pushMain("ff-land.txt", lines("main", "20"))
+			landing, dismissed := land(issue, prn, prPath, head)
+			if got := git(t, demo, "show", landing+":ff-land.txt") + "\n"; got != string(lines("main", "pr")) {
+				t.Fatalf("landing-tree: ff-land.txt in the landing commit:\n%s\nwant main's first line and the PR's last", got)
+			}
+			// Forgejo dismisses the approval on this push; the merge below
+			// then passes the protection only on the approval that
+			// ReconcileCarries restored.
+			if !dismissed {
+				t.Errorf("approval-restored: Forgejo kept the approval on the landing push, so the restored approval is not exercised")
+			}
+			code, b := merge(prPath, landing)
+			if code != 200 {
+				t.Fatalf("merge-ok: fast-forward-only merge of the approved landing commit: %d %s", code, b)
+			}
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			if !pr.Merged || pr.MergeCommitSHA != landing {
+				t.Errorf("merged-commit: PR merged=%v merge_commit_sha=%s, want the landing commit %s", pr.Merged, pr.MergeCommitSHA, landing)
+			}
+			if tip := mainTip(); tip != landing {
+				t.Errorf("main-at-landing: main at %s, want the landing commit %s", tip, landing)
+			}
+			for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+				var is struct{ State string }
+				a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", issue), nil, &is)
+				if is.State == "closed" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("issue-closed: #%d is %s after the merge", issue, is.State)
+					break
+				}
+			}
+			a.api(owner, "DELETE", fmt.Sprintf("/repos/bottown/demo/branches/issue/%d", issue), nil)
+		})
+
+		t.Run("refuses a moved base", func(t *testing.T) {
+			issue, prn, prPath, head := open("ff-race.txt")
+			landing, _ := land(issue, prn, prPath, head)
+			moved := pushMain("ff-race-main.txt", []byte("main moved under the landing\n"))
+			code, b := merge(prPath, landing)
+			// Forgejo 15 refuses with a 500 and no message: its merge API
+			// does not map ErrMergeDivergingFastForwardOnly. Design §4.1
+			// therefore reads the base after a refusal: the refusal is
+			// "base moved" only when the base's tip is no longer an
+			// ancestor of the landing commit.
+			t.Logf("fast-forward-only merge over a moved base: %d %s", code, b)
+			if code != 409 && code != 500 {
+				t.Errorf("race-refused: fast-forward-only merge over a moved base: %d %s, want 409 or 500", code, b)
+			}
+			tip := mainTip()
+			if tip != moved {
+				t.Errorf("race-main-untouched: main at %s, want %s", tip, moved)
+			}
+			ownerGit(nil, "fetch", "-q", remote)
+			if err := exec.Command("git", "-C", demo, "merge-base", "--is-ancestor", tip, landing).Run(); err == nil {
+				t.Errorf("race-base-moved: main's tip %s is an ancestor of the landing commit %s after the refusal", tip, landing)
+			}
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			if pr.Merged || pr.State != "open" {
+				t.Errorf("race-pr-open: PR merged=%v state=%s after a refused merge", pr.Merged, pr.State)
+			}
+			// Leave the forge as the later subtests expect it.
+			a.mustAPI(owner, "PATCH", prPath, map[string]string{"state": "closed"}, nil)
+			a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/issues/%d", issue), map[string]string{"state": "closed"}, nil)
+			a.api(owner, "DELETE", fmt.Sprintf("/repos/bottown/demo/branches/issue/%d", issue), nil)
+		})
+	})
+
+	t.Run("merge-all lands approved PRs", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+		impl := strings.TrimSpace(a.mustCmd("", "credential", "key", "claude", "--full"))
+		ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex", "--full"))
+
+		// The check command waits on a gate, so a landing's checks can be
+		// held open while the test moves main under them.
+		gateDir := t.TempDir()
+		gate, started := filepath.Join(gateDir, "gate"), filepath.Join(gateDir, "started")
+		checkCmd := fmt.Sprintf("touch %s; while [ ! -e %s ]; do sleep 0.1; done; echo check", started, gate)
+		if err := os.WriteFile(gate, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		lines := func(first, last string) string {
+			var b strings.Builder
+			b.WriteString(first + "\n")
+			for i := 2; i <= 19; i++ {
+				fmt.Fprintf(&b, "%d\n", i)
+			}
+			b.WriteString("20\n" + last + "\n")
+			return b.String()
+		}
+		pushMain := func(files map[string]string, msg string) string {
+			t.Helper()
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			for name, content := range files {
+				if err := os.WriteFile(filepath.Join(demo, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				git(t, demo, "add", name)
+			}
+			git(t, demo, "commit", "-q", "-m", msg)
+			sha := git(t, demo, "rev-parse", "HEAD")
+			ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+			return sha
+		}
+
+		// The repository's check and e2e commands, so both gate statuses are
+		// recorded at every landing commit.
+		pushMain(map[string]string{
+			".bottown.toml": "check = [" + strconv.Quote(checkCmd) + "]\ne2e = [\"echo e2e\"]\n",
+			"a.txt":         "a\n", "b.txt": "b\n", "d.txt": "d\n", "ctx.txt": lines("1", "21"),
+		}, "merge-all setup")
+
+		type pull struct {
+			Number         int64
+			State          string
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		open := func(file, content string) (prn int64, prPath, head string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "merge-all " + file}, &is)
+			branch := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/main")
+			if err := os.WriteFile(filepath.Join(demo, file), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "change "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+branch); err != nil {
+				t.Fatalf("push %s: %v\n%s", branch, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": branch, "base": "main", "title": "merge-all " + file,
+				"body": fmt.Sprintf("Change %s.\n\nCloses #%d", file, is.Number),
+			}, &pr)
+			return pr.Number, fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number), pr.Head.Sha
+		}
+		approve := func(prPath, head string) {
+			t.Helper()
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": head}, nil)
+		}
+		get := func(prPath string) pull {
+			t.Helper()
+			var pr pull
+			a.mustAPI(owner, "GET", prPath, nil, &pr)
+			return pr
+		}
+		verifyRuns := func() int {
+			t.Helper()
+			req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/runs?repo=demo", nil)
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var rs []struct{ Kind string }
+			if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&rs) != nil {
+				t.Fatalf("runs: %d", resp.StatusCode)
+			}
+			n := 0
+			for _, r := range rs {
+				if r.Kind == "verify" {
+					n++
+				}
+			}
+			return n
+		}
+		statuses := func(sha string) map[string]string {
+			t.Helper()
+			var cs []struct {
+				Context string
+				Status  string `json:"status"`
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/commits/"+sha+"/statuses", nil, &cs)
+			out := map[string]string{}
+			for _, s := range cs {
+				out[s.Context] = s.Status
+			}
+			return out
+		}
+
+		pr1, p1, h1 := open("a.txt", "a1\n")
+		pr2, p2, h2 := open("b.txt", "b1\n")
+		pr3, p3, h3 := open("ctx.txt", lines("1", "pr")) // changes the last line
+		// main moves: d.txt, and ctx.txt's line 18, which is inside the
+		// context of PR3's change to line 21 (but far enough that the merge
+		// is clean), so PR3's landing patch is no longer its head's and the
+		// approval does not carry.
+		before := pushMain(map[string]string{"d.txt": "d2\n", "ctx.txt": strings.Replace(lines("1", "21"), "18\n", "18m\n", 1)}, "main moves")
+		approve(p1, h1)
+		approve(p2, h2)
+		approve(p3, h3)
+
+		// Two approved PRs behind main land, with no new verify run.
+		verifyBefore := verifyRuns()
+		out, err := a.cmd(demo, "merge-all", fmt.Sprint(pr1), fmt.Sprint(pr2))
+		if err != nil {
+			t.Fatalf("merge-all !%d !%d: %v\n%s", pr1, pr2, err, out)
+		}
+		if verifyAfter := verifyRuns(); verifyAfter != verifyBefore {
+			t.Errorf("merge-all started %d verify run(s)", verifyAfter-verifyBefore)
+		}
+		landed1, landed2 := get(p1), get(p2)
+		for _, pr := range []pull{landed1, landed2} {
+			if !pr.Merged {
+				t.Fatalf("PR !%d not merged:\n%s", pr.Number, out)
+			}
+			st := statuses(pr.MergeCommitSHA)
+			for _, ctx := range []string{"bottown/check", "bottown/e2e"} {
+				if st[ctx] != "success" {
+					t.Errorf("PR !%d: status %s at %s = %q, want success (%v)", pr.Number, ctx, pr.MergeCommitSHA, st[ctx], st)
+				}
+			}
+		}
+		ownerGit("fetch", "-q", remote)
+		subjects := strings.Split(ownerGit("log", "--first-parent", "--format=%s", before+".."+remote+"/main"), "\n")
+		merges := 0
+		for _, s := range subjects {
+			if strings.HasPrefix(s, "Merge !") {
+				merges++
+			}
+		}
+		if merges != 2 {
+			t.Errorf("main's first-parent history between %s and the tip has %d landing merges, want 2: %v", before[:8], merges, subjects)
+		}
+
+		// A third whose context main edited is reported needs verify.
+		out, err = a.cmd(demo, "merge-all", fmt.Sprint(pr3))
+		if err == nil {
+			t.Errorf("merge-all on a lost carry exited 0:\n%s", out)
+		}
+		if !strings.Contains(out, "needs verify") {
+			t.Errorf("merge-all did not report needs verify:\n%s", out)
+		}
+		if get(p3).Merged {
+			t.Error("the lost-carry PR merged")
+		}
+
+		// main moving during a landing's checks: the landing is rebuilt on
+		// the new base and lands at a new landing commit.
+		pr4, p4, h4 := open("e.txt", "e1\n")
+		approve(p4, h4)
+		_ = os.Remove(gate)
+		_ = os.Remove(started)
+		cmd := exec.Command(bin, "merge-all", fmt.Sprint(pr4))
+		cmd.Env, cmd.Dir = a.env(), demo
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		var landing1 string
+		for deadline := time.Now().Add(time.Minute); ; time.Sleep(100 * time.Millisecond) {
+			if head := get(p4).Head.Sha; head != h4 {
+				landing1 = head
+				break
+			}
+			if time.Now().After(deadline) {
+				cmd.Process.Kill()
+				t.Fatalf("no landing commit for !%d:\n%s", pr4, buf.String())
+			}
+		}
+		moved := pushMain(map[string]string{"f.txt": "f1\n"}, "main moves during checks")
+		if err := os.WriteFile(gate, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("merge-all over a moved base: %v\n%s", err, buf.String())
+		}
+		final := get(p4)
+		if !final.Merged {
+			t.Fatalf("PR !%d not merged after main moved during the checks:\n%s", pr4, buf.String())
+		}
+		if final.MergeCommitSHA == landing1 {
+			t.Errorf("landing commit %s was not rebuilt on the new base", landing1)
+		}
+		ownerGit("fetch", "-q", remote)
+		if parent := ownerGit("rev-parse", final.MergeCommitSHA+"^1"); parent != moved {
+			t.Errorf("the rebuilt landing commit's first parent is %s, want the moved main tip %s", parent, moved)
+		}
+	})
+
+	// A milestone child that lands after a sibling landed is merged only at
+	// a landing commit the check group passed at (design §6): milestone
+	// merge lands through land.Land, as milestone run does.
+	t.Run("milestone merge lands a sibling at a checked combined head", func(t *testing.T) {
+		remote := "bottown-" + a.name
+		ownerGit := func(args ...string) string {
+			t.Helper()
+			c := exec.Command("git", append([]string{"-C", demo}, args...)...)
+			c.Env = a.env()
+			out, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		defer git(t, demo, "switch", "-q", "main")
+		impl := strings.TrimSpace(a.mustCmd("", "credential", "key", "claude", "--full"))
+		ver := strings.TrimSpace(a.mustCmd("", "credential", "key", "codex", "--full"))
+		const branch = "milestone/landing"
+
+		// The checks name the group they run in the check's log, and the
+		// milestone policy runs check alone.
+		ownerGit("fetch", "-q", remote)
+		git(t, demo, "switch", "-q", "--detach", remote+"/main")
+		os.WriteFile(filepath.Join(demo, ".bottown.toml"), []byte("check = [\"echo check\"]\ne2e = [\"echo e2e\"]\n"), 0o644)
+		git(t, demo, "add", ".bottown.toml")
+		git(t, demo, "commit", "-q", "--allow-empty", "-m", "milestone landing checks")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/main")
+		ownerGit("push", "-q", remote, "HEAD:refs/heads/"+branch)
+
+		type pull struct {
+			Number         int64
+			Merged         bool
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct{ Sha string }
+		}
+		// open files a child issue and its approved PR into the milestone
+		// branch, changing file, from the branch's tip now.
+		open := func(file string) (issue int64, prPath string) {
+			t.Helper()
+			var is struct{ Number int64 }
+			a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "milestone landing " + file}, &is)
+			head := fmt.Sprintf("issue/%d", is.Number)
+			ownerGit("fetch", "-q", remote)
+			git(t, demo, "switch", "-q", "--detach", remote+"/"+branch)
+			os.WriteFile(filepath.Join(demo, file), []byte(file+"\n"), 0o644)
+			git(t, demo, "add", file)
+			git(t, demo, "commit", "-q", "-m", "add "+file)
+			if out, err := a.pushAs(demo, "claude", impl, "HEAD:refs/heads/"+head); err != nil {
+				t.Fatalf("push %s: %v\n%s", head, err, out)
+			}
+			var pr pull
+			a.mustAPI(impl, "POST", "/repos/bottown/demo/pulls", map[string]string{
+				"head": head, "base": branch, "title": "milestone landing " + file, "body": "Add " + file + ".",
+			}, &pr)
+			prPath = fmt.Sprintf("/repos/bottown/demo/pulls/%d", pr.Number)
+			a.mustAPI(ver, "POST", prPath+"/reviews", map[string]any{"event": "APPROVED", "body": "ok", "commit_id": pr.Head.Sha}, nil)
+			return is.Number, prPath
+		}
+		statuses := func(sha string) map[string]string {
+			t.Helper()
+			var cs []struct {
+				Context string
+				Status  string `json:"status"`
+			}
+			a.mustAPI(owner, "GET", "/repos/bottown/demo/commits/"+sha+"/statuses", nil, &cs)
+			out := map[string]string{}
+			for _, s := range cs {
+				out[s.Context] = s.Status
+			}
+			return out
+		}
+
+		// Both children are ready from the same tip; the first lands, and
+		// the second is then behind its sibling's merge.
+		first, p1 := open("first.txt")
+		second, p2 := open("second.txt")
+		if out, err := a.cmd(demo, "milestone", "merge", fmt.Sprint(first)); err != nil {
+			t.Fatalf("milestone merge #%d: %v\n%s", first, err, out)
+		}
+		var landed1 pull
+		a.mustAPI(owner, "GET", p1, nil, &landed1)
+		if !landed1.Merged {
+			t.Fatalf("#%d's PR not merged", first)
+		}
+		var before pull
+		a.mustAPI(owner, "GET", p2, nil, &before)
+		out, err := a.cmd(demo, "milestone", "merge", fmt.Sprint(second))
+		if err != nil {
+			t.Fatalf("milestone merge #%d behind its sibling: %v\n%s", second, err, out)
+		}
+		var landed2 pull
+		a.mustAPI(owner, "GET", p2, nil, &landed2)
+		if !landed2.Merged || landed2.MergeCommitSHA == before.Head.Sha {
+			t.Fatalf("#%d's PR merged=%v at %s, want a landing commit past its head %s:\n%s", second, landed2.Merged, landed2.MergeCommitSHA, before.Head.Sha, out)
+		}
+		ownerGit("fetch", "-q", remote)
+		landing := landed2.MergeCommitSHA
+		if parents := strings.Fields(ownerGit("rev-list", "--parents", "-n1", landing)); len(parents) != 3 || parents[1] != landed1.MergeCommitSHA || parents[2] != before.Head.Sha {
+			t.Errorf("the landing commit's parents %v, want the sibling's merge %s and the head %s", parents[1:], landed1.MergeCommitSHA, before.Head.Sha)
+		}
+		if tip := ownerGit("rev-parse", remote+"/"+branch); tip != landing {
+			t.Errorf("%s at %s, want the landing commit %s", branch, tip, landing)
+		}
+		for _, f := range []string{"first.txt", "second.txt"} {
+			ownerGit("cat-file", "-e", landing+":"+f)
+		}
+		st := statuses(landing)
+		if st["bottown/check"] != "success" {
+			t.Errorf("bottown/check at the landing commit %s = %q, want success (%v)", landing, st["bottown/check"], st)
+		}
+		if _, ok := st["bottown/e2e"]; ok {
+			t.Errorf("the milestone landing ran e2e at %s: %v", landing, st)
+		}
+		var is struct{ State string }
+		a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", second), nil, &is)
+		if is.State != "closed" {
+			t.Errorf("#%d is %s after its landing", second, is.State)
+		}
+		// Landing it again reports it merged.
+		if out := a.mustCmd(demo, "milestone", "merge", fmt.Sprint(second)); !strings.Contains(out, "already merged") {
+			t.Errorf("milestone merge on a merged child:\n%s", out)
 		}
 	})
 
