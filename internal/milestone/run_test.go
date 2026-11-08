@@ -20,18 +20,27 @@ var runActors = []config.Actor{
 	{Name: "kimi", Family: "moonshot"},
 }
 
-// runFake is RunForge over the apply fake: merging closes the child.
+// runFake is RunForge over the apply fake, with a fake Land: landing
+// closes the child, unless landings holds the outcomes of its next
+// landings.
 type runFake struct {
 	*fakeForge
-	events    []string // "branch", "restart", "pair #n a/b", "merge #n", "comment #n"
-	comments  map[int64][]string
-	final     int64 // the open final PR
-	restart   Restart
-	failMerge map[int64]bool
+	events   []string // "branch", "restart", "pair #n a/b", "land #n", "merge #n", "comment #n"
+	comments map[int64][]string
+	final    int64 // the open final PR
+	restart  Restart
+	// landings are each child's next landings' outcomes, the first one
+	// first; Landed, or none left, merges it.
+	landings map[int64][]Landing
+	// onLand runs before each landing.
+	onLand func(n int64)
+	// order is Order's answer for ns; nil keeps ns.
+	order  func(ns []int64) []int64
+	orders [][]int64 // what Order was asked
 }
 
 func newRunFake(f *fakeForge) *runFake {
-	return &runFake{fakeForge: f, comments: map[int64][]string{}, failMerge: map[int64]bool{}}
+	return &runFake{fakeForge: f, comments: map[int64][]string{}, landings: map[int64][]Landing{}}
 }
 
 func (f *runFake) Branch(context.Context) (bool, error) {
@@ -54,13 +63,40 @@ func (f *runFake) SetPair(_ context.Context, n int64, implement, verify string) 
 	return nil
 }
 
-func (f *runFake) Merge(_ context.Context, n int64) (Merge, error) {
-	if f.failMerge[n] {
-		return Merge{}, errors.New("not approved at the head")
+func (f *runFake) Land(_ context.Context, n int64) Landing {
+	if f.onLand != nil {
+		f.onLand(n)
+	}
+	f.events = append(f.events, fmt.Sprintf("land #%d", n))
+	if q := f.landings[n]; len(q) > 0 {
+		f.landings[n] = q[1:]
+		if q[0].Kind != Landed {
+			return q[0]
+		}
 	}
 	f.issues[n].Closed = true
 	f.events = append(f.events, fmt.Sprintf("merge #%d", n))
-	return Merge{PR: 100 + n, HeadSHA: "abcdef0123456789", Base: "milestone/demo"}, nil
+	return Landing{Kind: Landed, Merge: Merge{PR: 100 + n, HeadSHA: "abcdef0123456789", Base: "milestone/demo"}}
+}
+
+func (f *runFake) Order(_ context.Context, ns []int64) ([]int64, error) {
+	f.orders = append(f.orders, slices.Clone(ns))
+	if f.order == nil {
+		return ns, nil
+	}
+	return f.order(ns), nil
+}
+
+// lands are the children landed, in the order Land was asked.
+func (f *runFake) lands() []int64 {
+	var out []int64
+	for _, e := range f.events {
+		var n int64
+		if _, err := fmt.Sscanf(e, "land #%d", &n); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func (f *runFake) FinalPR(context.Context) (int64, error) { return f.final, nil }
@@ -79,6 +115,7 @@ type fakeLauncher struct {
 	requests []FlowRequest
 	running  int
 	most     int
+	returned int // flows that have ended
 }
 
 func (l *fakeLauncher) Flow(_ context.Context, req FlowRequest) Outcome {
@@ -91,6 +128,7 @@ func (l *fakeLauncher) Flow(_ context.Context, req FlowRequest) Outcome {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.running--
+	l.returned++
 	if l.outcome != nil {
 		return l.outcome(req)
 	}
@@ -402,7 +440,7 @@ func TestRunRestartAndFailedMerge(t *testing.T) {
 	f := newRunFake(withPlan(planIndependent))
 	mustApply(t, f.fakeForge, nil)
 	f.restart = Restart{Merged: true, Final: 40, Base: "main", HeadSHA: "0123456789abcdef"}
-	f.failMerge[4] = true
+	f.landings[4] = []Landing{{Kind: LandFailed, Reason: "!104 at abcdef0: refused: PR must remain open, approved, synced and on its original base and head branch"}}
 	r := runOnce(t, f, &fakeLauncher{}, "claude=*,agy=*", 1)
 	if !strings.Contains(r.out, "the final PR !40 was merged: merged main into milestone/demo") {
 		t.Errorf("output:\n%s", r.out)
@@ -423,5 +461,157 @@ func TestRunRefusals(t *testing.T) {
 	mustApply(t, f.fakeForge, nil)
 	if r := runOnce(t, f, &fakeLauncher{}, "claude=*,agy=*", 0); r.err == nil || len(f.events) != 0 {
 		t.Errorf("parallel 0: %v, events %v", r.err, f.events)
+	}
+}
+
+// An approved child whose landing conflicts after a sibling landed goes
+// back to its flow once, with its recorded pair: the flow runs an
+// implement round and then a verify run, and the child lands.
+func TestRunConflictRedispatchedOnce(t *testing.T) {
+	f := newRunFake(withPlan(planIndependent))
+	mustApply(t, f.fakeForge, nil)
+	f.landings[4] = []Landing{{Kind: LandRepair, Reason: "!104 at abcdef0: conflict: x.txt"}}
+	var mu sync.Mutex
+	var repair []string // the second flow's runs on #4
+	flows := map[int64]int{}
+	l := &fakeLauncher{outcome: func(req FlowRequest) Outcome {
+		mu.Lock()
+		defer mu.Unlock()
+		flows[req.Issue]++
+		if req.Issue == 4 && flows[4] == 2 {
+			repair = append(repair, "implement "+req.Implement, "verify "+req.Verify)
+		}
+		return Outcome{Kind: FlowReady}
+	}}
+	f.onLand = func(n int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if n == 4 && len(f.landings[4]) == 0 && len(repair) == 0 {
+			t.Error("#4 landed again before its flow ran")
+		}
+	}
+	r := runOnce(t, f, l, "claude=*,agy=*", 1)
+	if r.err != nil || r.finished != 1 {
+		t.Fatalf("err = %v, finished %d\n%s", r.err, r.finished, r.out)
+	}
+	if got := l.issues(); !slices.Equal(got, []int64{3, 4, 4, 5}) {
+		t.Errorf("dispatched %v, want #4 twice", got)
+	}
+	if l.requests[1] != l.requests[2] {
+		t.Errorf("#4 went back with another pair: %+v, then %+v", l.requests[1], l.requests[2])
+	}
+	if want := []string{"implement " + l.requests[1].Implement, "verify " + l.requests[1].Verify}; !slices.Equal(repair, want) {
+		t.Errorf("#4's second flow ran %v, want %v", repair, want)
+	}
+	if got := f.lands(); !slices.Equal(got, []int64{3, 4, 4, 5}) {
+		t.Errorf("landed %v", got)
+	}
+	if !strings.Contains(r.out, "#4: ready to merge, but !104 at abcdef0: conflict: x.txt: back to its flow") {
+		t.Errorf("output:\n%s", r.out)
+	}
+	if len(r.rep.Stopped) != 0 || len(r.rep.Merged) != 3 {
+		t.Errorf("stopped %+v, merged %+v", r.rep.Stopped, r.rep.Merged)
+	}
+}
+
+// A child whose landing conflicts, or loses its approval, again after its
+// flow repaired it stops as merge failed, with the reason; the others
+// land.
+func TestRunConflictAgainStops(t *testing.T) {
+	f := newRunFake(withPlan(planIndependent))
+	mustApply(t, f.fakeForge, nil)
+	f.landings[4] = []Landing{
+		{Kind: LandRepair, Reason: "!104 at abcdef0: conflict: x.txt"},
+		{Kind: LandRepair, Reason: "!104 at 1234567: needs verify: approval did not carry"},
+	}
+	l := &fakeLauncher{}
+	r := runOnce(t, f, l, "claude=*,agy=*", 1)
+	var unfinished *UnfinishedError
+	if !errors.As(r.err, &unfinished) {
+		t.Fatalf("err = %v\n%s", r.err, r.out)
+	}
+	if got := l.issues(); !slices.Equal(got, []int64{3, 4, 4, 5}) {
+		t.Errorf("dispatched %v, want #4 twice and no more", got)
+	}
+	want := []StoppedChild{{Issue: 4, Reason: "merge failed", Detail: "!104 at 1234567: needs verify: approval did not carry"}}
+	if !slices.Equal(r.rep.Stopped, want) {
+		t.Errorf("stopped %+v, want %+v", r.rep.Stopped, want)
+	}
+	if !f.issues[3].Closed || f.issues[4].Closed || !f.issues[5].Closed {
+		t.Errorf("closed: #3 %v #4 %v #5 %v", f.issues[3].Closed, f.issues[4].Closed, f.issues[5].Closed)
+	}
+	if !strings.Contains(f.comments[6][0], "- #4: merge failed (!104 at 1234567: needs verify") {
+		t.Errorf("summary:\n%s", f.comments[6][0])
+	}
+}
+
+// Failed checks at the landing commit stop the child at once, with the
+// log, for the owner.
+func TestRunChecksFailedStops(t *testing.T) {
+	f := newRunFake(withPlan(planIndependent))
+	mustApply(t, f.fakeForge, nil)
+	reason := "!104 at 1234567: checks failed: make check failed; log: /runs/flow-4-1234567.check.log"
+	f.landings[4] = []Landing{{Kind: LandChecksFailed, Reason: reason}}
+	l := &fakeLauncher{}
+	r := runOnce(t, f, l, "claude=*,agy=*", 1)
+	var unfinished *UnfinishedError
+	if !errors.As(r.err, &unfinished) {
+		t.Fatalf("err = %v\n%s", r.err, r.out)
+	}
+	if got := l.issues(); !slices.Equal(got, []int64{3, 4, 5}) {
+		t.Errorf("dispatched %v, want #4 once", got)
+	}
+	want := []StoppedChild{{Issue: 4, Reason: "checks failed", Detail: reason}}
+	if !slices.Equal(r.rep.Stopped, want) {
+		t.Errorf("stopped %+v, want %+v", r.rep.Stopped, want)
+	}
+	if !strings.Contains(f.comments[6][0], "- #4: checks failed ("+reason+")") {
+		t.Errorf("summary:\n%s", f.comments[6][0])
+	}
+}
+
+// Children ready together (a resume) land in Order's order, recomputed
+// before each landing.
+func TestRunReadyTogetherLandInOrder(t *testing.T) {
+	f := newRunFake(withPlan(planIndependent))
+	mustApply(t, f.fakeForge, nil)
+	l := &fakeLauncher{}
+	// The first landing waits for every flow to end, so the others are
+	// ready together by the next one.
+	f.onLand = func(int64) {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			l.mu.Lock()
+			n := l.returned
+			l.mu.Unlock()
+			if n == 3 {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Highest issue first: not the order the flows ended in.
+	f.order = func(ns []int64) []int64 {
+		out := slices.Clone(ns)
+		slices.Sort(out)
+		slices.Reverse(out)
+		return out
+	}
+	r := runOnce(t, f, l, "claude=*,agy=*,kimi=*", 3)
+	if r.err != nil || r.finished != 1 {
+		t.Fatalf("err = %v\n%s", r.err, r.out)
+	}
+	got := f.lands()
+	if len(got) != 3 || got[1] < got[2] {
+		t.Fatalf("landed %v: after the first, the others in Order's order", got)
+	}
+	if len(f.orders) == 0 {
+		t.Fatal("Order was never asked")
+	}
+	last := f.orders[len(f.orders)-1]
+	slices.Sort(last)
+	rest := slices.Clone(got[1:])
+	slices.Sort(rest)
+	if !slices.Equal(last, rest) {
+		t.Errorf("the last order was of %v, want the two left %v", last, rest)
 	}
 }

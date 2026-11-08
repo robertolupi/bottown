@@ -1,7 +1,7 @@
 # Milestone run
 
-The shared [landing primitive](../land.md) describes the host-side steps,
-policies and outcomes; command integration is separate work.
+Run lands each child through the shared [landing primitive](../land.md)
+with the `Milestone` policy; that page describes its steps and outcomes.
 
 `bottown milestone run <slug> --agents SPEC --parallel N [--rounds 3]
 [--timeout 1h] [--check-timeout 1h] [--repo R]` (owner only) drives the
@@ -62,20 +62,46 @@ Then it loops, rebuilding everything from the forge each time:
    have stopped.
 5. **Results:** when a flow exits, run reads its stop, the owner's last
    stop comment on the child since the flow started:
-   - `ready to merge`: run merges the PR with `POST /v1/forge/pr/merge` at
-     its head, which closes the child and may make others ready. The
-     merge is fast-forward-only ([the landing merge](milestone-child-merge.md)),
-     so a head that does not contain the milestone branch's tip is refused
-     as `base_moved`, and the child stops as `merge failed`. If a
-     final PR is open, run comments on it that its head has not been
-     gated, so the owner does not merge it; finish re-gates it later.
+   - `ready to merge`: run lands the PR on `milestone/<slug>` with
+     `land.Land` and the `Milestone` policy, as `bottown milestone merge`
+     does ([the landing merge](milestone-child-merge.md)): it builds the
+     landing commit, the branch's tip merged with the PR's head, runs the
+     `check` group there (about a minute; `e2e` stays with finish), records
+     `bottown/check` on it, and merges it fast-forward-only as `manager`,
+     which closes the child and may make others ready. So a child landing
+     behind a sibling's merge is checked at the combined tree, and a
+     sibling that breaks it is named. A base that moves during the checks
+     is rebuilt and checked again. The landing runs in the result loop:
+     dispatch waits for it. If a final PR is open, run comments on it that
+     its head has not been gated, so the owner does not merge it; finish
+     re-gates it later. What else the landing can end in:
+     - **Conflict** (the branch's tip conflicts with the head) or **needs
+       verify** (the approval does not carry to the landing commit): the
+       child goes back to its flow, once per invocation. Its `ended` mark
+       is cleared and the loop dispatches it again with its recorded pair;
+       the flow starts a conflict round although the PR is approved, and
+       the verify that follows, and when it stops `ready to merge` again
+       run lands it again. A second such outcome stops it as `merge
+       failed`, with the outcome as the reason.
+     - **Checks failed** at the landing commit: the child stops as
+       `checks failed`, with the description and the check's log, for the
+       owner. Nothing merged.
+     - any other refusal, or a base that kept moving: the child stops as
+       `merge failed`, with the reason.
+
+     Flows that have ended by the time run lands are ready together (on a
+     resume, several approved children's flows stop at once): run lands
+     them one at a time in `land.Order`'s order, as `merge-all` does,
+     from a fresh trial merge of the branch into each before each
+     landing; if that fails, in the order their flows ended.
    - `agent did nothing`: the marker's actor leaves the pool until run
      exits; its child stays stopped, with no other actor substituted.
    - any other stop, or a flow that ended without one: the child is left
      to the owner as the flow left it.
 
    A child whose flow ended is not dispatched again in the same
-   invocation.
+   invocation, except once after a conflict or a lost approval at its
+   landing.
 
 When nothing is in flight and nothing more can be dispatched, run ends.
 If every active child is closed, it runs `bottown milestone finish`.

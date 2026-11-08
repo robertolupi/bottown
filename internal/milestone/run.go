@@ -23,9 +23,14 @@ type RunForge interface {
 	// SetPair labels issue n implement/<implement> and verify/<verify>,
 	// removing its other implement/* and verify/* labels.
 	SetPair(ctx context.Context, n int64, implement, verify string) error
-	// Merge merges issue n's approved PR into the milestone branch, as the
-	// manager, which closes n.
-	Merge(ctx context.Context, n int64) (Merge, error)
+	// Land lands issue n's approved PR on the milestone branch through
+	// land.Land with the milestone policy: the landing commit, the check
+	// group at it, and the fast-forward-only merge as the manager, which
+	// closes n.
+	Land(ctx context.Context, n int64) Landing
+	// Order is the issues ns, ready to land together, in land.Order's
+	// order, from fresh trial merges of the branch into their PRs.
+	Order(ctx context.Context, ns []int64) ([]int64, error)
 	// FinalPR is the open final PR from the milestone branch into the
 	// default branch, 0 if there is none.
 	FinalPR(ctx context.Context) (int64, error)
@@ -46,6 +51,32 @@ type Merge struct {
 	PR      int64
 	HeadSHA string
 	Base    string
+}
+
+// LandKind is how a child's landing ended, as the scheduler acts on it.
+type LandKind int
+
+const (
+	// LandFailed is a refusal, or a base that kept moving: the child stops
+	// as merge failed.
+	LandFailed LandKind = iota
+	// Landed: the PR merged into the milestone branch.
+	Landed
+	// LandRepair is land's Conflict or NeedsVerify: the child goes back to
+	// its flow, once per invocation.
+	LandRepair
+	// LandChecksFailed: the checks failed at the landing commit.
+	LandChecksFailed
+)
+
+// Landing is how one child's landing ended.
+type Landing struct {
+	Kind LandKind
+	// Merge is what landed, for Landed.
+	Merge Merge
+	// Reason is the landing's outcome as land prints it, with the check
+	// log for LandChecksFailed.
+	Reason string
 }
 
 // FlowRequest asks a Launcher for one child's flow; Implement and Verify
@@ -159,8 +190,10 @@ func (e *UnfinishedError) AgentDidNothing() bool { return len(e.Report.PoolRemov
 
 // Run is `bottown milestone run`: it dispatches the epic's ready children
 // in issue order, at most Parallel at a time, each as a flow with a
-// cross-family pair from the pool; merges each child whose flow ends ready
-// to merge; and, when every active child is closed, finishes the
+// cross-family pair from the pool; lands each child whose flow ends ready
+// to merge (several ready together in land.Order's order), sending one
+// whose landing conflicts or loses its approval back to its flow once;
+// and, when every active child is closed, finishes the
 // milestone. Otherwise, when nothing more can be dispatched, it comments a
 // summary on the epic and returns an *UnfinishedError.
 //
@@ -202,7 +235,23 @@ func Run(ctx context.Context, f RunForge, o RunOptions) (*RunReport, error) {
 	results := make(chan done)
 	inflight := map[int64]agents.Pair{}
 	live := map[string]int{}
-	ended := map[int64]bool{} // dispatched, and its flow ended, in this invocation
+	ended := map[int64]bool{}    // dispatched, and its flow ended, in this invocation
+	repaired := map[int64]bool{} // sent back to its flow after a landing, in this invocation
+	var ready []int64            // flows ended ready to merge, not landed yet, in the order they ended
+	receive := func(d done) {
+		delete(inflight, d.issue)
+		live[d.pair.Implement.Actor]--
+		live[d.pair.Verify.Actor]--
+		ended[d.issue] = true
+		if ctx.Err() != nil {
+			return // drain the flows that are stopping
+		}
+		if d.out.Kind == FlowReady {
+			ready = append(ready, d.issue)
+			return
+		}
+		handle(o, rep, out, d.issue, d.out)
+	}
 	var loopErr error
 	for {
 		if loopErr == nil && ctx.Err() == nil {
@@ -246,18 +295,35 @@ func Run(ctx context.Context, f RunForge, o RunOptions) (*RunReport, error) {
 				go func() { results <- done{req.Issue, pair, o.Launcher.Flow(ctx, req)} }()
 			}
 		}
-		if len(inflight) == 0 {
+		if ctx.Err() != nil {
+			ready = nil
+		}
+		if len(inflight) == 0 && len(ready) == 0 {
 			break
 		}
-		d := <-results
-		delete(inflight, d.issue)
-		live[d.pair.Implement.Actor]--
-		live[d.pair.Verify.Actor]--
-		ended[d.issue] = true
-		if ctx.Err() != nil {
-			continue // drain the flows that are stopping
+		if len(ready) == 0 {
+			receive(<-results)
 		}
-		handle(ctx, f, o, rep, out, d.issue, d.out)
+		// Every flow that has ended by now is ready together with the
+		// others (a resume), and lands in land.Order's order.
+	drain:
+		for {
+			select {
+			case d := <-results:
+				receive(d)
+			default:
+				break drain
+			}
+		}
+		if len(ready) == 0 || ctx.Err() != nil {
+			continue
+		}
+		n := next(ctx, f, out, ready)
+		ready = slices.DeleteFunc(ready, func(r int64) bool { return r == n })
+		if land(ctx, f, rep, out, n, repaired) {
+			// Back to its flow, with its recorded pair.
+			delete(ended, n)
+		}
 	}
 	if ctx.Err() != nil {
 		return rep, ctx.Err()
@@ -289,16 +355,31 @@ func Run(ctx context.Context, f RunForge, o RunOptions) (*RunReport, error) {
 	return rep, &UnfinishedError{Report: rep}
 }
 
-// handle acts on the end of child n's flow.
-func handle(ctx context.Context, f RunForge, o RunOptions, rep *RunReport, out io.Writer, n int64, oc Outcome) {
-	switch oc.Kind {
-	case FlowReady:
-		m, err := f.Merge(ctx, n)
-		if err != nil {
-			fmt.Fprintf(out, "#%d: ready to merge, but the merge failed: %v\n", n, err)
-			rep.Stopped = append(rep.Stopped, StoppedChild{Issue: n, Reason: "merge failed", Detail: err.Error()})
-			return
-		}
+// next is the first of the children ready to land, in land.Order's order
+// when there are several; in the order their flows ended when that fails.
+func next(ctx context.Context, f RunForge, out io.Writer, ready []int64) int64 {
+	if len(ready) == 1 {
+		return ready[0]
+	}
+	order, err := f.Order(ctx, slices.Clone(ready))
+	if err == nil && (len(order) == 0 || !slices.Contains(ready, order[0])) {
+		err = fmt.Errorf("the order %v is not of %v", order, ready)
+	}
+	if err != nil {
+		fmt.Fprintf(out, "warning: ordering %s for landing: %v; landing them as their flows ended\n", refs(ready), err)
+		return ready[0]
+	}
+	return order[0]
+}
+
+// land lands child n, whose flow ended ready to merge, and reports whether
+// it goes back to its flow: a conflict, or an approval that did not carry
+// to the landing commit, the first time in this invocation (repaired).
+func land(ctx context.Context, f RunForge, rep *RunReport, out io.Writer, n int64, repaired map[int64]bool) bool {
+	l := f.Land(ctx, n)
+	switch l.Kind {
+	case Landed:
+		m := l.Merge
 		rep.Merged = append(rep.Merged, MergedChild{Issue: n, Merge: m})
 		fmt.Fprintf(out, "#%d: merged !%d into %s at %s\n", n, m.PR, m.Base, short(m.HeadSHA))
 		final, err := f.FinalPR(ctx)
@@ -309,6 +390,26 @@ func handle(ctx context.Context, f RunForge, o RunOptions, rep *RunReport, out i
 		if err != nil {
 			fmt.Fprintf(out, "warning: telling the final PR that its head is not gated: %v\n", err)
 		}
+		return false
+	case LandRepair:
+		if !repaired[n] {
+			repaired[n] = true
+			fmt.Fprintf(out, "#%d: ready to merge, but %s: back to its flow\n", n, l.Reason)
+			return true
+		}
+	case LandChecksFailed:
+		fmt.Fprintf(out, "#%d: ready to merge, but the checks failed at the landing commit: %s\n", n, l.Reason)
+		rep.Stopped = append(rep.Stopped, StoppedChild{Issue: n, Reason: "checks failed", Detail: l.Reason})
+		return false
+	}
+	fmt.Fprintf(out, "#%d: ready to merge, but the merge failed: %s\n", n, l.Reason)
+	rep.Stopped = append(rep.Stopped, StoppedChild{Issue: n, Reason: "merge failed", Detail: l.Reason})
+	return false
+}
+
+// handle acts on the end of child n's flow, short of ready to merge.
+func handle(o RunOptions, rep *RunReport, out io.Writer, n int64, oc Outcome) {
+	switch oc.Kind {
 	case FlowIdle:
 		entry := oc.Actor
 		if e, ok := o.Pool.Lookup(oc.Actor); ok {
