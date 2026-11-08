@@ -38,6 +38,12 @@ Then it loops, rebuilding everything from the forge each time:
    child marker from the owner, is ignored; an issue whose key left the
    plan (its marker kept, its edge from the epic dropped) is flagged. Both
    are named in the summary; neither is dispatched or needed to finish.
+   Run checks the box of each closed child in the epic's `## Implementation
+   issues` checklist that is still unchecked, as `apply` renders it, and
+   updates the epic marker's sha to match, so the next `apply` finds
+   nothing to rewrite. It edits the epic with the owner's key and prints
+   `checked #N in epic #E`; a failed edit is a warning, and the next pass
+   tries again. It never unchecks a box.
 2. **Ready** children are open, with every issue they are blocked by
    closed (an issue the list does not hold counts as open). They are
    dispatched in issue order while fewer than `--parallel` are in flight.

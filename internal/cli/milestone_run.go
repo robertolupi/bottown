@@ -53,7 +53,8 @@ logged to .bottown/flow-<N>.log. When a flow stops ready to merge, run
 lands the PR on milestone/<slug> as ` + "`bottown milestone merge`" + ` does: the
 check group at the landing commit, the branch's tip merged with the PR's
 head, then the merge as the manager, which closes the child and may make
-others ready; children ready together land in merge-all's order. If a
+others ready. Run checks each closed child's box in the epic's checklist;
+children ready together land in merge-all's order. If a
 final PR is open, it comments there that its head is no longer gated. A
 child whose landing conflicts, or whose approval does not carry to the
 landing commit, goes back to its flow once (its pair kept); the second

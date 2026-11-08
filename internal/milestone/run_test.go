@@ -227,6 +227,23 @@ func TestRunReadinessAndFinish(t *testing.T) {
 	if f.events[0] != "branch" || f.events[1] != "restart" {
 		t.Errorf("events %v: the branch and the restart come first", f.events)
 	}
+	// The merged child's box is checked in the epic, the others are not,
+	// and the marker is kept.
+	epic := f.issues[7].Body
+	for _, s := range []string{"- [x] #3 — Alpha", "- [ ] #4 — Bravo", "- [ ] #5 — Charlie", "- [ ] #6 — Delta"} {
+		if !strings.Contains(epic, s) {
+			t.Errorf("epic lacks %q:\n%s", s, epic)
+		}
+	}
+	if m, _, ok := ParseMarker(epic); !ok || !m.Epic || !strings.Contains(r.out, "checked #3 in epic #7\n") {
+		t.Errorf("marker %+v ok=%v; output:\n%s", m, ok, r.out)
+	}
+	// Apply renders the same boxes: it has nothing to write to the epic.
+	f.writes = nil
+	mustApply(t, f.fakeForge, nil)
+	if slices.Contains(f.writes, "edit #7") {
+		t.Errorf("apply after the run rewrote the epic: %v", f.writes)
+	}
 
 	// #2 closed: the rest run one after the other, and finish follows.
 	f.issues[2].Closed = true
@@ -240,6 +257,31 @@ func TestRunReadinessAndFinish(t *testing.T) {
 	}
 	if len(f.comments[7]) != 1 {
 		t.Errorf("finishing commented a summary on the epic: %q", f.comments[7])
+	}
+	for _, n := range []int64{3, 4, 5, 6} {
+		if s := fmt.Sprintf("- [x] #%d — ", n); !strings.Contains(f.issues[7].Body, s) {
+			t.Errorf("epic lacks %q:\n%s", s, f.issues[7].Body)
+		}
+	}
+}
+
+// tickBoxes checks only the checklist lines of closed issues, and leaves
+// everything else as it is.
+func TestTickBoxes(t *testing.T) {
+	body := "Intro mentioning - [ ] #3 inline.\n\n## Implementation issues\n\n" +
+		"- [ ] #3 — Alpha (`a`)\n" +
+		"- [x] #4 — Bravo (`b`, depends on #3)\n" +
+		"- [ ] #5 — Charlie (`c`, depends on #4)\n" +
+		"- [ ] #33 — Other (`o`)\n" +
+		"- [ ] #6 not a checklist line\n\n" +
+		`<!-- bottown:milestone v=1 plan="demo" role="epic" sha="0123456789abcdef" -->`
+	got, ticked := tickBoxes(body, []int64{3, 4, 6})
+	want := strings.Replace(body, "- [ ] #3 — Alpha", "- [x] #3 — Alpha", 1)
+	if got != want || !slices.Equal(ticked, []int64{3}) {
+		t.Errorf("ticked %v; body:\n%s", ticked, got)
+	}
+	if got, ticked := tickBoxes(want, []int64{3, 4}); got != want || ticked != nil {
+		t.Errorf("a second tick checked %v; body:\n%s", ticked, got)
 	}
 }
 
