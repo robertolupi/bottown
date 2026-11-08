@@ -1,5 +1,8 @@
 # The landing commit
 
+The shared [landing primitive](land.md) describes the host-side steps,
+policies and outcomes; command integration is separate work.
+
 `POST /v1/forge/pr/landing` (owner only; `{"repo", "number", "head_sha"}`)
 builds and pushes the landing commit for an open pull request: a merge
 commit on the PR branch whose first parent is the base's tip and whose

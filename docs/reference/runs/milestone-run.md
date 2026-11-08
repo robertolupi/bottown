@@ -1,5 +1,8 @@
 # Milestone run
 
+The shared [landing primitive](../land.md) describes the host-side steps,
+policies and outcomes; command integration is separate work.
+
 `bottown milestone run <slug> --agents SPEC --parallel N [--rounds 3]
 [--timeout 1h] [--check-timeout 1h] [--repo R]` (owner only) drives the
 active children of plan `<slug>`'s epic to completion on
