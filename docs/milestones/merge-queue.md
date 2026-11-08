@@ -17,8 +17,9 @@ through the same step with `make check` at the combined head; the flow
 stops merging bases.
 
 Owner decisions, from #397: the full command with the overlap order and
-`--actor` repair; fast-forward-only landing, spiked first, with an
-ancestor pre-check as the fallback; `check` only at a milestone child's
+`--actor` repair; fast-forward-only landing, spiked first, and no
+fallback with a race (a failed spike stops the plan for a redesign);
+`check` only at a milestone child's
 landing, `e2e` at finish; no clean base merges in the flow; failed checks
 reported, not repaired; a lost carry costs a verify, not an implement
 round; the default batch leaves milestone PRs out; the local `main` is
@@ -67,13 +68,17 @@ pushed to `main` between steps 2 and 3, the merge fails with 409 and
 
 - The e2e test passes under `make e2e`, or fails on a named assertion.
 - A comment on this issue reports each assertion's result. If any fails,
-  the comment says which, and the owner decides between fixing the
-  assumption and the fallback in design §4.1 before `land-merge-op`
-  starts.
+  the comment says which, and `land-merge-op` and the issues that depend
+  on it do not start: design §4.1 is redesigned with the owner, around an
+  atomic compare-and-swap on the base (the candidate it names is a
+  `--force-with-lease` push of the landing commit with
+  `autodetect_manual_merge`), and the replacement passes these assertions,
+  the moved-base race included, in a revised spike. An ancestor check
+  before a merge-commit merge is not an acceptable replacement.
 - Provisioning sets `allow_fast_forward_only_merge` on repositories it
   creates if the spike finds it is not on by default.
 
-## Flow: no clean base merges; approved PRs stop before any base move
+## Flow: no clean base merges; conflicts still come before the approved stop
 
 ```issue
 key = "flow-no-base-merge"
@@ -92,12 +97,16 @@ behind its base with a conflict still gets an implement round before any
 verify. A PR behind its base cleanly is gated and verified at its own
 head.
 
-Reorder the loop so that an approved PR stops `ready to merge` before
-the base is considered at all, and say in the stop's detail when it is
-behind: "!N is approved at <sha>: behind `main` by K commits, cleanly;
-`bottown merge-all` lands it". `TestFlowMergeBaseCleanApproved`
-(`internal/flow/flow_test.go`) pins the old order; replace it with tests
-for the new one.
+Keep the loop's order: the trial merge and the conflict round stay ahead
+of the approved stop, so an **approved** PR that conflicts with its base
+still gets a conflict round (design §7). That is what lets `merge-all
+--actor` and `milestone run` repair Land's `Conflict` by running the flow
+on a PR that is still approved; do not move the approved stop ahead of
+the conflict check. When an approved PR is behind cleanly, say so in the
+stop's detail: "!N is approved at <sha>: behind `main` by K commits,
+cleanly; `bottown merge-all` lands it". `TestFlowMergeBaseCleanApproved`
+(`internal/flow/flow_test.go`) pins the clean merge of an approved PR;
+replace it with the tests below.
 
 The inbox's "merge main into the PR" offer stays until `web-ui-land`
 replaces it; nothing else calls `MergeBase` from the flow after this.
@@ -107,7 +116,10 @@ replaces it; nothing else calls `MergeBase` from the flow after this.
 - Flow tests: an approved PR behind a clean base stops `ready to merge`
   with no new head and the detail above; an unapproved PR behind a clean
   base is gated and verified at its own head, with no merge commit; a PR
-  behind a conflicting base still gets a conflict round; the e2e
+  behind a conflicting base still gets a conflict round; a PR **already
+  approved** whose base then conflicts (a sibling landed after the
+  approval) gets a conflict round, not `ready to merge`, and the verify
+  run follows the implementer's push; the e2e
   expectations that mention the merge prompt or `Merge main into` are
   updated.
 - `bottown flow --help` and `milestone run` no longer know
@@ -181,9 +193,10 @@ the landing merge of design §4 step 6 and §9, keeping the route
   the PR's closing keywords and never close an issue from a branch name;
 - `already_merged` on repeat, as today; audit as `land`, allow and deny.
 
-If the spike chose the fallback, the merge style stays `merge` and the
-operation checks that the base's tip is an ancestor of `head_sha` on the
-forge's repository just before merging; say which in the reference.
+This issue starts only after the spike passed. If it failed, this issue
+waits for the redesign of design §4.1, and is rewritten to its atomic
+guard; it is never built on an ancestor check followed by a merge-commit
+merge, which lets a base commit that moved in between land unchecked.
 `bottown milestone merge` keeps working unchanged through the operation.
 
 ### Acceptance criteria
@@ -328,7 +341,11 @@ size = "L"
   child's PR into `main` and a `milestone/*` PR, and takes them when
   named; the order is followed and recomputed; a `Conflict` is reported
   and the batch continues; with `--actor` the repair runs after the clean
-  landings with the right pair; `--dry-run` writes nothing; exit codes;
+  landings with the right pair; starting from an already-approved PR that
+  conflicts once a sibling landed, the repair's flow runs an implement
+  round and then a verify run (it does not stop `ready to merge` at the
+  unchanged head), and the PR lands at the repaired head; `--dry-run`
+  writes nothing; exit codes;
   the local `main` fast-forward, and the stop on a diverged `main`.
 - An e2e test: two approved PRs behind `main` land with no new verify run,
   both with gate statuses at their landing commits and `main`'s
@@ -366,8 +383,10 @@ by hand is also checked at the combined head.
 ### Acceptance criteria
 
 - Scheduler tests with the fake forge and a fake Land: a child landing
-  behind a sibling is checked with `check` only; a conflicting child is
-  re-dispatched once, then stopped; `ChecksFailed` stops with the log;
+  behind a sibling is checked with `check` only; an approved child that
+  conflicts after a sibling landed is re-dispatched once, and its flow
+  runs an implement round and then a verify run before it lands again; a
+  child that conflicts again after that is stopped; `ChecksFailed` stops with the log;
   several ready children are landed in order.
 - The e2e milestone scenario asserts a sibling landing after a child
   became ready is landed only at a checked combined head.

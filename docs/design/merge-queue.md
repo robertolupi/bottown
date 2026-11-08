@@ -157,10 +157,24 @@ The first child of the plan is a spike that proves on a real instance what
 this design assumes of the style: the PR is marked merged with the landing
 commit as its merge commit, `Closes #N` closes the issue, the protection
 of `main` counts an approval that `ReconcileCarries` undismissed, and a
-base that moved makes the merge fail with 409. If the spike fails on any
-point, the fallback is a server-side ancestor check just before a
-merge-commit merge, with the same bounded retry, and this section is
-rewritten.
+base that moved makes the merge fail with 409.
+
+**There is no fallback that this design authorizes.** A server-side check
+that the base's tip is an ancestor of the head, followed by an ordinary
+merge-commit merge, is not one: the owner can merge another PR in Forgejo
+between the check and the merge, `HeadCommitId` pins only the PR's head,
+and the merge commit then folds in a base commit nobody checked. That is
+the race the first paragraph rules out, and a retry cannot see it,
+because the unsafe merge succeeds. If the spike fails on any point, the
+plan stops before `land-merge-op` and the issues that depend on it, and
+this section is redesigned with the owner. A replacement must be an
+atomic compare-and-swap on the base; the candidate to try first is a
+fast-forward `git push` of the landing commit to the base as `manager`
+with the expected old tip (`--force-with-lease=<base>:<tip>`, which git
+refuses atomically if the ref moved), with the repository's
+`autodetect_manual_merge` marking the PR merged. Whatever replaces the
+style passes the spike's assertions again, the moved-base race included,
+before it is built on.
 
 ### 4.2 Checks at the landing commit
 
@@ -203,6 +217,9 @@ counts as it does elsewhere.
   conflict is resolved once against the final `main`. The flow's conflict
   rounds (`conflicts with base`, bounded by `--rounds`) and the verify
   that follows them are the repair; the queue adds nothing of its own.
+  The PR is still approved when the flow starts on it, so this works only
+  because the flow decides the conflict round before its approved stop
+  (§7).
 - **ChecksFailed:** reported, never repaired. The PR stays open at its
   landing commit with the failed status on it; the owner, or a new
   implement run, decides. Turning a failed check into leave to change
@@ -311,7 +328,9 @@ directly.
   failed` for the rest of the invocation. With Land, a **Conflict** or
   **NeedsVerify** outcome sends the child back through its own flow (its
   recorded pair, `--rounds` bounding the conflict rounds), once per
-  invocation; a second Conflict stops it as today. **ChecksFailed** stops
+  invocation; a second Conflict stops it as today. The child's flow
+  starts a conflict round on it although it is approved (§7), and the
+  verify that follows. **ChecksFailed** stops
   it, with the log, for the owner.
 - **The final PR** from `milestone/<slug>` into `main` is a `merge-all`
   candidate once the owner approves it and names it (§5.1). Land brings
@@ -328,14 +347,27 @@ with them `Options.MergeMilestoneBase`, `autoMerge` and `confirmMerge`.
 What stays:
 
 - a PR behind its base **with a conflict** still gets an implement round
-  (`conflicts with base`, bounded by `--rounds`), because a verifier should
-  not review an unmergeable PR, and the fix needs a verify;
+  (`conflicts with base`, bounded by `--rounds`), **approved or not**,
+  because a verifier should not review an unmergeable PR, an approved PR
+  that conflicts cannot land, and the fix needs a verify;
 - a PR behind its base **cleanly** is gated and verified at its own head.
   Approved, it stops `ready to merge`; the detail says it is behind and
-  that `bottown merge-all` lands it;
-- the order of the loop changes so that an approved PR stops before any
-  base consideration, which `TestFlowMergeBaseCleanApproved` pinned the
-  other way; the test changes with it.
+  that `bottown merge-all` lands it.
+
+The loop keeps the order it has (`internal/flow/flow.go`): the trial merge
+of the base comes first, the conflict round is decided on it, and only a
+PR that merges cleanly reaches the approved stop. Only the clean-merge
+branch between them goes. That order is what makes the flow the repair
+for Land's **Conflict** (§4.4, §5.3, §6): Land pushes nothing on a
+conflict, so the flow it hands the PR to finds the same approved head and
+the same conflict, starts a conflict round, and the patch the
+implementer changes then loses its carry, so the verify follows. An
+approved stop ahead of the conflict check would send that PR straight
+back as `ready to merge`, and Land would see the same conflict again.
+`TestFlowMergeBaseCleanApproved`, which pins the clean merge of an
+approved PR, is replaced by a test that it stops `ready to merge` with no
+new head; a new test starts from an approved PR that conflicts after a
+sibling landed and asserts the conflict round and then the verify run.
 
 This also deletes the milestones design's rule that `bottown` never merges
 into `main` ([milestones.md §1.1](milestones.md#11-why-this-narrows-two-non-goals-without-reviving-v1)):
@@ -377,9 +409,12 @@ Settled by the owner in this issue's discussion, 2026-11-08:
    repair, over a flow-only fix, because the safety gap on `main` is real
    even though the re-verifies were due.
 2. **Base guard:** fast-forward-only landing of a base-first landing
-   commit, spiked first; the ancestor pre-check is the fallback.
+   commit, spiked first. An ancestor pre-check before a merge-commit
+   merge is not a fallback (§4.1): a failed spike stops the plan for a
+   redesign that keeps the base guard atomic.
 3. **Milestone policy:** `check` at the combined head, `e2e` at finish.
-4. **Flow:** no clean base merges at all; conflict rounds stay.
+4. **Flow:** no clean base merges at all; conflict rounds stay, and come
+   before the approved stop (§7).
 5. **Failed checks** are reported, not repaired. **A lost carry** costs a
    verify, not an implement round. **Who repairs:** the recorded pair,
    flags override, cross-family enforced; owner-approved patches go back
@@ -392,7 +427,8 @@ Settled by the owner in this issue's discussion, 2026-11-08:
 ## 11. Risks
 
 - **Fast-forward semantics** (§4.1): the spike is first in the plan for
-  this reason, and the fallback is written down.
+  this reason; if it fails, the plan stops for a redesign rather than
+  falling back to a guard with a race.
 - **Forgejo's asynchrony:** a push returns before the PR ref, its
   mergeability and the stale-review dismissal settle. Land waits
   (`waitPushSynced`) and re-reads before trusting any assessment, and
