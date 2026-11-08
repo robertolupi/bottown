@@ -52,3 +52,23 @@ a branch cannot change what its own checks are.
   starts another implement round with the failure in its prompt
   ([web-ui.md §3.2](../design/web-ui.md#32-the-loop)). So implementers need
   not run `--e2e` before opening a PR.
+
+  The checker the flow uses can run either group or both, in a gate's
+  request: `check` and then `e2e`, the commands `.bottown.toml` on the
+  default branch names, one after the other in the same clean worktree
+  detached at the head, stopping at the first group that fails. The flow
+  and `milestone finish` ask for `e2e` alone. Each group logs to its own
+  file, `.bottown/runs/flow-<issue>-<sha>-<check>.check.log` and
+  `.e2e.log`, and while it runs a record
+  (`flow-<issue>-<sha>-<check>.<group>.check`) shows it in Live Runs as a
+  card of its own, named for its group. A group the repository names no
+  commands for (`check = []`, `e2e = []`) is skipped, and the outcome says
+  so (`the repository names no e2e commands`); with no group to run the
+  whole check is skipped, as the flow's gate is when there are no `e2e`
+  commands. A gate records each group that ran at the head as the owner's
+  `bottown/check` or `bottown/e2e` status with the `gate` mark, through
+  the path the flow's e2e gate records by (`POST /v1/forge/status`;
+  `milestone finish` records none, and puts its result in the final PR's
+  description). The outcome lists which groups ran and which failed, and
+  its description, for more than one group, names each group's result
+  after the group.

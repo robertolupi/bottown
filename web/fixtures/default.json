@@ -368,6 +368,7 @@
   "live_checks": [
     {
       "id": "flow-56-7c1d2e3f4a.e2e",
+      "group": "e2e",
       "issue": 56,
       "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/56",
       "issue_title": "Compress websocket payloads",
@@ -381,14 +382,15 @@
       "log_tail": []
     },
     {
-      "id": "flow-64-9e8d7c6b5a.e2e",
+      "id": "flow-64-9e8d7c6b5a.check",
+      "group": "check",
       "issue": 64,
       "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/64",
       "issue_title": "Started from a terminal: a flow the UI did not start",
       "pr": 65,
       "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/65",
       "sha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
-      "commands": ["make e2e-setup", "make e2e"],
+      "commands": ["make check"],
       "created": "2026-11-05T11:54:30Z",
       "elapsed": "1m 35s",
       "log_tail": []
@@ -981,7 +983,7 @@
   ],
   "logs": {
     "flow-56-7c1d2e3f4a.e2e": [
-      { "kind": "plain", "text": "bottown flow: post-implement checks for #56 (!62) at 7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d, 2026-11-05T12:52:00+01:00" },
+      { "kind": "plain", "text": "bottown flow: e2e commands for #56 (!62) at 7c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d, 2026-11-05T12:52:00+01:00" },
       { "kind": "plain", "text": "==> [e2e] make e2e" },
       { "kind": "plain", "text": "go test -tags e2e -count=1 -timeout 30m -v ./e2e/" },
       { "kind": "plain", "text": "=== RUN   TestE2E" },
@@ -992,13 +994,12 @@
       { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness" },
       { "kind": "plain", "text": "=== RUN   TestE2E/flow_with_a_scripted_harness/approve_first_time" }
     ],
-    "flow-64-9e8d7c6b5a.e2e": [
-      { "kind": "plain", "text": "bottown flow: post-implement checks for #64 (!65) at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d, 2026-11-05T12:54:30+01:00" },
-      { "kind": "plain", "text": "==> [e2e] make e2e-setup" },
-      { "kind": "plain", "text": "docker pull codeberg.org/forgejo/forgejo:13" },
-      { "kind": "plain", "text": "<== passed in 41s (exit 0)" },
-      { "kind": "plain", "text": "==> [e2e] make e2e" },
-      { "kind": "plain", "text": "=== RUN   TestE2E" }
+    "flow-64-9e8d7c6b5a.check": [
+      { "kind": "plain", "text": "bottown flow: check commands for #64 (!65) at 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d, 2026-11-05T12:54:30+01:00" },
+      { "kind": "plain", "text": "==> [check] make check" },
+      { "kind": "plain", "text": "gofmt -l . && go mod tidy -diff" },
+      { "kind": "plain", "text": "go vet ./... && go vet -tags e2e ./..." },
+      { "kind": "plain", "text": "go test -race ./..." }
     ],
     "r-5f6a7b8c": [
       {

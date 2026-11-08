@@ -91,14 +91,14 @@ func (f *fakeAPI) PRMergeStatus(context.Context, string, int64) (server.PRMergeS
 	return f.merge, nil
 }
 
-func (f *fakeAPI) RecordGate(_ context.Context, repo, sha, state, description string) error {
+func (f *fakeAPI) RecordGate(_ context.Context, repo, sha, check, state, description string) error {
 	if repo != "demo" {
 		return errors.New("wrong repo")
 	}
 	if f.gate == nil {
 		f.gate = map[string]server.CommitStatus{}
 	}
-	f.gate[sha] = server.CommitStatus{Context: "bottown/e2e", State: state, Description: description + " (flow)", Creator: "rlupi", Gate: true}
+	f.gate[sha] = server.CommitStatus{Context: "bottown/" + check, State: state, Description: description + " (flow)", Creator: "rlupi", Gate: true}
 	f.gated = append(f.gated, sha)
 	return nil
 }

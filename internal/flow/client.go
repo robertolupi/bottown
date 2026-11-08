@@ -82,8 +82,8 @@ func (c *Client) LiveRuns(ctx context.Context, repo string) ([]secrets.Run, erro
 	return runs, err
 }
 
-func (c *Client) RecordGate(ctx context.Context, repo, sha, state, description string) error {
-	in := server.CommitStatusIn{Repo: repo, SHA: sha, Check: "e2e", State: state, Description: description}
+func (c *Client) RecordGate(ctx context.Context, repo, sha, check, state, description string) error {
+	in := server.CommitStatusIn{Repo: repo, SHA: sha, Check: check, State: state, Description: description}
 	return c.call(ctx, "POST", "/v1/forge/status", in, nil)
 }
 

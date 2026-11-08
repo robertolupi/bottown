@@ -2,8 +2,9 @@
 
 What `run gc` removes, besides the server's records of ended runs: each
 finished run's worktree and its `<id>.*` files (succeeded and dead runs;
-failed ones with `--failed`); `bottown flow`'s e2e logs,
-`.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log`, once the issue has no open PR
+failed ones with `--failed`); `bottown flow`'s check logs,
+`.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log` (and `.check.log`, for
+a check that ran the check group), once the issue has no open PR
 from `issue/<n>`, or with `--older-than` once the log is that old (while the
 PR is open a resumed flow points to the log rather than checking again);
 and the web UI's flow logs, `.bottown/flow-<issue>.log`, once that flow is

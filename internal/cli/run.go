@@ -1616,8 +1616,9 @@ started in their own worktrees are left alone. Live runs are never purged;
 --older-than keeps recently ended ones. A run whose local record cannot be read is kept, with a
 warning; run ls lists it as unknown.
 
-gc also removes the logs flows leave: bottown flow's e2e logs
-(.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log) once the issue's PR is merged or
+gc also removes the logs flows leave: bottown flow's check logs
+(.bottown/runs/flow-<issue>-<sha>-<check>.e2e.log, and .check.log for a
+gate that ran the check commands too) once the issue's PR is merged or
 closed, or with --older-than once they are that old, and the web UI's flow
 logs (.bottown/flow-<issue>.log) once that flow is not running.`,
 		Args: cobra.NoArgs,
@@ -1733,8 +1734,8 @@ func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
 
 // gcFlowLogs removes the logs flows leave in ws, and returns how many:
 //
-//   - <runs>/flow-<issue>-<sha>-<check>.e2e.log, bottown flow's e2e log for one PR
-//     head, once the issue has no open PR (in open), or once it is at least
+//   - <runs>/flow-<issue>-<sha>-<check>.e2e.log and .check.log, bottown
+//     flow's logs of a check group for one PR head, once the issue has no open PR (in open), or once it is at least
 //     olderThan old when olderThan is set. While the PR is open the log is
 //     kept: a resumed flow points to it rather than checking again.
 //   - .bottown/flow-<issue>.log, a web UI flow's output, once the flow is
@@ -1749,8 +1750,10 @@ func gcFlowLogs(ws *runs.Workspace, open map[int64]bool, olderThan time.Duration
 		removed++
 	}
 	e2e, _ := filepath.Glob(filepath.Join(ws.RunsDir, "flow-*.e2e.log"))
-	for _, path := range e2e {
-		issue, sha, ok := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "flow-"), ".e2e.log"), "-")
+	check, _ := filepath.Glob(filepath.Join(ws.RunsDir, "flow-*.check.log"))
+	for _, path := range append(e2e, check...) {
+		stem, _, _ := strings.Cut(strings.TrimPrefix(filepath.Base(path), "flow-"), ".")
+		issue, sha, ok := strings.Cut(stem, "-")
 		n, err := strconv.ParseInt(issue, 10, 64)
 		if !ok || sha == "" || err != nil || n <= 0 {
 			continue
