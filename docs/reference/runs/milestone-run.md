@@ -47,7 +47,7 @@ Then it loops, rebuilding everything from the forge each time:
    as unpaired. Provisioning creates both labels, exclusive, for every
    actor.
 4. **Flows:** each child gets a `bottown flow N --implement A --verify B
-   --unattended --merge-milestone-base` process of its own (the flow
+   --unattended` process of its own (the flow
    command is one supervisor per process), logged to `.bottown/flow-<N>.log`
    with a `.bottown/flow-<N>.json` record while it runs, so the web UI
    shows and can stop it. The record is written once the flow holds the

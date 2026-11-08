@@ -29,19 +29,15 @@ When merging a pull request's base into it would conflict, the flow's stop
 is "conflicts with base" and names the base; stops flows wrote before as
 "conflicts with main" read back as the same stop.
 
-When a pull request's base has moved and the trial merge is clean, an
-attended `bottown flow` asks the owner before merging the base into the
-head; an unattended one (`--unattended`, as the web UI starts it) leaves
-the merge to the owner's inbox. `bottown flow --merge-milestone-base`
-merges a clean `milestone/*` base without asking, attended or not, so a
-milestone child stays up to date as its siblings land. The approval
-carries over when the patch is unchanged; otherwise the flow verifies the
-new head. The flag does nothing for any other base: the default branch is
-still the owner's to merge. A conflicting base is never merged; it starts
-an implement round, as without the flag, against `--rounds`.
+When a pull request's base has moved and the trial merge is clean, the
+flow does not merge the base into the PR: an unapproved PR is gated and
+verified at its own head, and an approved PR stops `ready to merge` at its
+own head with `: behind \`<base>\`, cleanly; \`bottown merge-all\` lands
+it` in its detail. When the trial merge would conflict, the flow starts a
+conflict implement round (up to `--rounds`) ahead of the `ready to merge`
+stop, so an approved PR whose base later conflicts gets a conflict round
+before any verify.
 
-While a request for changes stands at the head, the flow neither merges
-the base nor starts a conflict round: the implement round answers the
-request first, and the base is merged, or its conflicts resolved, at the
-head that round pushes. Merging first would push a head that dismisses the
-request unanswered, and a verifier would review the rejected patch again.
+While a request for changes stands at the head, the flow does not start a
+conflict round: the implement round answers the request first, and any
+base conflicts are resolved at the head that round pushes.

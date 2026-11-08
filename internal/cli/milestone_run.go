@@ -47,7 +47,7 @@ closed. Ready children are dispatched in issue order, at most --parallel at
 a time: each gets an implementer and a verifier of another family from
 --agents, recorded on it as implement/<actor> and verify/<actor> labels
 (a child that has them keeps its pair while both are in the pool), and a
-` + "`bottown flow N --unattended --merge-milestone-base`" + ` process of its own,
+` + "`bottown flow N --unattended`" + ` process of its own,
 logged to .bottown/flow-<N>.log. When a flow stops ready to merge, run
 merges the PR into milestone/<slug> as the manager, which closes the child
 and may make others ready; if a final PR is open, it comments there that
@@ -236,7 +236,7 @@ func (l *flowLauncher) Flow(ctx context.Context, req milestone.FlowRequest) mile
 	}
 	defer log.Close()
 	cmd := exec.Command(l.bin, "-i", l.instance, "flow", fmt.Sprint(req.Issue),
-		"--implement", req.Implement, "--verify", req.Verify, "--unattended", "--merge-milestone-base",
+		"--implement", req.Implement, "--verify", req.Verify, "--unattended",
 		"--repo", l.repo, "--rounds", fmt.Sprint(l.rounds), "--timeout", l.timeout.String(), "--check-timeout", l.checkTimeout.String())
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = l.dir, os.Environ(), log, log
 	// A group of its own, as the web UI starts flows, so the UI's stop

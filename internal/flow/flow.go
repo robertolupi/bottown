@@ -3,7 +3,6 @@
 package flow
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -90,14 +89,7 @@ type Options struct {
 	// actor is still busy after it. It must be positive when
 	// SerializeActors is set.
 	ActorWait time.Duration
-	// Attended flows ask on In before merging a clean, behind base; the
-	// others leave that to the owner inbox.
-	Attended bool
-	// MergeMilestoneBase merges a clean, behind base into the head without
-	// asking, attended or not, when the PR's base is a milestone/* branch.
-	// It does nothing for any other base: the default branch stays the
-	// owner's to merge.
-	MergeMilestoneBase bool
+	Attended  bool
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -210,10 +202,8 @@ type API interface {
 	RecordGate(ctx context.Context, repo, sha, state, description string) error
 	// GateFailures lists the PR's commits where they failed.
 	GateFailures(ctx context.Context, repo string, pr int64) ([]string, error)
-	// PRMergeStatus trial-merges the PR's base into its head; MergeBase
-	// pushes that merge when the head is still the one given.
+	// PRMergeStatus trial-merges the PR's base into its head.
 	PRMergeStatus(context.Context, string, int64) (server.PRMergeStatus, error)
-	MergeBase(context.Context, string, int64, string) (server.PRMergeOut, error)
 }
 
 // Supervisor drives one issue. RetryDelay is how long a flow that
@@ -226,7 +216,7 @@ type Supervisor struct {
 	API     API
 	Runner  Runner
 	Checker Checker
-	In      io.Reader // the owner's answers, for an attended flow
+	In      io.Reader
 	Out     io.Writer
 	// Pause, if set, is called before a prompt that reads In, and the
 	// function it returns after the answer: a live terminal tail gives
@@ -238,7 +228,6 @@ type Supervisor struct {
 	// rather than starting runs beside this one's.
 	Lock func(repo string, issue int64) (release func(), err error)
 
-	answers *bufio.Reader
 	// now and after, if set, replace time.Now and time.After in the wait
 	// for a busy actor (tests).
 	now   func() time.Time
@@ -344,10 +333,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		// A request for changes at the head is answered first: merging the
-		// base now would push a head that dismisses the request unanswered,
-		// and the flow would start a verifier on the rejected patch. The
-		// base is merged after the implement round pushes its fix.
+		// A request for changes at the head is answered first: a conflict
+		// round waits until the implement round pushes its fix, so the
+		// rejected patch is addressed before resolving base conflicts.
 		changesAtHead := pr.Assessment.Decision == review.ChangesRequested && pr.Assessment.AtHead(pr.HeadSHA)
 		if changesAtHead {
 			merge.Behind = false
@@ -380,24 +368,6 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			resuming = false
 			continue
 		}
-		if merge.Behind && merge.Clean && (opts.Attended || autoMerge(opts, pr)) {
-			yes := autoMerge(opts, pr)
-			if !yes {
-				if yes, err = s.confirmMerge(pr); err != nil {
-					return result, err
-				}
-			}
-			if yes {
-				merged, err := s.API.MergeBase(ctx, opts.Repo, pr.Number, merge.HeadSHA)
-				if err != nil {
-					return result, err
-				}
-				if s.Out != nil {
-					fmt.Fprintf(s.Out, "flow #%d: merged %s into %s for !%d at %s\n", opts.Issue, pr.BaseBranch, pr.HeadBranch, pr.Number, shortSHA(merged.HeadSHA))
-				}
-				continue
-			}
-		}
 		if !pr.Mergeable && !(merge.Behind && merge.Clean) && !changesAtHead {
 			if !resuming {
 				return s.stop(ctx, result, ConflictsWithBase, fmt.Sprintf("!%d no longer merges cleanly into %s; rerun the flow to resolve it", pr.Number, pr.BaseBranch))
@@ -420,6 +390,13 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 			detail := fmt.Sprintf("!%d is approved at %s", pr.Number, shortSHA(pr.HeadSHA))
 			if assessment.Reason != "" {
 				detail += ": " + assessment.Reason
+			}
+			if merge.Behind && merge.Clean {
+				base := pr.BaseBranch
+				if base == "" {
+					base = "main"
+				}
+				detail += fmt.Sprintf(": behind `%s`, cleanly; `bottown merge-all` lands it", base)
 			}
 			return s.stop(ctx, result, ReadyToMerge, detail)
 		case assessment.Decision == review.ChangesRequested && !assessment.AtHead(pr.HeadSHA):
@@ -519,44 +496,6 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return s.stop(ctx, result, VerifierUndecided, "the verify run ended without a verdict")
 			}
 		}
-	}
-}
-
-// autoMerge reports whether the flow merges pr's clean, behind base
-// without asking: only with Options.MergeMilestoneBase, and only into a
-// milestone/* base.
-func autoMerge(opts Options, pr server.PROut) bool {
-	return opts.MergeMilestoneBase && strings.HasPrefix(pr.BaseBranch, "milestone/")
-}
-
-// confirmMerge asks the owner whether to merge the base into pr's branch.
-// The default is yes: an empty line, y or yes is yes. Anything else is no,
-// and so is end of input with no answer, so a closed stdin never merges.
-func (s *Supervisor) confirmMerge(pr server.PROut) (bool, error) {
-	if s.In == nil {
-		return false, nil
-	}
-	if s.Pause != nil {
-		defer s.Pause()()
-	}
-	if s.Out != nil {
-		fmt.Fprintf(s.Out, "Merge %s into %s for !%d? [Y/n] ", pr.BaseBranch, pr.HeadBranch, pr.Number)
-	}
-	if s.answers == nil {
-		s.answers = bufio.NewReader(s.In)
-	}
-	answer, err := s.answers.ReadString('\n')
-	if errors.Is(err, io.EOF) && answer == "" {
-		return false, nil
-	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "", "y", "yes":
-		return true, nil
-	default:
-		return false, nil
 	}
 }
 
