@@ -23,6 +23,9 @@
       It interrupts the flows it started, which end their runs, and exits once they have stopped.
       Starting it again resumes.
     </p>
+  {:else if runId.startsWith('land-')}
+    <h3>Stop Landing</h3>
+    <p class="muted">Stop landing PR !{runId.slice(5)}? This interrupts the checks and landing worker. The PR may remain unmerged at its landing commit; you can Land it again.</p>
   {:else}
     <h3>Stop Run & Flow</h3>
     <p class="muted">

@@ -24,8 +24,7 @@ import (
 type InboxItemKind string
 
 const (
-	InboxReadyToMerge      InboxItemKind = "ready_to_merge"
-	InboxMergeBase         InboxItemKind = "merge_base"
+	InboxReadyToLand       InboxItemKind = "ready_to_land"
 	InboxConflictsWithBase InboxItemKind = "conflicts_with_base"
 	InboxStoppedFlow       InboxItemKind = "stopped_flow"
 	InboxBrokenRun         InboxItemKind = "broken_run"
@@ -143,14 +142,14 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	var items []InboxItem
 
 	// ----------------------------------------------------
-	// Item 1: Ready to merge (§4.1)
-	// Open PR, mergeable, and its reviews assess as approved
+	// Item 1: Ready to land (§4.1)
+	// Open candidate, including a PR behind its base
 	// ----------------------------------------------------
 	for _, pr := range prs {
 		if !activity.PROpen(pr) {
 			continue
 		}
-		if !pr.Mergeable || mergeStates[pr.Number].Behind {
+		if pr.BaseBranch != "main" && pr.BaseBranch != "" && !strings.HasPrefix(pr.BaseBranch, "milestone/") {
 			continue
 		}
 		if a := assessment(pr); a.Decision == review.Approved && a.Review != nil {
@@ -171,10 +170,12 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				created = *pr.Created
 			}
 			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("ready-to-merge-pr-%d", pr.Number),
-				Kind:        InboxReadyToMerge,
-				Title:       fmt.Sprintf("PR !%d is ready to merge", pr.Number),
-				Description: approvedDescription(a, pr.HeadSHA, approver),
+				ID:          fmt.Sprintf("ready-to-land-pr-%d", pr.Number),
+				Kind:        InboxReadyToLand,
+				Title:       fmt.Sprintf("PR !%d is ready to land", pr.Number),
+				Description: approvedDescription(a, pr.HeadSHA, approver) + ". Merging in Forgejo instead skips the checks at the combined tree.",
+				HeadSHA:     pr.HeadSHA,
+				Action:      &InboxAction{Label: "Land", Command: fmt.Sprintf("bottown land !%d", pr.Number)},
 				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     created,
@@ -183,7 +184,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 	}
 
 	// ----------------------------------------------------
-	// Item 2: Merge base, or report conflicts (§4.1)
+	// Item 2: Report conflicts (§4.1)
 	// ----------------------------------------------------
 	for _, pr := range prs {
 		if !activity.PROpen(pr) {
@@ -203,31 +204,11 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		} else if pr.Created != nil {
 			created = *pr.Created
 		}
-		base, head := "main", pr.HeadBranch
+		base := "main"
 		if pr.BaseBranch != "" {
 			base = pr.BaseBranch
 		}
 		if merge.Clean {
-			// An implement run on the PR's issue records the issue and
-			// branch, not the PR: merging under it would move the branch
-			// its checkout pushes to.
-			if issueNum, _ := issueForPR(pr); activeByPR[pr.Number] || activeByIssue[issueNum] {
-				continue
-			}
-			items = append(items, InboxItem{
-				ID:          fmt.Sprintf("merge-base-pr-%d", pr.Number),
-				Kind:        InboxMergeBase,
-				Title:       fmt.Sprintf("Merge %s into %s for !%d", base, head, pr.Number),
-				Description: "The branch is behind and the merge is clean",
-				Target:      fmt.Sprintf("!%d", pr.Number),
-				TargetURL:   prURL,
-				HeadSHA:     merge.HeadSHA,
-				Action: &InboxAction{
-					Label:   "Merge " + base,
-					Command: fmt.Sprintf("bottown flow merge-base !%d", pr.Number),
-				},
-				Created: created,
-			})
 			continue
 		}
 		description := "PR no longer merges cleanly with " + base

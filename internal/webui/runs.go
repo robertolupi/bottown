@@ -254,7 +254,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		return nil, fmt.Errorf("fetch live runs: %w", err)
 	}
 	if len(serverRuns) == 0 {
-		return []LiveRunInfo{}, nil
+		return s.liveLandings(), nil
 	}
 	denials := s.fetchDenials(ctx)
 
@@ -299,7 +299,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	}
 
 	now := time.Now().UTC()
-	var live []LiveRunInfo
+	live := s.liveLandings()
 
 	for _, sr := range serverRuns {
 		act := actorMap[sr.Actor]
