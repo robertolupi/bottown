@@ -161,7 +161,13 @@ commit as its merge commit, `Closes #N` closes the issue, the protection
 of `main` counts an approval that `ReconcileCarries` undismissed, and a
 base that moved makes the merge fail with 409.
 
-**What the spike found (#406):** all of it holds but the status. Over a
+**What the spike found (#406):** all of it holds but the status. In the
+successful case the PR and `main` edit one file independently after the
+approval, and the landing commit carries both edits. Forgejo dismisses the
+approval on the landing push, `ReconcileCarries` restores it, and the
+protection of `main` lets the merge through on the restored approval. (On
+a landing push where `main` had not diverged from the PR's base, Forgejo
+kept the approval.) Over a
 moved base Forgejo refuses the merge and leaves the base and the PR as
 they were, but its merge API does not map
 `ErrMergeDivergingFastForwardOnly`, so it answers **500** with an empty

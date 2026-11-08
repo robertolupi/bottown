@@ -3380,12 +3380,13 @@ fi`
 		// land builds the landing commit on the forge's repository, base
 		// first (main tip, then the PR head), pushes it to the PR branch
 		// with the owner's token as bottown's automatic merge does, and
-		// undismisses the approval if Forgejo dismissed it.
-		land := func(issue, prn int64, prPath, head string) string {
+		// undismisses the approval if Forgejo dismissed it, reporting
+		// whether it did.
+		land := func(issue, prn int64, prPath, head string) (landing string, dismissed bool) {
 			t.Helper()
 			base := mainTip()
 			tree := strings.Fields(git(t, demo, "merge-tree", "--write-tree", base, head))[0]
-			landing := ownerGit([]string{
+			landing = ownerGit([]string{
 				"GIT_AUTHOR_NAME=bottown", "GIT_AUTHOR_EMAIL=bottown@localhost",
 				"GIT_COMMITTER_NAME=bottown", "GIT_COMMITTER_EMAIL=bottown@localhost",
 			}, "commit-tree", tree, "-p", base, "-p", head, "-m", fmt.Sprintf("Land !%d", prn))
@@ -3402,7 +3403,6 @@ fi`
 			}
 			// Forgejo dismisses asynchronously; wait a while for it before
 			// reconciling, or the dismissal could land after.
-			dismissed := false
 			for deadline := time.Now().Add(15 * time.Second); !dismissed && time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
 				var rs []review
 				a.mustAPI(owner, "GET", prPath+"/reviews", nil, &rs)
@@ -3429,7 +3429,7 @@ fi`
 			if len(rs) != 1 || rs[0].Dismissed || rs[0].State != "APPROVED" {
 				t.Fatalf("approval not in force before the merge: %+v", rs)
 			}
-			return landing
+			return landing, dismissed
 		}
 		// merge asks Forgejo, as manager, to fast-forward main to landing.
 		// Mergeability is recomputed asynchronously, so a 405 is retried.
@@ -3444,11 +3444,22 @@ fi`
 		}
 
 		t.Run("lands the checked commit", func(t *testing.T) {
-			// main changes the first line of the PR's file, so the landing
-			// commit really merges, and Forgejo sees a file both changed.
-			pushMain("ff-land.txt", lines("main", "20"))
+			// The PR changes the file's last line; after its approval, main
+			// changes the first, so the landing commit really merges two
+			// independent edits of one file.
+			pushMain("ff-land.txt", lines("1", "20"))
 			issue, prn, prPath, head := open("ff-land.txt")
-			landing := land(issue, prn, prPath, head)
+			pushMain("ff-land.txt", lines("main", "20"))
+			landing, dismissed := land(issue, prn, prPath, head)
+			if got := git(t, demo, "show", landing+":ff-land.txt") + "\n"; got != string(lines("main", "pr")) {
+				t.Fatalf("landing-tree: ff-land.txt in the landing commit:\n%s\nwant main's first line and the PR's last", got)
+			}
+			// Forgejo dismisses the approval on this push; the merge below
+			// then passes the protection only on the approval that
+			// ReconcileCarries restored.
+			if !dismissed {
+				t.Errorf("approval-restored: Forgejo kept the approval on the landing push, so the restored approval is not exercised")
+			}
 			code, b := merge(prPath, landing)
 			if code != 200 {
 				t.Fatalf("merge-ok: fast-forward-only merge of the approved landing commit: %d %s", code, b)
@@ -3477,7 +3488,7 @@ fi`
 
 		t.Run("refuses a moved base", func(t *testing.T) {
 			issue, prn, prPath, head := open("ff-race.txt")
-			landing := land(issue, prn, prPath, head)
+			landing, _ := land(issue, prn, prPath, head)
 			moved := pushMain("ff-race-main.txt", []byte("main moved under the landing\n"))
 			code, b := merge(prPath, landing)
 			// Forgejo 15 refuses with a 500 and no message: its merge API
