@@ -27,8 +27,10 @@ instructions for agents working on this repository are in
   (`agy`), [Kimi Code](https://www.kimi.com/code/docs/en/) (`kimi`),
   [Codex CLI](https://openaicli.com/docs) (`codex`) and
   [Crush](https://github.com/charmbracelet/crush) (`crush`).
-- macOS is the tested host: the owner's keys live in the Keychain. On other
-  systems they go to a `0600` file under the instance's host config.
+- macOS is the tested host. The owner's keys live in a `0600` file under the
+  instance's host config, on every system; on macOS, an instance set up by
+  an earlier version has its keys copied there from the Keychain on first
+  use.
 
 ## Install
 
