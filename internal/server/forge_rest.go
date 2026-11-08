@@ -22,6 +22,10 @@ import (
 //	GET  /v1/forge/pr?repo=&number=&diff=1
 //	GET  /v1/forge/pr/carries?repo=&number=
 //	POST /v1/forge/pr/carries {repo, number} (the owner: reconcile dismissals)
+//	GET  /v1/forge/pr/merge-base?repo=&number=   (the owner: trial merge and files)
+//	POST /v1/forge/pr/merge-base {repo, number, head_sha}   (the owner: merge the base into the head)
+//	POST /v1/forge/pr/landing {repo, number, head_sha}   (the owner: the landing commit)
+//	POST /v1/forge/pr/merge {repo, number, head_sha}   (the owner: merge a milestone child)
 //	POST /v1/forge/pr       {title, body}
 //	POST /v1/forge/comment  {repo, number, body}
 //	POST /v1/forge/review   {event, body, commit_id}
@@ -128,6 +132,14 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 			return
 		}
 		out, err := s.opPRMerge(r.Context(), Who(r.Context()), in)
+		writeOp(w, out, err)
+	}))))
+	mux.Handle("POST /v1/forge/pr/landing", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in PRLandingIn
+		if !decode(w, r, &in) {
+			return
+		}
+		out, err := s.opPRLanding(r.Context(), Who(r.Context()), in)
 		writeOp(w, out, err)
 	}))))
 	mux.Handle("POST /v1/forge/milestone/branch", s.authed(s.ownerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
