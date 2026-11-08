@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/robertolupi/bottown/internal/agents"
@@ -35,6 +36,9 @@ type RunForge interface {
 	// default branch, 0 if there is none.
 	FinalPR(ctx context.Context) (int64, error)
 	Comment(ctx context.Context, n int64, body string) error
+	// EditIssue sets issue n's title and body: Run checks the epic's boxes
+	// with it.
+	EditIssue(ctx context.Context, n int64, title, body string) error
 }
 
 // Restart is what RunForge.Restart did: Merged is whether it merged Base
@@ -257,6 +261,8 @@ func Run(ctx context.Context, f RunForge, o RunOptions) (*RunReport, error) {
 		if loopErr == nil && ctx.Err() == nil {
 			if st, err = Epic(ctx, f, o.Owner, o.Slug); err != nil {
 				loopErr = err
+			} else {
+				tick(ctx, f, out, st)
 			}
 		}
 		if loopErr == nil && ctx.Err() == nil {
@@ -353,6 +359,60 @@ func Run(ctx context.Context, f RunForge, o RunOptions) (*RunReport, error) {
 		return rep, fmt.Errorf("commenting the summary on epic #%d: %w", rep.Epic, err)
 	}
 	return rep, &UnfinishedError{Report: rep}
+}
+
+// tick checks the boxes of the epic's checklist for its closed children,
+// as apply renders them, so the epic shows what has landed without another
+// apply. A failed edit is a warning: the next tick, or the next apply,
+// checks them.
+func tick(ctx context.Context, f RunForge, out io.Writer, st *EpicState) {
+	var closed []int64
+	for _, c := range st.Children {
+		if c.Closed {
+			closed = append(closed, c.Number)
+		}
+	}
+	m, content, _ := ParseMarker(st.Epic.Body)
+	content, ticked := tickBoxes(content, closed)
+	if len(ticked) == 0 {
+		return
+	}
+	// The marker's sha is the hash apply writes for this content, so the
+	// next apply finds nothing to change in the epic.
+	m.SHA = Hash(st.Epic.Title, content)
+	body := withMarker(content, m)
+	if err := f.EditIssue(ctx, st.Epic.Number, st.Epic.Title, body); err != nil {
+		fmt.Fprintf(out, "warning: checking %s in epic #%d: %v\n", refs(ticked), st.Epic.Number, err)
+		return
+	}
+	st.Epic.Body = body
+	fmt.Fprintf(out, "checked %s in epic #%d\n", refs(ticked), st.Epic.Number)
+}
+
+// tickBoxes checks the boxes of the epic's checklist lines, as epicContent
+// writes them, for the issues closed, and returns the body and the issues
+// it checked. It leaves every other line as it is, and returns a body it
+// checks nothing in unchanged.
+func tickBoxes(body string, closed []int64) (string, []int64) {
+	lines := strings.Split(normalize(body), "\n")
+	var ticked []int64
+	for i, l := range lines {
+		rest, ok := strings.CutPrefix(l, "- [ ] #")
+		if !ok || !checklistRE.MatchString(l) {
+			continue
+		}
+		num, _, _ := strings.Cut(rest, " ")
+		n, err := strconv.ParseInt(num, 10, 64)
+		if err != nil || !slices.Contains(closed, n) {
+			continue
+		}
+		lines[i] = "- [x] #" + rest
+		ticked = append(ticked, n)
+	}
+	if len(ticked) == 0 {
+		return body, nil
+	}
+	return strings.Join(lines, "\n"), ticked
 }
 
 // next is the first of the children ready to land, in land.Order's order
