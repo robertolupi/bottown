@@ -27,7 +27,11 @@ a branch cannot change what its own checks are.
 - **The record.** In an implement, plan or verify run, the result of each
   group that ran is recorded on HEAD as a commit status, `bottown/check`
   or `bottown/e2e` (success or failure, with a description naming the
-  commands, the duration and the run), through `POST /v1/forge/status`.
+  commands, the duration and the run; a failure also names the failing
+  step's failing tests, Go's `--- FAIL:` and vitest's `FAIL` lines, as
+  many as fit, e.g. `failed: make check (exit 2) after 59.6s:
+  TestKeychainResults (verify run r-63a64a3e)`; the flow's checks
+  describe their statuses the same way), through `POST /v1/forge/status`.
   The server writes it with the actor's token, only on the run's commit:
   a verify run's pinned SHA, or the head of an implement or plan run's
   branch on the forge, so the commit must be pushed first. Agents cannot

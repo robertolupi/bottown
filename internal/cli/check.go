@@ -40,6 +40,11 @@ const (
 const (
 	maxFailLines = 15 // failing lines quoted per failed step
 	maxDepLines  = 10 // added and removed lines quoted per manifest
+	maxFailTests = 20 // failing test names kept per failed step
+	// maxDescription bounds a status description as bottown check writes
+	// it, below Forgejo's 255, leaving room for the "(verify run r-…)" the
+	// server appends.
+	maxDescription = 200
 )
 
 // checkStep is one command of a check group and how it went.
@@ -53,6 +58,9 @@ type checkStep struct {
 	FirstLine int       `json:"first_line,omitempty"`
 	LastLine  int       `json:"last_line,omitempty"`
 	Failing   []logLine `json:"failing,omitempty"`
+	// Tests names the step's failing tests, in the order the log reports
+	// them, e.g. TestX/sub for Go.
+	Tests []string `json:"tests,omitempty"`
 }
 
 // logLine is a line of the log and its number.
@@ -121,7 +129,8 @@ func (r checkResult) groupDescription(group string) string {
 		total += s.Duration
 		cmds = append(cmds, s.Command)
 		if s.Status == stepFailed {
-			return fmt.Sprintf("failed: %s (exit %d) after %s", s.Command, s.Exit, fmtDuration(total))
+			d := fmt.Sprintf("failed: %s (exit %d) after %s", s.Command, s.Exit, fmtDuration(total))
+			return d + failedTests(s.Tests, maxDescription-len([]rune(d)))
 		}
 	}
 	d := fmt.Sprintf("passed: %s in %s", strings.Join(cmds, "; "), fmtDuration(total))
@@ -133,6 +142,21 @@ func (r checkResult) groupDescription(group string) string {
 		d += "; dependencies changed: " + strings.Join(files, ", ")
 	}
 	return d
+}
+
+// failedTests is ": A, B" naming tests within max runes, the ones that do
+// not fit counted as "+N more"; "" when there are none or none fit.
+func failedTests(tests []string, max int) string {
+	for n := len(tests); n > 0; n-- {
+		s := ": " + strings.Join(tests[:n], ", ")
+		if n < len(tests) {
+			s += fmt.Sprintf(" +%d more", len(tests)-n)
+		}
+		if len([]rune(s)) <= max {
+			return s
+		}
+	}
+	return ""
 }
 
 func fmtDuration(d time.Duration) string {
@@ -153,6 +177,10 @@ var failRe = regexp.MustCompile(`^\s*(--- FAIL|FAIL\b|panic:|fatal:|Error:|error
 	`|\.(go|ts|js|svelte):\d+(:\d+)?:? ` +
 	`|\b[Ee]rror TS\d+`)
 
+// failTestRe matches a failing test's line and captures its name: Go's
+// "--- FAIL: TestX (0.01s)", vitest's " FAIL  src/x.test.ts > suite > case".
+var failTestRe = regexp.MustCompile(`^\s*--- FAIL: (\S+)|^\s*FAIL\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?(?: > .*)?)$`)
+
 // checkLog writes a check's log and keeps, for the step being run, its line
 // numbers, its first failing lines and its last lines.
 type checkLog struct {
@@ -161,6 +189,7 @@ type checkLog struct {
 	partial []byte
 	matches []logLine
 	tail    []logLine
+	tests   []string // failing test names
 }
 
 func (l *checkLog) line(s string) {
@@ -171,7 +200,7 @@ func (l *checkLog) line(s string) {
 // startStep writes a step's header and resets what is kept per step.
 func (l *checkLog) startStep(group, command string) {
 	l.line(fmt.Sprintf("==> [%s] %s", group, command))
-	l.matches, l.tail, l.partial = nil, nil, nil
+	l.matches, l.tail, l.partial, l.tests = nil, nil, nil, nil
 }
 
 // Write takes the step's output.
@@ -195,9 +224,24 @@ func (l *checkLog) output(s string) {
 	if len(l.matches) < maxFailLines && failRe.MatchString(ll.Text) {
 		l.matches = append(l.matches, ll)
 	}
+	if m := failTestRe.FindStringSubmatch(ll.Text); m != nil {
+		l.addTest(strings.TrimSpace(m[1] + m[2]))
+	}
 	l.tail = append(l.tail, ll)
 	if len(l.tail) > maxFailLines {
 		l.tail = l.tail[1:]
+	}
+}
+
+// addTest keeps a failing test's name once, and the most specific: a Go
+// subtest replaces its parent, which go test reports first.
+func (l *checkLog) addTest(name string) {
+	if slices.ContainsFunc(l.tests, func(t string) bool { return t == name || strings.HasPrefix(t, name+"/") }) {
+		return
+	}
+	l.tests = slices.DeleteFunc(l.tests, func(t string) bool { return strings.HasPrefix(name, t+"/") })
+	if len(l.tests) < maxFailTests {
+		l.tests = append(l.tests, name)
 	}
 }
 
@@ -251,7 +295,7 @@ func runChecks(ctx context.Context, dir string, specs []checkSpec, log *checkLog
 		}
 		st.Status = stepPassed
 		if err != nil {
-			st.Status, st.Exit, st.Failing, failed = stepFailed, -1, failing, true
+			st.Status, st.Exit, st.Failing, st.Tests, failed = stepFailed, -1, failing, log.tests, true
 			var ee *exec.ExitError
 			if errors.As(err, &ee) && ee.ExitCode() >= 0 {
 				st.Exit = ee.ExitCode()

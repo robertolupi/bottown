@@ -69,6 +69,9 @@ type retroRun struct {
 	Outcome string `json:"outcome,omitempty"`
 	secrets.Digest
 	Purged bool `json:"purged,omitempty"`
+	// Build is the bottown binary that launched the run: the server's
+	// record of it, or the local one's.
+	Build *secrets.Build `json:"build,omitempty"`
 	// Local is the launcher's record, when this checkout launched the run.
 	Local *retroLocal `json:"local,omitempty"`
 	// Denials are the policy refusals the server kept for the run.
@@ -173,7 +176,7 @@ func gatherRetroScope(dir string, scope retroScope, self string, ws *runs.Worksp
 			cands = append(cands, secrets.Run{
 				ID: l.ID, Kind: l.Kind, Actor: l.Actor, Family: l.Family, Harness: l.Harness, Spec: l.Spec,
 				Issue: l.Issue, PR: l.PR, Branch: l.Branch, SHA: l.SHA, Interactive: l.Interactive,
-				Created: l.Started, Ended: l.Ended,
+				Created: l.Started, Ended: l.Ended, Build: l.Build,
 			})
 			states = append(states, "")
 		}
@@ -200,7 +203,7 @@ func gatherRetroScope(dir string, scope retroScope, self string, ws *runs.Worksp
 			ID: r.ID, Kind: r.Kind, Actor: r.Actor, Family: r.Family, Harness: r.Harness, Spec: r.Spec,
 			Issue: r.Issue, PR: r.PR, Branch: r.Branch, SHA: r.SHA, Interactive: r.Interactive,
 			AllowSameFamily: r.AllowSameFamily, StartedBy: r.StartedBy, Created: r.Created, Ended: r.Ended,
-			State: states[i], Status: r.Status, Outcome: r.Outcome, Digest: r.Digest, Purged: r.Purged,
+			State: states[i], Status: r.Status, Outcome: r.Outcome, Digest: r.Digest, Purged: r.Purged, Build: r.Build,
 		}
 		if r.Ended != nil {
 			rr.Duration = r.Ended.Sub(r.Created).Round(time.Second).String()
@@ -217,6 +220,9 @@ func gatherRetroScope(dir string, scope retroScope, self string, ws *runs.Worksp
 			}
 			if rr.Harness == "" {
 				rr.Harness = l.Harness
+			}
+			if rr.Build == nil {
+				rr.Build = l.Build
 			}
 		}
 		out = append(out, rr)

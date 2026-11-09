@@ -5,16 +5,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -97,6 +100,51 @@ func TestRunChecks(t *testing.T) {
 	}
 	if d := res.groupDescription("check"); d != "failed: echo 'main.go:3:1: undefined: x'; exit 3 (exit 3) after 3.0s" {
 		t.Errorf("failure description = %q", d)
+	}
+}
+
+func TestCheckLogFailingTests(t *testing.T) {
+	l := &checkLog{w: io.Discard}
+	l.startStep("check", "make check")
+	fmt.Fprint(l, "--- FAIL: TestKeychainResults (0.01s)\n    k_test.go:9: boom\n--- FAIL: TestStatus (0.20s)\n"+
+		"    --- FAIL: TestStatus/unreachable (0.10s)\n--- FAIL: TestKeychainResults (0.01s)\nFAIL\tpkg/a\n"+
+		" FAIL  src/lib/x.test.ts > inbox > sorts\n")
+	l.endStep()
+	if want := []string{"TestKeychainResults", "TestStatus/unreachable", "src/lib/x.test.ts > inbox > sorts"}; !slices.Equal(l.tests, want) {
+		t.Errorf("tests = %q, want %q", l.tests, want)
+	}
+	l.startStep("check", "x")
+	if l.tests != nil {
+		t.Errorf("tests kept across steps: %q", l.tests)
+	}
+}
+
+func TestFailedDescriptionNamesTests(t *testing.T) {
+	step := checkStep{Group: "check", Command: "make check", Status: stepFailed, Exit: 2, Duration: 59600 * time.Millisecond}
+	desc := func(tests ...string) string {
+		s := step
+		s.Tests = tests
+		return checkResult{Steps: []checkStep{s}}.groupDescription("check")
+	}
+	if d := desc(); d != "failed: make check (exit 2) after 59.6s" {
+		t.Errorf("without tests = %q", d)
+	}
+	if d := desc("TestKeychainResults", "TestLanding"); d != "failed: make check (exit 2) after 59.6s: TestKeychainResults, TestLanding" {
+		t.Errorf("two tests = %q", d)
+	}
+	var many []string
+	for i := range maxFailTests {
+		many = append(many, fmt.Sprintf("TestSomethingRatherLong%02d", i))
+	}
+	d := desc(many...)
+	if n := len([]rune(d)); n > maxDescription || !strings.Contains(d, ": TestSomethingRatherLong00, ") || !regexp.MustCompile(` \+\d+ more$`).MatchString(d) {
+		t.Errorf("long list (%d runes) = %q", n, d)
+	}
+	if got, ok := activity.CheckDuration(d); !ok || got != step.Duration {
+		t.Errorf("duration read back = %v, %v", got, ok)
+	}
+	if d := desc(strings.Repeat("x", maxDescription)); d != "failed: make check (exit 2) after 59.6s" {
+		t.Errorf("a name that cannot fit = %q", d)
 	}
 }
 

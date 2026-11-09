@@ -38,7 +38,8 @@ key, since a run key may not list runs or read the audit log, into
   context with more than one status at one commit (checks that overlapped
   or ran again), saying so when they include a success and a failure.
 - `runs.json`: each run's server record and digest (summary, usage,
-  observed failure), the launcher's local record if this checkout launched
+  observed failure), the [bottown build](launcher-build.md) that
+  launched it (`build`), the launcher's local record if this checkout launched
   it (exit code, stop request, notes, handover; never the key), its
   policy denials and rejections, and its harness denial count.
 - `transcripts/<id>.jsonl`: the run's log, as one `runs.LogLine` JSON line

@@ -102,7 +102,11 @@ func TestPlanRun(t *testing.T) {
 	if w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","spec":"two words","repo":"demo","issue":7}`); w.Code != http.StatusBadRequest {
 		t.Errorf("plan run with a bad spec = %d (%s), want 400", w.Code, w.Body.String())
 	}
-	w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","spec":"opus","repo":"demo","issue":7}`)
+	// So is the launcher's build.
+	if w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","repo":"demo","issue":7,"build":{"revision":"two words"}}`); w.Code != http.StatusBadRequest {
+		t.Errorf("plan run with a bad build = %d (%s), want 400", w.Code, w.Body.String())
+	}
+	w := do(ownerKey, "POST", "/v1/runs", `{"kind":"plan","actor":"claude","spec":"opus","repo":"demo","issue":7,"build":{"revision":"eee49e5b74dd","dirty":true}}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("POST /v1/runs plan = %d (%s), want 201", w.Code, w.Body.String())
 	}
@@ -112,6 +116,9 @@ func TestPlanRun(t *testing.T) {
 	}
 	if created.Kind != policy.Plan || created.Issue != 7 || created.Branch != "issue/7" || created.Key == "" || created.Spec != "opus" {
 		t.Fatalf("plan run = %+v, want kind plan on issue/7 with a key", created.Run)
+	}
+	if b := created.Build; b == nil || *b != (secrets.Build{Revision: "eee49e5b74dd", Dirty: true}) {
+		t.Errorf("plan run build = %+v, want eee49e5b74dd, dirty", b)
 	}
 	runKey := created.Key
 
