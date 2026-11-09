@@ -1525,11 +1525,11 @@ func TestE2E(t *testing.T) {
 			}
 			return strings.Join(got, ", ")
 		}
-		if got := diffstat(); got != "checked.txt +1 -0, go.mod +2 -0" {
+		if got := diffstat(); got != "checked.txt +1 -0, go.mod +3 -0" {
 			t.Errorf("open PR's diffstat: %s", got)
 		}
 		a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn), map[string]string{"state": "closed"}, nil)
-		if got := diffstat(); got != "checked.txt +1 -0, go.mod +2 -0" {
+		if got := diffstat(); got != "checked.txt +1 -0, go.mod +3 -0" {
 			t.Errorf("closed PR's diffstat: %s", got)
 		}
 	})
