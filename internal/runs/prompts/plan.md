@@ -34,6 +34,7 @@ model family approves it and the owner merges it, the owner's
    ```issue
    key = "first-issue"
    depends = []
+   size = "M"
    ```
 
    The first issue's body: what to do, and its acceptance criteria.
@@ -55,8 +56,12 @@ model family approves it and the owner merges it, the owner's
    - Each body must stand on its own: an implementer reads only its issue,
      so say what to change, where, and how to check it. Use `###` or
      deeper for headings inside a body.
-   - Size each issue for one implement run, and order the dependencies so
-     independent issues can run in parallel.
+   - Size each issue by the sizing guide below, and give the size in its
+     block's `size` (`S`, `M`, `L` or `XL`). Each issue must fit one
+     implement run: split one that comes out XL. An issue you cannot size
+     because it does not say what done is needs a clearer body, not a
+     size. Order the dependencies so independent issues can run in
+     parallel.
 3. Check the plan: `{{.Bottown}} milestone check <slug>`, then the
    repository's checks with `{{.Bottown}} check`: the ones its
    `.bottown.toml` names (by default `make check`, which its
@@ -65,6 +70,14 @@ model family approves it and the owner merges it, the owner's
    `git push {{.Remote}} HEAD`, and open a pull request into `{{.Base}}`:
    `{{.Bottown}} pr create --title "…" --body-file -`, saying what the plan
    proposes and how you checked it.
+
+## Sizing guide
+
+Size each issue you propose as its implementer would, from its body.
+{{template "sizing" .}}
+
+In a plan, the size goes in the issue's `size`, and the rest of the
+record in the pull request's description, a line or two per issue.
 
 ## How this run works
 

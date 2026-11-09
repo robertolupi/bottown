@@ -24,6 +24,7 @@ func TestPlanPrompt(t *testing.T) {
 		"repository's checks", "AGENTS.md (or README)", "`/b check`", "Commit only the plan file on `issue/7`",
 		"git push bottown HEAD", "pull request into `main`", "/b pr create", "kickoff = 7",
 		"/b run end --summary-file -",
+		"## Sizing guide", "**Size the whole issue**", "| **XL** |", "block's `size`",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("plan prompt lacks %q:\n%s", want, p)
