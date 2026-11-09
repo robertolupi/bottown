@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,6 +99,74 @@ func (c *Client) IssueComments(owner, repo string, index int64) ([]Comment, erro
 	var out []Comment
 	err := c.do(http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repo), index), nil, &out)
 	return out, err
+}
+
+// RepoComment is a comment as the repository-wide list gives it: with its
+// updated time and the issue or pull request it is on.
+type RepoComment struct {
+	Comment
+	Updated time.Time `json:"updated_at"`
+	// IssueURL is the issue's web URL, empty for a pull request's comment,
+	// whose PullRequestURL is set instead.
+	IssueURL       string `json:"issue_url"`
+	PullRequestURL string `json:"pull_request_url"`
+}
+
+// Issue is the number of the issue c is on, or 0 for a pull request's
+// comment or a URL that does not name an issue.
+func (c RepoComment) Issue() int64 {
+	if c.PullRequestURL != "" {
+		return 0
+	}
+	u, err := url.Parse(c.IssueURL)
+	if err != nil {
+		return 0
+	}
+	rest, num, ok := strings.Cut(strings.TrimSuffix(u.Path, "/"), "/issues/")
+	if !ok || rest == "" || strings.Contains(num, "/") {
+		return 0
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// repoCommentsPage is the page size RepoComments asks for: Forgejo's
+// largest by default.
+const repoCommentsPage = 50
+
+// RepoComments lists the comments on the repository's issues and pull
+// requests that were created or edited at or after since (all of them for
+// a zero since), oldest first. Forgejo ignores limit there unless page is
+// given too, and caps a page at its own maximum, which may be smaller, so
+// it reads page by page until a page is empty or brings no comment it has
+// already seen.
+func (c *Client) RepoComments(owner, repo string, since time.Time) ([]RepoComment, error) {
+	var out []RepoComment
+	seen := map[int64]bool{}
+	for page := 1; ; page++ {
+		q := url.Values{"page": {strconv.Itoa(page)}, "limit": {strconv.Itoa(repoCommentsPage)}}
+		if !since.IsZero() {
+			q.Set("since", since.UTC().Format(time.RFC3339))
+		}
+		var items []RepoComment
+		if err := c.do(http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/comments?%s", url.PathEscape(owner), url.PathEscape(repo), q.Encode()), nil, &items); err != nil {
+			return nil, err
+		}
+		fresh := 0
+		for _, cm := range items {
+			if !seen[cm.ID] {
+				seen[cm.ID] = true
+				out = append(out, cm)
+				fresh++
+			}
+		}
+		if fresh == 0 {
+			return out, nil
+		}
+	}
 }
 
 // DescriptionAttachments lists the files attached to the description of

@@ -10,10 +10,12 @@ import (
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/activity"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/diffstat"
 )
 
-// ComputeStats lists the issues once, through the activity, and a warm load
-// reads only the open PR: the merged PR's reviews, gate and diff are cached.
+// ComputeStats lists the issues and the comments once, through the
+// activity, and a warm load reads only the open PR: the merged PR's
+// reviews, gate and diffstat are cached.
 func TestComputeStatsReads(t *testing.T) {
 	fix := defaultFixture()
 	fix.requests = map[string]int{}
@@ -55,11 +57,13 @@ func TestComputeStatsReads(t *testing.T) {
 		defer fix.mu.Unlock()
 		return maps.Clone(fix.requests)
 	}
-	// Cold: PR and gate reads for both PRs, and the merged PR's diff.
-	if got := load(); got["/v1/forge/issues"] != 1 || got["/v1/forge/pr"] != 3 || got["/v1/forge/pr/gate"] != 2 {
+	// Cold: PR and gate reads for both PRs, and the merged PR's diffstat.
+	if got := load(); got["/v1/forge/issues"] != 1 || got["/v1/forge/comments"] != 1 || got["/v1/forge/issue"] != 0 ||
+		got["/v1/forge/pr"] != 2 || got["/v1/forge/pr/gate"] != 2 || got["/v1/forge/pr/diffstat"] != 1 {
 		t.Errorf("cold load requests = %v", got)
 	}
-	if got := load(); got["/v1/forge/issues"] != 1 || got["/v1/forge/pr"] != 1 || got["/v1/forge/pr/gate"] != 1 {
+	got := load()
+	if got["/v1/forge/issues"] != 1 || got["/v1/forge/comments"] != 1 || got["/v1/forge/pr"] != 1 || got["/v1/forge/pr/gate"] != 1 || got["/v1/forge/pr/diffstat"] != 0 {
 		t.Errorf("warm load requests = %v, want only the open PR read", got)
 	}
 }
@@ -67,14 +71,14 @@ func TestComputeStatsReads(t *testing.T) {
 func TestDiffCacheReadsOnce(t *testing.T) {
 	var c diffCache
 	calls := 0
-	read := func(context.Context, int64) (string, error) {
+	read := func(context.Context, int64) ([]diffstat.File, error) {
 		calls++
-		return "diff", nil
+		return []diffstat.File{{Path: "a.go"}}, nil
 	}
 	for i := 0; i < 3; i++ {
 		d, err := c.get(context.Background(), 7, read)
-		if err != nil || d != "diff" {
-			t.Fatalf("get: %q, %v", d, err)
+		if err != nil || len(d) != 1 {
+			t.Fatalf("get: %v, %v", d, err)
 		}
 	}
 	if calls != 1 {
@@ -85,19 +89,19 @@ func TestDiffCacheReadsOnce(t *testing.T) {
 func TestDiffCacheDoesNotCacheErrors(t *testing.T) {
 	var c diffCache
 	calls := 0
-	read := func(context.Context, int64) (string, error) {
+	read := func(context.Context, int64) ([]diffstat.File, error) {
 		calls++
 		if calls == 1 {
-			return "", errors.New("boom")
+			return nil, errors.New("boom")
 		}
-		return "diff", nil
+		return []diffstat.File{{Path: "a.go"}}, nil
 	}
 	if _, err := c.get(context.Background(), 3, read); err == nil {
 		t.Fatal("first get: want the read's error")
 	}
 	d, err := c.get(context.Background(), 3, read)
-	if err != nil || d != "diff" {
-		t.Fatalf("second get: %q, %v", d, err)
+	if err != nil || len(d) != 1 {
+		t.Fatalf("second get: %v, %v", d, err)
 	}
 	if calls != 2 {
 		t.Errorf("read the diff %d times, want twice: a failed read is not cached", calls)

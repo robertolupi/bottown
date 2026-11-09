@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // REST front end for the forge operations in forge.go, used by the bottown
@@ -12,6 +13,7 @@ import (
 //
 //	GET  /v1/forge/issue?repo=&number=&comments=0   (comments=0: the issue alone)
 //	GET  /v1/forge/issues?repo=&state=&body=1
+//	GET  /v1/forge/comments?repo=&since=   (issues' comments repo-wide; since is RFC 3339)
 //	GET  /v1/forge/issue/dependencies?repo=&number=
 //	GET  /v1/forge/prs?repo=&state=&checks=1
 //	GET  /v1/forge/milestones?repo=&state=
@@ -20,6 +22,7 @@ import (
 //	GET  /v1/forge/issue/attachment?repo=&number=&id=   (the file's bytes)
 //	POST /v1/forge/issue    {repo, title, body}
 //	GET  /v1/forge/pr?repo=&number=&diff=1
+//	GET  /v1/forge/pr/diffstat?repo=&number=   (the change by file, from git)
 //	GET  /v1/forge/pr/carries?repo=&number=
 //	POST /v1/forge/pr/carries {repo, number} (the owner: reconcile dismissals)
 //	GET  /v1/forge/pr/merge-base?repo=&number=   (the owner: trial merge and files)
@@ -97,6 +100,19 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 		})
 		writeOp(w, out, err)
 	})))
+	mux.Handle("GET /v1/forge/comments", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var since time.Time
+		if v := r.URL.Query().Get("since"); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "since: "+err.Error())
+				return
+			}
+			since = t
+		}
+		out, err := s.opRepoComments(r.Context(), Who(r.Context()), r.URL.Query().Get("repo"), since)
+		writeOp(w, out, err)
+	})))
 	mux.Handle("POST /v1/forge/issue", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in IssueCreateIn
 		if !decode(w, r, &in) {
@@ -107,6 +123,10 @@ func (s *Server) forgeRoutes(mux *http.ServeMux) {
 	})))
 	mux.Handle("GET /v1/forge/pr", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.opPR(r.Context(), Who(r.Context()), targetFromQuery(r), r.URL.Query().Get("diff") != "")
+		writeOp(w, out, err)
+	})))
+	mux.Handle("GET /v1/forge/pr/diffstat", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.opPRDiffStat(r.Context(), Who(r.Context()), targetFromQuery(r))
 		writeOp(w, out, err)
 	})))
 	mux.Handle("GET /v1/forge/pr/carries", s.authed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -25,14 +25,15 @@ import (
 
 // Facts is what Compute needs beyond the shared activity derivation: the
 // repository's issues (for their size label, milestone and created time)
-// and the merged PRs' diffs (for the measured size).
+// and the merged PRs' diffstats (for the measured size).
 type Facts struct {
 	// Issues are the repository's issues (not PRs) in every state
 	// (GET /v1/forge/issues?state=all).
 	Issues []*server.IssueItem
-	// Diffs are merged PRs' unified diffs by PR number; a missing one
-	// leaves that PR's measured size unknown.
-	Diffs map[int64]string
+	// DiffStats are merged PRs' changes by file, by PR number, with lock
+	// files marked Collapsed (diffstat.IsLockFile); a missing one leaves
+	// that PR's measured size unknown.
+	DiffStats map[int64][]diffstat.File
 }
 
 // Stats is what Compute derives for a window.
@@ -184,7 +185,8 @@ func Compute(a *activity.Activity, f Facts, now time.Time) *Stats {
 	}
 
 	for _, th := range a.Threads {
-		st.Issues = append(st.Issues, issueVector(th, runs[th.Key], meta[th.Issue], f.Diffs[th.PR]))
+		files, measured := f.DiffStats[th.PR]
+		st.Issues = append(st.Issues, issueVector(th, runs[th.Key], meta[th.Issue], files, measured))
 	}
 	slices.SortFunc(st.Issues, func(x, y Issue) int {
 		return cmp.Or(cmp.Compare(x.Issue, y.Issue), cmp.Compare(x.PR, y.PR))
@@ -205,7 +207,7 @@ func milestoneTitle(is *server.IssueItem) string {
 }
 
 // issueVector is the metric vector of one thread and its runs.
-func issueVector(th activity.Thread, runs []activity.Run, m issueMeta, diff string) Issue {
+func issueVector(th activity.Thread, runs []activity.Run, m issueMeta, files []diffstat.File, measured bool) Issue {
 	v := Issue{
 		Issue: th.Issue, PR: th.PR, Title: th.Title,
 		Size: m.size, Milestone: m.milestone,
@@ -258,8 +260,8 @@ func issueVector(th activity.Thread, runs []activity.Run, m issueMeta, diff stri
 			v.CycleSeconds = secondsBetween(*first, *v.Merged)
 		}
 	}
-	if v.PR > 0 && diff != "" {
-		s := diffstat.Sum(diffstat.Parse(diff))
+	if v.PR > 0 && measured {
+		s := diffstat.Sum(files)
 		v.Measured = &Measured{Added: s.Added, Deleted: s.Deleted, Files: s.Files}
 	}
 	return v

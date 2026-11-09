@@ -819,6 +819,8 @@ action only updates the PR's own branch.
 | One PR's reviews (bodies and times, for a timeline) | server | `GET /v1/forge/pr` (`pr show`) |
 | Issues, with labels, milestone and, for markers, bodies | server | `GET /v1/forge/issues?state=…[&body=1]` (`issue list`) |
 | One issue, with or without its comments | server | `GET /v1/forge/issue[?comments=0]` (`issue show`) |
+| Issues' comments repo-wide, since a time (activity's stops) | server | `GET /v1/forge/comments?since=` |
+| A merged PR's change by file (statistics' measured size) | server | `GET /v1/forge/pr/diffstat` (`git diff --numstat`) |
 | Issue dependencies, milestones, branches | server | `GET /v1/forge/issue/dependencies`, `/v1/forge/milestones`, `/v1/forge/branch` (§7) |
 | Actors and their families | server | `GET /v1/actors` |
 | Run records and logs of this checkout's runs | host, `.bottown/runs/` | read directly |
