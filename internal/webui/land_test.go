@@ -13,6 +13,7 @@ import (
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/runs"
 )
 
 func TestLandingActionLifecycle(t *testing.T) {
@@ -48,18 +49,29 @@ func TestLandingActionLifecycle(t *testing.T) {
 	if err != nil || len(live) != 1 || live[0].ID != "land-15" || live[0].Kind != "land" {
 		t.Fatalf("live: %+v, %v", live, err)
 	}
-	lines, exists, err := s.ComputeRunLog(context.Background(), "land-15")
-	if err != nil || !exists || len(lines) == 0 {
-		t.Fatalf("log: %+v %v %v", lines, exists, err)
-	}
-	b, _ := os.ReadFile(s.landingPath(15, ".log"))
-	if !strings.Contains(string(b), "land 15 --head-sha abc123") {
-		t.Fatal(string(b))
+	// The subprocess writes its log on its own schedule, which under load can
+	// be after ExecuteLand returns: wait for the line rather than assume it.
+	var (
+		lines  []runs.LogLine
+		exists bool
+		b      []byte
+	)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		lines, exists, err = s.ComputeRunLog(context.Background(), "land-15")
+		b, _ = os.ReadFile(s.landingPath(15, ".log"))
+		if err == nil && exists && len(lines) > 0 && strings.Contains(string(b), "land 15 --head-sha abc123") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("log: %+v %v %v; file: %q", lines, exists, err, b)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if _, err := s.ExecuteStop(context.Background(), "land-15"); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(2 * time.Second)
 	for s.getLanding(15) != nil && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
