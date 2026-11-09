@@ -23,6 +23,9 @@ full, then only the document, or section, your work needs.
   base-first landing commit, the checks at it, a fast-forward-only merge
   as `manager`), `bottown merge-all`, and why the flow no longer merges a
   base into a PR. Its status line says what is built.
+- [Sizing issues](design/sizing.md): read for the sizing guide, how
+  implement runs size an unsized issue (`issue_size`), and `bottown
+  estimate`. Its status line says what is built.
 - History, not kept current; read only for how something came to be:
   [Iteration 1](history/iteration-1.md) (the first issue through runs,
   actors as forge identities, permanent actor worktrees, in-harness runs),
