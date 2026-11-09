@@ -354,18 +354,46 @@ func TestGitState_ActorWorktrees(t *testing.T) {
 func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	mainCheckout, _, _ := setupThrowawayRepos(t)
 
-	// A hanging HTTP server simulates an unreachable origin (e.g. captive portal or offline).
+	// A hanging HTTP server simulates an unreachable origin (e.g. captive
+	// portal or offline). Steps 4 and 5 hold their origin fetch (requests 3
+	// and 4) until the test releases it, so what they assert follows from
+	// the order of events rather than from how fast git runs on the host
+	// (#376, #445, #452); any request after those fails at once.
+	type held struct{ arrived, release chan struct{} }
+	holds := map[int32]held{}
+	for _, n := range []int32{3, 4} {
+		holds[n] = held{make(chan struct{}), make(chan struct{})}
+	}
 	var originRequests atomic.Int32
-	originArrived := make(chan struct{}, 16)
 	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		originRequests.Add(1)
-		select {
-		case originArrived <- struct{}{}:
-		default:
+		n := originRequests.Add(1)
+		if h, ok := holds[n]; ok {
+			close(h.arrived)
+			select {
+			case <-h.release:
+				// An error, not an empty answer, which git would retry.
+				http.Error(w, "unreachable", http.StatusServiceUnavailable)
+			case <-r.Context().Done():
+			}
+			return
+		}
+		if n > 4 {
+			http.Error(w, "unexpected fetch", http.StatusServiceUnavailable)
+			return
 		}
 		<-r.Context().Done()
 	}))
 	defer hangSrv.Close()
+	// wait bounds a wait for an event that should come at once: generously,
+	// so that a loaded host only slows the test down.
+	wait := func(ch <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(time.Minute):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
 
 	runGit(t, mainCheckout, "remote", "set-url", "origin", hangSrv.URL+"/repo.git")
 
@@ -399,8 +427,9 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Cold start: concurrent status requests return within the timeout and do not queue up.
-	// If 5 requests queued up sequentially with 300ms timeout, they would take >= 1500ms.
+	// 1. Cold start: concurrent status requests return, bounded by
+	// fetchTimeout (the origin never answers), and share one origin fetch
+	// rather than queueing up a fetch each.
 	const numReqs = 5
 	var wg sync.WaitGroup
 	wg.Add(numReqs)
@@ -408,7 +437,6 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	results := make([]*UIStatusResponse, numReqs)
 	errors := make([]error, numReqs)
 
-	start := time.Now()
 	for i := 0; i < numReqs; i++ {
 		go func(idx int) {
 			defer wg.Done()
@@ -416,11 +444,6 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	elapsed := time.Since(start)
-
-	if elapsed >= 1200*time.Millisecond {
-		t.Fatalf("concurrent status requests queued up: took %v (expected < 1200ms for %d requests)", elapsed, numReqs)
-	}
 
 	if reqs := originRequests.Load(); reqs != 1 {
 		t.Fatalf("expected exactly 1 fetch attempt to hanging origin on cold start, got %d", reqs)
@@ -463,67 +486,69 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 		t.Fatalf("expected unforced poll after interval to fetch origin, got %d attempts (expected 2)", reqs)
 	}
 
+	// From here the test releases the held fetches itself: fetchTimeout
+	// must not end them first.
+	fetchTimeout = time.Minute
+
 	// 4. TryLock and serve snapshot: while a forced refresh is in flight, an unforced
-	// poll serves the last snapshot immediately without waiting for the fetch.
-	refreshStarted := make(chan struct{})
+	// poll serves the last snapshot without waiting for the fetch.
 	refreshDone := make(chan struct{})
 	go func() {
-		close(refreshStarted)
 		_, _ = srv.ComputeStatus(ctx, true)
 		close(refreshDone)
 	}()
+	// The forced refresh holds statusMu while its origin fetch is held.
+	wait(holds[3].arrived, "the forced refresh's origin fetch")
 
-	<-refreshStarted
-	// Wait a moment for the forced refresh goroutine to acquire statusMu and start git fetch
-	time.Sleep(50 * time.Millisecond)
-
-	start = time.Now()
-	snap, err := srv.ComputeStatus(ctx, false)
-	snapElapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("ComputeStatus snapshot: %v", err)
-	}
-	if snapElapsed >= 250*time.Millisecond {
-		t.Fatalf("concurrent poll during refresh took %v (expected < 250ms snapshot return)", snapElapsed)
+	var (
+		snap    *UIStatusResponse
+		snapErr error
+	)
+	polled := make(chan struct{})
+	go func() {
+		snap, snapErr = srv.ComputeStatus(ctx, false)
+		close(polled)
+	}()
+	wait(polled, "an unforced poll during a forced refresh (did it wait for the fetch?)")
+	if snapErr != nil {
+		t.Fatalf("ComputeStatus snapshot: %v", snapErr)
 	}
 	if snap == nil {
 		t.Fatalf("expected snapshot to be returned")
 	}
+	select {
+	case <-refreshDone:
+		t.Fatal("the forced refresh ended while its origin fetch was held")
+	default:
+	}
 
-	<-refreshDone
+	close(holds[3].release)
+	wait(refreshDone, "the forced refresh")
 	if reqs := originRequests.Load(); reqs != 3 {
 		t.Fatalf("expected 3 total origin fetch attempts after forced refresh, got %d", reqs)
 	}
 
-	// 5. Concurrent forced refreshes: forced refreshes that arrive while one is
-	// fetching origin wait for it and take its snapshot instead of each
-	// fetching origin in turn. The check counts origin fetches rather than
-	// timing the step: the winner's status computation runs several git
-	// commands besides the bounded fetch, and under host load they alone can
-	// exceed any tight wall-clock bound (#445).
-	for len(originArrived) > 0 {
-		<-originArrived
-	}
+	// 5. Concurrent forced refreshes: forced refreshes that wait behind one
+	// in flight take its result rather than each fetching origin in turn.
 	const forcedReqs = 3
+	waiting := make(chan struct{}, forcedReqs)
+	statusWaitHook = func() { waiting <- struct{}{} }
+	defer func() { statusWaitHook = nil }()
 	var forcedWg sync.WaitGroup
-	forcedWg.Add(forcedReqs)
 	forced := func() {
-		defer forcedWg.Done()
-		_, _ = srv.ComputeStatus(ctx, true)
+		forcedWg.Go(func() { _, _ = srv.ComputeStatus(ctx, true) })
 	}
-	go forced()
-	// Start the others once the first holds statusMu and is fetching origin,
-	// so they find the computation in flight.
-	select {
-	case <-originArrived:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("first forced refresh never reached origin")
+	forced()
+	wait(holds[4].arrived, "the first forced refresh's origin fetch")
+	for i := 1; i < forcedReqs; i++ {
+		forced()
 	}
 	for i := 1; i < forcedReqs; i++ {
-		go forced()
+		wait(waiting, "a forced refresh to wait for the one in flight")
 	}
+	close(holds[4].release)
 	forcedWg.Wait()
 	if reqs := originRequests.Load(); reqs != 4 {
-		t.Fatalf("concurrent forced refreshes queued up: %d origin fetch attempts for %d requests (expected 1, 4 in total)", reqs-3, forcedReqs)
+		t.Fatalf("concurrent forced refreshes queued up: %d origin fetch attempts, want 4 (one for the %d refreshes)", reqs, forcedReqs)
 	}
 }
