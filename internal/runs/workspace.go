@@ -5,6 +5,7 @@
 // Layout:
 //
 //	<repo>/.bottown/mirror.git          bare mirror of the bottown remote
+//	<repo>/.bottown/mirror.lock         serializes git writes to the mirror
 //	<repo>/.bottown/runs/<id>/          the run's worktree (the agent's cwd)
 //	<repo>/.bottown/runs/<id>.json      local record (0600; holds the key while running)
 //	<repo>/.bottown/runs/<id>.log       harness output
@@ -124,8 +125,29 @@ func appendLine(path, line string) error {
 	return err
 }
 
+// lockMirror takes the exclusive flock on the mirror's lock file, blocking
+// until no other process (or goroutine) holds it, and returns its release.
+// Every run worktree shares the mirror's config, refs and worktree list, and
+// git fails rather than waits on their lock files ("could not lock config
+// file", "cannot lock ref") when runs start together; bottown's git writes to
+// the mirror (fetch, worktree add and remove, shared config) take this lock.
+// Writes inside a run worktree's own files (config.worktree, its HEAD and
+// index) do not need it.
+func (w *Workspace) lockMirror() (release func(), err error) {
+	f, err := lockFile(filepath.Join(w.Dir, "mirror.lock"), true)
+	if err != nil {
+		return nil, fmt.Errorf("lock the runs mirror: %w", err)
+	}
+	return func() { _ = f.Close() }, nil
+}
+
 // Sync creates the mirror if needed and fetches it.
 func (w *Workspace) Sync(ctx context.Context) error {
+	release, err := w.lockMirror()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if _, err := os.Stat(filepath.Join(w.Mirror, "HEAD")); errors.Is(err, os.ErrNotExist) {
 		if _, err := Git(w.Dir, nil, "init", "-q", "--bare", w.Mirror); err != nil {
 			return err
@@ -177,7 +199,7 @@ func (w *Workspace) Sync(ctx context.Context) error {
 	if err := appendLine(filepath.Join(w.Mirror, "info", "exclude"), "/.crush/"); err != nil {
 		return err
 	}
-	_, err := GitCtx(ctx, w.Mirror, w.OwnerAuth, "fetch", "-q", "--prune", w.Remote)
+	_, err = GitCtx(ctx, w.Mirror, w.OwnerAuth, "fetch", "-q", "--prune", w.Remote)
 	return err
 }
 
@@ -216,6 +238,15 @@ func (w *Workspace) TmpDir(id string) string {
 // PrepareImplement frees branch from a kept run worktree before a new server
 // run is created. Detaching preserves the old HEAD and all working files.
 func (w *Workspace) PrepareImplement(branch string) error {
+	release, err := w.lockMirror()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return w.prepareImplement(branch)
+}
+
+func (w *Workspace) prepareImplement(branch string) error {
 	out, err := Git(w.Mirror, nil, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return err
@@ -253,7 +284,12 @@ func (w *Workspace) PrepareImplement(branch string) error {
 // AddImplement adds a worktree on branch, resuming the forge's branch if it
 // exists (a later run continues the same branch) or starting it from base.
 func (w *Workspace) AddImplement(id, branch, base string) (string, error) {
-	if err := w.PrepareImplement(branch); err != nil {
+	release, err := w.lockMirror()
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	if err := w.prepareImplement(branch); err != nil {
 		return "", err
 	}
 	dir := w.WorktreeDir(id)
@@ -263,7 +299,8 @@ func (w *Workspace) AddImplement(id, branch, base string) (string, error) {
 		upstream = branch
 		start = w.Remote + "/" + upstream
 	}
-	if _, err := Git(w.Mirror, nil, "worktree", "add", "-q", "-B", branch, dir, start); err != nil {
+	// --no-track: the upstream is set below, to the branch the run pushes to.
+	if _, err := Git(w.Mirror, nil, "worktree", "add", "-q", "--no-track", "-B", branch, dir, start); err != nil {
 		return "", err
 	}
 	for _, kv := range [][]string{
@@ -280,8 +317,40 @@ func (w *Workspace) AddImplement(id, branch, base string) (string, error) {
 // AddVerify adds a worktree detached at sha.
 func (w *Workspace) AddVerify(id, sha string) (string, error) {
 	dir := w.WorktreeDir(id)
-	_, err := Git(w.Mirror, nil, "worktree", "add", "-q", "--detach", dir, sha)
-	return dir, err
+	return dir, w.AddDetached(dir, sha)
+}
+
+// AddDetached adds a mirror worktree at dir, detached at sha.
+func (w *Workspace) AddDetached(dir, sha string) error {
+	release, err := w.lockMirror()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = Git(w.Mirror, nil, "worktree", "add", "-q", "--detach", dir, sha)
+	return err
+}
+
+// RemoveWorktree removes the mirror worktree at dir, discarding its changes.
+func (w *Workspace) RemoveWorktree(dir string) error {
+	release, err := w.lockMirror()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = Git(w.Mirror, nil, "worktree", "remove", "--force", dir)
+	return err
+}
+
+// Prune drops the mirror's records of worktrees whose directory is gone.
+func (w *Workspace) Prune() error {
+	release, err := w.lockMirror()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = Git(w.Mirror, nil, "worktree", "prune")
+	return err
 }
 
 // Configure gives a worktree the actor's identity and a credential helper
@@ -312,11 +381,9 @@ func (w *Workspace) Remove(id string) error {
 	}
 	dir := w.WorktreeDir(id)
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		_, err := Git(w.Mirror, nil, "worktree", "prune")
-		return err
+		return w.Prune()
 	}
-	_, err := Git(w.Mirror, nil, "worktree", "remove", "--force", dir)
-	return err
+	return w.RemoveWorktree(dir)
 }
 
 // RepoSettingsAt reads config.RepoSettingsFile at ref (e.g. origin/main) in

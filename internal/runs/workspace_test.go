@@ -1,9 +1,11 @@
 package runs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -162,5 +164,78 @@ func TestImplementWorktreeRemoteAndUpstream(t *testing.T) {
 	}
 	if got, err := Git(dir, nil, "rev-parse", "--abbrev-ref", "@{upstream}"); err != nil || got != "bottown/issue/7" {
 		t.Fatalf("resumed upstream = %q, %v; want bottown/issue/7", got, err)
+	}
+}
+
+// Runs started together share the mirror's config, refs and worktree list;
+// git fails rather than waits on their lock files, so bottown serializes its
+// writes to the mirror (#453).
+func TestConcurrentAddImplement(t *testing.T) {
+	tmp := t.TempDir()
+	forge := filepath.Join(tmp, "forge.git")
+	seed := filepath.Join(tmp, "seed")
+	top := filepath.Join(tmp, "main")
+	for _, dir := range []string{seed, top} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		dir  string
+		args []string
+	}{
+		{tmp, []string{"init", "-q", "--bare", "-b", "main", forge}},
+		{seed, []string{"init", "-q", "-b", "main"}},
+		{seed, []string{"config", "user.name", "owner"}},
+		{seed, []string{"config", "user.email", "owner@example.test"}},
+		{seed, []string{"commit", "-q", "--allow-empty", "-m", "initial"}},
+		{seed, []string{"remote", "add", "bottown", forge}},
+		{seed, []string{"push", "-q", "bottown", "main", "main:issue/1", "main:issue/3", "main:issue/5"}},
+		{top, []string{"init", "-q"}},
+	} {
+		if _, err := Git(c.dir, nil, c.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w, err := Open(top, "bottown", forge, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Sync(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	var wg sync.WaitGroup
+	dirs := make([]string, n)
+	errs := make([]error, n+2)
+	for i := range n {
+		wg.Go(func() {
+			dirs[i], errs[i] = w.AddImplement(fmt.Sprintf("r-c%d", i), fmt.Sprintf("issue/%d", i), "main")
+		})
+	}
+	// Fetches race the worktree adds too.
+	for i := range 2 {
+		wg.Go(func() { errs[n+i] = w.Sync(t.Context()) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("call %d: %v", i, err)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	for i, dir := range dirs {
+		want := "bottown/main"
+		if i%2 == 1 && i < 6 {
+			want = fmt.Sprintf("bottown/issue/%d", i)
+		}
+		if got, err := Git(dir, nil, "rev-parse", "--abbrev-ref", "@{upstream}"); err != nil || got != want {
+			t.Errorf("issue/%d upstream = %q, %v; want %s", i, got, err, want)
+		}
+		if got, err := Git(dir, nil, "symbolic-ref", "--short", "HEAD"); err != nil || got != fmt.Sprintf("issue/%d", i) {
+			t.Errorf("worktree %d branch = %q, %v", i, got, err)
+		}
 	}
 }
