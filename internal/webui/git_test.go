@@ -368,8 +368,12 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	fetchTimeout = 300 * time.Millisecond
 	defer func() { fetchTimeout = origTimeout }()
 
+	// The interval stays long except in step 3. Around its fetch, a status
+	// computation runs git commands that can take hundreds of milliseconds
+	// under -race on a loaded host, so a short interval could elapse before
+	// step 2's poll reaches the origin check (#376).
 	origInterval := originFetchInterval
-	originFetchInterval = 400 * time.Millisecond
+	originFetchInterval = time.Minute
 	defer func() { originFetchInterval = origInterval }()
 
 	cfg := Config{
@@ -442,8 +446,11 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 	}
 
 	// 3. Interval expiry: after originFetchInterval elapses, unforced status poll fetches origin again.
-	time.Sleep(450 * time.Millisecond)
+	originFetchInterval = 10 * time.Millisecond
+	time.Sleep(20 * time.Millisecond)
 	st, err = srv.ComputeStatus(ctx, false)
+	// Long again, so step 4's unforced poll never fetches origin itself.
+	originFetchInterval = time.Minute
 	if err != nil {
 		t.Fatalf("ComputeStatus after interval: %v", err)
 	}
