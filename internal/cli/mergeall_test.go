@@ -651,6 +651,37 @@ func TestMergeAllChecksFailReported(t *testing.T) {
 	}
 }
 
+// merge-all says what it is doing as it goes: the batch, the order, which
+// PR it lands and each landing step, so a long check does not look hung.
+func TestMergeAllPrintsProgress(t *testing.T) {
+	f := newFakeForge(t)
+	f.add(&fakePR{number: 1, author: "amy", headBranch: "issue/1", headSHA: "h1", baseBranch: "main"})
+	f.add(&fakePR{number: 2, author: "amy", headBranch: "issue/2", headSHA: "h2", baseBranch: "main"})
+
+	var out bytes.Buffer
+	m := newMergeAlly(t, f, &out, "", "")
+	if _, err := m.run(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"finding the approved pull requests into main\n",
+		"2 candidate(s): !1, !2\n",
+		"ordering !1, !2: trial-merging main into each\n",
+		"!1: landing (1 of 2) into main\n",
+		"!1: building the landing commit: main into h1\n",
+		"!1: running check and e2e at ",
+		"!1: checks passed",
+		"!2: landing (2 of 2) into main\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if i, j := strings.Index(out.String(), "!1: landing"), strings.Index(out.String(), "!1 at "); i < 0 || j < i {
+		t.Errorf("the landing line does not come before the outcome:\n%s", out.String())
+	}
+}
+
 func TestSyncMainCheckout(t *testing.T) {
 	dir := t.TempDir()
 	remote := filepath.Join(dir, "remote.git")

@@ -70,8 +70,14 @@ verifier on record is reported rather than repaired.
 
 ## Output and exit
 
-One line per pull request as it goes: where it landed, or the outcome and
-its reason. A table of the batch follows. `--dry-run` prints the order,
+merge-all prints each step as it starts, so a long check does not look
+hung: fetching the local `main`, finding the candidates and listing them,
+each round's trial merges, which pull request it lands (`!N: landing (1 of
+3) into main`), and, for that one, building the landing commit, each check
+group as it starts with its commands and its log, and the merge once the
+checks pass. A repair prints the flow's own lines. Then one line per pull
+request as it goes: where it landed, or the outcome and its reason. A
+table of the batch follows. `--dry-run` prints the order,
 each trial merge and its overlap count, and the local `main` step,
 touching nothing. The exit status is 0 when every candidate landed, 1 when
 any remains unmerged or on an error, or a named number was not a
