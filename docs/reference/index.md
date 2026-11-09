@@ -20,6 +20,7 @@ only their topic's file.
   - [The landing merge](runs/milestone-child-merge.md) (`POST /v1/forge/pr/merge`)
   - [Milestone run](runs/milestone-run.md)
   - [Scratch directories](runs/scratch-directories.md)
+  - [The launcher's build](runs/launcher-build.md)
   - [What run gc removes](runs/gc.md)
   - [Retro runs](runs/retro.md), including
     [windowed retros](runs/retro.md#windowed-retros)

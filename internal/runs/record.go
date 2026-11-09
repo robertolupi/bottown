@@ -45,15 +45,19 @@ type Record struct {
 	AllowSameFamily bool   `json:"allow_same_family,omitempty"`
 	Critical        bool   `json:"critical,omitempty"` // discuss: an adversarial review (--critical)
 	// Window is a windowed retro's window (#383); nil for other runs.
-	Window        *secrets.RetroWindow `json:"window,omitempty"`
-	Question      string               `json:"question,omitempty"` // discuss: the owner's question
-	Message       string               `json:"message,omitempty"`  // the owner's note for the prompt (--message)
-	Harness       string               `json:"harness"`
-	Spec          string               `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
-	Status        string               `json:"status"`
-	StopRequested bool                 `json:"stop_requested,omitempty"`
-	ExitCode      *int                 `json:"exit_code,omitempty"`
-	PID           int                  `json:"pid,omitempty"`
+	Window   *secrets.RetroWindow `json:"window,omitempty"`
+	Question string               `json:"question,omitempty"` // discuss: the owner's question
+	Message  string               `json:"message,omitempty"`  // the owner's note for the prompt (--message)
+	Harness  string               `json:"harness"`
+	Spec     string               `json:"spec,omitempty"` // the harness's model choice, from ACTOR:SPEC
+	// Build is the bottown binary that launched or leased the run (see
+	// LauncherBuild); nil when the binary knew no revision, or the run
+	// predates it.
+	Build         *secrets.Build `json:"build,omitempty"`
+	Status        string         `json:"status"`
+	StopRequested bool           `json:"stop_requested,omitempty"`
+	ExitCode      *int           `json:"exit_code,omitempty"`
+	PID           int            `json:"pid,omitempty"`
 	// LauncherLock is the file the launcher holds locked while it lives
 	// (see HoldLauncher); empty for runs started before it existed.
 	LauncherLock string     `json:"launcher_lock,omitempty"`

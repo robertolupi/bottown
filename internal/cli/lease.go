@@ -127,7 +127,7 @@ func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err erro
 		return err
 	}
 
-	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true, Critical: critical}
+	req := server.RunRequest{Kind: kind, Repo: repo, Interactive: true, Critical: critical, Build: runs.LauncherBuild(Version)}
 	if kind == policy.Verify {
 		req.PR = n
 	} else {
@@ -141,7 +141,7 @@ func runStart(cmd *cobra.Command, kind string, n int64, critical bool) (err erro
 	rec := runs.Record{
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, Base: run.Base, SHA: run.SHA,
-		Interactive: true, Critical: run.Critical, Harness: run.Harness, Started: time.Now().UTC(),
+		Interactive: true, Critical: run.Critical, Harness: run.Harness, Build: req.Build, Started: time.Now().UTC(),
 		Worktree: a.Worktree, Key: created.Key, ServerURL: a.ServerURL,
 		Attachments: leaseAttachments(a),
 	}

@@ -53,6 +53,9 @@ type RunRequest struct {
 	// landed on the default branch after this start (git:<ref>, last, a
 	// date or an age, retroWindow) instead of on an issue.
 	Since string `json:"since,omitempty"`
+	// Build is the launcher's bottown binary, recorded as given
+	// (runs.LauncherBuild); nil when it has none.
+	Build *secrets.Build `json:"build,omitempty"`
 }
 
 // ActorBusyMessage is in the error for a SerializeActor run refused
@@ -178,6 +181,9 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	if err := runs.ValidSpec(req.Spec); err != nil {
 		return run, runErr(http.StatusBadRequest, "%v", err)
 	}
+	if err := runs.ValidBuild(req.Build); err != nil {
+		return run, runErr(http.StatusBadRequest, "%v", err)
+	}
 	switch {
 	case req.Kind == policy.Consolidate && req.Debate == nil:
 		return run, runErr(http.StatusBadRequest, "consolidate runs need a debate")
@@ -197,7 +203,7 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 	now := time.Now().UTC()
 	run = secrets.Run{
 		ID: newRunID(), Kind: req.Kind, Actor: actor.Name, Family: actor.Family, Harness: actor.Harness, Spec: req.Spec,
-		Org: s.desired().Org, Repo: req.Repo, Interactive: req.Interactive,
+		Org: s.desired().Org, Repo: req.Repo, Interactive: req.Interactive, Build: req.Build,
 		Created: now, Expires: now.Add(ttl),
 	}
 	if req.Critical && req.Kind != policy.Discuss {

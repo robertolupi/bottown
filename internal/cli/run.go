@@ -383,7 +383,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		}
 	}
 
-	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate, Since: o.since}
+	req := server.RunRequest{Kind: kind, Actor: actor, Spec: spec, Repo: rc.repo, AllowSameFamily: o.allowSameFamily, Critical: o.critical, SerializeActor: o.serializeActor, Interactive: o.interactive, Debate: o.debate, Since: o.since, Build: runs.LauncherBuild(Version)}
 	if kind == policy.Verify {
 		req.PR, req.SHA = n, o.sha
 	} else {
@@ -457,7 +457,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		ID: run.ID, Kind: run.Kind, Actor: run.Actor, Family: run.Family, Instance: rc.inst.Name,
 		Repo: run.Org + "/" + run.Repo, Issue: run.Issue, PR: run.PR, Branch: run.Branch, Base: run.Base, SHA: run.SHA,
 		Interactive: o.interactive, AllowSameFamily: run.AllowSameFamily, Critical: run.Critical, Window: run.Window, Harness: harnessName, Spec: run.Spec,
-		PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
+		Build: req.Build, PID: os.Getpid(), LauncherLock: liveLock, Started: time.Now().UTC(),
 		Key: created.Key, ServerURL: rc.inst.ServerURL(), Question: o.question,
 		Message: strings.TrimSpace(o.message), Attachments: attachDir, TmpDir: tmpDir,
 		FlowNote: strings.TrimSpace(o.flowNote), ChecksPassed: o.checksPassed,
@@ -1366,6 +1366,13 @@ func printRunShow(out io.Writer, rec *runs.Record, sr *secrets.Run, srErr error,
 			fmt.Fprintf(out, ", ended %s", st.Dim.Render(rec.Ended.Local().Format(time.DateTime)))
 		}
 		fmt.Fprintln(out)
+		build := rec.Build
+		if build == nil && sr != nil {
+			build = sr.Build
+		}
+		if build != nil {
+			fmt.Fprintf(out, "        launched by bottown %s\n", build)
+		}
 	} else {
 		fmt.Fprintf(out, "%s  no record\n", st.Bold.Render("local:"))
 	}
@@ -1388,6 +1395,9 @@ func printRunShow(out io.Writer, rec *runs.Record, sr *secrets.Run, srErr error,
 			fmt.Fprint(out, ", purged (digest kept)")
 		}
 		fmt.Fprintln(out)
+		if rec == nil && sr.Build != nil {
+			fmt.Fprintf(out, "        launched by bottown %s\n", sr.Build)
+		}
 		if sr.Usage != nil {
 			fmt.Fprintf(out, "        usage %s\n", formatUsage(*sr.Usage))
 		}

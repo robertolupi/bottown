@@ -98,6 +98,9 @@ func TestModelShown(t *testing.T) {
 	if !strings.Contains(b.String(), "as agy (google, model gemini-3.8-flash)") {
 		t.Errorf("run show:\n%s", b.String())
 	}
+	if strings.Contains(b.String(), "launched by") {
+		t.Errorf("run show of a record without a build:\n%s", b.String())
+	}
 	b.Reset()
 	if err := printRunLs(colorOut(&b), []runs.Record{rec}, []secrets.Run{{ID: "r-srv", Actor: "crush", Spec: "openrouter:~deepseek/latest", Expires: time.Now().Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
@@ -110,6 +113,31 @@ func TestModelShown(t *testing.T) {
 	rec.Spec = ""
 	if got := handoverText(rec, runs.StatusSucceeded, 0, "ok"); strings.Contains(got, "model") {
 		t.Errorf("handover without a model:\n%s", got)
+	}
+}
+
+// run show says which bottown build launched the run: the local record's,
+// else the server's.
+func TestRunShowBuild(t *testing.T) {
+	local := &secrets.Build{Revision: "ed1b16b48e47"}
+	remote := &secrets.Build{Revision: "eee49e5b74dd", Dirty: true}
+	for _, tc := range []struct {
+		name string
+		rec  *runs.Record
+		sr   *secrets.Run
+		want string
+	}{
+		{"local", &runs.Record{ID: "r-1", Build: local}, &secrets.Run{ID: "r-1", Build: remote}, "launched by bottown ed1b16b48e47\n"},
+		{"local without, server with", &runs.Record{ID: "r-1"}, &secrets.Run{ID: "r-1", Build: remote}, "launched by bottown eee49e5b74dd (dirty)\n"},
+		{"server only", nil, &secrets.Run{ID: "r-1", Build: remote}, "launched by bottown eee49e5b74dd (dirty)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var b strings.Builder
+			printRunShow(&b, tc.rec, tc.sr, nil, "", "")
+			if got := b.String(); strings.Count(got, "launched by") != 1 || !strings.Contains(got, tc.want) {
+				t.Errorf("run show:\n%s\nwant one %q", got, tc.want)
+			}
+		})
 	}
 }
 
