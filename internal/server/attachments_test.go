@@ -21,6 +21,7 @@ import (
 func TestIssueAttachments(t *testing.T) {
 	shot := []byte("\x89PNG\r\n\x1a\nimage")
 	var downloads []string
+	commentReads := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/attachments/") {
 			downloads = append(downloads, r.URL.Path)
@@ -39,6 +40,9 @@ func TestIssueAttachments(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/comments") {
+			commentReads++
+		}
 		switch r.URL.Path {
 		case "/api/v1/repos/bottown/demo/issues/4", "/api/v1/repos/bottown/demo/issues/5":
 			_, _ = w.Write([]byte(`{"number":4,"title":"t","body":"b","state":"open","user":{"login":"owner"}}`))
@@ -103,6 +107,10 @@ func TestIssueAttachments(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "u1") {
 		t.Errorf("issue exposes attachment UUIDs: %s", w.Body)
+	}
+	// One comment list serves the comments and their attachments.
+	if len(is.Comments) != 1 || is.Comments[0].ID != 30 || is.Comments[0].Author != "owner" || commentReads != 1 {
+		t.Errorf("comments %+v, read %d times", is.Comments, commentReads)
 	}
 
 	// A listing failure leaves the issue readable.

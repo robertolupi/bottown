@@ -67,8 +67,9 @@ func TestCompleteLists(t *testing.T) {
 	}
 }
 
-// Forgejo ignores page/limit for issue comments, including long threads.
-func TestAllCommentsUnpaginated(t *testing.T) {
+// Forgejo ignores page/limit for issue comments, including long threads,
+// so one request reads them all, with their attachments.
+func TestIssueCommentsUnpaginated(t *testing.T) {
 	for _, size := range []int{0, 50, 101} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			calls := 0
@@ -78,20 +79,28 @@ func TestAllCommentsUnpaginated(t *testing.T) {
 					http.Error(w, "unexpected repeated request", 500)
 					return
 				}
-				if r.URL.Query().Get("page") != "1" || r.URL.Query().Get("limit") != "0" {
-					t.Errorf("pagination parameters: %s", r.URL.RawQuery)
+				if r.URL.Path != "/api/v1/repos/o/r/issues/1/comments" || r.URL.RawQuery != "" {
+					t.Errorf("request: %s?%s", r.URL.Path, r.URL.RawQuery)
 				}
-				items := make([]*sdk.Comment, size)
+				items := make([]map[string]any, size)
 				for i := range items {
-					items[i] = &sdk.Comment{ID: int64(i + 1)}
+					items[i] = map[string]any{"id": i + 1, "body": "b", "user": map[string]any{"login": "u"}}
+					if i == 0 {
+						items[i]["assets"] = []map[string]any{{"id": 7, "name": "f.txt", "type": "attachment"}}
+					}
 				}
 				_ = json.NewEncoder(w).Encode(items)
 			}))
 			defer srv.Close()
 			c := New(context.Background(), srv.URL, "")
-			items, _, err := c.AllComments("o", "r", 1, sdk.ListIssueCommentOptions{ListOptions: sdk.ListOptions{Page: 2, PageSize: 50}})
+			items, err := c.IssueComments("o", "r", 1)
 			if err != nil || len(items) != size || calls != 1 {
 				t.Fatalf("items=%d calls=%d err=%v", len(items), calls, err)
+			}
+			as := CommentAttachments(items)
+			if size > 0 && (items[0].Poster == nil || items[0].Poster.UserName != "u" || items[0].Body != "b" ||
+				len(as) != 1 || as[0].ID != 7 || as[0].Comment != 1) {
+				t.Errorf("first comment %+v, attachments %+v", items[0], as)
 			}
 		})
 	}

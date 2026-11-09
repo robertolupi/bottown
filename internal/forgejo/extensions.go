@@ -81,29 +81,60 @@ type Attachment struct {
 	Comment int64  `json:"-"` // the comment it is on; 0 for the description
 }
 
-// IssueAttachments lists the files attached to issue (or pull request)
-// index: its description's, then each comment's in order. Forgejo returns
-// an issue's comments in one page.
-func (c *Client) IssueAttachments(owner, repo string, index int64) ([]Attachment, error) {
-	base := fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo))
+// Comment is an issue (or pull request) comment with its attachments,
+// which the SDK's Comment lacks.
+type Comment struct {
+	ID      int64        `json:"id"`
+	Body    string       `json:"body"`
+	Poster  *sdk.User    `json:"user"`
+	Created time.Time    `json:"created_at"`
+	Assets  []Attachment `json:"assets"`
+}
+
+// IssueComments lists all the comments on issue (or pull request) index,
+// oldest first, in one request: Forgejo ignores page and limit there and
+// returns the complete list.
+func (c *Client) IssueComments(owner, repo string, index int64) ([]Comment, error) {
+	var out []Comment
+	err := c.do(http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repo), index), nil, &out)
+	return out, err
+}
+
+// DescriptionAttachments lists the files attached to the description of
+// issue (or pull request) index.
+func (c *Client) DescriptionAttachments(owner, repo string, index int64) ([]Attachment, error) {
 	var out []Attachment
-	if err := c.do(http.MethodGet, fmt.Sprintf("%s/%d/assets", base, index), nil, &out); err != nil {
-		return nil, err
-	}
-	var comments []struct {
-		ID     int64        `json:"id"`
-		Assets []Attachment `json:"assets"`
-	}
-	if err := c.do(http.MethodGet, fmt.Sprintf("%s/%d/comments", base, index), nil, &comments); err != nil {
-		return nil, err
-	}
+	err := c.do(http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/assets", url.PathEscape(owner), url.PathEscape(repo), index), nil, &out)
+	return out, err
+}
+
+// CommentAttachments are the files attached to comments, in their order,
+// each with the comment it is on.
+func CommentAttachments(comments []Comment) []Attachment {
+	var out []Attachment
 	for _, cm := range comments {
 		for _, a := range cm.Assets {
 			a.Comment = cm.ID
 			out = append(out, a)
 		}
 	}
-	return out, nil
+	return out
+}
+
+// IssueAttachments lists the files attached to issue (or pull request)
+// index: its description's, then each comment's in order. A caller that
+// also needs the comments lists them with IssueComments and collects
+// their files with CommentAttachments, rather than reading them twice.
+func (c *Client) IssueAttachments(owner, repo string, index int64) ([]Attachment, error) {
+	out, err := c.DescriptionAttachments(owner, repo, index)
+	if err != nil {
+		return nil, err
+	}
+	comments, err := c.IssueComments(owner, repo, index)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, CommentAttachments(comments)...), nil
 }
 
 // DownloadAttachment opens an attachment's contents. Forgejo serves them on

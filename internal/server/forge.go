@@ -489,7 +489,8 @@ func (s *Server) readIssue(ctx context.Context, p secrets.Principal, in Target, 
 	if !discussion {
 		return out, nil
 	}
-	cs, _, err := c.AllComments(org, repo, n, sdk.ListIssueCommentOptions{})
+	// The comments carry their attachments: one comment list serves both.
+	cs, err := c.IssueComments(org, repo, n)
 	if err != nil {
 		return IssueOut{}, err
 	}
@@ -498,30 +499,36 @@ func (s *Server) readIssue(ctx context.Context, p secrets.Principal, in Target, 
 		out.Comments = append(out.Comments, CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created})
 	}
 	out.Attachments = []AttachmentOut{}
-	as, err := issueFiles(c, org, repo, n)
+	as, err := c.DescriptionAttachments(org, repo, n)
 	if err != nil {
-		out.AttachmentsError = err.Error()
+		out.AttachmentsError = fmt.Sprintf("listing attachments: %v", err)
+		return out, nil
 	}
-	for _, a := range as {
+	for _, a := range uploaded(append(as, forgejo.CommentAttachments(cs)...)) {
 		out.Attachments = append(out.Attachments, AttachmentOut{ID: a.ID, Name: a.Name, Size: a.Size, Comment: a.Comment, Created: a.Created})
 	}
 	return out, nil
 }
 
-// issueFiles lists an issue's uploaded attachments; external links, which
-// Forgejo also lists as assets, have no bytes to fetch.
+// issueFiles lists an issue's uploaded attachments.
 func issueFiles(c *forgejo.Client, org, repo string, n int64) ([]forgejo.Attachment, error) {
 	as, err := c.IssueAttachments(org, repo, n)
 	if err != nil {
 		return nil, fmt.Errorf("listing attachments: %w", err)
 	}
+	return uploaded(as), nil
+}
+
+// uploaded keeps the uploaded files of as; external links, which Forgejo
+// also lists as assets, have no bytes to fetch.
+func uploaded(as []forgejo.Attachment) []forgejo.Attachment {
 	files := as[:0]
 	for _, a := range as {
 		if a.Type == "" || a.Type == "attachment" {
 			files = append(files, a)
 		}
 	}
-	return files, nil
+	return files
 }
 
 // Download is an attachment's contents, for the caller to stream and close.
