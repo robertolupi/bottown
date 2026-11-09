@@ -35,13 +35,6 @@ func (c *Client) AllPullRequests(org, repo string, opts sdk.ListPullRequestsOpti
 	})
 }
 
-// AllComments returns all matching comments in one request. Forgejo's issue
-// comments endpoint ignores page/limit and returns the complete list.
-func (c *Client) AllComments(org, repo string, index int64, opts sdk.ListIssueCommentOptions) ([]*sdk.Comment, *sdk.Response, error) {
-	opts.ListOptions = sdk.ListOptions{}
-	return c.ListIssueComments(org, repo, index, opts)
-}
-
 // AllReviews returns every page, retaining the supplied filters.
 func (c *Client) AllReviews(org, repo string, index int64, opts sdk.ListPullReviewsOptions) ([]*sdk.PullReview, *sdk.Response, error) {
 	return allPages(func(page sdk.ListOptions) ([]*sdk.PullReview, *sdk.Response, error) {
