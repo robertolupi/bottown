@@ -30,7 +30,10 @@ func TestKeychainTimesOutOnAPrompt(t *testing.T) {
 	if err == nil {
 		t.Fatal("Get succeeded on a security that never answers")
 	}
-	if d := time.Since(start); d > 5*time.Second {
+	// Well short of the script's 30s sleep, so the timeout ended it, and
+	// long enough for a loaded host to start and kill a new script, which
+	// macOS's security scan can delay for seconds (see TestKeychainResults).
+	if d := time.Since(start); d > 20*time.Second {
 		t.Errorf("Get took %s; the timeout is 200ms", d)
 	}
 	for _, want := range []string{"bottown-test/api-key", "no answer"} {

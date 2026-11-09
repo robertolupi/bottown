@@ -106,7 +106,9 @@ func TestActions_MilestoneRunStartAndStop(t *testing.T) {
 		t.Errorf("output %q", out)
 	}
 	var args, pidText []byte
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	// A new script's first exec can wait seconds on macOS's security scan
+	// on a loaded host: these deadlines only bound a wait for it.
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		args, _ = os.ReadFile(filepath.Join(top, "args"))
 		pidText, _ = os.ReadFile(filepath.Join(top, "pid"))
 		if len(args) > 0 && len(pidText) > 0 {
@@ -134,7 +136,7 @@ func TestActions_MilestoneRunStartAndStop(t *testing.T) {
 		t.Fatalf("stop: %q, %v", out, err)
 	}
 	// The whole group got the signal: the script and its sleep exit.
-	for deadline := time.Now().Add(5 * time.Second); syscall.Kill(-rec.PID, 0) == nil; time.Sleep(20 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); syscall.Kill(-rec.PID, 0) == nil; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(-rec.PID, syscall.SIGKILL)
 			t.Fatal("the milestone run's process group is still alive")

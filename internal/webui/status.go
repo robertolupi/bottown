@@ -143,6 +143,10 @@ var fetchTimeout = 5 * time.Second
 // and rapid unforced page reloads reuse cached origin status if fetched recently.
 var originFetchInterval = 1 * time.Minute
 
+// statusWaitHook, when set by a test, runs when ComputeStatus is about to
+// wait for another caller's computation.
+var statusWaitHook func()
+
 func (s *Server) snapshot() *UIStatusResponse {
 	s.lastStatusMu.RLock()
 	defer s.lastStatusMu.RUnlock()
@@ -170,12 +174,18 @@ func (s *Server) ComputeStatus(ctx context.Context, forceFetch bool) (*UIStatusR
 			return nil, ctx.Err()
 		default:
 		}
+		waitStart := time.Now()
+		if statusWaitHook != nil {
+			statusWaitHook()
+		}
 		s.statusMu.Lock()
 		// If another computation just finished and we have a snapshot:
-		// for unforced callers, or forced callers where origin was just fetched,
-		// return the fresh snapshot.
+		// for unforced callers, or forced callers where origin was fetched
+		// while they waited or just before, return the fresh snapshot.
+		// "While they waited" holds however long the computation took on a
+		// loaded host; the 2s window covers a fetch that ended just before.
 		if snap := s.snapshot(); snap != nil {
-			if !forceFetch || time.Since(s.lastFetch) < 2*time.Second {
+			if !forceFetch || s.lastFetch.After(waitStart) || time.Since(s.lastFetch) < 2*time.Second {
 				s.statusMu.Unlock()
 				return snap, nil
 			}

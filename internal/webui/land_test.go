@@ -71,7 +71,9 @@ func TestLandingActionLifecycle(t *testing.T) {
 	if _, err := s.ExecuteStop(context.Background(), "land-15"); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(2 * time.Second)
+	// The record goes when the signalled script has exited: as generous a
+	// deadline as the log's, for the same loaded host.
+	deadline = time.Now().Add(10 * time.Second)
 	for s.getLanding(15) != nil && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
