@@ -39,6 +39,11 @@ var (
 	src  string // repo root
 )
 
+// binVersion is the e2e binary's -ldflags version, as make build's git
+// describe --dirty gives it: with -buildvcs=false it is the build the
+// runs it launches record.
+const binVersion = "0e2e0e2e0e2e-dirty"
+
 func TestMain(m *testing.M) {
 	// Run inside a bottown run, the environment carries the run's key and
 	// prod's URLs (BOTTOWN_RUN_*, BOTTOWN_MCP_URL, ...). Every subprocess
@@ -55,7 +60,7 @@ func TestMain(m *testing.M) {
 	_, file, _, _ := runtime.Caller(0)
 	src = filepath.Dir(filepath.Dir(file))
 	bin = filepath.Join(dir, "bottown")
-	if out, err := exec.Command("go", "build", "-buildvcs=false", "-o", bin, filepath.Join(src, "cmd", "bottown")).CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X github.com/robertolupi/bottown/internal/cli.Version="+binVersion, "-o", bin, filepath.Join(src, "cmd", "bottown")).CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	home = filepath.Join(dir, "home")
@@ -2055,8 +2060,10 @@ func TestE2E(t *testing.T) {
 			t.Errorf("after gc: %d ended demo runs (kimi %v), want only kimi's", n, kimi)
 		}
 		// Their digests survive: the launcher's with the harness's usage, and
-		// the actor-worktree run's with its handover.
+		// the actor-worktree run's with its handover; and the build that
+		// launched it.
 		if out := a.mustCmd(demo, "run", "show", implRun); !strings.Contains(out, "ended succeeded, purged (digest kept)") ||
+			!strings.Contains(out, "launched by bottown 0e2e0e2e0e2e (dirty)") ||
 			!strings.Contains(out, "usage 100 in, 7 out tokens · $0.2500 · 3 turns") || !strings.Contains(out, "summary implemented by script") {
 			t.Errorf("run show of a purged run:\n%s", out)
 		}

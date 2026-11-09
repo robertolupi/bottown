@@ -101,6 +101,28 @@ type Run struct {
 	// on the default branch after Base, up to the run's SHA; nil for
 	// other runs.
 	Window *RetroWindow `json:"window,omitempty"`
+	// Build is the bottown binary that launched the run, as the launcher
+	// reported it; nil when it reported none (an older launcher, or a
+	// binary without VCS information).
+	Build *Build `json:"build,omitempty"`
+}
+
+// Build is a bottown binary's source: its commit, and whether the tree it
+// was built from had uncommitted changes. A retro tells "the fix did not
+// work" from "the fix was not installed yet" by it.
+type Build struct {
+	// Revision is the commit, in full from the Go toolchain's VCS stamp, or
+	// as git describe gave it to the Makefile's -ldflags.
+	Revision string `json:"revision"`
+	Dirty    bool   `json:"dirty,omitempty"`
+}
+
+// String is the revision, with " (dirty)" when the tree was.
+func (b Build) String() string {
+	if b.Dirty {
+		return b.Revision + " (dirty)"
+	}
+	return b.Revision
 }
 
 // RetroWindow is a windowed retro's window: the commits on the default
