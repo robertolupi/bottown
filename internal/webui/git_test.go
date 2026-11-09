@@ -356,8 +356,13 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 
 	// A hanging HTTP server simulates an unreachable origin (e.g. captive portal or offline).
 	var originRequests atomic.Int32
+	originArrived := make(chan struct{}, 16)
 	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		originRequests.Add(1)
+		select {
+		case originArrived <- struct{}{}:
+		default:
+		}
 		<-r.Context().Done()
 	}))
 	defer hangSrv.Close()
@@ -490,20 +495,35 @@ func TestStatus_UnreachableOriginTimeoutAndQueueing(t *testing.T) {
 		t.Fatalf("expected 3 total origin fetch attempts after forced refresh, got %d", reqs)
 	}
 
-	// 5. Concurrent forced refreshes: rapid forced refreshes coalesce within 2s and do not queue.
+	// 5. Concurrent forced refreshes: forced refreshes that arrive while one is
+	// fetching origin wait for it and take its snapshot instead of each
+	// fetching origin in turn. The check counts origin fetches rather than
+	// timing the step: the winner's status computation runs several git
+	// commands besides the bounded fetch, and under host load they alone can
+	// exceed any tight wall-clock bound (#445).
+	for len(originArrived) > 0 {
+		<-originArrived
+	}
 	const forcedReqs = 3
 	var forcedWg sync.WaitGroup
 	forcedWg.Add(forcedReqs)
-	start = time.Now()
-	for i := 0; i < forcedReqs; i++ {
-		go func() {
-			defer forcedWg.Done()
-			_, _ = srv.ComputeStatus(ctx, true)
-		}()
+	forced := func() {
+		defer forcedWg.Done()
+		_, _ = srv.ComputeStatus(ctx, true)
+	}
+	go forced()
+	// Start the others once the first holds statusMu and is fetching origin,
+	// so they find the computation in flight.
+	select {
+	case <-originArrived:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("first forced refresh never reached origin")
+	}
+	for i := 1; i < forcedReqs; i++ {
+		go forced()
 	}
 	forcedWg.Wait()
-	forcedElapsed := time.Since(start)
-	if forcedElapsed >= 700*time.Millisecond {
-		t.Fatalf("concurrent forced refreshes queued up: took %v (expected < 700ms for %d requests with 300ms timeout)", forcedElapsed, forcedReqs)
+	if reqs := originRequests.Load(); reqs != 4 {
+		t.Fatalf("concurrent forced refreshes queued up: %d origin fetch attempts for %d requests (expected 1, 4 in total)", reqs-3, forcedReqs)
 	}
 }
