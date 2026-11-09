@@ -252,6 +252,38 @@ func TestIssueSizeKeepsPROutcome(t *testing.T) {
 	}
 }
 
+// An estimate run sizes its issue, and its estimate is the run's outcome,
+// whatever was recorded before: unlike an implement run's, an estimate
+// run's outcome is its estimate.
+func TestIssueSizeEstimateRun(t *testing.T) {
+	run := implementRun("r-est")
+	run.Kind, run.Branch, run.SHA = policy.Estimate, "", "c0ffee"
+	f := &sizeForge{}
+	s := sizeServer(t, f, &run)
+	if _, err := s.Store.SetOutcome(run.ID, secrets.OutcomeCommented); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.opIssueSize(t.Context(), secrets.Principal{Actor: "claude", Run: &run}, sizeM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != secrets.OutcomeSized || got.Label != "size/M" {
+		t.Errorf("out = %+v", got)
+	}
+	rec, ok := estimate.Parse(f.comments[0]["body"].(string))
+	if !ok || rec.Role != policy.Estimate || rec.Run != run.ID || rec.SHA != "c0ffee" {
+		t.Errorf("record = %+v, %v", rec, ok)
+	}
+	if o := outcome(t, s, run.ID); o != secrets.OutcomeSized {
+		t.Errorf("outcome = %q, want %q", o, secrets.OutcomeSized)
+	}
+	other := sizeM()
+	other.Number = 7
+	if _, err := s.opIssueSize(t.Context(), secrets.Principal{Actor: "claude", Run: &run}, other); errStatus(err) != http.StatusForbidden {
+		t.Errorf("another issue: err = %v, want 403", err)
+	}
+}
+
 func TestIssueSizeOwner(t *testing.T) {
 	f := &sizeForge{}
 	s := sizeServer(t, f, nil)

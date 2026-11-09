@@ -8,7 +8,7 @@ import (
 
 // The sizing guide (docs/reference/sizing.md): how an agent sizes an issue,
 // rendered from prompts/sizing.md into the prompts of runs that size issues
-// (plan runs today). Estimates record the version of the guide they
+// (plan, implement and estimate runs). Estimates record the version of the guide they
 // followed, so estimates made by different texts can be told apart.
 
 // SizingGuideVersion is the first 12 hex digits of the SHA-256 of

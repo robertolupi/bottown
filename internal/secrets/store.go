@@ -53,7 +53,7 @@ type APIKey struct {
 // the forge holds.
 type Run struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate
+	Kind    string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate | estimate
 	Actor   string `json:"actor"`
 	Family  string `json:"family"`
 	Harness string `json:"harness,omitempty"` // which CLI runs the actor

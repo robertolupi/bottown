@@ -82,6 +82,9 @@ bottown run end [--failed] --summary-file -
   the default branch, written to its own wiki page
   (`YYYYMMDD-<sha>-retrospective`). Like discuss runs, they cannot push,
   open PRs or review; they may file follow-up issues.
+- **Estimate runs** (`bottown estimate`, the owner's) size one issue by
+  the sizing guide and record it with `issue size`. Like discuss runs,
+  they cannot push, open PRs or review.
 - **Plan runs** write a milestone plan for a kickoff issue: they push
   `issue/<n>` with only that file and open a PR. They cannot file issues,
   review or merge.

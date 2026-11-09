@@ -35,6 +35,30 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// ParseEntries is Parse's grammar without the family rule: a pool of one
+// family is valid, and its refusals are Parse's.
+func TestParseEntries(t *testing.T) {
+	got, err := ParseEntries("claude=2,opus:sonnet=*", testActors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{
+		{Actor: "claude", Family: "anthropic", Limit: 2},
+		{Actor: "opus", Model: "sonnet", Family: "anthropic", Limit: 0},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("entries = %#v, want %#v", got, want)
+	}
+	if _, err := Parse("claude=2,opus=1", testActors); err == nil {
+		t.Error("Parse accepted a single-family pool")
+	}
+	for _, spec := range []string{"", "claude", "nobody=1", "claude=0", "claude=1,claude=2"} {
+		if _, err := ParseEntries(spec, testActors); err == nil {
+			t.Errorf("ParseEntries(%q) succeeded", spec)
+		}
+	}
+}
+
 func TestParseRefusals(t *testing.T) {
 	tests := []struct {
 		name  string

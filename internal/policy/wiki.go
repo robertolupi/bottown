@@ -47,7 +47,7 @@ type WikiRule struct {
 // retro's page by DecideWikiRetroPage, before these.
 var WikiRules = []WikiRule{
 	{Name: "wiki-owner", Who: []string{WikiOwner}, Pattern: "/**", Read: true, Write: true},
-	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro, Consolidate}, Pattern: "/**", Read: true},
+	{Name: "wiki-read", Who: []string{WikiActor, Implement, Verify, Discuss, Plan, Retro, Consolidate, Estimate}, Pattern: "/**", Read: true},
 }
 
 // WikiRound is a run's place in a debate round, for the round file rules.

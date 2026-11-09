@@ -2272,6 +2272,68 @@ func TestE2E(t *testing.T) {
 		if out := a.mustCmd(demo, "run", "ls"); !strings.Contains(out, "discuss") || !strings.Contains(out, "succeeded") {
 			t.Errorf("run ls after discuss:\n%s", out)
 		}
+
+		// bottown estimate: one estimate run per named issue, sizing it with
+		// issue size; a sized issue is skipped, and a run that records no
+		// estimate fails.
+		var unsized, sized, idle struct{ Number int64 }
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "estimate me", "body": "two contracts"}, &unsized)
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "estimate sized", "body": "already sized"}, &sized)
+		a.mustAPI(owner, "POST", "/repos/bottown/demo/issues", map[string]string{"title": "estimate nothing", "body": "idle"}, &idle)
+		a.mustAPI(owner, "POST", fmt.Sprintf("/repos/bottown/demo/issues/%d/labels", sized.Number), map[string][]string{"labels": {"size/S"}}, nil)
+		estimateScript := "set -e; grep -q '\\*\\*estimator\\*\\*' \"$BOTTOWN_PROMPT_FILE\"; " +
+			"if grep -q 'estimate nothing' \"$BOTTOWN_PROMPT_FILE\"; then echo idle; exit 0; fi; " +
+			"if git push -q " + remote + " HEAD:refs/heads/estimate-push 2>/dev/null; then echo pushed; exit 9; fi; " +
+			"size=L; if grep -q 'estimate sized' \"$BOTTOWN_PROMPT_FILE\"; then size=M; fi; " +
+			"printf 'deciding_factor = \"two contracts\"\\nconfidence = \"medium\"\\nscope = \"as filed\"\\n' | " + bin + " issue size $size --file -"
+		out, err = withHarness(estimateScript, "estimate", "--actors", "claude,codex", fmt.Sprint(unsized.Number), fmt.Sprint(sized.Number), fmt.Sprint(idle.Number))
+		if err == nil {
+			t.Errorf("estimate with an idle run succeeded:\n%s", out)
+		}
+		for _, want := range []string{
+			fmt.Sprintf("#%d is already size/S; skipped", sized.Number),
+			"sized", "two contracts", "no estimate recorded", "1 of 2 run(s) recorded no estimate",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("estimate output lacks %q:\n%s", want, out)
+			}
+		}
+		labels := func(n int64) string {
+			var is struct{ Labels []struct{ Name string } }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d", n), nil, &is)
+			var names []string
+			for _, l := range is.Labels {
+				names = append(names, l.Name)
+			}
+			return strings.Join(names, ",")
+		}
+		lastComment := func(n int64) string {
+			var cs []struct{ Body string }
+			a.mustAPI(owner, "GET", fmt.Sprintf("/repos/bottown/demo/issues/%d/comments", n), nil, &cs)
+			if len(cs) == 0 {
+				return ""
+			}
+			return cs[len(cs)-1].Body
+		}
+		if l := labels(unsized.Number); l != "size/L" {
+			t.Errorf("estimated issue's labels = %q, want size/L", l)
+		}
+		if c := lastComment(unsized.Number); !strings.Contains(c, "**Estimate: size/L**") || !strings.Contains(c, "role = 'estimate'") {
+			t.Errorf("estimated issue's last comment (the estimate, no handover):\n%s", c)
+		}
+		if c := lastComment(idle.Number); !strings.Contains(c, "· estimate · ") || !strings.Contains(c, "**failed**") {
+			t.Errorf("idle estimate's handover:\n%s", c)
+		}
+		// --again posts a second opinion, and the label stays.
+		if out, err := withHarness(estimateScript, "estimate", "--actors", "codex", "--again", fmt.Sprint(sized.Number)); err != nil || !strings.Contains(out, "kept size/S") {
+			t.Errorf("estimate --again: %v\n%s", err, out)
+		}
+		if l := labels(sized.Number); l != "size/S" {
+			t.Errorf("second opinion changed the labels: %q", l)
+		}
+		if c := lastComment(sized.Number); !strings.Contains(c, "_Not applied: the issue is already size/S._") {
+			t.Errorf("second opinion comment:\n%s", c)
+		}
 	})
 
 	t.Run("a milestone child runs on its milestone branch", func(t *testing.T) {

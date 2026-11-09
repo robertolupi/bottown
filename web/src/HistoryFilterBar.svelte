@@ -35,6 +35,7 @@
     <option value="plan">Plan</option>
     <option value="retro">Retro</option>
     <option value="consolidate">Consolidate</option>
+    <option value="estimate">Estimate</option>
   </select>
   <select class="input input-sm select-sm" bind:value={filters.status}>
     <option value="">All Statuses</option>
