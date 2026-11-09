@@ -162,6 +162,10 @@ Say what the records cannot tell you rather than guessing.
   files in the worktree: bottown keeps the worktree when you leave changes
   in it, and the owner decides what to do with them.
 - `{{.Remote}}` is the bottown forge.
+- {{if .TmpDir}}Write scratch files, the retro's draft among them, with your
+  file tools to `{{.TmpDir}}`, this run's scratch directory, and name it
+  literally in commands, not as a variable.{{else}}Write scratch files,
+  the retro's draft among them, under `$TMPDIR`.{{end}}
 {{- if .Window}}
 - Write the retro to the wiki page `{{.WindowPage}}`, the only page this
   run may write: `{{.Bottown}} wiki put {{.WindowPage}} --file F`. If it
