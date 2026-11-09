@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/activity"
+	"github.com/robertolupi/bottown/internal/diffstat"
 	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
@@ -66,7 +67,7 @@ func sampleFacts() Facts {
 			{Number: 7, State: "closed", Labels: []string{"size/L", "mode/ask"}, Milestone: &server.MilestoneItem{Title: "M1"}, Created: at(0), Closed: ptr(at(100))},
 			{Number: 8, State: "open", Milestone: &server.MilestoneItem{Title: "M1"}, Created: at(50)},
 		},
-		Diffs: map[int64]string{9: "diff --git a/go.sum b/go.sum\n@@ -1 +1,2 @@\n x\n+y\ndiff --git a/a.go b/a.go\n@@ -1 +1,4 @@\n-a\n-b\n+c\n+d\n+e\n"},
+		DiffStats: map[int64][]diffstat.File{9: {{Path: "go.sum", Added: 1, Collapsed: true}, {Path: "a.go", Added: 3, Deleted: 2}}},
 	}
 }
 

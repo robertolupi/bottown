@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/robertolupi/bottown/internal/secrets"
 	serverapi "github.com/robertolupi/bottown/internal/server"
@@ -69,6 +70,21 @@ func (s *Server) issue(ctx context.Context, n int64, comments bool) (*serverapi.
 		return nil, err
 	}
 	return &is, nil
+}
+
+// repoComments lists the comments on the repository's issues created or
+// edited at or after since, all of them for a zero since.
+func (s *Server) repoComments(ctx context.Context, since time.Time) ([]serverapi.RepoCommentOut, error) {
+	_, repo := s.orgAndRepo()
+	q := url.Values{"repo": {repo}}
+	if !since.IsZero() {
+		q.Set("since", since.UTC().Format(time.RFC3339))
+	}
+	var out []serverapi.RepoCommentOut
+	if err := s.callServer(ctx, http.MethodGet, "/v1/forge/comments?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // issueDependencies lists the issues that block issue n.

@@ -192,6 +192,15 @@ type CommentOut struct {
 	Created time.Time `json:"created"`
 }
 
+// RepoCommentOut is a comment on one of a repository's issues, as the
+// repository-wide comment list gives it (GET /v1/forge/comments).
+type RepoCommentOut struct {
+	Issue int64 `json:"issue"`
+	CommentOut
+	// Updated is the comment's last edit, its creation if never edited.
+	Updated time.Time `json:"updated"`
+}
+
 // PROut is a pull request with what a reviewer needs.
 type PROut struct {
 	Number     int64  `json:"number"`
@@ -660,6 +669,35 @@ func (s *Server) opIssueList(ctx context.Context, p secrets.Principal, in IssueL
 	out := make([]IssueItem, 0, len(issues))
 	for _, is := range issues {
 		out = append(out, NewIssueItem(is, in.Bodies))
+	}
+	return out, nil
+}
+
+// opRepoComments lists the comments on a repository's issues created or
+// edited at or after since (all of them for a zero since), oldest first,
+// in one read of the repository's comments rather than one per issue. Pull
+// requests' comments are left out.
+func (s *Server) opRepoComments(ctx context.Context, p secrets.Principal, repoName string, since time.Time) ([]RepoCommentOut, error) {
+	org, repo, err := s.resolveRepo(p, repoName)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.actorClient(ctx, p.Actor)
+	if err != nil {
+		return nil, err
+	}
+	cs, err := c.RepoComments(org, repo, since)
+	if forgejo.IsRawNotFound(err) {
+		return nil, ferr(http.StatusNotFound, "repository %s/%s not found", org, repo)
+	} else if err != nil {
+		return nil, err
+	}
+	out := []RepoCommentOut{}
+	for _, cm := range cs {
+		if n := cm.Issue(); n > 0 {
+			out = append(out, RepoCommentOut{Issue: n, Updated: cm.Updated,
+				CommentOut: CommentOut{ID: cm.ID, Author: login(cm.Poster), Body: cm.Body, Created: cm.Created}})
+		}
 	}
 	return out, nil
 }

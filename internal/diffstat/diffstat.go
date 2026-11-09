@@ -1,7 +1,8 @@
 // Package diffstat parses a unified diff into its files: each file's path,
 // added and deleted line counts, and whether it is binary or a lock file
-// whose content is collapsed. `pr show` and the statistics' measured size
-// both read a diff through Parse, so they count the same lines.
+// whose content is collapsed. `pr show` reads a diff through Parse; the
+// statistics' measured size counts the same lines from git diff --numstat
+// (server.opPRDiffStat), or through Parse where git is not available.
 package diffstat
 
 import (

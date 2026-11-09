@@ -5,7 +5,8 @@ window, for the web UI's timeline and statistics views: both call
 `activity.Load` (through `webui.Server.ComputeActivity`) rather than each
 deriving on its own, and the browser shows what it returns. It keeps no
 store: every fact is read again from the server's run records and the
-forge, apart from an in-memory cache of issues (see Reads below).
+forge, apart from an in-memory cache of comments and closed PRs' reads
+(see Reads below).
 
 - **Runs** that overlap the window, purged ones included, each with its
   thread key and its usage. A run's usage is reported when the harness
@@ -38,21 +39,30 @@ forge, apart from an in-memory cache of issues (see Reads below).
 **Reads.** Load reads the run list (all of it, so threads group as History
 groups them and a wait that began before the window ends where it did),
 the PR list and the issue list once. It then reads each PR of the window's
-threads once and its gate once, and, once each, the comments of the
-issues that can hold a stop or a wait in the window: those of the window's
-threads, those updated in the window (a new stop updates its issue), and
-every open one, whose wait may have begun before the window, even before
-the flow's first run. That is 3 + issues + 2 × PRs calls, for a 7-day
-window or any other; after the three lists they run eight at a time. The
-web UI keeps the issues it read in memory, and the reviews and gates of
-merged and closed PRs, each as of the issue's or PR's `updated` time, and
-reads one again only when that has changed. An open PR's are read on every
-load: the flow's check statuses land on its commits without updating it.
-A late review or status on a closed PR shows once something updates the
-PR. The cache only saves reads, and a restart empties it. A failed issue
-or PR read leaves its facts out and is named in `incomplete`, sorted. The
-statistics reuse the issue list the activity read, and read the merged
-PRs' diffs, eight at a time, once each (kept in memory too).
+threads once and its gate once, and the repository's issue comments, where
+the stops are, in one read (`GET /v1/forge/comments?since=`): every
+comment the first time, then only those created or edited since the latest
+the cache holds, less a minute. All of the comments count, since a wait may
+have begun before the window, even before the flow's first run. That is
+4 + 2 × PRs calls, for a 7-day window or any other; after the three lists
+they run eight at a time. The server reads the comments from Forgejo's
+repository-wide list page by page, with both `page` and `limit` (Forgejo
+ignores `limit` without `page`, and caps a page at its maximum), until a
+page is empty or brings nothing new. The web UI keeps the comments in
+memory, and the reviews and gates of merged and closed PRs as of the PR's
+`updated` time, reading one again only when that has changed. An open
+PR's are read on every load: the flow's check statuses land on its commits
+without updating it. A late review or status on a closed PR shows once
+something updates the PR. A comment deleted from the forge stays in the
+cache, since the comment read lists only new and edited ones. The cache
+only saves reads, and a restart empties it. A failed read leaves its facts
+out (for the comments, those not yet cached) and is named in `incomplete`,
+sorted. The statistics reuse the issue list the activity read, and read
+the merged PRs' diffstats (`GET /v1/forge/pr/diffstat`), eight at a time,
+once each (kept in memory too). The server counts a diffstat with `git
+diff --numstat` in Forgejo's repository, from the PR's merge base to its
+head, the range Forgejo's diff shows, and parses Forgejo's whole diff only
+when the repository or those commits are not there.
 
 **Timeline.** `GET /api/timeline?since=&until=` (RFC 3339; `since`
 defaults to six hours before `until`, and `until` to now, which leaves the
@@ -80,12 +90,12 @@ in an open window the view grows it with the clock.
 **Statistics.** `GET /api/stats?since=&until=` serves the web UI's Stats
 tab (`webui.ComputeStats`, `internal/stats`), built on the same activity
 derivation plus the issues' size labels and milestones and the merged PRs'
-diffs. Its window parses as the timeline's, but `since` defaults to thirty
+diffstats. Its window parses as the timeline's, but `since` defaults to thirty
 days before `until`. It follows the ground rules of #309: every number
 carries its coverage, missing data stays missing rather than becoming
 zero, and tokens are never added up across model families. A cold load
-reads every issue and PR in the window from the forge and can take tens of
-seconds: the tab shows a spinner until the first answer, and an
+reads every comment, and every PR in the window, from the forge and can
+take tens of seconds: the tab shows a spinner until the first answer, and an
 "Updating…" spinner in its header while a refresh runs over the numbers
 already shown.
 

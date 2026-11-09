@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,9 +63,7 @@ func stopComment(id int64, reason flow.StopReason, pr int64, h float64) server.C
 	return server.CommentOut{ID: id, Author: "rlupi", Body: body, Created: at(h)}
 }
 
-func issueWith(n int64, comments ...server.CommentOut) *server.IssueOut {
-	return &server.IssueOut{Number: n, Comments: comments}
-}
+func commentsOf(cs ...server.CommentOut) []server.CommentOut { return cs }
 
 // listed is issue n's entry in the issue list, open.
 func listed(n int64, created, updated float64) *server.IssueItem {
@@ -234,7 +233,7 @@ func TestStopReasons(t *testing.T) {
 		server.CommentOut{ID: 101, Body: "looks good to me", Created: at(1.6)})
 	a := Derive(week, Facts{
 		Runs: []server.RunItem{run("r-impl", "implement", 7, 0, 1, 1.4)}, PRs: []*server.PRItem{pr(12, 7, 1.2)},
-		Issues: map[int64]*server.IssueOut{7: issueWith(7, comments...)},
+		Comments: map[int64][]server.CommentOut{7: commentsOf(comments...)},
 	}, week.Until)
 	th := thread(t, a, "flow:issue:7:pr:12")
 	var got []flow.StopReason
@@ -321,7 +320,7 @@ func TestOwnerWaits(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := Derive(week, Facts{Runs: tc.runs, PRs: []*server.PRItem{tc.pr}, Issues: map[int64]*server.IssueOut{7: issueWith(7, tc.stops...)}}, week.Until)
+			a := Derive(week, Facts{Runs: tc.runs, PRs: []*server.PRItem{tc.pr}, Comments: map[int64][]server.CommentOut{7: commentsOf(tc.stops...)}}, week.Until)
 			th := thread(t, a, "flow:issue:7:pr:12")
 			if len(th.Stops) != 1 || len(th.OwnerWaits) != 1 {
 				t.Fatalf("stops %+v, waits %+v", th.Stops, th.OwnerWaits)
@@ -343,8 +342,7 @@ func TestStopsByThread(t *testing.T) {
 	a := Derive(week, Facts{
 		Runs: []server.RunItem{run("r-1", "implement", 7, 0, 1, 2), run("r-2", "implement", 7, 0, 5, 6)},
 		PRs:  []*server.PRItem{first, pr(13, 7, 5.5)},
-		Issues: map[int64]*server.IssueOut{7: issueWith(7,
-			stopComment(1, flow.ConflictsWithBase, 12, 2.1),
+		Comments: map[int64][]server.CommentOut{7: commentsOf(stopComment(1, flow.ConflictsWithBase, 12, 2.1),
 			stopComment(2, flow.ChecksFailed, 13, 6.1))},
 	}, week.Until)
 	if th := thread(t, a, "flow:issue:7:pr:12"); len(th.Stops) != 1 || th.Stops[0].Reason != flow.ConflictsWithBase ||
@@ -363,6 +361,10 @@ type fakeSource struct {
 	facts Facts
 	reads map[string]int
 	fail  map[string]bool
+	// edited is when comments were last edited, by id; sinces are the
+	// times the comment reads asked from.
+	edited map[int64]time.Time
+	sinces []time.Time
 }
 
 func (f *fakeSource) read(what string) error {
@@ -395,12 +397,32 @@ func (f *fakeSource) Gate(_ context.Context, n int64) (server.GateOut, error) {
 	return f.facts.Gates[n], f.read(fmt.Sprintf("gate %d", n))
 }
 
-func (f *fakeSource) Issue(_ context.Context, n int64) (*server.IssueOut, error) {
-	return f.facts.Issues[n], f.read(fmt.Sprintf("issue %d", n))
+// Comments lists facts.Comments as the forge does: those created, or
+// edited (edited, by comment id), at or after since. It records each since.
+func (f *fakeSource) Comments(_ context.Context, since time.Time) ([]server.RepoCommentOut, error) {
+	if err := f.read("comments"); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sinces = append(f.sinces, since)
+	var out []server.RepoCommentOut
+	for n, cs := range f.facts.Comments {
+		for _, c := range cs {
+			updated := c.Created
+			if t, ok := f.edited[c.ID]; ok {
+				updated = t
+			}
+			if !updated.Before(since) {
+				out = append(out, server.RepoCommentOut{Issue: n, CommentOut: c, Updated: updated})
+			}
+		}
+	}
+	return out, nil
 }
 
-// Load reads each issue and PR of the window's threads once, each other
-// open issue or issue updated in the window once, and nothing else.
+// Load reads the three lists, the repository's comments and each PR of
+// the window's threads once, and nothing else.
 func TestLoadReadsAreBounded(t *testing.T) {
 	src := &fakeSource{reads: map[string]int{}, fail: map[string]bool{"gate 13": true}, facts: Facts{
 		Runs: []server.RunItem{
@@ -413,13 +435,13 @@ func TestLoadReadsAreBounded(t *testing.T) {
 			listed(4, -200, 2),   // the discuss run commented: updated in the window
 			listed(5, -200, -50), // open and unchanged: an older stop may hold it
 		},
-		Issues: map[int64]*server.IssueOut{7: issueWith(7, stopComment(1, flow.ReadyToMerge, 13, 6.1))},
+		Comments: map[int64][]server.CommentOut{7: commentsOf(stopComment(1, flow.ReadyToMerge, 13, 6.1))},
 	}}
 	a, err := Load(context.Background(), src, nil, Window{Since: t0}, week.Until)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"runs": 1, "prs": 1, "issues": 1, "issue 4": 1, "issue 5": 1, "issue 7": 1, "pr 12": 1, "gate 12": 1, "pr 13": 1, "gate 13": 1}
+	want := map[string]int{"runs": 1, "prs": 1, "issues": 1, "comments": 1, "pr 12": 1, "gate 12": 1, "pr 13": 1, "gate 13": 1}
 	if fmt.Sprint(src.reads) != fmt.Sprint(want) {
 		t.Errorf("reads = %v, want %v", src.reads, want)
 	}
@@ -436,23 +458,21 @@ func TestLoadReadsAreBounded(t *testing.T) {
 	}
 }
 
-// A flow without a PR whose runs ended before the window: Load reads its
-// issue when the issue is still open, or changed in the window, and keeps
-// the thread while a stop or a wait of it meets the window.
+// A flow without a PR whose runs ended before the window: Load keeps the
+// thread while a stop or a wait of it meets the window.
 func TestLoadThreadWithoutPRBeforeWindow(t *testing.T) {
 	old := run("r-old", "implement", 7, 0, -10, -9)
 	for _, tc := range []struct {
 		name    string
 		issue   *server.IssueItem
 		stop    float64
-		reads   int // of issue 7
 		shown   bool
 		end     *time.Time
 		endedBy string
 	}{
-		{name: "an ongoing wait from before the window", issue: listed(7, -20, -8), stop: -8, reads: 1, shown: true},
-		{name: "a stop in the window", issue: listed(7, -20, 2), stop: 2, reads: 1, shown: true},
-		{name: "a wait the issue's close ended in the window", issue: closedIssue(listed(7, -20, -8), 3), stop: -8, reads: 1, shown: true,
+		{name: "an ongoing wait from before the window", issue: listed(7, -20, -8), stop: -8, shown: true},
+		{name: "a stop in the window", issue: listed(7, -20, 2), stop: 2, shown: true},
+		{name: "a wait the issue's close ended in the window", issue: closedIssue(listed(7, -20, -8), 3), stop: -8, shown: true,
 			end: ptr(at(3)), endedBy: EndedByClose},
 		{name: "a wait the issue's close ended before the window", issue: closedIssue(listed(7, -20, -8), -5), stop: -8},
 	} {
@@ -461,14 +481,14 @@ func TestLoadThreadWithoutPRBeforeWindow(t *testing.T) {
 				Runs:      []server.RunItem{old},
 				PRs:       []*server.PRItem{merged(pr(9, 3, -99.5), -98)},
 				IssueList: []*server.IssueItem{tc.issue},
-				Issues:    map[int64]*server.IssueOut{7: issueWith(7, stopComment(1, flow.RunFailed, 0, tc.stop))},
+				Comments:  map[int64][]server.CommentOut{7: commentsOf(stopComment(1, flow.RunFailed, 0, tc.stop))},
 			}}
 			a, err := Load(context.Background(), src, nil, week, week.Until)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := src.reads["issue 7"]; got != tc.reads {
-				t.Errorf("issue 7 read %d times, want %d (reads %v)", got, tc.reads, src.reads)
+			if got := src.reads["comments"]; got != 1 {
+				t.Errorf("comments read %d times, want once (reads %v)", got, src.reads)
 			}
 			if !tc.shown {
 				if len(a.Threads) != 0 {
@@ -489,8 +509,8 @@ func TestLoadThreadWithoutPRBeforeWindow(t *testing.T) {
 }
 
 // A stop before the flow's first run (its actor busy), with no PR: Load
-// reads its issue while it is open, changed in the window or not, and
-// keeps the thread while its wait goes on.
+// finds it in the repository's comments, whether the issue changed in the
+// window or not, and keeps the thread while its wait goes on.
 func TestLoadStopWithoutRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -503,14 +523,14 @@ func TestLoadStopWithoutRuns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := &fakeSource{reads: map[string]int{}, facts: Facts{
 				IssueList: []*server.IssueItem{tc.issue},
-				Issues:    map[int64]*server.IssueOut{8: issueWith(8, stopComment(1, flow.ActorBusy, 0, tc.stop))},
+				Comments:  map[int64][]server.CommentOut{8: commentsOf(stopComment(1, flow.ActorBusy, 0, tc.stop))},
 			}}
 			a, err := Load(context.Background(), src, nil, week, week.Until)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if src.reads["issue 8"] != 1 {
-				t.Errorf("reads = %v, want issue 8 once", src.reads)
+			if src.reads["comments"] != 1 {
+				t.Errorf("reads = %v, want the comments once", src.reads)
 			}
 			th := thread(t, a, "flow:issue:8")
 			if len(th.Stops) != 1 || th.Stops[0].Reason != flow.ActorBusy || len(th.OwnerWaits) != 1 {
@@ -533,12 +553,14 @@ func TestOwnerWaitsMergedStop(t *testing.T) {
 	}
 }
 
-// With a cache, Load reads an issue again only once its updated time
-// changes; without one, or with an emptied one, it reads it each time.
+// With a cache, Load reads the comments created or edited since the
+// latest it holds (less commentOverlap), and keeps the older ones; without
+// one, or with an emptied one, it reads them all each time. A failed read
+// leaves the cache as it was, and is reported.
 func TestLoadCache(t *testing.T) {
-	src := &fakeSource{reads: map[string]int{}, facts: Facts{
+	src := &fakeSource{reads: map[string]int{}, edited: map[int64]time.Time{}, facts: Facts{
 		IssueList: []*server.IssueItem{listed(8, -20, -8)},
-		Issues:    map[int64]*server.IssueOut{8: issueWith(8, stopComment(1, flow.ActorBusy, 0, -8))},
+		Comments:  map[int64][]server.CommentOut{8: commentsOf(stopComment(1, flow.ActorBusy, 0, -8))},
 	}}
 	var cache Cache
 	load := func(c *Cache) *Activity {
@@ -549,23 +571,59 @@ func TestLoadCache(t *testing.T) {
 		}
 		return a
 	}
+	sinceWas := func(want time.Time) {
+		t.Helper()
+		if got := src.sinces[len(src.sinces)-1]; !got.Equal(want) {
+			t.Errorf("read the comments since %v, want %v", got, want)
+		}
+	}
 	load(&cache)
-	if a := load(&cache); src.reads["issue 8"] != 1 || len(thread(t, a, "flow:issue:8").Stops) != 1 {
-		t.Errorf("after two loads: reads = %v, activity = %+v", src.reads, a)
+	sinceWas(time.Time{})
+	if a := load(&cache); len(thread(t, a, "flow:issue:8").Stops) != 1 {
+		t.Errorf("after two loads: activity = %+v", a)
 	}
+	sinceWas(at(-8).Add(-commentOverlap))
 
-	// A new stop updates the issue, and the next load reads it.
-	src.facts.IssueList = []*server.IssueItem{listed(8, -20, 3)}
-	src.facts.Issues[8] = issueWith(8, stopComment(1, flow.ActorBusy, 0, -8), stopComment(2, flow.RunFailed, 0, 3))
-	if a := load(&cache); src.reads["issue 8"] != 2 || len(thread(t, a, "flow:issue:8").Stops) != 2 {
-		t.Errorf("after the update: reads = %v, activity = %+v", src.reads, a)
+	// A new stop on another issue, and an edit that makes the first comment
+	// a different stop: the next load reads only those.
+	src.facts.IssueList = append(src.facts.IssueList, listed(9, -20, 3))
+	src.facts.Comments[9] = commentsOf(stopComment(2, flow.RunFailed, 0, 3))
+	src.facts.Comments[8] = commentsOf(stopComment(1, flow.ChecksFailed, 0, -8))
+	src.edited[1] = at(2)
+	a := load(&cache)
+	sinceWas(at(-8).Add(-commentOverlap))
+	if th := thread(t, a, "flow:issue:8"); len(th.Stops) != 1 || th.Stops[0].Reason != flow.ChecksFailed {
+		t.Errorf("edited thread = %+v", th)
 	}
+	if th := thread(t, a, "flow:issue:9"); len(th.Stops) != 1 {
+		t.Errorf("new thread = %+v", th)
+	}
+	load(&cache)
+	sinceWas(at(3).Add(-commentOverlap))
 
+	// A failed read keeps what the cache holds.
+	src.fail = map[string]bool{"comments": true}
+	a = load(&cache)
+	if len(a.Incomplete) != 1 || !strings.HasPrefix(a.Incomplete[0], "comments: ") || len(thread(t, a, "flow:issue:9").Stops) != 1 {
+		t.Errorf("after a failed read: incomplete %q, activity %+v", a.Incomplete, a)
+	}
+	src.fail = nil
+	load(&cache)
+	sinceWas(at(3).Add(-commentOverlap))
+
+	n := len(src.sinces)
 	load(nil)
 	load(&Cache{})
-	if src.reads["issue 8"] != 4 {
-		t.Errorf("reads = %v, want issue 8 read by each load without the cache", src.reads)
+	if len(src.sinces) != n+2 || !src.sinces[n].IsZero() || !src.sinces[n+1].IsZero() {
+		t.Errorf("sinces = %v, want every comment read by each load without the cache", src.sinces[n:])
 	}
+	// Without a successful read, an empty cache reads every comment again.
+	src.fail = map[string]bool{"comments": true}
+	var failing Cache
+	load(&failing)
+	src.fail = nil
+	load(&failing)
+	sinceWas(time.Time{})
 }
 
 // With a cache, a merged or closed PR's reviews and gate are read again
@@ -617,14 +675,13 @@ func TestLoadPRCache(t *testing.T) {
 	}
 }
 
-// slowSource holds each issue read a moment and counts how many ran at
-// once.
+// slowSource holds each PR read a moment and counts how many ran at once.
 type slowSource struct {
 	*fakeSource
 	running, peak atomic.Int32
 }
 
-func (s *slowSource) Issue(ctx context.Context, n int64) (*server.IssueOut, error) {
+func (s *slowSource) PullRequest(ctx context.Context, n int64) (*server.PROut, error) {
 	now := s.running.Add(1)
 	defer s.running.Add(-1)
 	for {
@@ -634,17 +691,17 @@ func (s *slowSource) Issue(ctx context.Context, n int64) (*server.IssueOut, erro
 		}
 	}
 	time.Sleep(10 * time.Millisecond)
-	return s.fakeSource.Issue(ctx, n)
+	return s.fakeSource.PullRequest(ctx, n)
 }
 
 // Load's reads run concurrently, at most Concurrency at a time, and its
 // Incomplete is sorted however they finish.
 func TestLoadConcurrent(t *testing.T) {
-	src := &slowSource{fakeSource: &fakeSource{reads: map[string]int{}, fail: map[string]bool{}, facts: Facts{Issues: map[int64]*server.IssueOut{}}}}
+	src := &slowSource{fakeSource: &fakeSource{reads: map[string]int{}, fail: map[string]bool{}}}
 	for n := int64(1); n <= 3*Concurrency; n++ {
-		src.facts.IssueList = append(src.facts.IssueList, listed(n, -20, 1))
+		src.facts.PRs = append(src.facts.PRs, pr(100+n, n, 1))
 		if n%5 == 0 {
-			src.fail[fmt.Sprintf("issue %d", n)] = true
+			src.fail[fmt.Sprintf("pr %d", 100+n)] = true
 		}
 	}
 	a, err := Load(context.Background(), src, nil, week, week.Until)
@@ -654,7 +711,7 @@ func TestLoadConcurrent(t *testing.T) {
 	if p := src.peak.Load(); p < 2 || p > Concurrency {
 		t.Errorf("peak concurrent reads = %d, want 2..%d", p, Concurrency)
 	}
-	if len(src.reads) != 3+3*Concurrency {
+	if len(src.reads) != 4+2*3*Concurrency {
 		t.Errorf("reads = %v", src.reads)
 	}
 	if len(a.Incomplete) != 4 || !slices.IsSorted(a.Incomplete) {

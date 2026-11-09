@@ -847,6 +847,31 @@ func TestE2E(t *testing.T) {
 				t.Fatalf("comments page %d: got %d, want complete thread", page, len(comments))
 			}
 		}
+		// The repository-wide comment read (the activity's) finds both on
+		// their issue, from Forgejo's issue_url.
+		{
+			req, _ := http.NewRequest("GET", a.cfg.ServerURL()+"/v1/forge/comments?since="+time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), nil)
+			req.Header.Set("Authorization", "Bearer "+runKey)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var repoComments []struct {
+				Issue int64
+				Body  string
+			}
+			err = json.NewDecoder(resp.Body).Decode(&repoComments)
+			resp.Body.Close()
+			var bodies []string
+			for _, c := range repoComments {
+				if c.Issue == issue.Number {
+					bodies = append(bodies, c.Body)
+				}
+			}
+			if resp.StatusCode != 200 || err != nil || !slices.Contains(bodies, "working on it") || !slices.Contains(bodies, "second comment") {
+				t.Errorf("GET /v1/forge/comments: %d %v, issue #%d's comments %q", resp.StatusCode, err, issue.Number, bodies)
+			}
+		}
 		if code, _ := call(runKey, "POST", "/v1/forge/review", map[string]any{"event": "APPROVED", "body": "x", "commit_id": "x"}); code != 403 {
 			t.Errorf("review from an implement run: %d, want 403", code)
 		}
@@ -1474,7 +1499,39 @@ func TestE2E(t *testing.T) {
 			t.Errorf("pr show --json checks: %+v", p.Checks)
 		}
 		must(aw, "run", "end", "--summary", "checked only")
+		// The PR's change by file, from git in Forgejo's repository, open
+		// and closed.
+		diffstat := func() string {
+			t.Helper()
+			req, _ := http.NewRequest("GET", fmt.Sprintf("%s/v1/forge/pr/diffstat?repo=demo&number=%d", a.cfg.ServerURL(), prn), nil)
+			req.Header.Set("Authorization", "Bearer "+owner)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var ds struct {
+				Files []struct {
+					Path           string
+					Added, Deleted int
+				}
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&ds); err != nil || resp.StatusCode != 200 {
+				t.Fatalf("diffstat: %d %v", resp.StatusCode, err)
+			}
+			var got []string
+			for _, f := range ds.Files {
+				got = append(got, fmt.Sprintf("%s +%d -%d", f.Path, f.Added, f.Deleted))
+			}
+			return strings.Join(got, ", ")
+		}
+		if got := diffstat(); got != "checked.txt +1 -0, go.mod +2 -0" {
+			t.Errorf("open PR's diffstat: %s", got)
+		}
 		a.mustAPI(owner, "PATCH", fmt.Sprintf("/repos/bottown/demo/pulls/%d", prn), map[string]string{"state": "closed"}, nil)
+		if got := diffstat(); got != "checked.txt +1 -0, go.mod +2 -0" {
+			t.Errorf("closed PR's diffstat: %s", got)
+		}
 	})
 
 	t.Run("mcp whoami", func(t *testing.T) {

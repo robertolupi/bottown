@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -59,6 +60,27 @@ func (f fakeAPI) serve(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		out = f.prOut(r, pr)
+	case "/v1/forge/pr/diffstat":
+		if f.pr(num) == nil {
+			http.NotFound(w, r)
+			return true
+		}
+		out = serverapi.DiffStatOut{Files: []serverapi.DiffStatFile{{Path: "a.go", Added: 3, Deleted: 1}, {Path: "go.sum", Added: 9}}}
+	case "/v1/forge/comments":
+		var since time.Time
+		if v := q.Get("since"); v != "" {
+			since, _ = time.Parse(time.RFC3339, v)
+		}
+		items := []serverapi.RepoCommentOut{}
+		for n, cs := range f.comments {
+			for _, c := range cs {
+				if updated := cmp.Or(c.Updated, c.Created); !updated.Before(since) {
+					items = append(items, serverapi.RepoCommentOut{Issue: n, Updated: updated,
+						CommentOut: serverapi.CommentOut{ID: c.ID, Author: userLogin(c.Poster), Body: c.Body, Created: c.Created}})
+				}
+			}
+		}
+		out = items
 	case "/v1/forge/pr/gate":
 		if f.pr(num) == nil {
 			http.NotFound(w, r)

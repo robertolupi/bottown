@@ -11,8 +11,7 @@ import (
 // Rendering of a pull request's unified diff for `pr show`: a per-file
 // summary first, then the diff with lock files collapsed. Collapsing is
 // always announced, so a reviewer knows what was not shown. The parsing
-// itself is internal/diffstat, which the statistics' measured size reads
-// too.
+// itself is internal/diffstat.
 
 // writeDiffStat prints a summary like `git diff --stat`.
 func writeDiffStat(out io.Writer, files []diffstat.File) {

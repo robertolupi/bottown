@@ -15,8 +15,9 @@ import (
 // ComputeActivity is the repository's activity in w (internal/activity):
 // the one derivation the timeline and the statistics views both serve.
 // Issues' comments, and merged or closed PRs' reviews and gates, are kept
-// in memory between calls, by their updated time, so a load reads only the
-// issues and PRs that changed, and the open PRs.
+// in memory between calls, so a load reads only the comments created or
+// edited since the latest it holds, in one read, the PRs that changed, and
+// the open PRs.
 func (s *Server) ComputeActivity(ctx context.Context, w activity.Window) (*activity.Activity, error) {
 	a, _, err := s.computeActivity(ctx, w)
 	return a, err
@@ -82,8 +83,8 @@ func (a *activitySource) PullRequest(ctx context.Context, n int64) (*serverapi.P
 	return a.s.pullRequest(ctx, n)
 }
 
-func (a *activitySource) Issue(ctx context.Context, n int64) (*serverapi.IssueOut, error) {
-	return a.s.issue(ctx, n, true)
+func (a *activitySource) Comments(ctx context.Context, since time.Time) ([]serverapi.RepoCommentOut, error) {
+	return a.s.repoComments(ctx, since)
 }
 
 func (a *activitySource) Gate(ctx context.Context, n int64) (serverapi.GateOut, error) {

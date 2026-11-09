@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/robertolupi/bottown/internal/activity"
+	"github.com/robertolupi/bottown/internal/diffstat"
 	serverapi "github.com/robertolupi/bottown/internal/server"
 	"github.com/robertolupi/bottown/internal/stats"
 )
@@ -18,15 +19,15 @@ import (
 // per-issue/PR vector and the breakdowns, built on the shared activity
 // derivation (ComputeActivity) so the timeline and the statistics cannot
 // disagree. It adds the issues' size labels and milestones, and the merged
-// PRs' diffs for the measured size: the issue list is the one the activity
-// read, and the diffs not yet cached are read activity.Concurrency at a
-// time.
+// PRs' diffstats for the measured size: the issue list is the one the
+// activity read, and the diffstats not yet cached are read
+// activity.Concurrency at a time.
 func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.Stats, error) {
 	a, issues, err := s.computeActivity(ctx, w)
 	if err != nil {
 		return nil, err
 	}
-	f := stats.Facts{Issues: issues, Diffs: map[int64]string{}}
+	f := stats.Facts{Issues: issues, DiffStats: map[int64][]diffstat.File{}}
 	var (
 		mu         sync.Mutex
 		incomplete []string
@@ -37,14 +38,14 @@ func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.St
 			continue
 		}
 		reads = append(reads, func() {
-			diff, err := s.diffs.get(ctx, th.PR, s.pullRequestDiff)
+			files, err := s.diffs.get(ctx, th.PR, s.pullRequestDiffStat)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				incomplete = append(incomplete, fmt.Sprintf("diff of !%d: %v", th.PR, err))
+				incomplete = append(incomplete, fmt.Sprintf("diffstat of !%d: %v", th.PR, err))
 				return
 			}
-			f.Diffs[th.PR] = diff
+			f.DiffStats[th.PR] = files
 		})
 	}
 	activity.Parallel(activity.Concurrency, reads)
@@ -54,17 +55,17 @@ func (s *Server) ComputeStats(ctx context.Context, w activity.Window) (*stats.St
 	return st, nil
 }
 
-// diffCache remembers merged PRs' diffs between requests. A merged PR does
-// not change, so its diff is read once; the tab's refresh on every status or
+// diffCache remembers merged PRs' diffstats between requests. A merged PR
+// does not change, so its diffstat is read once; the tab's refresh on every status or
 // history event then costs no forge reads. Like activity.IssueCache it is
 // safe for concurrent use and to drop: it only saves reads.
 type diffCache struct {
 	mu    sync.Mutex
-	diffs map[int64]string
+	diffs map[int64][]diffstat.File
 }
 
-// get is n's diff from the cache, reading it once with read on a miss.
-func (c *diffCache) get(ctx context.Context, n int64, read func(context.Context, int64) (string, error)) (string, error) {
+// get is n's diffstat from the cache, reading it once with read on a miss.
+func (c *diffCache) get(ctx context.Context, n int64, read func(context.Context, int64) ([]diffstat.File, error)) ([]diffstat.File, error) {
 	c.mu.Lock()
 	if d, ok := c.diffs[n]; ok {
 		c.mu.Unlock()
@@ -73,26 +74,32 @@ func (c *diffCache) get(ctx context.Context, n int64, read func(context.Context,
 	c.mu.Unlock()
 	d, err := read(ctx, n)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	c.mu.Lock()
 	if c.diffs == nil {
-		c.diffs = map[int64]string{}
+		c.diffs = map[int64][]diffstat.File{}
 	}
 	c.diffs[n] = d
 	c.mu.Unlock()
 	return d, nil
 }
 
-// pullRequestDiff reads PR n's unified diff (GET /v1/forge/pr?diff=1).
-func (s *Server) pullRequestDiff(ctx context.Context, n int64) (string, error) {
+// pullRequestDiffStat reads PR n's change by file
+// (GET /v1/forge/pr/diffstat), its lock files marked Collapsed as
+// diffstat.Parse marks them.
+func (s *Server) pullRequestDiffStat(ctx context.Context, n int64) ([]diffstat.File, error) {
 	_, repo := s.orgAndRepo()
-	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(n)}, "diff": {"1"}}
-	var pr serverapi.PROut
-	if err := s.callServer(ctx, http.MethodGet, "/v1/forge/pr?"+q.Encode(), nil, &pr); err != nil {
-		return "", err
+	q := url.Values{"repo": {repo}, "number": {fmt.Sprint(n)}}
+	var out serverapi.DiffStatOut
+	if err := s.callServer(ctx, http.MethodGet, "/v1/forge/pr/diffstat?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
 	}
-	return pr.Diff, nil
+	files := make([]diffstat.File, 0, len(out.Files))
+	for _, f := range out.Files {
+		files = append(files, diffstat.File{Path: f.Path, Added: f.Added, Deleted: f.Deleted, Binary: f.Binary, Collapsed: diffstat.IsLockFile(f.Path)})
+	}
+	return files, nil
 }
 
 // handleGetStats serves GET /api/stats?since=&until= (RFC 3339; since

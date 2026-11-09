@@ -8,7 +8,9 @@
 //
 // Nothing here is a store of its own: every fact is read again from the
 // forge and the server's run records on each Load, except what an optional
-// Cache keeps while the updated time of its issue or closed PR holds.
+// Cache keeps: the issues' comments, brought up to date on each Load by
+// one read of those changed since, and closed PRs' reads while their
+// updated time holds.
 package activity
 
 import (
@@ -188,8 +190,10 @@ type Source interface {
 	PullRequest(ctx context.Context, n int64) (*server.PROut, error)
 	// Gate is the flow's gate on PR n (GET /v1/forge/pr/gate).
 	Gate(ctx context.Context, n int64) (server.GateOut, error)
-	// Issue is issue n with its comments (GET /v1/forge/issue).
-	Issue(ctx context.Context, n int64) (*server.IssueOut, error)
+	// Comments are the comments on the repository's issues created or
+	// edited at or after since, all of them for a zero since
+	// (GET /v1/forge/comments?since=).
+	Comments(ctx context.Context, since time.Time) ([]server.RepoCommentOut, error)
 }
 
 // Facts are what Derive works from, as Load reads them.
@@ -197,34 +201,39 @@ type Facts struct {
 	Runs      []server.RunItem
 	PRs       []*server.PRItem
 	IssueList []*server.IssueItem
-	// By number, for the threads in the window: each issue with its
-	// comments, each PR with its reviews, and each PR's gate.
-	Issues  map[int64]*server.IssueOut
+	// Comments are the issues' comments by issue number, oldest first.
+	Comments map[int64][]server.CommentOut
+	// By number, for the threads in the window: each PR with its reviews,
+	// and each PR's gate.
 	Reviews map[int64]*server.PROut
 	Gates   map[int64]server.GateOut
 }
 
 // Load reads the facts for w from src and derives its activity. A non-nil
-// cache keeps issues' comments, and merged or closed PRs' reviews and
+// cache keeps the issues' comments, and merged or closed PRs' reviews and
 // gates, between Loads; it holds nothing the forge does not, and an empty
 // one only costs reads.
 //
 // Its reads are bounded whatever the window's length: one run list (the
 // server's own records, all of them, so threads group as History groups
 // them and a wait that began before the window ends where it did), one PR
-// list and one issue list; then one issue read (its comments, where the
-// stops are) per issue of the window's threads, per issue updated in the
-// window (a new stop updates its issue) and per open issue (a stop made
-// before the window, even one before any run, may still keep it waiting);
-// and one PR read and one gate read per PR of the window's threads. For 7
-// days that is 3 + issues + 2 × PRs reads, each issue and PR read once;
-// with a cache, an issue is read again only when its updated time has
-// changed since the cache read it, and a merged or closed PR likewise,
-// while an open PR is read on every Load. After the three lists the reads
-// run concurrently, Concurrency at a time. A read that fails leaves its
-// facts out and is named in Incomplete, which is sorted.
+// list and one issue list; one read of the repository's comments (where
+// the stops are: a stop made before the window, even one before any run,
+// may still keep a thread waiting); and one PR read and one gate read per
+// PR of the window's threads. For 7 days that is 4 + 2 × PRs reads. The
+// comment read brings every comment the first time; with a cache, later
+// Loads read only those created or edited since the latest it holds (less
+// commentOverlap), so a Load reads few however many issues changed. A
+// merged or closed PR is read again only when its updated time has changed
+// since the cache read it, while an open PR is read on every Load. After
+// the three lists the reads run concurrently, Concurrency at a time. A
+// read that fails leaves its facts out (for the comments: those the cache
+// does not hold yet) and is named in Incomplete, which is sorted.
 func Load(ctx context.Context, src Source, cache *Cache, w Window, now time.Time) (*Activity, error) {
 	w = w.resolve(now)
+	if cache == nil {
+		cache = &Cache{}
+	}
 	runs, err := src.Runs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read runs: %w", err)
@@ -237,13 +246,7 @@ func Load(ctx context.Context, src Source, cache *Cache, w Window, now time.Time
 	if err != nil {
 		return nil, fmt.Errorf("read issues: %w", err)
 	}
-	f := Facts{Runs: runs, PRs: prs, IssueList: issues, Issues: map[int64]*server.IssueOut{}, Reviews: map[int64]*server.PROut{}, Gates: map[int64]server.GateOut{}}
-	updated := map[int64]time.Time{}
-	for _, is := range issues {
-		if is != nil {
-			updated[is.Number] = is.Updated
-		}
-	}
+	f := Facts{Runs: runs, PRs: prs, IssueList: issues, Reviews: map[int64]*server.PROut{}, Gates: map[int64]server.GateOut{}}
 	// A PR's reads are cached as of its updated time once it is merged or
 	// closed: the flow posts its check statuses to an open PR's commits
 	// without updating the PR, so an open PR is read on every Load.
@@ -257,37 +260,20 @@ func Load(ctx context.Context, src Source, cache *Cache, w Window, now time.Time
 	var (
 		mu         sync.Mutex // guards f's maps and incomplete while reads run
 		incomplete []string
-		reads      []func()
-		queued     = map[int64]bool{}
 	)
 	failed := func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
 		incomplete = append(incomplete, fmt.Sprintf(format, args...))
 	}
-	readIssue := func(n int64) {
-		if n <= 0 || queued[n] {
+	reads := []func(){func() {
+		cs, err := src.Comments(ctx, cache.commentsSince())
+		if err != nil {
+			failed("comments: %v", err)
 			return
 		}
-		// Read each issue once, even when it fails.
-		queued[n] = true
-		if is := cache.issue(n, updated[n]); is != nil {
-			f.Issues[n] = is
-			return
-		}
-		reads = append(reads, func() {
-			is, err := src.Issue(ctx, n)
-			if err != nil {
-				failed("issue #%d: %v", n, err)
-				is = &server.IssueOut{Number: n}
-			} else {
-				cache.putIssue(n, updated[n], is)
-			}
-			mu.Lock()
-			f.Issues[n] = is
-			mu.Unlock()
-		})
-	}
+		cache.putComments(cs)
+	}}
 	readPR := func(n int64) {
 		if pr := cache.pr(n, frozen[n]); pr != nil {
 			f.Reviews[n] = pr
@@ -322,15 +308,12 @@ func Load(ctx context.Context, src Source, cache *Cache, w Window, now time.Time
 	}
 	g := Group(runs, prs)
 	for _, t := range windowThreads(w, g, runs, prs) {
-		readIssue(t.Issue)
 		if t.PR > 0 {
 			readPR(t.PR)
 		}
 	}
-	for _, n := range stopIssues(w, issues) {
-		readIssue(n)
-	}
 	Parallel(Concurrency, reads)
+	f.Comments = cache.comments()
 	a := Derive(w, f, now)
 	slices.Sort(incomplete)
 	a.Incomplete = incomplete
@@ -356,34 +339,75 @@ func Parallel(n int, fns []func()) {
 	wg.Wait()
 }
 
-// stopIssues are the issues whose comments may hold a stop in w or the
-// start of an owner wait that overlaps it, beyond the issues of the
-// window's threads, by number: those created before w ends that were
-// updated in w or are still open. A closed issue not updated in w was
-// closed before it, and so were the waits of its flow without a PR.
-func stopIssues(w Window, issues []*server.IssueItem) []int64 {
-	var out []int64
-	for _, is := range issues {
-		if is == nil || is.Number <= 0 || is.PullRequest || !is.Created.Before(w.Until) {
-			continue
-		}
-		if !is.Updated.Before(w.Since) || (is.Closed == nil && is.State != "closed") {
-			out = append(out, is.Number)
-		}
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// Cache keeps reads between Loads, each as of the updated time of the
-// issue or PR it belongs to, so an unchanged one is not read again: issues
-// with their comments, and merged or closed PRs' reviews and gates. It is
+// Cache keeps reads between Loads, so an unchanged fact is not read again:
+// the issues' comments, by id, with the latest time one of them was created
+// or edited, from which the next Load reads only newer ones; and merged or
+// closed PRs' reviews and gates, each as of its PR's updated time. It is
 // safe for concurrent use, and to drop: it only saves reads.
+//
+// A comment deleted from the forge stays in a Cache, since the comment
+// read lists only those created or edited since a time: a stop comment the
+// owner deletes still counts until the Cache is dropped.
 type Cache struct {
-	mu     sync.Mutex
-	issues map[int64]cached[*server.IssueOut]
+	mu sync.Mutex
+	// byID holds the comments read; read is set once a comment read
+	// succeeded, and latest is the latest updated time among them.
+	byID   map[int64]server.RepoCommentOut
+	read   bool
+	latest time.Time
 	prs    map[int64]cached[*server.PROut]
 	gates  map[int64]cached[server.GateOut]
+}
+
+// commentOverlap is how far before the latest comment it holds a Cache
+// reads again: a comment's time is set before Forgejo commits it, so one
+// written while the previous read ran may show up later, with a time just
+// before that read's latest.
+const commentOverlap = time.Minute
+
+// commentsSince is the time the next comment read starts from: zero (every
+// comment) until a read succeeded.
+func (c *Cache) commentsSince() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.read || c.latest.IsZero() {
+		return time.Time{}
+	}
+	return c.latest.Add(-commentOverlap)
+}
+
+// putComments adds the comments of a successful read, replacing the edited
+// ones.
+func (c *Cache) putComments(cs []server.RepoCommentOut) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byID == nil {
+		c.byID = map[int64]server.RepoCommentOut{}
+	}
+	c.read = true
+	for _, cm := range cs {
+		if cm.Issue <= 0 {
+			continue
+		}
+		c.byID[cm.ID] = cm
+		if t := cmp.Or(cm.Updated, cm.Created); t.After(c.latest) {
+			c.latest = t
+		}
+	}
+}
+
+// comments are the comments c holds by issue, each issue's oldest first.
+func (c *Cache) comments() map[int64][]server.CommentOut {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[int64][]server.CommentOut{}
+	for _, cm := range c.byID {
+		out[cm.Issue] = append(out[cm.Issue], cm.CommentOut)
+	}
+	for _, cs := range out {
+		slices.SortFunc(cs, func(x, y server.CommentOut) int { return cmp.Or(x.Created.Compare(y.Created), cmp.Compare(x.ID, y.ID)) })
+	}
+	return out
 }
 
 type cached[T any] struct {
@@ -415,21 +439,6 @@ func store[T any](c *Cache, m *map[int64]cached[T], n int64, updated time.Time, 
 		*m = map[int64]cached[T]{}
 	}
 	(*m)[n] = cached[T]{updated: updated, v: v}
-}
-
-// issue is issue n as of updated, or nil when c does not hold it.
-func (c *Cache) issue(n int64, updated time.Time) *server.IssueOut {
-	if c == nil {
-		return nil
-	}
-	is, _ := lookup(c, &c.issues, n, updated)
-	return is
-}
-
-func (c *Cache) putIssue(n int64, updated time.Time, is *server.IssueOut) {
-	if c != nil && is != nil {
-		store(c, &c.issues, n, updated, is)
-	}
 }
 
 // pr is PR n's read as of updated, or nil when c does not hold it.
@@ -563,11 +572,8 @@ func Derive(w Window, f Facts, now time.Time) *Activity {
 	// Each issue's stops, by the thread the flow stopped in: the PR it
 	// names, else the PR the issue's work belonged to at the time.
 	stops := map[string][]Stop{}
-	for issue, is := range f.Issues {
-		if is == nil {
-			continue
-		}
-		for _, c := range is.Comments {
+	for issue, cs := range f.Comments {
+		for _, c := range cs {
 			st, ok := flow.ParseStop(c.Body)
 			if !ok {
 				continue
