@@ -580,6 +580,99 @@ func TestGatherRetroWindowDeletedBranch(t *testing.T) {
 	}
 }
 
+// A milestone's integration pull request merged in the window brings the
+// flows of the pull requests merged into its milestone/<slug> branch
+// (#449): their implement and verify runs are gathered, the README lists
+// them under it, and neither it nor its head, pushed by a child's
+// implementer, is warned of as written by no run.
+func TestGatherRetroWindowMilestone(t *testing.T) {
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	pr := func(n int64, ref, base, merge string) prHead {
+		h := prHead{Number: n, Title: fmt.Sprintf("PR %d", n), Merged: merge != "", MergeCommit: merge}
+		h.Head.Ref, h.Base.Ref = ref, base
+		return h
+	}
+	heads := []prHead{
+		pr(434, "milestone/mq", "main", "m2"),
+		pr(418, "issue/406", "milestone/mq", "c1"),
+		pr(421, "issue/407", "milestone/mq", "c2"),
+		pr(417, "issue/407", "milestone/mq", ""), // #407's first try, closed
+		pr(440, "issue/408", "milestone/other", "c3"),
+		pr(30, "issue/7", "main", "m1"),
+	}
+	merged, flows := windowFlows([]string{"m1", "m2"}, heads, nil)
+	var got []string
+	for _, f := range flows {
+		got = append(got, fmt.Sprintf("%s%v^%d", f.Flow, f.ForgePRs, f.Milestone))
+	}
+	if want := "#7[30]^0 !434[434]^0 #406[418]^434 #407[421 417]^434"; strings.Join(got, " ") != want {
+		t.Errorf("flows = %v, want %s", got, want)
+	}
+	list := []server.RunItem{
+		{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 406, Branch: "issue/406", Created: t0}, State: "ended"},
+		{Run: secrets.Run{ID: "r-2b", Kind: policy.Verify, Actor: "codex", PR: 418, Branch: "issue/406", Created: t0.Add(time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-3c", Kind: policy.Implement, Actor: "kimi", Issue: 407, Branch: "issue/407", Created: t0.Add(2 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-4d", Kind: policy.Verify, Actor: "claude", PR: 434, Branch: "milestone/mq", Created: t0.Add(3 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-5e", Kind: policy.Implement, Actor: "agy", Issue: 408, Branch: "issue/408", Created: t0.Add(4 * time.Minute)}, State: "ended"},
+		{Run: secrets.Run{ID: "r-6f", Kind: policy.Implement, Actor: "codex", Issue: 7, Branch: "issue/7", Created: t0.Add(5 * time.Minute)}, State: "ended"},
+	}
+	scope := retroScope{
+		Flows: flows, Merged: merged, Head: "bbbbbbbbbbbbbbbb",
+		Window: &secrets.RetroWindow{Since: "1w", Base: "aaaaaaaaaaaaaaaa", Page: "20261109-bbbbbbb-retrospective"},
+	}
+	// The milestone's head, below its landing commits, is kimi's.
+	tips := []prTip{{PR: 434, Head: "h1", SHA: "h0", Author: "kimi"}}
+	dir := filepath.Join(t.TempDir(), retroDir)
+	n, gaps, err := gatherRetroScope(dir, scope, "r-self", ws, list, nil, tips, prStatuses{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Errorf("gathered %d runs, want 5: not #408's, merged into another milestone", n)
+	}
+	if len(gaps) != 0 {
+		t.Errorf("gaps = %q, want none", gaps)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(b)
+	for _, w := range []string{
+		"| !434 | PR 434 | `milestone/mq` | `m2` | !434 |\n| !434 → #406 (!418) | PR 418 | `issue/406` | `c1` | !418 of #406 |\n| !434 → #407 (!421) |",
+		"`r-1a`", "`r-2b`", "`r-3c`", "`r-4d`", "`r-6f`",
+	} {
+		if !strings.Contains(readme, w) {
+			t.Errorf("README lacks %q:\n%s", w, readme)
+		}
+	}
+	if strings.Contains(readme, "`r-5e`") {
+		t.Errorf("README has #408's run:\n%s", readme)
+	}
+
+	// Without its children's runs, the milestone's flow and theirs are
+	// each warned of.
+	_, gaps, err = gatherRetroScope(dir, scope, "r-self", ws, list[3:4], nil, nil, prStatuses{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Merged pull request !30 (flow #7) has 0 verify run(s)",
+		"Merged pull request !434 (flow !434) has 1 verify run(s)",
+		"Merged pull request !418 (flow #406) has 0 verify run(s)",
+		"Merged pull request !421 (flow #407) has 0 verify run(s)",
+	}
+	if len(gaps) != len(want) {
+		t.Fatalf("gaps = %q, want %d", gaps, len(want))
+	}
+	for i := range want {
+		if !strings.HasPrefix(gaps[i], want[i]) {
+			t.Errorf("gaps[%d] = %q, want %q…", i, gaps[i], want[i])
+		}
+	}
+}
+
 // run retro takes an issue or --since, not both, and a windowed retro has
 // no family rule to override; these are refused before anything starts.
 func TestRunRetroArgs(t *testing.T) {
