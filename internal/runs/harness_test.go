@@ -345,6 +345,38 @@ func TestDebatePrompts(t *testing.T) {
 	}
 }
 
+// A launched run's prompt names its scratch directory literally: a harness
+// may refuse a command that expands $TMPDIR (#450). A leased run, which has
+// none, keeps $TMPDIR.
+func TestPromptsNameScratchDirLiterally(t *testing.T) {
+	for _, kind := range []string{"implement", "verify", "retro"} {
+		for _, window := range []bool{false, true} {
+			if window && kind != "retro" {
+				continue
+			}
+			d := PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/b", Batch: true,
+				Window: window, WindowPage: "p", TmpDir: "/tmp/bottown-x-r-1"}
+			p, err := Prompt(kind, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(p, "file tools to `/tmp/bottown-x-r-1`, this run's scratch directory") {
+				t.Errorf("%s prompt (window %v) lacks the literal scratch path:\n%s", kind, window, p)
+			}
+			if strings.Contains(p, "$TMPDIR") {
+				t.Errorf("%s prompt (window %v) with a TmpDir mentions $TMPDIR:\n%s", kind, window, p)
+			}
+			d.TmpDir = ""
+			if p, err = Prompt(kind, d); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(p, "under\n  `$TMPDIR`") && !strings.Contains(p, "under `$TMPDIR`") {
+				t.Errorf("%s prompt (window %v) without a TmpDir lacks $TMPDIR:\n%s", kind, window, p)
+			}
+		}
+	}
+}
+
 // Batch prompts say nobody can approve a permission request; interactive
 // ones do not.
 func TestBatchPromptsSayNobodyApproves(t *testing.T) {

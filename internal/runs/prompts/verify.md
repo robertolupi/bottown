@@ -50,7 +50,10 @@ Review pull request !{{.PR}} in `{{.Repo}}`: **{{.Title}}**, written by
     "reopen #N"); the server refuses a note or verdict that does.
   - `{{.Bottown}} issue create --title "…" --body-file -` files a follow-up
     that should not block this pull request.
-- Run checks as plain commands; write scratch files under `$TMPDIR`.
+- Run checks as plain commands; {{if .TmpDir}}write scratch files with your
+  file tools to `{{.TmpDir}}`, this run's scratch directory, and name it
+  literally in commands, not as a variable{{else}}write scratch files under
+  `$TMPDIR`{{end}}.
 - Other runs may be active on this host at the same time. Do not stop,
   kill or remove processes, containers or worktrees this run did not start,
   and do not run `{{.Bottown}} up` or `down` on any instance: other runs and

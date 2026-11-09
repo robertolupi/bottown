@@ -76,7 +76,10 @@ if you only size the issue later in the run, still record it.
     re-running.
 - You cannot review or merge. A verifier from another model family will
   review your pull request, and the owner merges.
-- Run checks as plain commands; write scratch files under `$TMPDIR`.
+- Run checks as plain commands; {{if .TmpDir}}write scratch files with your
+  file tools to `{{.TmpDir}}`, this run's scratch directory, and name it
+  literally in commands, not as a variable{{else}}write scratch files under
+  `$TMPDIR`{{end}}.
 - Other runs may be active on this host at the same time. Do not stop,
   kill or remove processes, containers or worktrees this run did not start,
   and do not run `{{.Bottown}} up` or `down` on any instance: other runs and
