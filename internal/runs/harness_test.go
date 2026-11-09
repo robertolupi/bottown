@@ -247,6 +247,36 @@ func TestImplementPromptPart(t *testing.T) {
 	}
 }
 
+// An implement run on an unsized issue sizes it first, by the guide; on a
+// sized one the prompt says nothing of sizing. Either way an unclear but
+// workable issue is implemented, not stopped on.
+func TestImplementPromptSizing(t *testing.T) {
+	guide, err := SizingGuide()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []bool{true, false} {
+		p, err := Prompt("implement", PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 9, Bottown: "/b", SizeIssue: size})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wants := []string{"## Size the issue", "#9 has no size label. Before you edit anything", "/b issue size SIZE --file - <<'EOF'",
+			"Nothing waits on\nthe estimate", "implement the issue anyway, on assumptions you state", "open it with `pr create --part`",
+			strings.TrimSpace(guide)}
+		for _, want := range wants {
+			if strings.Contains(p, want) != size {
+				t.Errorf("SizeIssue=%v: has %q = %v:\n%s", size, want, !size, p)
+			}
+		}
+		if !strings.Contains(p, "An issue that is unclear but workable is implemented") {
+			t.Errorf("SizeIssue=%v: prompt lacks the unclear-but-workable rule:\n%s", size, p)
+		}
+		if strings.Contains(p, "If the issue is unclear, or you are blocked") {
+			t.Errorf("SizeIssue=%v: prompt still stops on any unclear issue", size)
+		}
+	}
+}
+
 func TestPromptsNameForgeRemote(t *testing.T) {
 	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro"} {
 		p, err := Prompt(kind, PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Remote: "bottown-test"})

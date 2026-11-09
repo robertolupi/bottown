@@ -347,6 +347,10 @@ const outcomeBadges: Record<string, Omit<OutcomeBadge, 'title'>> = {
   changes_requested: { label: 'Changes requested', icon: '✗', tone: 'warning' },
   commented: { label: 'Commented', icon: '…', tone: 'neutral' },
   pr_opened: { label: 'PR opened', icon: '↗', tone: 'accent' },
+  // An issue size estimate (issue_size).
+  sized: { label: 'Sized', icon: '#', tone: 'neutral' },
+  already_sized: { label: 'Already sized', icon: '=', tone: 'neutral' },
+  needs_clarification: { label: 'Needs clarification', icon: '?', tone: 'warning' },
 };
 
 // runOutcome describes a run's work outcome, apart from its execution status:

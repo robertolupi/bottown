@@ -45,6 +45,7 @@ type PromptData struct {
 	MilestonesDir              string // plan: where the repository keeps milestone plans
 	WebPreview                 bool   // implement, verify: the repository has fixtures for `bottown web preview`
 	Reviewed                   bool   // verify: the PR already has reviews, so `pr show --since-review` applies
+	SizeIssue                  bool   // implement: the issue has no size label, so the run sizes it (sizing guide)
 	// Retro: the directory of the flow's evidence and how many runs it
 	// holds, or why it could not be gathered; EvidenceGaps are what it
 	// visibly lacks, such as verify runs with no implement run.

@@ -92,6 +92,14 @@ name = "needs/human"
 color = "d93f0b"
 description = "Escalated; only the owner clears it"
 
+# Set by an estimate that found the issue unclear (`bottown issue size
+# needs-clarification`), with its questions in a comment; the owner removes
+# it once the issue is clarified. Not exclusive.
+[[labels]]
+name = "needs/clarification"
+color = "fbca04"
+description = "An estimate found the issue unclear and asked questions; the owner clears it"
+
 # The size labels: the owner's estimate, or the planner's proposal applied
 # by `milestone apply`. Exclusive, so an issue carries at most one. The
 # descriptions summarize the tiers of the sizing guide

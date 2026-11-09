@@ -45,6 +45,7 @@ bottown whoami                      # actor, run or last run, HEAD vs main
 bottown issue list [--state open|closed|all] [--repo R] [--json]
 bottown issue show [N] [--repo R] [--json] [--download DIR]
 bottown issue create --title T --body-file -
+bottown issue size S|M|L|XL|needs-clarification --file F|-   # implement: size the run's issue
 bottown pr list [--state open|closed|all] [--repo R] [--json]
 bottown pr show [N] [--repo R] [--diff [--full] | --stat | --since-review [--reviewer R]] [--json]
 bottown pr create --title T --body-file - [--part]
@@ -88,6 +89,10 @@ bottown run end [--failed] --summary-file -
   reopen, retitle or retarget them, or change milestones.
 - **If an issue is unclear or you are blocked,** comment on the issue and end
   the run with `--failed`. Do not guess, and do not work outside the issue.
+  An implementer still implements an issue that is unclear but workable, on
+  assumptions it states in its pull request's description.
+- **Implementers size unsized issues** by the sizing guide in their goal
+  prompt, with `issue size`, before editing; nothing waits on the estimate.
 - **Checks:** `bottown check` runs the repository's checks (those its
   `.bottown.toml` names, by default `make check`), keeps the full output in
   a log, prints a short summary, and records the result on your committed,

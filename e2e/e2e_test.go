@@ -1669,6 +1669,21 @@ func TestE2E(t *testing.T) {
 		if out, _ := call(is, "forge_api", map[string]any{"method": "GET", "path": "/repos/bottown/elsewhere"}); out["status"] != float64(403) {
 			t.Errorf("forge_api other repo: %v", out)
 		}
+		// The run sizes its unsized issue: a comment, and the org's size
+		// label by name; a retry keeps the first estimate.
+		estimate := map[string]any{"size": "M", "deciding_factor": "one new file", "confidence": "high", "scope": "as filed"}
+		sized, errMsg := call(is, "issue_size", estimate)
+		if errMsg != "" || sized["outcome"] != "sized" || sized["label"] != "size/M" {
+			t.Fatalf("issue_size: %v %s", sized, errMsg)
+		}
+		estimate["size"] = "L"
+		if again, errMsg := call(is, "issue_size", estimate); errMsg != "" || again["reused"] != true || again["comment_id"] != sized["comment_id"] {
+			t.Errorf("issue_size retry: %v %s", again, errMsg)
+		}
+		if got, _ := call(is, "issue_get", nil); !strings.Contains(fmt.Sprint(got["labels"]), "size/M") ||
+			!strings.Contains(fmt.Sprint(got["comments"]), "```bottown-estimate") {
+			t.Errorf("sized issue: %v", got)
+		}
 
 		git(t, demo, "checkout", "-q", "-B", branch, "bottown-"+a.name+"/main")
 		os.WriteFile(filepath.Join(demo, "mcp.txt"), []byte("1\n"), 0o644)

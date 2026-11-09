@@ -58,6 +58,7 @@ type Server struct {
 	// create hooks replace Forgejo in tests.
 	wikiMu       sync.Mutex
 	debateMu     sync.Mutex // places runs in debate rounds one at a time (debate.go)
+	sizeMu       sync.Mutex // writes issue size estimates one at a time (size.go)
 	wikiPushFn   func(ctx context.Context, gitDir, branch, old, commit string) error
 	wikiCreateFn func(ctx context.Context, org, repo string) error
 	// milestonePushFn replaces the push of a merge into a milestone branch

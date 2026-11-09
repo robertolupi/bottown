@@ -1195,11 +1195,14 @@ test('runOutcome labels recorded outcomes apart from execution status, and keeps
   assert.match(changes?.title || '', /^Outcome: Changes requested/);
   assert.equal(runOutcome({ status: 'succeeded', outcome: 'pr_opened', ended })?.label, 'PR opened');
   assert.equal(runOutcome({ status: 'succeeded', outcome: 'commented', ended })?.label, 'Commented');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'sized', ended })?.label, 'Sized');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'already_sized', ended })?.label, 'Already sized');
+  assert.equal(runOutcome({ status: 'failed', outcome: 'needs_clarification', ended })?.label, 'Needs clarification');
 
   // A failed run keeps its recorded verdict; status stays separate, and no
   // outcome uses the error tone that marks execution failures.
   assert.equal(runOutcome({ status: 'failed', outcome: 'changes_requested', ended })?.label, 'Changes requested');
-  for (const o of ['approved', 'changes_requested', 'commented', 'pr_opened']) {
+  for (const o of ['approved', 'changes_requested', 'commented', 'pr_opened', 'sized', 'already_sized', 'needs_clarification']) {
     assert.notEqual(runOutcome({ status: 'succeeded', outcome: o, ended })?.tone, 'error');
   }
 

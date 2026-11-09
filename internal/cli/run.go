@@ -20,6 +20,7 @@ import (
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
+	"github.com/robertolupi/bottown/internal/estimate"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -865,6 +866,9 @@ func goalPrompt(ctx context.Context, rk *agentCtx, run secrets.Run, d runs.Promp
 		d.AttachmentsError = itemErr.Error()
 	} else {
 		d.Attachments, d.AttachmentsError = rk.fetchAttachments(ctx, attachDir, "", *item), item.AttachmentsError
+		// Read again each round, so a resumed run does not size an issue
+		// sized since; an issue that could not be read is not asked for.
+		d.SizeIssue = run.Kind == policy.Implement && estimate.SizeLabel(item.Labels) == ""
 	}
 	d.WebPreview = runs.HasWebPreview(gitDir, baseRef)
 	if run.Kind == policy.Verify {

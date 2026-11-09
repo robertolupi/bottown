@@ -33,7 +33,7 @@ var toolClasses = []struct {
 	// (internal/server/mcp.go and tools.go).
 	{class: ToolForge, prefixes: []string{"mcp__bottown__", "mcp_bottown_"}, names: []string{
 		"whoami", "forge_status", "forge_api", "issue_get", "issue_create", "issue_list",
-		"pr_get", "pr_list", "pr_create", "comment", "review_submit",
+		"pr_get", "pr_list", "pr_create", "comment", "review_submit", "issue_size",
 	}},
 	// agy's browser_* tools, and chrome-devtools MCP.
 	{class: ToolBrowser, prefixes: []string{"browser_", "mcp__chrome-devtools__", "mcp__chrome_devtools__"}, names: []string{
