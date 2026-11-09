@@ -1891,7 +1891,7 @@ func gcLocal(ws *runs.Workspace, recs []runs.Record, failed bool, live map[strin
 	}
 	// Lock files left by runs removed before RemoveFiles removed them.
 	ws.RemoveOrphanLocks()
-	_, _ = runs.Git(ws.Mirror, nil, "worktree", "prune")
+	_ = ws.Prune()
 	return removed, keep
 }
 

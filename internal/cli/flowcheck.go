@@ -175,13 +175,13 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 		return out, err
 	}
 	c.removeLeftovers()
-	if _, err := runs.Git(c.ws.Mirror, nil, "worktree", "add", "-q", "--detach", dir, req.SHA); err != nil {
+	if err := c.ws.AddDetached(dir, req.SHA); err != nil {
 		return out, err
 	}
 	defer func() {
-		if _, err := runs.Git(c.ws.Mirror, nil, "worktree", "remove", "--force", dir); err != nil {
+		if err := c.ws.RemoveWorktree(dir); err != nil {
 			_ = os.RemoveAll(dir)
-			_, _ = runs.Git(c.ws.Mirror, nil, "worktree", "prune")
+			_ = c.ws.Prune()
 		}
 	}()
 
@@ -311,7 +311,7 @@ func (c flowChecker) removeLeftovers() {
 			_ = os.RemoveAll(filepath.Join(c.ws.RunsDir, d))
 		}
 	}
-	_, _ = runs.Git(c.ws.Mirror, nil, "worktree", "prune")
+	_ = c.ws.Prune()
 }
 
 // checkSummary is the failed steps and their first failing lines, with
