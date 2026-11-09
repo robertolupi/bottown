@@ -173,12 +173,17 @@ const (
 const MaxFailureDetail = 1000
 
 // Run outcomes. A verify run's is its latest review verdict; an implement
-// or plan run's is the pull request it opened.
+// or plan run's is the pull request it opened. An issue size estimate
+// (issue_size) records sized, already_sized or needs_clarification; in an
+// implement run only until its pull request opens.
 const (
-	OutcomeApproved         = "approved"
-	OutcomeChangesRequested = "changes_requested"
-	OutcomeCommented        = "commented"
-	OutcomePROpened         = "pr_opened"
+	OutcomeApproved           = "approved"
+	OutcomeChangesRequested   = "changes_requested"
+	OutcomeCommented          = "commented"
+	OutcomePROpened           = "pr_opened"
+	OutcomeSized              = "sized"
+	OutcomeAlreadySized       = "already_sized"
+	OutcomeNeedsClarification = "needs_clarification"
 )
 
 // MaxSummary bounds a stored digest summary, in bytes.
@@ -423,6 +428,23 @@ func (s *Store) SetOutcome(id, outcome string) (bool, error) {
 	err := s.Update(func(st *State) error {
 		run, found := st.Runs[id]
 		if !found || run.Ended != nil {
+			return nil
+		}
+		run.Outcome, ok = outcome, true
+		st.Runs[id] = run
+		return nil
+	})
+	return ok, err
+}
+
+// SetOutcomeIfUnset is SetOutcome for a side result, which must not
+// replace the run's main one: it records outcome only on a run that has
+// none yet.
+func (s *Store) SetOutcomeIfUnset(id, outcome string) (bool, error) {
+	var ok bool
+	err := s.Update(func(st *State) error {
+		run, found := st.Runs[id]
+		if !found || run.Ended != nil || run.Outcome != "" {
 			return nil
 		}
 		run.Outcome, ok = outcome, true

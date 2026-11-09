@@ -292,7 +292,8 @@ export interface HistoryRunInfo {
   mode: string;
   status: string; // execution: succeeded | failed | revoked | running
   // The work result the server recorded from the run's tools: approved,
-  // changes_requested, commented, pr_opened. Absent when none was recorded.
+  // changes_requested, commented, pr_opened; an estimate's sized,
+  // already_sized or needs_clarification. Absent when none was recorded.
   outcome?: string;
   created: string;
   ended?: string;

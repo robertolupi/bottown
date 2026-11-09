@@ -53,6 +53,14 @@ func (c *Client) EditOrgLabel(org string, id int64, l OrgLabel) error {
 	return c.do(http.MethodPatch, fmt.Sprintf("/orgs/%s/labels/%d", url.PathEscape(org), id), l, nil)
 }
 
+// AddIssueLabelNames adds labels to issue index by name, which Forgejo
+// resolves among the repository's and its organization's labels; the SDK
+// takes label IDs only.
+func (c *Client) AddIssueLabelNames(owner, repo string, index int64, names ...string) error {
+	return c.do(http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", url.PathEscape(owner), url.PathEscape(repo), index),
+		map[string][]string{"labels": names}, nil)
+}
+
 // ApplyToAdmins reads Forgejo's "admins cannot bypass this rule" flag of a
 // branch protection rule. The SDK's BranchProtection lacks it (Gitea calls
 // the similar field block_admin_merge_override).

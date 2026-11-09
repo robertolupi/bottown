@@ -110,6 +110,16 @@ func (s *Server) addForgeTools(srv *mcp.Server) {
 		return nil, out, err
 	})
 
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "issue_size",
+		Description: "Record your size estimate of this run's issue, by the sizing guide in your prompt: " +
+			"S, M, L, XL, or needs-clarification with your questions for the owner. bottown posts it as a comment " +
+			"and sets the issue's size label if it has none (an existing size is kept). Calling it again in the same run is safe.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in IssueSizeIn) (*mcp.CallToolResult, IssueSizeOut, error) {
+		out, err := s.opIssueSize(ctx, principal(req), in)
+		return nil, out, err
+	})
+
 	type apiIn struct {
 		Method string `json:"method" jsonschema:"HTTP method"`
 		Path   string `json:"path" jsonschema:"Forgejo API path below /api/v1, e.g. /repos/bottown/x/issues"`

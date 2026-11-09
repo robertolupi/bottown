@@ -13,12 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/robertolupi/bottown/internal/client"
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/diffstat"
+	"github.com/robertolupi/bottown/internal/estimate"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
 
@@ -474,8 +477,104 @@ their local paths; outside a run, --download DIR saves them there.`,
 	list.Flags().StringVar(&listRepo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
 	list.Flags().StringVar(&listState, "state", "open", "state filter: open, closed, or all")
 	list.Flags().BoolVar(&listJSON, "json", false, "print JSON")
-	issue.AddCommand(show, create, list)
+	issue.AddCommand(show, create, list, newIssueSize())
 	return issue
+}
+
+func newIssueSize() *cobra.Command {
+	var repo, file string
+	var number int64
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "size SIZE --file F|- [--issue N --repo R]",
+		Short: "Record your size estimate of the run's issue (S, M, L, XL or needs-clarification)",
+		Long: `Record a size estimate of the run's issue, made by the sizing guide in your
+prompt. SIZE is S, M, L, XL or needs-clarification; --file holds the rest
+of the estimate, as TOML or JSON (- reads stdin):
+
+  deciding_factor = "the factor that decides the size, in one sentence"
+  boundaries = ["the contracts the change crosses or adds"]
+  behaviours = ["the cases it must decide"]
+  novelty = ["the pattern it follows, or none"]
+  questions = ["open questions; for needs-clarification, those for the owner"]
+  confidence = "high"   # high, medium or low
+  scope = "what you sized, with any assumptions"
+
+bottown posts the estimate as a comment on the issue and, when the issue
+has no size label, sets size/SIZE (needs-clarification sets
+needs/clarification). An issue that is already sized keeps its size; the
+estimate is still posted, as a second opinion. Calling it again in the
+same run keeps the estimate it posted first, and only adds a label that is
+missing. Outside a run only the owner may size issues (--issue, --repo).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := resolveAgent()
+			if err != nil {
+				return err
+			}
+			if file == "" {
+				return errors.New("--file is required: the estimate's factors, as TOML or JSON (- for stdin)")
+			}
+			text, err := readBody(cmd, "", file)
+			if err != nil {
+				return err
+			}
+			in, err := parseEstimate(text)
+			if err != nil {
+				return fmt.Errorf("--file: %w", err)
+			}
+			if in.Size != "" && !strings.EqualFold(in.Size, args[0]) {
+				return fmt.Errorf("the file says size %q, the argument %q", in.Size, args[0])
+			}
+			in.Size = args[0]
+			r := repo
+			if r == "" {
+				r = a.defaultRepo()
+			}
+			var out server.IssueSizeOut
+			if err := a.call(cmd.Context(), "POST", "/v1/forge/issue-size", server.IssueSizeIn{Target: server.Target{Repo: r, Number: number}, Input: in}, &out); err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(cmd, out)
+			}
+			w := cmd.OutOrStdout()
+			switch out.Outcome {
+			case secrets.OutcomeSized:
+				fmt.Fprintf(w, "sized #%d: %s\n", out.Number, out.Label)
+			case secrets.OutcomeNeedsClarification:
+				fmt.Fprintf(w, "#%d needs clarification: labelled %s, questions posted\n", out.Number, estimate.ClarificationLabel)
+			default:
+				fmt.Fprintf(w, "#%d is already %s: kept it, and posted your estimate (%s) as a second opinion\n", out.Number, out.Label, out.Size)
+			}
+			if out.Reused {
+				fmt.Fprintln(w, "This run had already posted its estimate; it was kept, not posted again.")
+			}
+			if out.URL != "" {
+				fmt.Fprintln(w, out.URL)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", "", "the estimate's factors, as TOML or JSON, or - for stdin (required)")
+	cmd.Flags().Int64Var(&number, "issue", 0, "the issue (default: the run's; required outside a run)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repository (default: the run's, else the one this worktree's bottown remote points at)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
+	return cmd
+}
+
+// parseEstimate reads an estimate file: JSON when it starts with {, else
+// TOML. Unknown keys are refused, so a misspelt factor is not dropped.
+func parseEstimate(text string) (estimate.Input, error) {
+	var in estimate.Input
+	if strings.HasPrefix(strings.TrimSpace(text), "{") {
+		dec := json.NewDecoder(strings.NewReader(text))
+		dec.DisallowUnknownFields()
+		return in, dec.Decode(&in)
+	}
+	dec := toml.NewDecoder(strings.NewReader(text))
+	dec.DisallowUnknownFields()
+	return in, dec.Decode(&in)
 }
 
 func newPR() *cobra.Command {

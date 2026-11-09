@@ -18,7 +18,7 @@ func TestToolClass(t *testing.T) {
 		{"search", ToolSearch, []call{{"Grep", ""}, {"Glob", ""}, {"grep_search", ""}, {"find_by_name", ""}, {"grep", ""}, {"glob", ""}}},
 		{"forge mcp", ToolForge, []call{{"mcp__bottown__issue_get", ""}, {"mcp__bottown__review_submit", ""}, {"mcp_bottown_pr_get", ""},
 			{"whoami", ""}, {"forge_status", ""}, {"forge_api", ""}, {"issue_get", ""}, {"issue_create", ""}, {"issue_list", ""},
-			{"pr_get", ""}, {"pr_list", ""}, {"pr_create", ""}, {"comment", ""}, {"review_submit", ""}}},
+			{"pr_get", ""}, {"pr_list", ""}, {"pr_create", ""}, {"comment", ""}, {"review_submit", ""}, {"issue_size", ""}}},
 		{"forge shell", ToolForge, []call{{"Bash", "bottown issue show 12"}, {"Bash", "/Users/me/.local/bin/bottown pr create --title x"},
 			{"Bash", "~/.local/bin/bottown whoami"}, {"run_command", "bottown run end --summary-file -"}, {"bash", "bottown whoami"}}},
 		{"forge shell wrapper", ToolForge, []call{
