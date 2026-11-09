@@ -447,10 +447,14 @@ func TestFlowsShareActor(t *testing.T) {
 			errs <- err
 		}()
 	}
+	// Each implement run blocks until release, so both being started at
+	// once is the overlap itself; the deadline only bounds a hang, and is
+	// generous so a loaded host cannot trip it.
+	deadline := time.After(30 * time.Second)
 	for range 2 {
 		select {
 		case <-started:
-		case <-time.After(5 * time.Second):
+		case <-deadline:
 			t.Fatal("the implement runs did not start concurrently")
 		}
 	}

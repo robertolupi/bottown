@@ -675,10 +675,14 @@ func TestLoadPRCache(t *testing.T) {
 	}
 }
 
-// slowSource holds each PR read a moment and counts how many ran at once.
+// slowSource counts how many PR reads run at once. Until two are in
+// flight, each read waits for another to join it, so the overlap is
+// observed rather than left to how the reads happen to be scheduled.
 type slowSource struct {
 	*fakeSource
 	running, peak atomic.Int32
+	once          sync.Once
+	overlap       chan struct{} // closed once two reads are in flight
 }
 
 func (s *slowSource) PullRequest(ctx context.Context, n int64) (*server.PROut, error) {
@@ -690,14 +694,20 @@ func (s *slowSource) PullRequest(ctx context.Context, n int64) (*server.PROut, e
 			break
 		}
 	}
-	time.Sleep(10 * time.Millisecond)
+	if now >= 2 {
+		s.once.Do(func() { close(s.overlap) })
+	}
+	select {
+	case <-s.overlap:
+	case <-time.After(10 * time.Second): // reads never overlap: the peak check fails
+	}
 	return s.fakeSource.PullRequest(ctx, n)
 }
 
 // Load's reads run concurrently, at most Concurrency at a time, and its
 // Incomplete is sorted however they finish.
 func TestLoadConcurrent(t *testing.T) {
-	src := &slowSource{fakeSource: &fakeSource{reads: map[string]int{}, fail: map[string]bool{}}}
+	src := &slowSource{fakeSource: &fakeSource{reads: map[string]int{}, fail: map[string]bool{}}, overlap: make(chan struct{})}
 	for n := int64(1); n <= 3*Concurrency; n++ {
 		src.facts.PRs = append(src.facts.PRs, pr(100+n, n, 1))
 		if n%5 == 0 {

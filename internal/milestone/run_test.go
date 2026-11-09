@@ -108,7 +108,9 @@ func (f *runFake) Comment(_ context.Context, n int64, body string) error {
 }
 
 // fakeLauncher runs no flow: each child's flow ends with outcome(issue),
-// ready to merge by default, after a short wait so flows overlap.
+// ready to merge by default. With gather set, flows wait until gather of
+// them are in flight, so a test observes the overlap rather than inferring
+// it from timing; without it, each waits a moment so flows can overlap.
 type fakeLauncher struct {
 	mu       sync.Mutex
 	outcome  func(FlowRequest) Outcome
@@ -116,6 +118,8 @@ type fakeLauncher struct {
 	running  int
 	most     int
 	returned int // flows that have ended
+	gather   int
+	gathered chan struct{} // closed once gather flows are in flight
 }
 
 func (l *fakeLauncher) Flow(_ context.Context, req FlowRequest) Outcome {
@@ -123,8 +127,26 @@ func (l *fakeLauncher) Flow(_ context.Context, req FlowRequest) Outcome {
 	l.requests = append(l.requests, req)
 	l.running++
 	l.most = max(l.most, l.running)
+	if l.gather > 0 && l.gathered == nil {
+		l.gathered = make(chan struct{})
+	}
+	gathered := l.gathered
+	if l.gather > 0 && l.running >= l.gather {
+		select {
+		case <-gathered:
+		default:
+			close(gathered)
+		}
+	}
 	l.mu.Unlock()
-	time.Sleep(20 * time.Millisecond)
+	if gathered != nil {
+		select {
+		case <-gathered:
+		case <-time.After(10 * time.Second): // too few overlapped: the test's count fails
+		}
+	} else {
+		time.Sleep(20 * time.Millisecond)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.running--
@@ -292,7 +314,7 @@ func TestRunParallelAndPairs(t *testing.T) {
 		t.Run(fmt.Sprint(parallel), func(t *testing.T) {
 			f := newRunFake(withPlan(planIndependent))
 			mustApply(t, f.fakeForge, nil)
-			l := &fakeLauncher{}
+			l := &fakeLauncher{gather: parallel}
 			r := runOnce(t, f, l, "claude=*,agy=*,kimi=*", parallel)
 			if r.err != nil || r.finished != 1 {
 				t.Fatalf("err = %v\n%s", r.err, r.out)
