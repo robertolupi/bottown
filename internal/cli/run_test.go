@@ -761,7 +761,8 @@ func TestGCRemovesLocks(t *testing.T) {
 	if removed, _ := gcLocal(ws, recs, false, nil, io.Discard, func(runs.Record) error { return nil }); removed != 1 {
 		t.Fatalf("removed %d runs, want 1", removed)
 	}
-	locks, _ := filepath.Glob(filepath.Join(ws.RunsDir, "*.lock"))
+	// Run locks only: the mirror lock (gc removes worktrees) stays.
+	locks, _ := filepath.Glob(filepath.Join(ws.RunsDir, "r-*.lock"))
 	if want := []string{ws.Path("r-f1", ".lock")}; !slices.Equal(locks, want) {
 		t.Fatalf("lock files %v, want %v", locks, want)
 	}
