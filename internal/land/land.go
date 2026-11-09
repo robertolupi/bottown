@@ -40,6 +40,9 @@ type Policy struct {
 	Kind         Kind
 	CheckTimeout time.Duration
 	Repair       func(context.Context, Outcome) bool
+	// Progress, when set, is told each step as it starts, so a caller can
+	// show what a long landing is doing: one short line, without the PR.
+	Progress func(step string)
 }
 
 // Outcome is a printable result. Callers may switch on its concrete type.
@@ -112,6 +115,11 @@ func issueNumber(branch string) int64 {
 func Land(ctx context.Context, api API, checker flow.Checker, policy Policy, pr server.PROut) Outcome {
 	pos := Position{pr.Number, pr.HeadSHA}
 	refuse := func(err error) Outcome { return Refused{pos, err} }
+	progress := func(format string, args ...any) {
+		if policy.Progress != nil {
+			policy.Progress(fmt.Sprintf(format, args...))
+		}
+	}
 	if policy.Repo == "" || policy.RunsDir == "" || pr.Number <= 0 || checker == nil || (policy.Kind != Main && policy.Kind != Milestone) {
 		return refuse(errors.New("repo, runs directory, PR, checker and valid policy are required"))
 	}
@@ -182,6 +190,11 @@ func Land(ctx context.Context, api API, checker flow.Checker, policy Policy, pr 
 				outcome = Conflict{pos, status.Conflicts}
 				break
 			}
+			if attempt > 0 {
+				progress("base moved; building the landing commit again (retry %d of 3)", attempt)
+			} else {
+				progress("building the landing commit: %s into %s", pr.BaseBranch, short(pos.Head))
+			}
 			var landing server.PRLandingOut
 			err := api.Call(ctx, "POST", "/v1/forge/pr/landing", server.PRLandingIn{Target: target, HeadSHA: pos.Head}, &landing)
 			if err != nil {
@@ -206,6 +219,7 @@ func Land(ctx context.Context, api API, checker flow.Checker, policy Policy, pr 
 			if policy.Kind == Main {
 				groups = append(groups, flow.GroupE2E)
 			}
+			progress("running %s at %s", strings.Join(groups, " and "), short(pos.Head))
 			checked, err := flow.RunCheck(ctx, checker, flow.CheckRequest{Repo: policy.Repo, Issue: issue, PR: pr.Number, SHA: pos.Head, Groups: groups}, timeout)
 			if err != nil {
 				return refuse(err)
@@ -216,6 +230,11 @@ func Land(ctx context.Context, api API, checker flow.Checker, policy Policy, pr 
 			if !checked.Passed && !checked.Skipped {
 				return ChecksFailed{pos, checked.Log, checked.Description}
 			}
+			verdict := "passed"
+			if !checked.Passed {
+				verdict = "skipped"
+			}
+			progress("checks %s (%s); merging %s", verdict, checked.Description, short(pos.Head))
 			var merged server.LandOut
 			err = api.Call(ctx, "POST", "/v1/forge/pr/merge", server.LandIn{Target: target, HeadSHA: pos.Head}, &merged)
 			if err == nil {
@@ -239,6 +258,14 @@ func Land(ctx context.Context, api API, checker flow.Checker, policy Policy, pr 
 			return outcome
 		}
 	}
+}
+
+// short abbreviates a commit SHA for a progress line.
+func short(sha string) string {
+	if len(sha) > 10 {
+		return sha[:10]
+	}
+	return sha
 }
 
 type recorder struct{ API }

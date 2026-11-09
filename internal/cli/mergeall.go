@@ -156,6 +156,7 @@ func syncMainCheckout(ctx context.Context, out io.Writer, top, remote string, dr
 		fmt.Fprintf(out, "main: would fetch %s %s and fast-forward %s\n", remote, base, base)
 		return base, nil
 	}
+	fmt.Fprintf(out, "%s: fetching %s %s\n", base, remote, base)
 	if _, err := runs.GitCtx(ctx, top, nil, "fetch", "-q", remote, base); err != nil {
 		return "", err
 	}
@@ -263,12 +264,19 @@ func (m *mergeAll) landChecker() flow.Checker {
 	if m.checker != nil {
 		return m.checker
 	}
-	return flowChecker{ws: m.ws}
+	return flowChecker{ws: m.ws, progress: func(req flow.CheckRequest, step string) {
+		fmt.Fprintf(m.out, "!%d: running %s\n", req.PR, step)
+	}}
 }
 
 // run builds the batch, orders and lands it, repairs it when asked, prints
 // the table and reports whether every candidate landed.
 func (m *mergeAll) run(ctx context.Context, numbers []int64) (bool, error) {
+	if len(numbers) > 0 {
+		fmt.Fprintf(m.out, "reading %s\n", prList(numbers))
+	} else {
+		fmt.Fprintf(m.out, "finding the approved pull requests into %s\n", m.base)
+	}
 	batch, skipped, err := m.batch(ctx, numbers)
 	if err != nil {
 		return false, err
@@ -278,6 +286,7 @@ func (m *mergeAll) run(ctx context.Context, numbers []int64) (bool, error) {
 		fmt.Fprintln(m.out, "no candidates to land")
 		return skipped == 0, nil
 	}
+	fmt.Fprintf(m.out, "%d candidate(s): %s\n", total, prList(numbersOf(batch)))
 	if m.dryRun {
 		return m.dryRunOrder(ctx, batch)
 	}
@@ -290,7 +299,8 @@ func (m *mergeAll) run(ctx context.Context, numbers []int64) (bool, error) {
 			return false, err
 		}
 		c := ordered[0]
-		oc := land.Land(ctx, m.api, m.landChecker(), m.policy(), m.prOut(c))
+		fmt.Fprintf(m.out, "!%d: landing (%d of %d) into %s\n", c.number, total-len(remaining)+1, total, c.base)
+		oc := land.Land(ctx, m.api, m.landChecker(), m.policy(c), m.prOut(c))
 		fmt.Fprintln(m.out, oc)
 		results.record(c, oc)
 		remaining = removeCandidate(remaining, c.number)
@@ -325,8 +335,10 @@ func (r *results) record(c *mergeCandidate, oc land.Outcome) {
 	}
 }
 
-func (m *mergeAll) policy() land.Policy {
-	return land.Policy{Repo: m.repo, RunsDir: m.ws.RunsDir, Kind: land.Main, CheckTimeout: m.checkTimeout}
+// policy is the landing policy for c, whose steps print as they start.
+func (m *mergeAll) policy(c *mergeCandidate) land.Policy {
+	return land.Policy{Repo: m.repo, RunsDir: m.ws.RunsDir, Kind: land.Main, CheckTimeout: m.checkTimeout,
+		Progress: func(step string) { fmt.Fprintf(m.out, "!%d: %s\n", c.number, step) }}
 }
 
 // prOut is the pull request land.Land re-reads and revalidates: only its
@@ -467,6 +479,7 @@ func (m *mergeAll) liveRuns(ctx context.Context) ([]secrets.Run, error) {
 
 // order trial-merges each candidate's base and orders them with land.Order.
 func (m *mergeAll) order(ctx context.Context, batch []*mergeCandidate) ([]*mergeCandidate, error) {
+	fmt.Fprintf(m.out, "ordering %s: trial-merging %s into each\n", prList(numbersOf(batch)), m.baseName(batch))
 	for _, c := range batch {
 		q := url.Values{"repo": {m.repo}, "number": {fmt.Sprint(c.number)}}
 		var st server.PRMergeStatus
@@ -585,7 +598,8 @@ func (m *mergeAll) reland(ctx context.Context, batch []*mergeCandidate, out *res
 			return err
 		}
 		c := ordered[0]
-		oc := land.Land(ctx, m.api, m.landChecker(), m.policy(), m.prOut(c))
+		fmt.Fprintf(m.out, "!%d: landing again after the repair\n", c.number)
+		oc := land.Land(ctx, m.api, m.landChecker(), m.policy(c), m.prOut(c))
 		fmt.Fprintln(m.out, oc)
 		out.record(c, oc)
 		remaining = removeCandidate(remaining, c.number)
@@ -606,6 +620,35 @@ func (m *mergeAll) table(batch []*mergeCandidate, r *results) {
 		}
 		fmt.Fprintf(m.out, "!%-5d %s\n", c.number, state)
 	}
+}
+
+// numbersOf is the batch's pull request numbers, in its order.
+func numbersOf(batch []*mergeCandidate) []int64 {
+	out := make([]int64, len(batch))
+	for i, c := range batch {
+		out[i] = c.number
+	}
+	return out
+}
+
+// prList prints pull request numbers as "!1, !2".
+func prList(numbers []int64) string {
+	parts := make([]string, len(numbers))
+	for i, n := range numbers {
+		parts[i] = fmt.Sprintf("!%d", n)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// baseName is the batch's base branch, or "its base" when the named
+// candidates land into different ones.
+func (m *mergeAll) baseName(batch []*mergeCandidate) string {
+	for _, c := range batch {
+		if c.base != batch[0].base {
+			return "its base"
+		}
+	}
+	return batch[0].base
 }
 
 func removeCandidate(batch []*mergeCandidate, number int64) []*mergeCandidate {
