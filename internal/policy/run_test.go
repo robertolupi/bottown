@@ -8,6 +8,7 @@ func TestRunScopeAPI(t *testing.T) {
 	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
 	plan := RunScope{Org: "bottown", Repo: "demo", Role: Plan}
 	retro := RunScope{Org: "bottown", Repo: "demo", Role: Retro}
+	est := RunScope{Org: "bottown", Repo: "demo", Role: Estimate}
 	cases := []struct {
 		s            RunScope
 		method, path string
@@ -50,6 +51,15 @@ func TestRunScopeAPI(t *testing.T) {
 		{retro, "PATCH", "/repos/bottown/demo/issues/1", false, "role-retro"},
 		{retro, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "review-via-tool"},
 		{retro, "POST", "/repos/bottown/demo/milestones", false, "role-retro"},
+		// Estimate runs read and comment; their label goes through
+		// issue_size, not the API.
+		{est, "GET", "/repos/bottown/demo/issues/1", true, "run-read"},
+		{est, "POST", "/repos/bottown/demo/issues/1/comments", true, "run-estimate-comment"},
+		{est, "POST", "/repos/bottown/demo/issues/1/labels", false, "role-estimate"},
+		{est, "PATCH", "/repos/bottown/demo/issues/1", false, "role-estimate"},
+		{est, "POST", "/repos/bottown/demo/issues", false, "role-estimate"},
+		{est, "POST", "/repos/bottown/demo/pulls", false, "role-estimate"},
+		{est, "POST", "/repos/bottown/demo/pulls/2/reviews", false, "review-via-tool"},
 		// Plan runs are implement runs that may not file issues.
 		{plan, "GET", "/repos/bottown/demo/issues/1", true, "run-read"},
 		{plan, "POST", "/repos/bottown/demo/issues", false, "role-plan-no-issues"},
@@ -75,6 +85,7 @@ func TestRunScopeGit(t *testing.T) {
 	dis := RunScope{Org: "bottown", Repo: "demo", Role: Discuss}
 	plan := RunScope{Org: "bottown", Repo: "demo", Role: Plan}
 	retro := RunScope{Org: "bottown", Repo: "demo", Role: Retro}
+	est := RunScope{Org: "bottown", Repo: "demo", Role: Estimate, Issue: 7}
 	cases := []struct {
 		s             RunScope
 		path, service string
@@ -97,6 +108,9 @@ func TestRunScopeGit(t *testing.T) {
 		{dis, "/bottown/demo.git/git-receive-pack", "", false},
 		{retro, "/bottown/demo.git/info/refs", "git-upload-pack", true},
 		{retro, "/bottown/demo.git/info/refs", "git-receive-pack", false},
+		{est, "/bottown/demo.git/info/refs", "git-upload-pack", true},
+		{est, "/bottown/demo.git/info/refs", "git-receive-pack", false},
+		{est, "/bottown/demo.git/git-receive-pack", "", false},
 	}
 	for _, c := range cases {
 		if d := c.s.DecideGit(c.path, c.service); d.Allow != c.allow {

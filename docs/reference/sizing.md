@@ -2,8 +2,7 @@
 
 The `size/S`, `size/M`, `size/L` and `size/XL` labels mean what the
 **sizing guide** says they mean, so that sizes set by different agents,
-or by the owner, are consistent enough to compare. The design, and the
-part not built yet (`bottown estimate`), are in
+or by the owner, are consistent enough to compare. The design is in
 [the sizing design](../design/sizing.md).
 
 - **One source, in the binary.** The guide is a template,
@@ -27,7 +26,8 @@ part not built yet (`bottown estimate`), are in
   the planner gives each proposed issue a `size` in its block (which
   `milestone apply` sets as the issue's label when it has none), splits
   one that comes out XL, and puts the rest of each estimate in its pull
-  request's description. Implement runs on an unsized issue: below.
+  request's description. Implement runs on an unsized issue, and estimate
+  runs: below.
 - **The labels' descriptions** in `internal/config/default.toml` are
   one-line summaries of the guide's tiers. `needs/clarification` (not
   exclusive) marks an issue an estimate found unclear; the owner removes
@@ -48,8 +48,8 @@ whose file holds the rest of the estimate as TOML or JSON
 not dropped). A size needs its deciding factor, confidence and scope;
 `needs-clarification` needs its questions.
 
-- **Who.** An implement run, on its own issue only. Outside a run, the
-  owner, on any issue (`--issue`, `--repo`). Other runs and actor keys
+- **Who.** An implement or estimate run, on its own issue only. Outside a
+  run, the owner, on any issue (`--issue`, `--repo`). Other runs and actor keys
   outside a run are refused. It is the only way an agent sets a label:
   the proxy still denies the issue labels endpoints.
 - **What it writes,** in order, with the actor's token:
@@ -66,7 +66,8 @@ not dropped). A size needs its deciding factor, confidence and scope;
   3. The run's outcome: `sized`, `already_sized` or
      `needs_clarification`. An implement run's outcome is its pull
      request, so there the estimate is recorded only while the run has
-     no outcome, and `pr_opened` replaces it.
+     no outcome, and `pr_opened` replaces it. An estimate run's outcome
+     is its estimate.
 - **Already sized** is a success: a `size/*` label someone set is never
   replaced. The estimate is still posted, with `applied = false` and the
   existing size, as a second opinion; no label is written, not even
@@ -96,3 +97,40 @@ issue the section is absent.
 - **`XL`:** the implementer comments a plan that splits the issue into
   pull requests, implements the first, and opens it with `--part`; the
   owner starts a run for each next part.
+
+## `bottown estimate`
+
+```
+bottown estimate [ISSUE...] --actors SPEC [--max N] [--again] [--timeout D] [--repo R] [--keep]
+```
+
+An owner command, in the main checkout, that starts one **estimate run**
+per issue, side by side, and prints a line per issue when they have
+ended: the actor, the run, the outcome, the size and the deciding factor.
+
+- **Which issues.** The ones named. Without any, the open issues with no
+  `size/*` and no `needs/clarification` label, leaving out pull requests
+  and milestone epics, oldest first, at most `--max` (default 10). A named
+  issue that is already sized is skipped, saying so, unless `--again` is
+  given: then its estimate is posted as a second opinion (`applied =
+  false`) and the label stays. `--again` needs named issues.
+- **Actors.** `--actors` is the pool: comma-separated `ACTOR[:MODEL][=N]`
+  entries, milestone run's grammar (`agents.ParseEntries`) without its
+  family rule, since estimates are not verified. N is how many runs the
+  actor has at once, a number or `*` (default 1). Each issue goes to the
+  next actor, in spec order, with a free slot.
+- **The run.** The `estimate` role (`policy.Estimate`). Like a discuss
+  run it reads the default branch's head, recorded as its SHA, in a
+  read-only worktree, and cannot push, open pull requests or review; it
+  may comment, and call `issue_size` on its issue. Its prompt
+  (`internal/runs/prompts/estimate.md`) is the issue, the sizing guide and
+  one task: size the issue and record it with `issue size`, once. Each run
+  is a batch run with a time limit of `--timeout` (default 15 minutes).
+- **Its output.** The estimate's comment is the run's output: a run that
+  succeeds posts no handover comment. A run that exits cleanly without
+  recording an estimate (its server outcome is not `sized`,
+  `already_sized` or `needs_clarification`) has failed, with the observed
+  cause `no_output`, and posts a failed handover on the issue. The command
+  exits non-zero when any run recorded no estimate.
+- **In the web UI** estimate runs stand alone, like discuss runs, outside
+  the issue's flow; the history's kind filter has them.

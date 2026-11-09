@@ -349,7 +349,7 @@ func TestDebatePrompts(t *testing.T) {
 // ones do not.
 func TestBatchPromptsSayNobodyApproves(t *testing.T) {
 	const line = "nobody can approve a permission\n  request"
-	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro", "debate", "consolidate"} {
+	for _, kind := range []string{"implement", "verify", "discuss", "plan", "retro", "debate", "consolidate", "estimate"} {
 		for _, batch := range []bool{true, false} {
 			d := PromptData{RunID: "r-1", Actor: "claude", Repo: "o/r", Issue: 1, PR: 2, SHA: "abc", Bottown: "/b", Batch: batch,
 				Debate: &DebatePrompt{Round: 1, File: "f.md"}}
@@ -385,6 +385,31 @@ func TestPromptsSayRunsShareTheHost(t *testing.T) {
 				t.Errorf("%s prompt lacks %q:\n%s", kind, want, p)
 			}
 		}
+	}
+}
+
+// An estimate prompt is the guide, the issue and one task: record the
+// estimate with issue size, once, without implementing.
+func TestEstimatePrompt(t *testing.T) {
+	p, err := Prompt("estimate", PromptData{RunID: "r-1", Actor: "codex", Family: "openai", Repo: "o/r", Issue: 7, Title: "T", Body: "the body", SHA: "abc", Base: "main", Bottown: "/b", Batch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide, err := SizingGuide()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"**estimator**", "Size #7 in `o/r`: **T**", "the body", strings.TrimSpace(guide),
+		"/b issue size SIZE --file - <<'EOF'", "detached at `abc`, the head\n  of `main`",
+		"do not post another\n  with `comment`", "A run that\n   ends without it has failed.",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("estimate prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "run end --summary") {
+		t.Errorf("a launched estimate run is told to end itself:\n%s", p)
 	}
 }
 

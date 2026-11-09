@@ -46,6 +46,12 @@ type runOpts struct {
 	plain           bool                  // no live tail: plain output even on a terminal (bottown flow without a tail, --unattended included)
 	debate          *server.DebateRequest // discuss in a debate round, consolidate: the debate (bottown debate)
 	since           string                // retro: the window's start, for a windowed retro (#383)
+	// ctx, when set, is the run's context in place of the command's: a
+	// time limit for one of several runs started side by side (bottown
+	// estimate).
+	ctx context.Context
+	// runID, when set, gets the run's ID once the server has created it.
+	runID *string
 }
 
 // ownTail is whether startRun shows a live tail of its own for the run,
@@ -329,6 +335,9 @@ func parseNumber(s string) (int64, error) {
 
 func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (err error) {
 	ctx := cmd.Context()
+	if o.ctx != nil {
+		ctx = o.ctx
+	}
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	// A batch run on a terminal shows its live tail there (tail.go), a
 	// flow's for all its runs; its lines and the launcher's go through it.
@@ -391,6 +400,9 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		return err
 	}
 	run := created.Run
+	if o.runID != nil {
+		*o.runID = run.ID
+	}
 	if w := run.Window; w != nil {
 		fmt.Fprintf(out, "retro window --since %s: after %s, up to %s; wiki page %s\n", w.Since, w.Base, run.SHA, w.Page)
 	}
@@ -504,7 +516,7 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		Dir: dir, Prompt: prompt, PromptFile: rc.ws.Path(run.ID, ".prompt.md"),
 		MCPURL: mcpURL, Key: created.Key,
 		RecordFile: recPath, RunID: run.ID, Interactive: o.interactive, Allow: o.allow,
-		ReadOnly: kind == policy.Discuss || kind == policy.Consolidate, Spec: run.Spec, TmpDir: tmpDir,
+		ReadOnly: kind == policy.Discuss || kind == policy.Consolidate || kind == policy.Estimate, Spec: run.Spec, TmpDir: tmpDir,
 	}
 	if err := h.PrepareMCP(&l, rc.ws.RunsDir); err != nil {
 		return err
@@ -616,10 +628,14 @@ func startRun(cmd *cobra.Command, g *globals, kind, target string, o runOpts) (e
 		status = askOutcome(cmd, status)
 	}
 	// A debate run that exited cleanly did its job only if its file is in
-	// the wiki (#391).
+	// the wiki (#391), and an estimate run only if it recorded an estimate.
 	var noOutput *secrets.Failure
 	if status == runs.StatusSucceeded {
-		if noOutput = checkDebateFile(ctx, rc, run, errOut); noOutput != nil {
+		noOutput = checkDebateFile(ctx, rc, run, errOut)
+		if noOutput == nil {
+			noOutput = checkEstimated(ctx, rc, run, errOut)
+		}
+		if noOutput != nil {
 			status = runs.StatusFailed
 			fmt.Fprintf(errOut, "run %s: %s\n", run.ID, noOutput.Detail)
 		}
@@ -952,6 +968,9 @@ func handover(ctx context.Context, rc *runContext, run secrets.Run, rec runs.Rec
 		return nil
 	case run.Kind == policy.Consolidate && run.Debate != nil:
 		body = consolidatedText(rec, run, status, code)
+	case run.Kind == policy.Estimate && status == runs.StatusSucceeded:
+		// The estimate's own comment is the run's output.
+		return nil
 	}
 	path := fmt.Sprintf("/forgejo/api/v1/repos/%s/%s/issues/%d/comments", run.Org, run.Repo, n)
 	return callServer(ctx, rc.inst, key, "POST", path, map[string]string{"body": body}, nil)
@@ -996,6 +1015,8 @@ func handoverText(rec runs.Record, status string, code int, summary string) stri
 		}
 	case policy.Retro:
 		fmt.Fprintf(&b, "Retrospective against `%s`, the default branch's head.\n\n", rec.SHA)
+	case policy.Estimate:
+		fmt.Fprintf(&b, "Estimated against `%s`, the default branch's head.\n\n", rec.SHA)
 	case policy.Discuss:
 		if rec.Critical {
 			fmt.Fprintf(&b, "Critical discuss (red team) by the %s family.", rec.Family)

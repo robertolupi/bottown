@@ -49,7 +49,7 @@ type IssueSizeOut struct {
 
 // sizingRoles are the runs that may size their issue; the owner may size
 // any issue outside a run.
-var sizingRoles = []string{policy.Implement}
+var sizingRoles = []string{policy.Implement, policy.Estimate}
 
 func (s *Server) opIssueSize(ctx context.Context, p secrets.Principal, in IssueSizeIn) (IssueSizeOut, error) {
 	deny := func(err error) (IssueSizeOut, error) {

@@ -26,6 +26,11 @@ const (
 	// one, in the wiki (#315): like a discuss run they read and comment,
 	// and cannot push, open pull requests or review.
 	Consolidate = "consolidate"
+	// Estimate runs size one issue by the sizing guide (#439): like a
+	// discuss run they read and comment, and cannot push, open pull
+	// requests or review; their one write beyond comments is the
+	// issue_size tool, which sets the size label.
+	Estimate = "estimate"
 )
 
 // RunScope confines a run key to one repository and to its role. It applies
@@ -33,7 +38,7 @@ const (
 type RunScope struct {
 	Org, Repo string
 	Issue     int64
-	Role      string // Implement | Verify | Discuss | Plan | Retro | Consolidate
+	Role      string // Implement | Verify | Discuss | Plan | Retro | Consolidate | Estimate
 	// Debate is a discuss run answering in a debate round (#315): it may
 	// not comment or react while the round is open, since every other
 	// participant could read it.
@@ -44,7 +49,7 @@ type RunScope struct {
 // issue's thread.
 const DebateQuiet = "role-debate-no-comment"
 
-// verifyWrites are the only API writes a verify, discuss, retro or consolidate run may make
+// verifyWrites are the only API writes a verify, discuss, retro, consolidate or estimate run may make
 // directly inside its repository: commenting. Reviews go through the review_submit
 // MCP tool, which pins them to the run's commit; everything else that
 // changes the repository (pushes, PRs, issues, files, branches, releases) is
@@ -89,7 +94,7 @@ func (s RunScope) DecideAPI(method, apiPath string) Decision {
 		return Decision{Allow: true, Rule: "run-read"}
 	}
 	switch s.Role {
-	case Verify, Discuss, Retro, Consolidate:
+	case Verify, Discuss, Retro, Consolidate, Estimate:
 		if slices.Contains(reviewWrites.Methods, method) && match(split(reviewWrites.Pattern), segs) {
 			return Decision{Allow: false, Rule: reviewWrites.Name}
 		}

@@ -30,7 +30,8 @@ only their topic's file.
 - [Harness models](harness-models.md)
 - [The fam guide](fam-guide.md)
 - [The sizing guide](sizing.md) (what `size/*` means; the plan prompt's
-  rubric; `bottown issue size` and sizing in implement runs)
+  rubric; `bottown issue size`, sizing in implement runs, and
+  `bottown estimate`)
 - [The wiki store](wiki-store.md) (`bottown wiki`)
 - [Debates](debates.md) (`bottown debate`: independent rounds of answers,
   consolidated in the wiki)

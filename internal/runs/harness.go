@@ -95,7 +95,7 @@ type DebatePrompt struct {
 }
 
 // Prompt renders the goal prompt for kind (a run role: "implement",
-// "verify", "discuss", "plan", "retro" or "consolidate"; or "debate", a
+// "verify", "discuss", "plan", "retro", "consolidate" or "estimate"; or "debate", a
 // discuss run in a debate round).
 func Prompt(kind string, d PromptData) (string, error) {
 	var b bytes.Buffer
@@ -120,7 +120,7 @@ type Launch struct {
 	// model (see SplitActorSpec); empty uses the harness's default.
 	Spec  string
 	Allow []string // extra allowed tools (claude syntax)
-	// ReadOnly runs (discuss; not retro, which may draft notes) must not change the worktree: file-editing
+	// ReadOnly runs (discuss, consolidate, estimate; not retro, which may draft notes) must not change the worktree: file-editing
 	// tools are pre-approved only in TmpDir, and edits are not auto-accepted.
 	ReadOnly bool
 	TmpDir   string // scratch directory for the run

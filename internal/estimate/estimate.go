@@ -161,7 +161,7 @@ func Comment(in Input, rec Record, owner string) string {
 		list(&b, in.Questions)
 	} else {
 		fmt.Fprintf(&b, "**Estimate: %s%s**, %s confidence (%s)\n\n", SizeLabelPrefix, in.Size, in.Confidence, by)
-		fmt.Fprintf(&b, "**Deciding factor:** %s\n\n", in.DecidingFactor)
+		fmt.Fprintf(&b, "%s%s\n\n", decidingPrefix, in.DecidingFactor)
 	}
 	if !rec.Applied {
 		fmt.Fprintf(&b, "_Not applied: the issue is already %s._\n\n", rec.Existing)
@@ -188,6 +188,21 @@ func Comment(in Input, rec Record, owner string) string {
 	}
 	fmt.Fprintf(&b, "```%s\n%s```\n", Fence, block)
 	return b.String()
+}
+
+// decidingPrefix starts the line of a sized estimate's comment that holds
+// its deciding factor.
+const decidingPrefix = "**Deciding factor:** "
+
+// DecidingFactor is the deciding factor in an estimate's comment, as
+// Comment renders it, or "" when it has none (needs-clarification).
+func DecidingFactor(body string) string {
+	for line := range strings.Lines(strings.ReplaceAll(body, "\r\n", "\n")) {
+		if f, ok := strings.CutPrefix(line, decidingPrefix); ok {
+			return strings.TrimSpace(f)
+		}
+	}
+	return ""
 }
 
 func list(b *strings.Builder, items []string) {
