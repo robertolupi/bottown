@@ -37,6 +37,9 @@ const defaultCheckTimeout = time.Hour
 type flowChecker struct {
 	ws   *runs.Workspace
 	tail *liveTail
+	// progress, when set, is told as each group's commands start, with
+	// the group, the commands and the log they write.
+	progress func(req flow.CheckRequest, step string)
 	// hold marks a check live; nil is runs.HoldCheck. Tests replace it.
 	hold func(dir string, rec runs.CheckRecord) (release func(), err error)
 }
@@ -193,6 +196,9 @@ func (c flowChecker) Check(ctx context.Context, req flow.CheckRequest) (flow.Che
 			if err := mark(rec); err != nil {
 				return out, err
 			}
+		}
+		if c.progress != nil {
+			c.progress(req, fmt.Sprintf("%s: %s (log: %s.%s.log)", g, strings.Join(commands[g], "; "), dir, g))
 		}
 		res, err := c.runGroup(ctx, req, dir, rec, g)
 		out.Groups = append(out.Groups, res)

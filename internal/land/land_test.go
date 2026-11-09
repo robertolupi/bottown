@@ -179,6 +179,29 @@ func TestOutcomes(t *testing.T) {
 		})
 	}
 }
+
+// Progress hears each step as it starts, before the outcome.
+func TestProgress(t *testing.T) {
+	a, c := fixture(t)
+	a.moved = 1
+	var steps []string
+	a.policy.Progress = func(step string) { steps = append(steps, step) }
+	if got := Land(context.Background(), a, c, a.policy, a.pr); reflect.TypeOf(got) != reflect.TypeOf(Landed{}) {
+		t.Fatalf("got %T: %s", got, got)
+	}
+	want := []string{
+		"building the landing commit: main into head",
+		"running check and e2e at landing1",
+		"checks passed (make check); merging landing1",
+		"base moved; building the landing commit again (retry 1 of 3)",
+		"running check and e2e at landing2",
+		"checks passed (make check); merging landing2",
+	}
+	if !reflect.DeepEqual(steps, want) {
+		t.Errorf("steps =\n%s\nwant\n%s", strings.Join(steps, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestRepair(t *testing.T) {
 	for _, lost := range []bool{false, true} {
 		for _, repair := range []bool{false, true} {

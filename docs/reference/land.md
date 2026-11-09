@@ -52,6 +52,11 @@ the original outcome. Callers bound their own repairs. Failed checks and
 other refusals never invoke repair. Land itself does not comment or launch
 agent runs; callers own those decisions.
 
+An optional `Policy.Progress(step)` hook hears each step as it starts:
+building the landing commit (again, after a moved base), running the check
+groups at it, and merging once they pass. `merge-all` prints them; Land
+prints nothing itself.
+
 The web inbox shows every approved candidate as **Ready to land**, even
 when behind its base. **Land** calls `POST /api/actions/land` with
 `{number, head_sha}` and starts a background worker using the Main policy:

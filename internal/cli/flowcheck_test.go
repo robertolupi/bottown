@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,10 +87,17 @@ func TestFlowChecker(t *testing.T) {
 	}
 
 	req.SHA = fixed
+	var steps []string
+	c.progress = func(r flow.CheckRequest, step string) { steps = append(steps, fmt.Sprintf("!%d %s", r.PR, step)) }
 	out, err = c.Check(ctx, req)
 	if err != nil || !out.Passed || !strings.HasPrefix(out.Description, "passed: test -f fixed; echo e2e ok in ") {
 		t.Fatalf("fixed head: %+v, %v", out, err)
 	}
+	// Each group says what it runs and where its log is as it starts.
+	if want := []string{"!12 e2e: test -f fixed; echo e2e ok (log: " + out.Log + ")"}; !slices.Equal(steps, want) {
+		t.Errorf("progress = %q, want %q", steps, want)
+	}
+	c.progress = nil
 	if log, _ := os.ReadFile(out.Log); !strings.Contains(string(log), "e2e ok") {
 		t.Errorf("fixed log:\n%s", log)
 	}
