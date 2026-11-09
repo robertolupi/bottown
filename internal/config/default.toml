@@ -93,29 +93,31 @@ color = "d93f0b"
 description = "Escalated; only the owner clears it"
 
 # The size labels: the owner's estimate, or the planner's proposal applied
-# by `milestone apply`. Exclusive, so an issue carries at most one.
+# by `milestone apply`. Exclusive, so an issue carries at most one. The
+# descriptions summarize the tiers of the sizing guide
+# (internal/runs/prompts/sizing.md).
 [[labels]]
 name = "size/S"
 color = "c5def5"
-description = "Small: a change with little scope"
+description = "Small: no new boundary, a few obvious cases, an existing pattern applied once"
 exclusive = true
 
 [[labels]]
 name = "size/M"
 color = "bfd4f2"
-description = "Medium: a change with some scope"
+description = "Medium: one boundary, a handful of clear cases, an existing pattern adapted"
 exclusive = true
 
 [[labels]]
 name = "size/L"
 color = "a2c4f7"
-description = "Large: a change with wide scope"
+description = "Large: several boundaries with new obligations, a new mechanism, design choices"
 exclusive = true
 
 [[labels]]
 name = "size/XL"
 color = "7ea6e0"
-description = "Extra large: a change spanning many parts"
+description = "Extra large: a new subsystem or central contract; needs a design before the code"
 exclusive = true
 
 [protection]
