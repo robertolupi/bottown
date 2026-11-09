@@ -5,8 +5,8 @@
 // Layout:
 //
 //	<repo>/.bottown/mirror.git          bare mirror of the bottown remote
-//	<repo>/.bottown/mirror.lock         serializes git writes to the mirror
 //	<repo>/.bottown/runs/<id>/          the run's worktree (the agent's cwd)
+//	<repo>/.bottown/runs/.git-mirror.lock serializes bottown's git writes to the mirror
 //	<repo>/.bottown/runs/<id>.json      local record (0600; holds the key while running)
 //	<repo>/.bottown/runs/<id>.log       harness output
 //	<repo>/.bottown/runs/<id>.mcp.json  harness MCP config (0600)
@@ -134,7 +134,7 @@ func appendLine(path, line string) error {
 // Writes inside a run worktree's own files (config.worktree, its HEAD and
 // index) do not need it.
 func (w *Workspace) lockMirror() (release func(), err error) {
-	f, err := lockFile(filepath.Join(w.Dir, "mirror.lock"), true)
+	f, err := lockFile(filepath.Join(w.RunsDir, ".git-mirror.lock"), true)
 	if err != nil {
 		return nil, fmt.Errorf("lock the runs mirror: %w", err)
 	}
