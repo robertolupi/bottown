@@ -3,8 +3,8 @@
 Launched runs get a private scratch directory under the launcher's temporary
 directory, named `bottown-<workspace hash>-<run id>`. The harness receives it
 as `TMPDIR` (and Claude receives it through `--add-dir`), so tests that need
-temporary directories outside a git checkout can run normally. Discuss and
-consolidate runs are read-only: Claude gets no `Edit` or `Write` in the
+temporary directories outside a git checkout can run normally. Discuss,
+consolidate and estimate runs are read-only: Claude gets no `Edit` or `Write` in the
 worktree, only in the scratch directory (`Write(//<dir>/**)` and
 `Edit(//<dir>/**)` in `--allowedTools`, for the path and its resolved form). Their prompts name the directory, and a
 debate's runs write a long answer or consolidation to a file there and pass

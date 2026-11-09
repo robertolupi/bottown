@@ -25,7 +25,7 @@ const (
 
 // RunRequest is the body of POST /v1/runs.
 type RunRequest struct {
-	Kind  string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate
+	Kind  string `json:"kind"` // implement | verify | discuss | plan | retro | consolidate | estimate
 	Actor string `json:"actor"`
 	Spec  string `json:"spec,omitempty"` // the harness's model, recorded as given
 	Repo  string `json:"repo"`           // name within the org
@@ -370,8 +370,33 @@ func (s *Server) newRun(r *http.Request, req RunRequest) (secrets.Run, error) {
 			}
 		}
 
+	case policy.Estimate:
+		// An estimate sizes an issue, open or closed, against the default
+		// branch's current code, recorded as its SHA
+		// (docs/reference/sizing.md).
+		if req.Issue <= 0 {
+			return run, runErr(http.StatusBadRequest, "estimate runs need an issue")
+		}
+		is, resp, err := api.GetIssue(run.Org, run.Repo, req.Issue)
+		switch {
+		case forgejo.IsNotFound(resp, err):
+			return run, runErr(http.StatusNotFound, "issue #%d not found", req.Issue)
+		case err != nil:
+			return run, err
+		case is.PullRequest != nil:
+			return run, runErr(http.StatusBadRequest, "#%d is a pull request; estimate runs size an issue", req.Issue)
+		}
+		b, _, err := api.GetRepoBranch(run.Org, run.Repo, repo.DefaultBranch)
+		if err != nil {
+			return run, fmt.Errorf("default branch %s: %w", repo.DefaultBranch, err)
+		}
+		if b.Commit == nil || b.Commit.ID == "" {
+			return run, fmt.Errorf("default branch %s has no commit", repo.DefaultBranch)
+		}
+		run.Issue, run.SHA = req.Issue, b.Commit.ID
+
 	default:
-		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan, policy.Retro, policy.Consolidate)
+		return run, runErr(http.StatusBadRequest, `kind must be %q, %q, %q, %q, %q, %q or %q`, policy.Implement, policy.Verify, policy.Discuss, policy.Plan, policy.Retro, policy.Consolidate, policy.Estimate)
 	}
 	return run, nil
 }

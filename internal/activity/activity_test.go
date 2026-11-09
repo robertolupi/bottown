@@ -733,3 +733,16 @@ func TestParallel(t *testing.T) {
 	}
 	Parallel(0, nil)
 }
+
+// Runs that look at an issue without working it stand alone; the flow's
+// runs do not.
+func TestStandalone(t *testing.T) {
+	for kind, want := range map[string]bool{
+		"discuss": true, "retro": true, "consolidate": true, "estimate": true,
+		"implement": false, "verify": false, "plan": false,
+	} {
+		if got := Standalone(kind); got != want {
+			t.Errorf("Standalone(%q) = %v, want %v", kind, got, want)
+		}
+	}
+}

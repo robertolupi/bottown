@@ -3,8 +3,8 @@
 Status: **design**, settled from issue #439 after two debate rounds (the
 wiki page `Review-439-auto-estimate-issue-size-for` and its round files are
 their record; they bind nothing, this document does) and the owner's
-comments of 2026-11-09. Parts 1 and 2 of the plan (§6) are built;
-`bottown estimate` is not. Where this design and
+comments of 2026-11-09. All three parts of the plan (§6) are built.
+Where this design and
 [the reference](../reference/index.md) differ once work lands, the
 reference says what is built.
 

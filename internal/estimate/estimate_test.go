@@ -78,6 +78,9 @@ func TestCommentRoundTrip(t *testing.T) {
 	if !ok || got != rec {
 		t.Errorf("Parse = %+v, %v; want %+v", got, ok, rec)
 	}
+	if f := DecidingFactor(body); f != in.DecidingFactor {
+		t.Errorf("DecidingFactor = %q, want %q", f, in.DecidingFactor)
+	}
 
 	rec.Applied, rec.Existing = false, "size/L"
 	body = Comment(in, rec, "rlupi")
@@ -98,6 +101,9 @@ func TestCommentClarification(t *testing.T) {
 	}
 	if strings.Contains(body, "Open questions") {
 		t.Errorf("questions listed twice:\n%s", body)
+	}
+	if f := DecidingFactor(body); f != "" {
+		t.Errorf("DecidingFactor = %q, want none", f)
 	}
 	if body := Comment(in, rec, ""); strings.Contains(body, "@") {
 		t.Errorf("owner's own estimate mentions someone:\n%s", body)

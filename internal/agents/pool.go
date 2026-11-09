@@ -47,6 +47,23 @@ type Pool struct {
 // occur in actors at most once in the spec, and every represented family must
 // have a potential verifier from another family.
 func Parse(spec string, actors []config.Actor) (*Pool, error) {
+	entries, err := ParseEntries(spec, actors)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !hasOtherFamily(entries, entry.Family) {
+			return nil, fmt.Errorf("agents pool: family %q cannot be verified by another family", entry.Family)
+		}
+	}
+	return &Pool{entries: entries, removed: map[string]bool{}}, nil
+}
+
+// ParseEntries parses comma-separated actor[:model]=limit entries, as Parse
+// does, without its family rule: for pools whose runs are not verified,
+// such as bottown estimate's. Every actor must occur in actors, and at most
+// once in the spec.
+func ParseEntries(spec string, actors []config.Actor) ([]Entry, error) {
 	if spec == "" {
 		return nil, fmt.Errorf("agents spec is empty")
 	}
@@ -54,7 +71,7 @@ func Parse(spec string, actors []config.Actor) (*Pool, error) {
 	for _, actor := range actors {
 		known[actor.Name] = actor.Family
 	}
-	p := &Pool{removed: map[string]bool{}}
+	var entries []Entry
 	seen := map[string]bool{}
 	for _, raw := range strings.Split(spec, ",") {
 		entry, err := parseEntry(raw, known)
@@ -65,14 +82,9 @@ func Parse(spec string, actors []config.Actor) (*Pool, error) {
 			return nil, fmt.Errorf("agents entry %q: actor %q appears more than once", raw, entry.Actor)
 		}
 		seen[entry.Actor] = true
-		p.entries = append(p.entries, entry)
+		entries = append(entries, entry)
 	}
-	for _, entry := range p.entries {
-		if !hasOtherFamily(p.entries, entry.Family) {
-			return nil, fmt.Errorf("agents pool: family %q cannot be verified by another family", entry.Family)
-		}
-	}
-	return p, nil
+	return entries, nil
 }
 
 func parseEntry(raw string, known map[string]string) (Entry, error) {
