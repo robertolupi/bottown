@@ -795,13 +795,23 @@ func prIssue(h prHead, list []server.RunItem) int64 {
 // maxTipMerges bounds how many merge commits prTipOf walks down.
 const maxTipMerges = 20
 
-// prTipOf is h's head and its own last commit, below any merge commits.
+// isLandingCommit is whether a commit with this message and author name is
+// a Land landing commit (server opPRLanding): "Merge !N (...) into <base>"
+// by bottown, whose first parent is the base and second the PR's head.
+func isLandingCommit(message, author string) bool {
+	return author == "bottown" && strings.HasPrefix(message, "Merge !")
+}
+
+// prTipOf is h's head and its own last commit, below any merge commits:
+// it follows a merge's first parent (the PR branch, in "Merge main into
+// issue/N"), but a landing commit's second, the PR's head.
 func prTipOf(ctx context.Context, rc *runContext, h prHead) (prTip, error) {
 	sha := h.Head.Sha
 	for i := 0; ; i++ {
 		var c struct {
 			Commit struct {
-				Author struct{ Name string }
+				Message string
+				Author  struct{ Name string }
 			}
 			Author  *struct{ Login string }
 			Parents []struct{ Sha string }
@@ -817,7 +827,11 @@ func prTipOf(ctx context.Context, rc *runContext, h prHead) (prTip, error) {
 			}
 			return prTip{PR: h.Number, Head: h.Head.Sha, SHA: sha, Author: author}, nil
 		}
-		sha = c.Parents[0].Sha
+		if isLandingCommit(c.Commit.Message, c.Commit.Author.Name) {
+			sha = c.Parents[1].Sha
+		} else {
+			sha = c.Parents[0].Sha
+		}
 	}
 }
 

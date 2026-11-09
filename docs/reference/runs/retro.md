@@ -25,8 +25,9 @@ key, since a run key may not list runs or read the audit log, into
   partial, which the prompt repeats: verify runs but no implement or plan
   run (in a windowed retro, a merged pull request whose flow has no
   implement or plan run), or a pull request whose own last commit (its
-  head, or the first parent below the merges, such as the flow's "Merge
-  main into" commits) is by an author with no implement or plan run in
+  head, or the commit below the merges: the first parent of the flow's
+  "Merge main into" commits, the second, the pull request's side, of a
+  Land landing commit, "Merge !N (…) into" by `bottown`) is by an author with no implement or plan run in
   that pull request's flow, or
   commit statuses it could not read. Each run counts its policy denials
   and, apart, its harness denials: the transcript's `error` lines that

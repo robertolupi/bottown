@@ -1,14 +1,20 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/secrets"
@@ -267,6 +273,79 @@ func TestGatherRetroGaps(t *testing.T) {
 	tip.Author = "claude"
 	if gaps, readme = gather(append([]server.RunItem{impl}, verifies...), []prTip{tip}); gaps != nil || strings.Contains(readme, "WARNING") {
 		t.Errorf("whole evidence warns: %q:\n%s", gaps, readme)
+	}
+}
+
+// prTipOf follows a "Merge main into issue/N" commit down its first parent
+// and a Land landing commit, base-first, down its second, so a merged pull
+// request's own last commit is the run's, not some older merge on main
+// (#448); a PR-side commit by an actor with no run still warns.
+func TestPRTipOfLandingCommit(t *testing.T) {
+	type parent struct {
+		Sha string `json:"sha"`
+	}
+	commit := func(message, name, login string, parents ...string) map[string]any {
+		ps := []parent{}
+		for _, p := range parents {
+			ps = append(ps, parent{p})
+		}
+		return map[string]any{
+			"commit":  map[string]any{"message": message, "author": map[string]string{"name": name}},
+			"author":  map[string]string{"login": login},
+			"parents": ps,
+		}
+	}
+	commits := map[string]map[string]any{
+		"base0":   commit("docs: a commit on main\n", "rlupi", "rlupi"),
+		"other":   commit("an older PR's commit\n", "agy", "agy", "base0"),
+		"main1":   commit("Merge pull request 'older' (#373) from issue/370 into main\n", "rlupi", "rlupi", "base0", "other"),
+		"byrun":   commit("retro: the run's commit\n", "claude", "claude", "base0"),
+		"byhand":  commit("retro: a commit no run pushed\n", "kimi", "kimi", "base0"),
+		"land9":   commit("Merge !9 (retro: x (#7)) into main\n\nbottown landing commit: head byrun, base main1.\n", "bottown", "", "main1", "byrun"),
+		"land10":  commit("Merge !10 (retro: y (#7)) into main\n\nbottown landing commit: head byhand, base main1.\n", "bottown", "", "main1", "byhand"),
+		"synced9": commit("Merge branch 'main' into issue/7\n", "claude", "claude", "byrun", "main1"),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sha, ok := strings.CutPrefix(r.URL.Path, "/forgejo/api/v1/repos/bottown/bottown/git/commits/")
+		c, found := commits[sha]
+		if !ok || !found {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(c)
+	}))
+	defer srv.Close()
+	rc := &runContext{inst: config.Instance{ServerPort: srv.Listener.Addr().(*net.TCPAddr).Port}, org: "bottown", repo: "bottown"}
+
+	ws := &runs.Workspace{RunsDir: t.TempDir()}
+	impl := server.RunItem{Run: secrets.Run{ID: "r-1a", Kind: policy.Implement, Actor: "claude", Issue: 7, Branch: "issue/7", Created: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)}, State: "ended"}
+	for _, tc := range []struct {
+		pr         int64
+		head       string
+		sha, actor string
+		warns      bool
+	}{
+		{9, "land9", "byrun", "claude", false},
+		{9, "synced9", "byrun", "claude", false},
+		{10, "land10", "byhand", "kimi", true},
+	} {
+		var h prHead
+		h.Number, h.Head.Sha = tc.pr, tc.head
+		tip, err := prTipOf(context.Background(), rc, h)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.head, err)
+		}
+		if want := (prTip{PR: tc.pr, Head: tc.head, SHA: tc.sha, Author: tc.actor}); tip != want {
+			t.Errorf("%s: tip = %+v, want %+v", tc.head, tip, want)
+		}
+		dir := filepath.Join(t.TempDir(), retroDir)
+		_, gaps, err := gatherRetro(dir, server.NewRetroFlow(7, false, ""), "r-self", ws, []server.RunItem{impl}, nil, []int64{tc.pr}, []prTip{tip}, prStatuses{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if warned := slices.ContainsFunc(gaps, func(g string) bool { return strings.Contains(g, "no run in it pushed that head") }); warned != tc.warns {
+			t.Errorf("%s: gaps = %q, want a pushed-by-no-run warning: %v", tc.head, gaps, tc.warns)
+		}
 	}
 }
 
