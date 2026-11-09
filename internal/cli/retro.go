@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -129,6 +130,9 @@ type retroScope struct {
 type retroFlowPRs struct {
 	Flow     server.RetroFlow
 	ForgePRs []int64
+	// Milestone is, in a window, the milestone pull request whose branch
+	// this flow's pull request merged into; 0 for a flow of its own.
+	Milestone int64
 }
 
 // String names the scope for people: the flow, or the window.
@@ -298,9 +302,9 @@ type prTip struct {
 func retroGaps(scope retroScope, prs []map[int64]bool, rs []retroRun, tips []prTip) []string {
 	var gaps []string
 	writers := make([]map[string]bool, len(scope.Flows))
+	verifies := make([]int, len(scope.Flows))
 	for i, f := range scope.Flows {
 		writers[i] = map[string]bool{}
-		verifies := 0
 		for _, r := range rs {
 			if !f.Flow.Has(secrets.Run{Issue: r.Issue, PR: r.PR, Branch: r.Branch}, prs[i]) {
 				continue
@@ -309,21 +313,34 @@ func retroGaps(scope retroScope, prs []map[int64]bool, rs []retroRun, tips []prT
 			case policy.Implement, policy.Plan:
 				writers[i][r.Actor] = true
 			case policy.Verify:
-				verifies++
+				verifies[i]++
 			}
 		}
+	}
+	// A milestone's pull request carries its children's code: their
+	// writers wrote it.
+	for j, c := range scope.Flows {
+		for i := range scope.Flows {
+			if c.Milestone > 0 && i != j && prs[i][c.Milestone] {
+				maps.Copy(writers[i], writers[j])
+			}
+		}
+	}
+	for i, f := range scope.Flows {
 		switch {
 		case len(writers[i]) > 0:
 		case scope.Window != nil:
 			var merged []string
 			for _, pr := range scope.Merged {
-				if prs[i][pr.Number] {
-					merged = append(merged, fmt.Sprintf("!%d", pr.Number))
+				for _, p := range append([]prHead{pr}, pr.Children...) {
+					if prs[i][p.Number] {
+						merged = append(merged, fmt.Sprintf("!%d", p.Number))
+					}
 				}
 			}
-			gaps = append(gaps, fmt.Sprintf("Merged pull request %s (flow %s) has %d verify run(s) but no implement or plan run in the evidence: the runs that wrote its code are missing from it.", strings.Join(merged, ", "), f.Flow, verifies))
-		case verifies > 0:
-			gaps = append(gaps, fmt.Sprintf("The evidence has %d verify run(s) but no implement or plan run: the runs that wrote the code are missing from it.", verifies))
+			gaps = append(gaps, fmt.Sprintf("Merged pull request %s (flow %s) has %d verify run(s) but no implement or plan run in the evidence: the runs that wrote its code are missing from it.", strings.Join(merged, ", "), f.Flow, verifies[i]))
+		case verifies[i] > 0:
+			gaps = append(gaps, fmt.Sprintf("The evidence has %d verify run(s) but no implement or plan run: the runs that wrote the code are missing from it.", verifies[i]))
 		}
 	}
 	for _, t := range tips {
@@ -457,7 +474,8 @@ func retroReadme(scope retroScope, rs []retroRun, gaps []string, sts []prStatus)
 }
 
 // writeWindow writes a windowed retro's window and the pull requests
-// merged in it, each with the flow whose runs the evidence holds.
+// merged in it, each with the flow whose runs the evidence holds, a
+// milestone's followed by its children.
 func writeWindow(b *strings.Builder, scope retroScope) {
 	w := scope.Window
 	fmt.Fprintf(b, "The window (`--since %s`) is what landed on the default branch after `%s`, up to `%s`:\n"+
@@ -468,14 +486,34 @@ func writeWindow(b *strings.Builder, scope retroScope) {
 	}
 	b.WriteString("| pull request | title | branch | merge commit | flow |\n|---|---|---|---|---|\n")
 	for _, pr := range scope.Merged {
-		flow, _ := retroFlowOf(pr.Number, []prHead{pr})
-		if flow.Issue == 0 {
-			flow.Issue = pr.Issue // recovered: its branch is gone
+		writeWindowPR(b, fmt.Sprintf("!%d", pr.Number), pr)
+		// A milestone's children, merged into its branch: `!M → #I (!N)`.
+		for _, c := range pr.Children {
+			name := fmt.Sprintf("!%d → !%d", pr.Number, c.Number)
+			if flow := windowPRFlow(c); flow.Issue > 0 {
+				name = fmt.Sprintf("!%d → #%d (!%d)", pr.Number, flow.Issue, c.Number)
+			}
+			writeWindowPR(b, name, c)
 		}
-		fmt.Fprintf(b, "| !%d | %s | `%s` | `%s` | %s |\n", pr.Number, strings.ReplaceAll(pr.Title, "|", `\|`),
-			pr.Head.Ref, short(pr.MergeCommit), flow)
 	}
 	b.WriteString("\n")
+}
+
+// writeWindowPR writes the window table's row of merged pull request pr,
+// named name.
+func writeWindowPR(b *strings.Builder, name string, pr prHead) {
+	fmt.Fprintf(b, "| %s | %s | `%s` | `%s` | %s |\n", name, strings.ReplaceAll(pr.Title, "|", `\|`),
+		pr.Head.Ref, short(pr.MergeCommit), windowPRFlow(pr))
+}
+
+// windowPRFlow is merged pull request pr's own flow, with the issue
+// windowFlows recovered when its branch is gone.
+func windowPRFlow(pr prHead) server.RetroFlow {
+	flow, _ := retroFlowOf(pr.Number, []prHead{pr})
+	if flow.Issue == 0 {
+		flow.Issue = pr.Issue // recovered: its branch is gone
+	}
+	return flow
 }
 
 // writeStatuses writes each pull request's commit statuses, oldest first,
@@ -623,7 +661,10 @@ func collectRetroWindow(ctx context.Context, rc *runContext, run secrets.Run, gi
 // every pull request from its branch (heads). A merged pull request whose
 // head branch is gone (most are, deleted after the merge) stands for the
 // issue prIssue recovers from the runs in list or its title, and records it
-// as its Issue.
+// as its Issue. A milestone's integration pull request, from a
+// milestone/<slug> branch, also brings the flows of the pull requests merged
+// into that branch (#449): it records them as its Children, and their flows
+// as the milestone's.
 func windowFlows(revs []string, heads []prHead, list []server.RunItem) ([]prHead, []retroFlowPRs) {
 	at := map[string]int{}
 	for i, r := range revs {
@@ -638,34 +679,58 @@ func windowFlows(revs []string, heads []prHead, list []server.RunItem) ([]prHead
 	slices.SortStableFunc(merged, func(a, b prHead) int { return cmp.Compare(at[a.MergeCommit], at[b.MergeCommit]) })
 	var flows []retroFlowPRs
 	seen := map[string]int{}
-	for i, pr := range merged {
-		flow, prs := retroFlowOf(pr.Number, heads)
-		if flow.Issue == 0 && branchGone(pr) {
-			if m := prIssue(pr, list); m > 0 {
-				merged[i].Issue = m
-				flow, prs = server.NewRetroFlow(m, false, ""), []int64{pr.Number}
-				for _, h := range heads {
-					if h.Head.Ref == flow.Branch {
-						prs = append(prs, h.Number)
-					}
-				}
-			}
-		}
-		if flow.Issue > 0 {
-			// The issue's flow, whichever of its pull requests merged.
-			flow = server.NewRetroFlow(flow.Issue, false, "")
-		}
+	add := func(pr *prHead, milestone int64) {
+		flow, prs := prFlow(pr, heads, list)
 		k := flow.String()
 		if j, ok := seen[k]; ok {
 			if !slices.Contains(flows[j].ForgePRs, pr.Number) {
 				flows[j].ForgePRs = append(flows[j].ForgePRs, pr.Number)
 			}
-			continue
+			return
 		}
 		seen[k] = len(flows)
-		flows = append(flows, retroFlowPRs{Flow: flow, ForgePRs: prs})
+		flows = append(flows, retroFlowPRs{Flow: flow, ForgePRs: prs, Milestone: milestone})
+	}
+	for i := range merged {
+		pr := &merged[i]
+		add(pr, 0)
+		if !strings.HasPrefix(pr.Head.Ref, server.MilestoneBranchPrefix) {
+			continue
+		}
+		for _, h := range heads {
+			if h.Merged && h.Base.Ref == pr.Head.Ref && h.Number != pr.Number {
+				pr.Children = append(pr.Children, h)
+			}
+		}
+		slices.SortFunc(pr.Children, func(a, b prHead) int { return cmp.Compare(a.Number, b.Number) })
+		for j := range pr.Children {
+			add(&pr.Children[j], pr.Number)
+		}
 	}
 	return merged, flows
+}
+
+// prFlow is the flow merged pull request pr stands for in a window, and
+// the pull requests from its branch: its issue's flow, whichever of the
+// issue's pull requests merged, with the issue recovered (and recorded as
+// pr.Issue) when its head branch is gone.
+func prFlow(pr *prHead, heads []prHead, list []server.RunItem) (server.RetroFlow, []int64) {
+	flow, prs := retroFlowOf(pr.Number, heads)
+	if flow.Issue == 0 && branchGone(*pr) {
+		if m := prIssue(*pr, list); m > 0 {
+			pr.Issue = m
+			flow, prs = server.NewRetroFlow(m, false, ""), []int64{pr.Number}
+			for _, h := range heads {
+				if h.Head.Ref == flow.Branch {
+					prs = append(prs, h.Number)
+				}
+			}
+		}
+	}
+	if flow.Issue > 0 {
+		flow = server.NewRetroFlow(flow.Issue, false, "")
+	}
+	return flow, prs
 }
 
 // windowHas is whether pull request n is one of scope's flows'.
@@ -762,11 +827,16 @@ type prHead struct {
 	Number      int64
 	Title       string
 	Head        struct{ Ref, Sha string }
+	Base        struct{ Ref string }
 	Merged      bool
 	MergeCommit string `json:"merge_commit_sha"`
 	// Issue is the issue windowFlows recovered for a pull request whose
 	// head branch is gone (prIssue); not Forgejo's.
 	Issue int64 `json:"-"`
+	// Children are, for a milestone's integration pull request, the pull
+	// requests merged into its milestone/<slug> branch, by number
+	// (windowFlows); not Forgejo's.
+	Children []prHead `json:"-"`
 }
 
 // branchGone is whether Forgejo no longer has h's head branch: it then

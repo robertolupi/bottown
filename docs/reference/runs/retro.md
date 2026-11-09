@@ -104,9 +104,15 @@ included), each flow once. A merged pull request's head branch is
 usually deleted, and Forgejo then reports `refs/pull/N/head` as its head:
 such a pull request stands for the issue of the `issue/M` branch its
 verify runs record or, failing that, of the last `(#M)` in its title, and
-the README shows that flow (`!N of #M`). The README starts with the window and those
-pull requests, oldest first, then the runs and commit statuses as for a
-retro. Pull requests that have not merged are outside the window: they are
+the README shows that flow (`!N of #M`). A milestone's integration pull
+request, from a `milestone/<slug>` branch, also brings the flows of the
+pull requests merged into that branch, its children (by their base
+branch, so the milestone branch must still exist): their runs are in the
+evidence, the README lists each under the milestone as `!434 → #406
+(!418)`, and their implement and plan runs count as the milestone's, so
+neither it nor its head is warned of as written by no run. The README
+starts with the window and those pull requests, oldest first, then the
+runs and commit statuses as for a retro. Pull requests that have not merged are outside the window: they are
 not yet a lesson.
 
 The prompt asks for the retro across the flows: the window, the flows at a
