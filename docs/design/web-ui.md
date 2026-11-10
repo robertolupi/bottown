@@ -869,6 +869,27 @@ for the owner's judgment alone.
 - **Milestone burndown and burnup:** plain SVG, one chart per milestone,
   counting or size-weighted as the labels allow.
 
+### 4.8 Keys
+
+Every view is reachable from the keyboard. The keys are handled in one
+place and ignored while an input, select or textarea has focus or a
+command modifier (Ctrl, Alt or Meta) is held, so text entry and the
+browser's shortcuts win.
+
+| Key | Does |
+|---|---|
+| `1`-`6` | Switch view, in the tabs' order (Now, History, Milestones, Timeline, Stats, Repository) |
+| `j` / `k`, arrows | Move a visible selection among Now's tiles and rows and History's rows |
+| `Enter` | Open the selected item's page |
+| `Esc` | Back (`history.back()`, or to Now when there is nothing to go back to); it closes the `?` panel when that is open |
+| `f` | Follow, or stop following, the log, on a run or flow page |
+| `g` / `G` | The top or the end of the log, on a run or flow page |
+| `/` | Focus History's search |
+| `?` | Show these keys in a small panel |
+
+The selection is visible, scrolls into view, and is reachable by Tab as
+well: tiles and rows are focusable and announce themselves as links.
+
 ## 5. Actions
 
 Each action is a CLI command, and the UI calls the same Go code with the

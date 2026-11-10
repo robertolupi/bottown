@@ -32,6 +32,7 @@
   import { formatElapsed, formatTime, formatUsage } from './format';
   import { applyLog, logURL, type LogCursor, type LogResponse } from './logcursor';
   import { flowRouteHash, runRouteHash, type Route } from './routes';
+  import { setLogCommands } from './keys';
   import DenialList from './DenialList.svelte';
   import FailureReason from './FailureReason.svelte';
   import FlowTimeline from './FlowTimeline.svelte';
@@ -495,23 +496,14 @@
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
-      return;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      goBack();
-    } else if (e.key === 'f') {
-      e.preventDefault();
-      handleFollowClick();
-    } else if (e.key === 'g') {
-      e.preventDefault();
-      window.scrollTo({ top: 0 });
-    } else if (e.key === 'G') {
-      e.preventDefault();
-      window.scrollTo({ top: document.documentElement.scrollHeight });
-    }
+  // The keyboard's log keys (design §5) are handled in App, in one place;
+  // this page registers how they drive its log while it is mounted.
+  function registerLogCommands() {
+    setLogCommands({
+      toggleFollow: handleFollowClick,
+      toTop: () => window.scrollTo({ top: 0 }),
+      toEnd: () => window.scrollTo({ top: document.documentElement.scrollHeight }),
+    });
   }
 
   // Load log. A poll asks only for the lines after the last stable prefix
@@ -630,7 +622,7 @@
 
   onMount(() => {
     window.addEventListener('scroll', handleWindowScroll, { passive: true });
-    window.addEventListener('keydown', handleKeydown);
+    registerLogCommands();
 
     let destroyed = false;
     let pollTimer: any;
@@ -656,7 +648,7 @@
       destroyed = true;
       clearTimeout(pollTimer);
       window.removeEventListener('scroll', handleWindowScroll);
-      window.removeEventListener('keydown', handleKeydown);
+      setLogCommands(null);
     };
   });
 </script>

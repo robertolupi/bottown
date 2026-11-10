@@ -57,14 +57,15 @@
   }
 </script>
 
+<!-- svelte-ignore a11y_click_events_have_key_events (Enter is handled by App's one keydown listener, so it is not handled here) -->
 <div
   class="now-tile"
   class:quiet={last.quiet}
   role="link"
   tabindex="0"
   data-id={tile.id}
+  data-nav={tile.id}
   onclick={open}
-  onkeydown={(e) => { if (e.key === 'Enter') open(); }}
 >
   <div class="tile-head">
     <div class="tile-line">

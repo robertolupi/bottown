@@ -251,3 +251,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2.4s; }
 }
+
+/* The keyboard's selection on a tile or a row (design §5). */
+.nav-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

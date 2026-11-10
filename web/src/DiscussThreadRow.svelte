@@ -33,6 +33,9 @@
 <tr
   class="discuss-thread-row"
   class:flow-row-active={thread.active}
+  role="link"
+  tabindex="0"
+  data-nav={thread.key}
   onclick={navigateToRun}
 >
   <td class="target-cell">

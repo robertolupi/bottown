@@ -25,7 +25,9 @@
   import Timeline from './Timeline.svelte';
   import UpstreamForge from './UpstreamForge.svelte';
   import ViewTabs from './ViewTabs.svelte';
-  import { parseRoute, runRouteHash, flowRouteHash, type View, type Route } from './routes';
+  import KeyboardHelp from './KeyboardHelp.svelte';
+  import { parseRoute, runRouteHash, flowRouteHash, routeHash, type View, type Route } from './routes';
+  import { keyIntent, getLogCommands } from './keys';
   import {
     buildFlowActionPayload,
     buildRunActionPayload,
@@ -58,6 +60,8 @@
   let showAfterPullModal = $state<boolean>(false);
   let afterPullOutput = $state<string | null>(null);
   let actionLoading = $state<boolean>(false);
+  // The `?` panel's keys (design §5).
+  let helpOpen = $state<boolean>(false);
 
   // Stop modal state
   let stopRunId = $state<string>('');
@@ -92,6 +96,10 @@
   let route = $state<Route>(initialRoute);
   let previousView = $state<View>(initialRoute.kind === 'view' ? initialRoute.view : 'now');
   let view = $derived<View>(route.kind === 'view' ? route.view : 'now');
+  // The keyboard's selection (design §5): the nav item j/k last moved to.
+  // Its highlight is a class on the element itself, so this is not state
+  // the view renders.
+  let navSelected: HTMLElement | null = null;
   let milestonesRefresh = $state<number>(0);
   // Bumped when a run or flow starts or ends, to reload the Timeline and
   // the Stats.
@@ -312,6 +320,120 @@
       await loadHistory();
     });
 
+  // The keyboard (design §5): keyIntent maps a key and these carry it
+  // out. The selection is a class on the nav item, so it survives the
+  // poll re-rendering it in place.
+  function navItems(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[data-nav]'));
+  }
+
+  function clearNavSelection() {
+    navSelected?.classList.remove('nav-selected');
+    navSelected = null;
+  }
+
+  function selectNav(el: HTMLElement) {
+    if (navSelected && navSelected !== el) navSelected.classList.remove('nav-selected');
+    navSelected = el;
+    el.classList.add('nav-selected');
+    el.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  // moveSelection moves the selection by delta and returns whether there
+  // was anything to move, so a key with no items is left to the page (the
+  // arrows scroll a run's log).
+  function moveSelection(delta: number): boolean {
+    const items = navItems();
+    if (items.length === 0) return false;
+    const current = navSelected ? items.indexOf(navSelected) : -1;
+    const next =
+      current === -1
+        ? delta > 0
+          ? 0
+          : items.length - 1
+        : Math.min(items.length - 1, Math.max(0, current + delta));
+    selectNav(items[next]);
+    return true;
+  }
+
+  // openSelection returns the nav item Enter should open: the selection,
+  // or the focused item when Tab reached it. Null when neither (a button
+  // keeps Enter for itself).
+  function openSelection(): HTMLElement | null {
+    if (navSelected && document.contains(navSelected)) return navSelected;
+    const focused = document.activeElement;
+    return focused instanceof HTMLElement && focused.matches('[data-nav]') ? focused : null;
+  }
+
+  function focusHistorySearch() {
+    const focus = () => document.querySelector<HTMLInputElement>('[data-history-search]')?.focus();
+    if (view === 'history') {
+      focus();
+      return;
+    }
+    location.hash = routeHash('history');
+    setTimeout(focus, 0);
+  }
+
+  // Back: the entry before, or Now when there is none (a page opened by a
+  // direct link).
+  function goBack() {
+    if (typeof window !== 'undefined' && window.history.length > 1) window.history.back();
+    else location.hash = '#/now';
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (helpOpen && e.key === 'Escape') {
+      e.preventDefault();
+      helpOpen = false;
+      return;
+    }
+    const intent = keyIntent(e, route.kind === 'run' || route.kind === 'flow');
+    if (!intent) return;
+    switch (intent.kind) {
+      case 'view':
+        e.preventDefault();
+        location.hash = routeHash(intent.view);
+        break;
+      case 'move':
+        if (moveSelection(intent.delta)) e.preventDefault();
+        break;
+      case 'open':
+        {
+          const item = openSelection();
+          if (item) {
+            e.preventDefault();
+            item.click();
+          }
+        }
+        break;
+      case 'back':
+        e.preventDefault();
+        goBack();
+        break;
+      case 'follow':
+        e.preventDefault();
+        getLogCommands()?.toggleFollow();
+        break;
+      case 'log-top':
+        e.preventDefault();
+        getLogCommands()?.toTop();
+        break;
+      case 'log-end':
+        e.preventDefault();
+        getLogCommands()?.toEnd();
+        break;
+      case 'search':
+        e.preventDefault();
+        focusHistorySearch();
+        break;
+      case 'help':
+        e.preventDefault();
+        helpOpen = true;
+        break;
+    }
+  }
+
   onMount(() => {
     const onHashChange = () => {
       const nextRoute = parseRoute(location.hash);
@@ -319,6 +441,7 @@
         previousView = route.view;
       }
       route = nextRoute;
+      clearNavSelection();
     };
     window.addEventListener('hashchange', onHashChange);
 
@@ -379,6 +502,8 @@
     };
   });
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <main class="container">
   <AppHeader
@@ -553,6 +678,10 @@
     onconfirm={handleConfirmAfterPull}
     onclose={() => (showAfterPullModal = false)}
   />
+{/if}
+
+{#if helpOpen}
+  <KeyboardHelp onclose={() => (helpOpen = false)} />
 {/if}
 
 <style>
