@@ -528,17 +528,53 @@ func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) (
 	if validCheckID.MatchString(id) {
 		return runs.RenderLog("", logBytes), false // the checks' commands' output: plain lines
 	}
-	actorMap, _ := s.fetchActorMap(ctx)
-	harness := ""
-	var serverRun secrets.Run
-	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &serverRun); err == nil {
-		harness = serverRun.Harness
-		if harness == "" && actorMap[serverRun.Actor] != nil {
-			harness = actorMap[serverRun.Actor].Harness
-		}
-		ended = serverRun.Ended != nil
+	harness, run, _ := s.runHarness(ctx, id)
+	return runs.RenderLog(harness, logBytes), run.Ended != nil
+}
+
+// runHarness is run id's record from the server and the harness its log is
+// rendered for: the run's own, else its actor's.
+func (s *Server) runHarness(ctx context.Context, id string) (string, secrets.Run, error) {
+	var run secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &run); err != nil {
+		return "", secrets.Run{}, err
 	}
-	return runs.RenderLog(harness, logBytes), ended
+	harness := run.Harness
+	if harness == "" {
+		if actorMap, _ := s.fetchActorMap(ctx); actorMap[run.Actor] != nil {
+			harness = actorMap[run.Actor].Harness
+		}
+	}
+	return harness, run, nil
+}
+
+// LogFollower returns a follower of item id's log, a run's or a check
+// group's, rendered as GET /api/runs/{id}/log renders it: for the terminal
+// view's full-screen log (monitor-ui design §8).
+func (s *Server) LogFollower(ctx context.Context, id string) (*runs.LogFollower, error) {
+	if !validRunID.MatchString(id) {
+		return nil, fmt.Errorf("invalid run ID %q", id)
+	}
+	f := &runs.LogFollower{Path: filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")}
+	if !validCheckID.MatchString(id) {
+		f.Harness, _, _ = s.runHarness(ctx, id)
+	}
+	return f, nil
+}
+
+// RunEnd says how run id ended: its status (succeeded, failed, revoked)
+// and the outcome the server recorded, if any. ok is false when the run
+// has not ended, or the server does not answer for it; a check group has
+// no record, and is never ok.
+func (s *Server) RunEnd(ctx context.Context, id string) (status, outcome string, ok bool) {
+	if !validRunID.MatchString(id) || validCheckID.MatchString(id) {
+		return "", "", false
+	}
+	var run secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &run); err != nil || run.Ended == nil {
+		return "", "", false
+	}
+	return run.Status, run.Outcome, true
 }
 
 // ComputeRunLog returns run id's rendered log as GET /api/runs/{id}/log

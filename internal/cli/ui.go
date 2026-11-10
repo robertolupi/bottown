@@ -52,8 +52,19 @@ the panes scroll with the selection, the summary saying how many are off
 screen. A pane that has written nothing for five minutes turns to the
 warning colour and reads "no output Nm".
 
-Keys: j/k and the arrows move the selection, o opens the web UI in this
-machine's browser, ? lists the keys, q and Ctrl-C quit and stop the server.
+Keys: j/k and the arrows move the selection, over the panes and then the
+rows; Enter shows the selected run's or check's log full screen; o opens
+the web UI in this machine's browser, ? lists the keys, q and Ctrl-C quit
+and stop the server. A row (a waiting flow, an interactive run) has no
+log, and Enter on it does nothing.
+
+The full-screen log has a header with the item's target, kind, actor,
+elapsed and last-output age, then its log, rendered as the terminal tail
+renders it, each line cut to the width. It follows the end while the item
+is live: f turns following off and on, j/k, the arrows, PgUp/PgDn and
+g/G scroll (scrolling up stops following, G resumes it), Esc returns to
+the panes with the same selection, q quits. When the item ends the view
+stays on its log and says how it ended.
 
 The command does not open a browser by default. --print, or an output that
 is not a terminal, prints the login URL and serves until interrupted.
@@ -134,6 +145,14 @@ func runUI(cmd *cobra.Command, g *globals, s uiSettings) error {
 	go func() { _ = srv.Serve(ctx) }()
 	m.live = func(tail int) (webui.Live, error) { return srv.Live(ctx, tail) }
 	m.open = openBrowser
+	m.logSource = func(id string) (uiLogSource, error) {
+		f, err := srv.LogFollower(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
+	m.runEnd = func(id string) (string, string, bool) { return srv.RunEnd(ctx, id) }
 	prog := tea.NewProgram(m, tea.WithOutput(f), tea.WithoutSignalHandler(), tea.WithContext(ctx))
 	if _, err := prog.Run(); err != nil {
 		return err
@@ -164,6 +183,10 @@ type uiModel struct {
 
 	live func(tail int) (webui.Live, error)
 	open func(url string) error
+	// logSource opens an item's log for the full-screen view, and runEnd
+	// says how a run ended (webui.Server's LogFollower and RunEnd).
+	logSource func(id string) (uiLogSource, error)
+	runEnd    func(id string) (status, outcome string, ok bool)
 
 	now    func() time.Time
 	width  int
@@ -177,6 +200,8 @@ type uiModel struct {
 	top      int
 	showKeys bool
 	quitting bool
+
+	logv *uiLogView // the full-screen log, when one is shown
 }
 
 func newUIModel(loginURL, repo, instance string, live func(int) (webui.Live, error)) *uiModel {
@@ -227,26 +252,44 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.logv != nil {
+			m.clampLog()
+		}
 		return m, nil
 	case uiLiveMsg:
 		m.data, m.err = msg.live, msg.err
 		m.clampSelection()
+		m.logLive()
 		return m, m.tick()
 	case uiTickMsg:
 		return m, m.fetch()
+	case uiLogMsg:
+		return m, m.logMsg(msg)
+	case uiLogTickMsg:
+		if m.logv == nil || m.logv.item.ID != msg.id {
+			return m, nil
+		}
+		return m, m.pollLog()
 	case tea.KeyPressMsg:
+		if m.logv != nil {
+			return m, m.logKey(msg)
+		}
 		return m, m.key(msg)
 	}
 	return m, nil
 }
 
-// key handles one key press. Enter is the terminal log follower's (a later
-// issue); nothing here changes a run.
+// key handles one key press in the panes; nothing here changes a run.
+// Enter shows the selected item's log full screen; a row has none.
 func (m *uiModel) key(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
 		return tea.Quit
+	case "enter":
+		if m.sel < len(m.data.Items) {
+			return m.openLog(m.data.Items[m.sel])
+		}
 	case "?":
 		m.showKeys = !m.showKeys
 	case "j", "down":
@@ -261,41 +304,62 @@ func (m *uiModel) key(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// The selection runs over the items, then the rows: selectable indexes
+// 0..selectable()-1, an item's id or a row's key naming each.
+func (m *uiModel) selectable() int { return len(m.data.Items) + len(m.data.Rows) }
+
+func (m *uiModel) keyAt(i int) string {
+	if i < len(m.data.Items) {
+		return m.data.Items[i].ID
+	}
+	return m.data.Rows[i-len(m.data.Items)].Key
+}
+
+// paneSel is the selection the panes scroll to: a selected row keeps the
+// last panes on screen.
+func (m *uiModel) paneSel() int { return min(m.sel, max(len(m.data.Items)-1, 0)) }
+
 // move changes the selection by d, keeping it in range, and scrolls the
 // panes so it stays on screen.
 func (m *uiModel) move(d int) {
-	n := len(m.data.Items)
+	n := m.selectable()
 	if n == 0 {
 		return
 	}
 	m.sel += d
 	m.sel = min(max(m.sel, 0), n-1)
-	m.selKey = m.data.Items[m.sel].ID
+	m.selKey = m.keyAt(m.sel)
 	m.panes()
 }
 
 // clampSelection brings the selection back in range after Live changes the
-// items, following the selected item by id when it is still there.
+// items and rows, following the selected one by id when it is still there.
 func (m *uiModel) clampSelection() {
-	n := len(m.data.Items)
+	n := m.selectable()
 	if n == 0 {
 		m.sel, m.selKey, m.top = 0, "", 0
 		return
 	}
 	if m.selKey != "" {
-		for i, it := range m.data.Items {
-			if it.ID == m.selKey {
+		for i := range n {
+			if m.keyAt(i) == m.selKey {
 				m.sel = i
 				break
 			}
 		}
 	}
 	m.sel = min(max(m.sel, 0), n-1)
-	m.selKey = m.data.Items[m.sel].ID
+	m.selKey = m.keyAt(m.sel)
 }
 
 func (m *uiModel) View() tea.View {
-	v := tea.NewView(m.render())
+	content := ""
+	if m.logv != nil {
+		content = m.renderLog()
+	} else {
+		content = m.render()
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
 }
@@ -354,7 +418,7 @@ func (m *uiModel) fixedLines() int {
 // panes computes the split for the current height and stores the scrolled
 // position, so the selection stays visible.
 func (m *uiModel) panes() (start, count int, lines []int, offscreen, maxTail int) {
-	start, count, lines, offscreen, maxTail = splitPanes(len(m.data.Items), max(m.bodyHeight(), 0), m.sel, m.top)
+	start, count, lines, offscreen, maxTail = splitPanes(len(m.data.Items), max(m.bodyHeight(), 0), m.paneSel(), m.top)
 	m.top = start
 	return start, count, lines, offscreen, maxTail
 }
@@ -367,7 +431,7 @@ func (m *uiModel) tailRequest() int {
 	if m.height <= 0 || len(m.data.Items) == 0 {
 		return uiDefaultTail
 	}
-	_, _, _, _, maxTail := splitPanes(len(m.data.Items), max(m.bodyHeight(), 0), m.sel, m.top)
+	_, _, _, _, maxTail := splitPanes(len(m.data.Items), max(m.bodyHeight(), 0), m.paneSel(), m.top)
 	return max(maxTail, uiOnceTail)
 }
 
@@ -391,13 +455,21 @@ func (m *uiModel) render() string {
 	}
 	for i := 0; i < count; i++ {
 		it := m.data.Items[start+i]
-		line(m.paneRule(it, start+i == m.sel))
+		prefix := "  "
+		if start+i == m.sel {
+			prefix = m.st.Info.Render("▸") + " "
+		}
+		line(m.paneRule(it, prefix, m.now()))
 		for _, l := range m.paneLogs(it, lines[i]-1) {
 			line(l)
 		}
 	}
-	for _, r := range m.data.Rows {
-		line(m.rowLine(r))
+	for i, r := range m.data.Rows {
+		prefix := "  "
+		if len(m.data.Items)+i == m.sel {
+			prefix = m.st.Info.Render("▸") + " "
+		}
+		line(prefix + m.rowLine(r))
 	}
 	line(m.st.Dim.Render(m.keyHint()))
 	return b.String()
@@ -479,17 +551,13 @@ func (m *uiModel) inboxSummary() string {
 	return strings.Join(parts, ", ")
 }
 
-// paneRule is an item's pane header: the selection marker, the item's
-// header, a rule filling the width, and its last-output age. A quiet pane's
-// rule is in the warning colour.
-func (m *uiModel) paneRule(it webui.LiveItem, selected bool) string {
-	left := m.itemLine(it)
-	if selected {
-		left = m.st.Info.Render("▸") + " " + left
-	} else {
-		left = "  " + left
-	}
-	age := m.ageString(it)
+// paneRule is an item's pane header: prefix (the selection marker), the
+// item's header, a rule filling the width, and its last-output age, at now.
+// A quiet pane's rule is in the warning colour. The full-screen log's
+// header is the same rule.
+func (m *uiModel) paneRule(it webui.LiveItem, prefix string, now time.Time) string {
+	left := prefix + m.itemLine(it, now)
+	age := m.ageString(it, now)
 	var rule string
 	if m.width <= 0 {
 		rule = left + m.st.Dim.Render(" · ") + age
@@ -510,12 +578,13 @@ func (m *uiModel) paneRule(it webui.LiveItem, selected bool) string {
 
 // itemHeader is an item's header without the rule, for --once.
 func (m *uiModel) itemHeader(it webui.LiveItem) string {
-	return m.itemLine(it) + " · " + m.ageString(it)
+	now := m.now()
+	return m.itemLine(it, now) + " · " + m.ageString(it, now)
 }
 
 // itemLine is an item's header text: target, title, kind and round, actor,
 // and elapsed against the limit.
-func (m *uiModel) itemLine(it webui.LiveItem) string {
+func (m *uiModel) itemLine(it webui.LiveItem, now time.Time) string {
 	st := m.st
 	var b strings.Builder
 	b.WriteString(st.Bold.Render(it.Target))
@@ -527,7 +596,7 @@ func (m *uiModel) itemLine(it webui.LiveItem) string {
 	if it.Actor != "" {
 		b.WriteString(st.Dim.Render(" · ") + it.Actor)
 	}
-	b.WriteString(st.Dim.Render(" · " + m.itemElapsed(it)))
+	b.WriteString(st.Dim.Render(" · " + itemElapsed(it, now)))
 	return b.String()
 }
 
@@ -546,8 +615,8 @@ func (m *uiModel) itemKind(it webui.LiveItem) string {
 	return s
 }
 
-func (m *uiModel) itemElapsed(it webui.LiveItem) string {
-	el := ageShort(m.now().Sub(it.Started))
+func itemElapsed(it webui.LiveItem, now time.Time) string {
+	el := ageShort(now.Sub(it.Started))
 	if it.Limit > 0 {
 		el += "/" + ageShort(time.Duration(it.Limit)*time.Second)
 	}
@@ -556,12 +625,12 @@ func (m *uiModel) itemElapsed(it webui.LiveItem) string {
 
 // ageString is the time since the item last wrote, or "no output Nm" when
 // it is quiet.
-func (m *uiModel) ageString(it webui.LiveItem) string {
+func (m *uiModel) ageString(it webui.LiveItem, now time.Time) string {
 	from := it.Started
 	if it.LastOutput != nil {
 		from = *it.LastOutput
 	}
-	d := m.now().Sub(from)
+	d := now.Sub(from)
 	if it.Quiet {
 		return "no output " + ageShort(d)
 	}
@@ -633,14 +702,21 @@ func (m *uiModel) rowLine(r webui.LiveRow) string {
 	return strings.Join(parts, st.Dim.Render(" · "))
 }
 
+// keyHint is the panes' last line. A row has no log, so with one selected
+// it says so in place of Enter.
 func (m *uiModel) keyHint() string {
-	return "j/k move · enter log · o open browser · ? keys · q quit"
+	enter := "enter log"
+	if m.sel >= len(m.data.Items) && m.selectable() > 0 {
+		enter = "no log for this row"
+	}
+	return "j/k move · " + enter + " · o open browser · ? keys · q quit"
 }
 
 func (m *uiModel) keyLines() []string {
 	return []string{
 		"j / k, ↑ / ↓   move the selection",
-		"enter          show the selected run's log",
+		"enter          show the selected run's log full screen, following it:",
+		"                 f follow on/off, j/k ↑/↓ pgup/pgdn g/G scroll, esc back",
 		"o              open the web UI in this machine's browser",
 		"?              hide these keys",
 		"q, ctrl-c      quit and stop the server",
