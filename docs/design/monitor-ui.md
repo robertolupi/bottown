@@ -184,9 +184,7 @@ lines. When they differ, or N is past the end, the response says
 The check does not depend on why the prefix changed. When the run ends
 the page loads the whole log once more, without a cursor, so the final
 view never rests on a prefix. What the page shows after any poll
-therefore equals the full rendered log at that moment. Until this lands
-(§12, step 2) the page reloads the whole log at the live poll's interval
-while it is open.
+therefore equals the full rendered log at that moment.
 
 ## 5. The other views, addresses and keys
 
@@ -267,8 +265,8 @@ makes it once.
 
 ### 7.1 `Live`
 
-`internal/webui` gains `(*Server).Live(ctx) (Live, error)`, served as
-`GET /api/live` and called in-process by the terminal view (§8):
+`internal/webui` gains `(*Server).Live(ctx, tail) (Live, error)`, served as
+`GET /api/live?tail=N` and called in-process by the terminal view (§8):
 
 ```
 Live

@@ -1,7 +1,7 @@
 <script lang="ts">
-  // An expanded flow's combined timeline: each run as a boundary around
+  // A flow's combined timeline: each run as a boundary around
   // its events, and the events outside any run.
-  import type { FlowTimelineEntry, HistoryThread, RunLogState } from './types';
+  import type { FlowTimelineEntry, HistoryThread } from './types';
   import type { ThreadMainLine } from './state';
   import { runOutcome } from './state';
   import { formatTime } from './format';
@@ -14,13 +14,11 @@
     thread: HistoryThread;
     mainLine: ThreadMainLine;
     entries: FlowTimelineEntry[];
-    loading: boolean | undefined;
-    error: string | undefined;
-    expandedLogs: Record<string, RunLogState>;
-    onToggleLog: (runId: string) => void;
+    loading?: boolean;
+    error?: string;
   }
 
-  let { thread, mainLine, entries, loading, error, expandedLogs, onToggleLog }: Props = $props();
+  let { thread, mainLine, entries, loading, error }: Props = $props();
 </script>
 
 <div class="flow-timeline-section">
@@ -58,7 +56,7 @@
             <div class="timeline-run-boundary-meta">
               <span class="badge badge-neutral">{entry.run.kind}</span>
               <span class="badge repo-badge">{entry.run.family ? `${entry.run.actor} (${entry.run.family})` : entry.run.actor}</span>
-              <code class="text-sm muted">{entry.run.id}</code>
+              <a href="#/run/{entry.run.id}"><code class="text-sm muted">{entry.run.id}</code></a>
               <StatusBadge status={entry.status} />
               {#if runOutcome(entry.run)}
                 <OutcomeBadge run={entry.run} />
@@ -71,12 +69,12 @@
               <span class="muted text-sm">
                 {formatTime(entry.time)}{entry.ended ? ` → ${formatTime(entry.ended)}` : ' (in progress)'}
               </span>
-              <button
+              <a
                 class="btn btn-sm btn-secondary"
-                onclick={() => onToggleLog(entry.run.id)}
+                href="#/run/{entry.run.id}"
               >
-                {expandedLogs[entry.run.id] ? 'Hide Run Details' : 'Run Details & Log'}
-              </button>
+                Run details & log
+              </a>
             </div>
           </div>
 

@@ -187,6 +187,8 @@ export interface LiveRunInfo {
   timeout: string;
   flow?: FlowInfo;
   log_tail: LogLine[];
+  // When it last wrote its log or live transcript; absent before either.
+  last_output?: string;
   denials: Denial[];
 }
 
@@ -209,6 +211,83 @@ export interface LiveCheckInfo {
   elapsed: string;
   timeout?: string; // the flow's --check-timeout
   log_tail: LogLine[];
+  last_output?: string; // its log's modification time; absent before it has one
+}
+
+// GET /api/live (monitor-ui design §7.1): the live view, made by the
+// server; Now lays it out.
+export interface Live {
+  items: LiveItem[]; // tiles: batch runs and check groups, oldest first
+  rows: LiveRow[]; // one-liners: held flows with nothing live, interactive runs
+  ended: LiveEnded[]; // threads ended in the past hour, newest first, at most 5
+  summary: LiveSummary;
+}
+
+// The flow an item or row belongs to; round and max_rounds are absent
+// when the flow has not reported them.
+export interface LiveFlow {
+  issue: number;
+  round?: number;
+  max_rounds?: number;
+  step?: string; // implementing, checks, verifying, waiting for actor, between runs
+}
+
+export interface LiveItem {
+  id: string;
+  kind: string; // the run's kind, or check or e2e for a check group
+  target: string;
+  target_url?: string;
+  issue?: number;
+  issue_url?: string;
+  pr?: number;
+  pr_url?: string;
+  title?: string;
+  sha?: string; // a check group's head
+  flow?: LiveFlow;
+  actor?: string;
+  family?: string;
+  spec?: string;
+  started: string;
+  limit?: number; // seconds
+  last_output?: string;
+  quiet: boolean;
+  tail: LogLine[];
+  denials: number;
+}
+
+export interface LiveRow {
+  key: string;
+  kind: 'flow' | 'interactive';
+  id?: string; // an interactive run's
+  target: string;
+  target_url?: string;
+  issue?: number;
+  pr?: number;
+  title?: string;
+  flow?: LiveFlow;
+  what: string; // the flow's step, or interactive
+  detail?: string;
+  since?: string;
+}
+
+export interface LiveEnded {
+  key: string;
+  kind: string; // flow, or a standalone run's kind
+  issue?: number;
+  pr?: number;
+  run_id: string;
+  target: string;
+  title?: string;
+  ended: string;
+}
+
+export interface LiveSummary {
+  running: number;
+  quiet: number;
+  waiting: number;
+  interactive: number;
+  inbox: Partial<Record<InboxItemKind, number>>;
+  inbox_error?: string;
 }
 
 export interface Denial {
@@ -502,21 +581,6 @@ export interface MilestoneGroup {
   edges: MilestoneEdge[];
   layers: number;
   error?: string;
-  // The plan's `bottown milestone run` the UI started, while it runs.
-  scheduler?: MilestoneScheduler;
-}
-
-// A running milestone run (internal/webui/milestone_run.go). id is what
-// POST /api/actions/stop takes: milestone-<slug>. Its child flows are the
-// group's nodes with a flow.
-export interface MilestoneScheduler {
-  id: string;
-  agents: string;
-  pool: string[];
-  parallel: number;
-  started_at: string;
-  elapsed: string;
-  log: string;
 }
 
 // GET /api/timeline (internal/webui/timeline.go): the window's runs laid

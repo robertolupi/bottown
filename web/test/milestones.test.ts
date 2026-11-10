@@ -54,8 +54,8 @@ test('node actions follow status', () => {
   assert.ok(!canStart(node(1, 0, { status: 'blocked' })));
   assert.ok(!canStart(node(1, 0, { status: 'ready', external: true })));
   assert.ok(canOpenFlow(node(1, 0, { status: 'in_review' })));
-  assert.ok(!canOpenFlow(node(1, 0, { status: 'running' })));
-  assert.ok(!canOpenFlow(node(1, 0, { status: 'closed', state: 'closed' })));
+  assert.ok(canOpenFlow(node(1, 0, { status: 'running' })));
+  assert.ok(canOpenFlow(node(1, 0, { status: 'closed', state: 'closed' })));
 });
 
 test('statusBadge and actorPair', () => {

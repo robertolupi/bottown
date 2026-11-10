@@ -16,9 +16,10 @@ verdict, start a follow-up run, merge. This design adds two things:
   loop and stops where the owner has to act. It is the supervisor that the
   [problem statement](../problem-statement.md) describes (§4, §5.3), in its
   first concrete form.
-- **A local web UI:** `bottown web ui` becomes a local HTTP server on the
-  host that shows what is going on in one repository and its runs, and
-  offers the CLI's actions, the supervisor's included, as buttons.
+- **A local web UI:** `bottown ui` becomes a local HTTP server on the
+  host that shows what is going on in one repository and its runs, in the
+  browser and, since the terminal view, in the terminal it was started in.
+  It shows commands to copy and run in the terminal.
 
 bottown will mostly host repositories other than itself, so nothing here
 assumes bottown's own tooling.
@@ -32,7 +33,7 @@ several agents means reading logs and running `git` by hand.
 ## 2. Architecture
 
 ```
-browser ──localhost, one-time token──▶ bottown web ui   (host, owner's process)
+browser ──localhost, login token──▶ bottown ui   (host, owner's process)
                                          │  reads: run logs, actor worktrees,
                                          │         upstream origin (owner's creds)
                                          │  calls: supervisor, run commands (Go)
@@ -41,18 +42,18 @@ browser ──localhost, one-time token──▶ bottown web ui   (host, owner's
                                          runs, keys, policy, audit, forge
 ```
 
-- **`bottown web ui` runs on the host,** in the `bottown` process, started
+- **`bottown ui` runs on the host,** in the `bottown` process, started
   by the owner from a repository's `main` checkout like the other owner
-  commands. It binds to localhost only and opens the browser with a
-  one-time token.
+  commands. It binds to localhost only. On a terminal it shows the live
+  view in the same terminal; otherwise it prints the login URL and serves.
+  `bottown web ui` is an alias of it.
 - **One UI, one repository.** The UI is about the repository whose
   checkout it was started in: its inbox, its runs, its upstream. The owner
   starts it in the repository they want to work on, and starts another
   one for another repository. Nothing on the host records where
   checkouts are, and nothing needs to.
-- **The UI is a view plus actions.** It reads what only the host has and
-  calls the server's API as the owner for the rest. Its actions are the
-  CLI's actions, through the same Go code and the same checks.
+- **The UI is read-only, except for Refresh.** It reads what only the host has and
+  calls the server's API as the owner for the rest. It suggests CLI commands to copy.
 - **The server stays authoritative:** runs, keys, policy, the audit trail
   and the forge. Section 7 lists the read APIs it needs. The container's own
   page stays as a small health page (`bottown web health`).
@@ -157,7 +158,7 @@ random id per check, so two checks at the same head (overlapping flows)
 neither share nor overwrite a worktree or log; a check removes the check
 worktrees whose record is no longer held (what interrupted checks left),
 and a resumed flow cites the newest log at H of a check that has ended.
-Live Runs and the terminal tail show the checks with a live tail of their
+Now and the terminal tail show the checks with a live tail of their
 log, like a run (§4.2).
 
 - **Passed:** the verify run starts, and its prompt says the checks passed
@@ -210,7 +211,7 @@ or when one pushes no new commit; the owner then resolves them or starts
 an implement run.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
-action (the UI offers it); a flow never starts one.
+action in the terminal; a flow never starts one.
 
 Every stop says why, on the issue as well as in the command's output, so
 the owner sees it in Forgejo and in the UI:
@@ -459,12 +460,25 @@ and when a milestone flow is done.
 
 ## 4. Views
 
-The first phases build three views: the owner inbox, runs (live and
-history), and upstream and repository health, on one tab. A second tab,
-Milestones, shows each Implementation Epic's dependency DAG
-([milestones design](milestones.md) §2.7), and a third, Timeline, the
-runs of a time window in lanes (§4.6). A run detail view with the
-transcript comes later.
+Each view has a tab and an address in the URL's fragment. A tab is a link
+to its route, so switching views adds a history entry: Back and Forward
+return to the previous view, and editing the address switches it. An
+empty fragment, or one the UI does not know, shows Now; the fragments
+before routes, `#milestones`, `#timeline` and `#stats`, still name their
+views.
+
+| Tab | Route | Shows |
+|---|---|---|
+| Now | `#/now` (the default) | Needs you, the owner inbox (§4.1), above Live, a wall of live tails (§4.2) |
+| History | `#/history` | Run History (§4.2) |
+| Milestones | `#/milestones` | each Implementation Epic's dependency DAG ([milestones design](milestones.md) §2.7) |
+| Timeline | `#/timeline` | the runs of a time window in lanes (§4.6) |
+| Stats | `#/stats` | the fam's work in numbers (§4.7) |
+| Repository | `#/repo` | Upstream & Forge and the Health Checklist (§4.3) |
+
+The UI loads run history and polls live runs whichever view is shown, so
+History follows live runs while another view is open. A run detail view
+with the transcript comes later.
 
 ### 4.1 Owner inbox
 
@@ -482,25 +496,64 @@ be recomputed.
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
 
+On Now the inbox is **Needs you**, one line above Live: the counts by
+kind ("2 ready to land · 1 stopped flow · 1 conflict"), and an **expand**
+control that shows the items in place. Whether it is expanded is kept in
+the browser's `localStorage` (a browser that refuses storage starts
+collapsed and still toggles). Inbox zero is one muted line.
+
 Actor-filed issues are hidden by default. The **Show actor-filed issues**
-checkbox reveals them; the inbox count and inbox-zero state follow the
-current filter.
+checkbox, in the expanded list, reveals them; the counts and the
+inbox-zero line follow the current filter.
 
 Each row links to the issue or PR in Forgejo and offers the matching
-bottown action (§5): Land the PR, re-run the flow, or end or clean up the
-run. **Land** starts a background landing with the Main policy: check and
-e2e at the combined tree, with a record, log and stop control under Live
-Runs. Merging in Forgejo instead skips these checks, as the item explains.
+command to copy (§5): land the PR with `bottown merge-all N`, re-run the
+flow, or clean up the run. A landing started with `bottown merge-all`
+shows on Now through its check items. Merging in Forgejo instead skips
+these checks, as the item explains.
 Issue-backed rows show the full issue title next to the reference.
 
 ### 4.2 Runs
 
-**Live.** Active runs: target, issue title, kind, actor and family, batch or
-interactive, and elapsed time against the timeout. Runs of one flow are
-grouped under it ("#51 · round 2/3 · verifying with kimi"). A batch run
-shows a **live tail of its log**, readable rather than raw JSON (assistant
-text and tool calls, one line each), refreshed while it runs; the UI is
-on the host, so it reads `.bottown/runs/<id>.log` directly. Each line
+**Now.** The page header carries three chips: health ("✓ healthy", or "N
+problems", counting the Health Checklist's failing items: missing agent
+instructions, an unprotected main, a repository settings error, a CLI and
+server version mismatch, outdated harness commands), upstream (the default
+branch against origin: "main · up to date", "main · 1 ahead", "main · 2
+behind"), both linking to `#/repo`, with **Refresh** beside the upstream
+chip; and freshness, "live · 2s ago" from the last successful live poll
+(or status load), which turns to "stale · 40s" after 30 seconds without
+one. A failed poll is not ignored: its error is the chip's tooltip.
+
+Below Needs you (§4.1), **Live** lays out the server's live view, `GET
+/api/live` (§7), polled with the live runs: what is live, how it groups,
+its order and what is quiet are decided there, and the browser only words
+them. Live is a summary ("5 running · 1 quiet · 1 waiting · 1
+interactive"), and a grid
+of **tiles** (`repeat(auto-fill, minmax(420px, 1fr))`, one column on a
+narrow screen), one per item: each live batch run and
+each live check group, ordered by start time and never reordered. A tile
+has a two-line header, the target and title, then the kind with the
+flow's round ("verify 2/3"), the actor, elapsed time against the limit
+("12m/1h 0m"), the denials count ("1 denied"), and the time since its
+**last output**; below, a fixed-height tail of its last lines, as the live
+tail renders them without the filter bar. A click anywhere on the tile
+opens its page, `#/run/<id>`. Last output counts from `last_output`, or
+from the start when there is none yet, every second; when the server
+marks the item **quiet** (five minutes without output, §7) it reads "no
+output for 6m" in the warning colour and the tile gets a warning border.
+Under the grid, one-line **rows** for what is live but has no tail: a
+flow whose lock is held with no live run or check on its issue, with its
+round, its step, what it waits for and since when, linking
+`#/flow/<issue>`; and an interactive run, linking `#/run/<id>`. Rows are
+never quiet. Last, **Just ended** names up to five threads whose last run
+ended in the past hour, newest first, each a link to its page.
+Durations past an hour read in hours ("3h 12m").
+
+**Live tail.** A batch run's tail, readable rather than raw JSON
+(assistant text and tool calls, one line each), refreshes while it runs;
+the UI is on the host, so it reads `.bottown/runs/<id>.log` directly, with
+the live transcript (`runs.ReadLog`). Each line
 carries a kind (`text`, `tool`, `output`, `error`, `status`, or `plain`
 for harnesses whose parts are not told apart yet) and, for a tool call,
 the tool's name, class (`shell`, `read`, `edit`, `search`, `forge`,
@@ -514,13 +567,12 @@ header. Both also link to `GET /api/runs/{id}/log?raw=1`, which serves the
 complete original log as redacted plain text for diagnosis. Encoded
 attachment payloads are elided from both the rendered and raw views.
 
-A flow's **post-implement checks** (§3.2) are not a run, but Live Runs
+A flow's **post-implement checks** (§3.2) are not a run, but Now
 shows them while they run, as `live_checks` in `GET /api/status` and `GET
 /api/runs?state=live`: the issue and PR, the head, the commands, elapsed
 time against the flow's `--check-timeout`, and the live tail of their log
-in plain lines. A check sits under its flow when the UI started that flow,
-whose step then reads "post-implement checks at <sha>", and on its own
-otherwise. Its id, `flow-<issue>-<sha>-<check>.e2e`, names its log for `GET
+in plain lines, each check group a tile; the flow's step reads
+"post-implement checks at <sha>" while they run. Its id, `flow-<issue>-<sha>-<check>.e2e`, names its log for `GET
 /api/runs/{id}/log` and the raw link.
 
 **Terminal tail.** `bottown flow`, and a batch `bottown run implement`,
@@ -545,33 +597,71 @@ in the terminal's ANSI palette, without escape sequences from the log. The
 launcher's and the flow's own lines print above the view too. An attended
 flow's merge prompt pauses the program and gives the terminal back for
 the answer. Ctrl+C interrupts the command as without the tail. Output that
-is not a terminal (piped, redirected, the web UI's background flows),
+is not a terminal (piped or redirected),
 `TERM=dumb`, interactive runs, and `bottown flow --unattended` keep the
 plain output: one line per step and the `log:` path.
 
-Issue references in Live Runs, Run History and Owner Inbox show the issue
+Issue references in Run History and the Owner Inbox show the issue
 title and Markdown description in a popup on hover or keyboard focus. The
 browser loads `GET /api/issues/{number}` on first display or interaction,
 sharing and caching concurrent and completed reads; a failed read affects
 only that popup. The
 title stays plain text and rendered description HTML is sanitized.
 
-**History.** A flow-centric table of history threads. Each flow thread groups
+**History.** A flow-centric table of history threads with five columns.
+Each flow thread groups
 `implement` and `verify` runs for the same issue and PR (including manual
 runs, retries, stops/resumes, repeated rounds, and pre-PR implementation runs
 that stay in the thread once its PR is opened; a different PR on the same
 issue forms a separate thread). `discuss` runs appear as separate entries.
-The main line shows the issue, PR, and milestone name together (omitting the
-milestone when none is assigned), along with latest status, active flow
-highlighting, run count, actors, duration, usage, summary, and last activity.
-Clicking a flow expands it (at most one flow is expanded at a time) to show a
-combined flow **timeline** at the top — covering all runs in the flow with
-clear run boundaries, reviews, comments, and merge events — followed by the
-constituent runs and their individual logs and policy denials. A run's start
-stays compact; its summary appears once, on its completion event, including
-for a failed run when one was recorded. Live activity
-updates statuses, highlighting, and the selected active flow's timeline
-without changing the selected flow.
+The columns are:
+- **Target:** the issue and PR references, the title, the milestone badge
+  when one is assigned, and the thread's kind
+  and run count as a muted suffix, with the summary as a second, clipped
+  line under them. A failed or revoked run's reason stays on the row, under
+  the summary.
+- **Actors:** the thread's actors.
+- **State:** one badge — the thread's status, which already folds the review
+  outcome in for merged, ready, needs-changes and needs-intervention
+  threads. The outcome badge shows next to it only when the status does not
+  imply it.
+- **Duration · cost:** the thread's duration and recorded cost.
+- **Last activity:** a relative age, with the exact time as its title.
+
+The token counts move to the run page. A row opens its page: clicking a flow
+row navigates to `#/flow/<issue>`
+(optionally `?pr=N`), while a discuss or single-run row navigates to
+`#/run/<id>`. Back returns to the view the owner came from, at its scroll
+position. The filters stay above the table, and the table fills the view's
+height with no sideways scroll. The page shares one unified layout component
+with runs:
+- **Header:** target, issue title, kind, active round, actor, model and mode,
+  elapsed time against the limit, and links to the issue and PR in Forgejo.
+  A flow, and any run belonging to one, shows the flow's phase bar
+  (`[ implement ]──[ checks ]──[ verify ]──[ land ]`).
+- **Run page (`#/run/<id>`):** displays the full log from `GET /api/runs/{id}/log`
+  in the page's own scroll (without inner scroll boxes or max-height limits),
+  with kind filters, raw log link, and the follow toggle of `LiveLogTail`. When
+  the run recorded a failure or revoked reason, the page renders that reason
+  above the log. While the run is live, the page polls the log at the live
+  poll interval for what may have changed: every response carries `stable`,
+  the length of the rendered log's stable prefix (the lines before the first
+  running tool call, or before a live log's last line; an ended run's whole
+  log), and `stable_sum`, its digest. A poll sends them back as
+  `after=N&sum=S`, gets the lines from position N on, keeps its first N and
+  replaces the rest; when the server's first N lines have another digest
+  (the log is rendered from another source, as when a live transcript is
+  removed), `sum` is missing or N is past the end, the response has
+  `reset: true` and the whole log, which replaces the page's. A check's log is taken as live, so its last line stays out of the prefix.
+  The page auto-scrolls to the bottom when following is on; when the run ends
+  it loads the whole log once more, without a cursor. Below or alongside the
+  log, any policy denials are listed.
+- **Flow page (`#/flow/<issue>`):** offers three tabs: **Log** (displaying the
+  live run's log, or the last run's log), **Timeline** (the full flow timeline
+  from `GET /api/issues/{issue}/timeline`), and **Runs** (listing the flow's
+  constituent runs, each linking to `#/run/<id>`). While the flow is active
+  or its run is live, the timeline reloads at the live poll interval, and
+  once more when it stops.
 
 The table's header stays at the top of its scroll box as the rows scroll.
 A summary cell, and each line of a failure reason, shows one line, cut
@@ -582,7 +672,9 @@ cell, wrapped, and **less** cuts it again (#133). Neither expands the flow.
 (succeeded, failed, revoked); its **outcome** says what work it produced,
 as the server recorded it from the run's tools: a verify run's latest
 review verdict (Approved, Changes requested, Commented) and an implement
-or plan run's opened PR (PR opened). History rows, flow rows (the latest
+or plan run's opened PR (PR opened). A History row's state badge folds the
+outcome in for merged, ready, needs-changes and needs-intervention threads
+and shows the outcome badge beside it otherwise; flow rows (the latest
 run's), the timeline's run boundaries and the constituent runs show both,
 the outcome as an outlined badge with a glyph and a label, so it reads
 without color. A run with no recorded outcome, including every run from
@@ -601,9 +693,8 @@ run with neither, such as one from before failures were recorded, or an
 interactive run that exited cleanly and the owner marked failed, says
 "Reason unavailable"; a cause is never guessed from the summary or log.
 A flow row shows its latest run's reason unless the flow is going again.
-Each reason links to the run: View log expands the flow, if needed, and
-the run's log, whose row repeats the reason in full; View details does
-the same for a run that wrote no log, and says so. The timeline's run
+Each reason links to the run: View log or View details navigates to the
+run's page at `#/run/<id>`, which displays the reason and full log. The timeline's run
 ended event carries the reason too.
 
 **Flow-level state.** In addition to execution status and run outcome, flow
@@ -615,8 +706,8 @@ do not imply readiness. Missing or read-failed data remains explicitly neutral
 and screen-reader prefix so it is accessible without color, consistent with
 Inbox and flow stop reasons.
 
-**Denials.** A live run's card and a history row (when expanded) list
-the operations the server's policy refused the run (denied or rejected),
+**Denials.** A live run's tile counts them, and a run's page
+(`#/run/<id>`) lists the operations the server's policy refused the run (denied or rejected),
 including those outside its repository: when, the request or operation,
 the rule, and why. History marks a run with denials with a count. They
 come from `GET /v1/audit` (§7); while the server cannot say,
@@ -727,7 +818,7 @@ by hand) nothing runs the checks but the agents.
 
 ### 4.6 Timeline
 
-A third tab, **Timeline** (`#timeline`), shows where time went in a
+The **Timeline** tab (`#/timeline`), shows where time went in a
 window: every run on one time scale, from `GET /api/timeline`
 ([reference](../reference/activity.md)), drawn as plain SVG.
 
@@ -747,12 +838,12 @@ window: every run on one time scale, from `GET /api/timeline`
   flow stop until the thread's next run, merge, close or next stop,
   labelled with the stop reason, and **flow overhead**, a dashed line, for
   any other gap between them. Its numbers are the window's share spent on
-  agents, e2e and waiting on the owner. Its label opens the thread's
-  timeline dialog.
+  agents, e2e and waiting on the owner. Its label navigates to the flow page
+  at `#/flow/<issue>`.
 - **Bars** are colored by kind (implement, verify, discuss, plan, other),
   with the outcome glyph at the end; failed and revoked runs are outlined,
-  interactive ones hatched, so the bars read without color. A bar opens a
-  dialog with the run's details and log.
+  interactive ones hatched, so the bars read without color. A bar navigates to
+  the run page at `#/run/<id>`.
 - **Concurrency strip**, above the lanes: how many batch runs were live at
   each moment, with the peak and the mean over the window.
 
@@ -761,7 +852,7 @@ derives nothing.
 
 ### 4.7 Stats
 
-A fourth tab, **Stats** (`#stats`), answers the owner's questions about the
+The **Stats** tab (`#/stats`), answers the owner's questions about the
 fam's work from `GET /api/stats` ([reference](../reference/activity.md),
 `internal/stats`), built on the same activity derivation as the Timeline so
 the two cannot disagree. It follows the ground rules of #309: show
@@ -781,39 +872,65 @@ for the owner's judgment alone.
 - **Milestone burndown and burnup:** plain SVG, one chart per milestone,
   counting or size-weighted as the labels allow.
 
-## 5. Actions
+### 4.8 Keys
 
-Each action is a CLI command, and the UI calls the same Go code with the
-same checks. Actions marked "confirm" show what they will do, in full, and
-ask first.
+Every view is reachable from the keyboard. The keys are handled in one
+place and ignored while an input, select or textarea has focus or a
+command modifier (Ctrl, Alt or Meta) is held, so text entry and the
+browser's shortcuts win.
 
-| Action | CLI equivalent | Confirm |
-|---|---|---|
-| Start a flow: implementer, verifier, rounds, timeout | `bottown flow N --implement A --verify B` | no |
-| Start one run: implement, verify, or discuss with a question | `bottown run …` | no |
-| Stop a live run or flow: kill the harness, end the run as failed | `bottown run stop ID` (new) | confirm |
-| Clean up broken runs | `bottown run gc` | confirm |
-| Pull the checkout | `git pull --ff-only bottown main` | no |
-| Run the after-pull steps | the commands in `.bottown.toml` | confirm |
-| Push `main` to origin | `git push origin main` | confirm |
-| Merge the base into a clean, behind PR | answer `y` to the attended flow's prompt | confirm |
-| Queue or unqueue an issue (later, §3.6) | sets or clears the bottown-managed labels | no |
+| Key | Does |
+|---|---|
+| `1`-`6` | Switch view, in the tabs' order (Now, History, Milestones, Timeline, Stats, Repository) |
+| `j` / `k`, arrows | Move a visible selection among Now's tiles and rows and History's rows |
+| `Enter` | Open the selected item's page |
+| `Esc` | Back (`history.back()`, or to Now when there is nothing to go back to); it closes the `?` panel when that is open |
+| `f` | Follow, or stop following, the log, on a run or flow page |
+| `g` / `G` | The top or the end of the log, on a run or flow page |
+| `/` | Focus History's search |
+| `?` | Show these keys in a small panel |
 
-Starting a flow or a run picks actors from lists of the instance's actors,
-each with an optional model field: a model given starts the actor as
-`ACTOR:SPEC`, and an empty field leaves the host's `[actor_models]` entry,
-which the field shows as its placeholder, to apply. The UI refuses a same-family verifier before anything starts, as the CLI
-does.
+The selection is visible, scrolls into view, and is reachable by Tab as
+well: tiles and rows are focusable and announce themselves as links. Focus
+decides what `Enter` opens: a focused tile or row wins (Tab reached it),
+any other focused control (a button) keeps `Enter` for itself, and the
+`j`/`k` selection is used only when nothing else has focus. Focusing a
+tile or row also moves the selection there, so `j`/`k` carry on from where
+Tab left off. While a dialog (the `?` panel or a modal) is on screen it
+owns the keyboard: the nav keys and `Esc` are left for it to handle.
 
-Merging pull requests, editing issues and PRs, reviewing, and milestones are
-not actions here: the UI links to Forgejo for them. The clean base-merge
-action only updates the PR's own branch.
+## 5. Read-only UI
+
+The UI is read-only. Refresh reloads status and fetches origin; all other
+operations are commands to copy and run in a terminal. Monospace chips offer
+clipboard copy, with text selection when clipboard access is unavailable.
+
+- Inbox: `bottown merge-all N`, `bottown flow N --implement A --verify B`,
+  and the cleanup or stop command carried by a broken-run item. Unknown actors
+  appear as `ACTOR`.
+- Milestones: ready nodes show `bottown flow N --implement A --verify B`
+  from their labels, with `ACTOR` placeholders. Clicking a node opens its flow
+  page. Plans show `bottown milestone run SLUG --agents POOL --parallel N`;
+  the owner fills in the pool and parallelism. The UI shows the child flows,
+  but has no scheduler status record and does not show its pool or parallelism.
+- Repository: `git pull --ff-only bottown <default>` when behind the forge,
+  `git push origin <default>` when ahead of origin, and each declared
+  after-pull step. Short SHAs have controls to copy their full values.
+- Run pages: `bottown run show ID`.
+
+There are no start, stop, cleanup, pull, push or landing dialogs. Failed
+loads appear in a fixed notice visible while the page scrolls. The only
+write route is `POST /api/refresh`, which fetches origin and
+keeps the matching-Origin check. The former `/api/actions/*` routes return
+404. The shared command templates are exported with concrete samples and
+validated against the CLI command tree, flags and required flags.
 
 ## 6. Data sources
 
 | Data | Where | How the UI gets it |
 |---|---|---|
 | Runs: live and ended, with digests and each run's state | server | `GET /v1/runs` (§7) |
+| The live view: items, rows, threads just ended, summary | host, from the rows below | `GET /api/live` (`(*Server).Live`, §7): live runs from `GET /v1/runs?state=live`, check groups from their held `.check` records, flows from their held locks and status files in `.bottown/runs/`, tails and last output from the logs there, titles from the forge, the inbox's counts from §4.1's |
 | Policy decisions (allow/deny per forge write) | server | `GET /v1/audit` (new, §7) |
 | PRs, with where their reviews leave each open one | server | `GET /v1/forge/prs?state=open\|all[&checks=1]` (`pr list`): each item carries the PR's branches, mergeability, milestone, dates, its `assessment` and rounds spent, and with `checks=1` the statuses at its head |
 | One PR's reviews (bodies and times, for a timeline) | server | `GET /v1/forge/pr` (`pr show`) |
@@ -873,8 +990,8 @@ session's transcript to its log (`crush session last --json`, if crush
 created that session during the run), as JSON lines: the session's meta,
 then each message. While the run goes on, the launcher exports the
 transcript every 3 seconds into `<id>.transcript` beside the log,
-replacing it whole; the tail reads it after the log, so Live Runs follows
-the session as it grows, and the launcher removes it before appending the
+replacing it whole; the tail reads it after the log, so Now's tile follows
+the session as it grows (and its `last_output` moves with it), and the launcher removes it before appending the
 final transcript. Its lines are typed: assistant text, tool calls with
 their class, tool results crush marks as errors, commands whose output
 ends `Exit code N` with N non-zero, and finishes other than a normal end
@@ -888,14 +1005,67 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
-- **Landing.** **Land** posts the PR number and offered head SHA to
-  `POST /api/actions/land`. A background worker runs `land.Land` with the
-  Main policy (check and e2e at the combined tree). Its record and log
-  appear under Live Runs with a stop control; milestone child nodes show
-  their landing like their flow. The inbox warns that merging in Forgejo
-  instead skips the checks at the combined tree. Owner-only
-  `GET /v1/forge/pr/merge-base` still reports behind and conflict status;
-  the PR-first merge POST and inbox action are removed.
+- **The live view.** `(*Server).Live(ctx, tail)` in `internal/webui`
+  makes the live picture once, for Now and the terminal alike, served as
+  `GET /api/live?tail=N` (monitor-ui design §7). It returns:
+
+  - `items`, the tiles, oldest first (by start, then id): every live
+    batch run (`GET /v1/runs?state=live`) and every live check group (its `.check`
+    record, held while the group runs, §4.2). Each has its `id`, `kind`
+    (the run's kind, or `check`/`e2e` for a check group), `target` and
+    `target_url` (a run's `runTarget`; a check group's issue, else its
+    PR), `issue`/`pr` with their URLs, `title` (the issue's, else the
+    PR's, from the forge), a check group's `sha`, `actor`, `family` and
+    `spec` (the run's record, or the actor's), `started`, `limit` in
+    seconds (a run's key lifetime; a check group's `--check-timeout`;
+    absent when it has none), `last_output`, `quiet`, `tail` (the last
+    N rendered lines of its log, 12 by default, at most 500) and
+    `denials` (the count of its refusals in `GET /v1/audit`). An
+    implement or verify run, or a check group, whose issue has a held
+    flow lock has a `flow`: the issue, and the `round`, `max_rounds` and
+    `step` the flow reports in its status file (`runs.HeldFlows`,
+    monitor-ui design §7.3), with the run's or check's own step
+    (`implementing`, `verifying`, `checks`) when the flow has not reported
+    one. Active flows come from held locks only, whoever started them,
+    not from the UI's `flow-<N>.json`.
+  - `rows`: each flow whose lock is held with no item on its issue, as
+    `key` `flow-<issue>`, its `flow`, `what` (its step), `detail` (what
+    it waits for, from the status file) and `since` (when the step
+    began); then each interactive run, by start, with `what`
+    `interactive`, `detail` its kind and actor, and `since` its start.
+  - `ended`: up to five threads whose runs have all ended, the last in
+    the past hour, newest first: threads as `activity.Group` makes them
+    for History, from every run and every PR (read only when some run
+    ended in the past hour), each with its `key`, `kind` (`flow`, or a
+    standalone run's kind), `issue`, `pr`, `run_id` (the last run to
+    end), `target`, `title` and `ended`. A flow thread whose issue's
+    lock is held has not ended.
+  - `summary`: `running` (the items), `quiet`, `waiting` (the flow rows),
+    `interactive`, and `inbox`, the owner inbox's counts by kind
+    (`ComputeInbox`, recomputed at most every 30 seconds), with
+    `inbox_error` when it could not be read.
+
+  `quiet` is `now − last_output ≥ quietAfter`, five minutes, one constant
+  in `internal/webui`; an item with no output yet counts from its start,
+  and rows are never quiet. `GET /api/runs?state=live` (`live_runs`,
+  `live_checks`, `active_flows`) stays for History's reconciliation of
+  its threads with what is live.
+
+- **Last output.** Each of `live_runs` and `live_checks` (in `GET
+  /api/status` and `GET /api/runs?state=live`) carries `last_output`: the
+  newest modification time among the files its tail is read from, a run's
+  log and its live transcript (`runs.ReadLog` appends the transcript, and
+  `runs.FollowTranscript` rewrites it only when it changes), a check
+  group's own log. It is omitted while none exists. Live's
+  items carry the same `last_output`, and their `quiet` is decided from it
+  (§4.2).
+
+- **Refresh.** `POST /api/refresh` is the UI's only write route. It fetches
+  origin and returns the status, with the same Origin check as before.
+- **Landing.** The inbox suggests `bottown merge-all N` in the terminal.
+  Its checks show on Now as check items; there is no UI landing worker,
+  landing record or landing kind. Flows are discovered through held CLI
+  locks and their status files, without UI-specific `flow-<N>.json` files.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when
@@ -968,35 +1138,62 @@ live, as a round) is decided in one place.
 
 ## 8. Security
 
-- **Localhost only.** `bottown web ui` binds `127.0.0.1` on a random port
-  (or `--port`), checks the `Host` header against it (against DNS
-  rebinding), and refuses state-changing requests whose `Origin` is not
-  its own (against CSRF).
-- **One-time token.** The URL it opens carries a token that is exchanged,
-  once, for an `HttpOnly`, `SameSite=Strict` session cookie. The session
-  lives as long as the process: when `bottown web ui` exits, it is gone.
+- **The command.** `bottown ui [--port N] [--print] [--once] [--repo R]`
+  starts the server for one repository (`--repo`, default the checkout's).
+  On a terminal it shows the live view in the alternate screen; `--print`,
+  or an output that is not a terminal, prints the login URL and serves
+  until interrupted, and `--once` prints one frame as plain text and exits
+  without serving. `bottown web ui` is an alias of it. The terminal view
+  calls the server's `Live` in-process, so the browser and the terminal
+  read the same view.
+- **The terminal view's keys.** In the panes: `j`/`k` and the arrows move
+  the selection, over the items and then the rows; `Enter` shows the
+  selected item's log full screen; `o` opens the web UI in the browser of
+  the machine the command runs on; `?` lists the keys; `q` and `Ctrl-C`
+  quit and stop the server. A row (a waiting flow, an interactive run) has
+  no log: `Enter` on it does nothing, and the key hint says so.
+- **The full-screen log.** A header line with the item's target, kind,
+  actor, elapsed and last-output age, then the log read from the run's or
+  check's log file (`runs.LogFollower`, polled every second) and rendered
+  with `runs.RenderLog` in the terminal tail's styles, each line cut to the
+  width; a running tool call is replaced by its completed line. It follows
+  the end while the item is live. `f` turns following off and on;
+  `j`/`k`, the arrows, `PgUp`/`PgDn` and `g`/`G` scroll (scrolling up
+  stops following, `G` goes to the end and follows); `Esc` returns to the
+  panes with the same selection; `q` quits. When the item leaves the live
+  view, the log is read once more and the view stays on it, saying how it
+  ended: a run's status and outcome, from the server, or that the checks
+  ended.
+- **Localhost only.** It binds `127.0.0.1` on a random port
+  (or `--port`), and checks the `Host` header against it (against DNS
+  rebinding). Its one write route, `POST /api/refresh`, refuses requests
+  whose `Origin` is not its own (against CSRF).
+- **Reusable login token.** The URL it shows carries a token that is
+  accepted on every request that carries it, for as long as the command
+  runs: each such request sets an `HttpOnly`, `SameSite=Strict` session
+  cookie and redirects to the address without the token. A new token is
+  made at each start. This is safe only because the server has no route
+  that changes a run, a flow, the forge or the checkout, so a login URL
+  left in a browser's history or a terminal's scrollback can reach nothing
+  that acts; the session lives as long as the process.
 - **The owner key never reaches the browser.** The Go process holds it and
   makes every server call itself.
 - **Everything the agents wrote is untrusted:** issue and PR text, review
   bodies, handovers, logs. The UI escapes text, sanitizes the HTML produced
   from issue-description Markdown, and sets a strict Content-Security-Policy
   with no inline scripts, so text an agent controls cannot run in the page
-  that can start runs or push.
-- **Actions are the CLI's.** Each goes through the same Go code and checks
-  as its CLI command, and the server enforces policy regardless of who
-  calls. Repository-declared commands (after-pull steps) run only when the
-  owner clicks, after seeing them in full, and only from `main`'s
-  `.bottown.toml`.
+  that displays the data.
+- **Commands run in the terminal.** The UI cannot start or stop runs, land,
+  pull, push or execute repository-declared after-pull steps. Refresh only
+  changes remote-tracking refs by fetching origin.
 - **Logs stay on the host.** Transcripts can contain secrets. The UI shows
   them locally, and only the digest goes to the server.
-- **Flows outlive the UI.** A flow started from the UI is its own
-  background `bottown flow` process, with its output in `.bottown/`.
-  Closing the UI does not stop it; a restarted UI finds it through the
-  server's run records.
+- **Flows outlive the UI.** CLI flows are independent of the UI and are
+  discovered from their held locks and status files.
 
 ### 8.1 Previewing the UI in a run
 
-`bottown web ui` needs the owner's key and a `main` checkout, so a run that
+`bottown ui` needs the owner's key and a `main` checkout, so a run that
 changes the UI cannot use it. `bottown web preview` is for that run, and
 for its verifier:
 
@@ -1026,14 +1223,16 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
   `default`): the status, inbox, live runs and checks with their logs, active flows,
+  the live view (`live`, `GET /api/live`, each item's tail cut from its
+  log in the fixture when it has one, to `?tail=N`),
   history, milestones, issue details and timelines, and the Timeline
   view's answer (`timeline`, served for any window; without it, an empty
   one), in the API's own JSON.
   A fixture is decoded strictly into the Go types the API uses, and a test
   loads every one, so a renamed field fails the tests instead of showing
   as a blank. `default` exercises every view; `empty` is a repository with
-  nothing going on; `errors` has every error state. Actions do nothing and
-  succeed, unless the fixture's `actions` gives their answer. A change
+  nothing going on; `errors` has every error state. The preview has no action
+  answers; Refresh returns the fixture status. A change
   that shows something new adds it to the fixtures.
 - **Tests and people can change the state** while the page is open:
   `POST /api/preview/logs/RUN` appends lines to a run's log and live tail,
@@ -1042,8 +1241,8 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   /api/preview` names the one in use and the pid serving it.
 - **Same checks, no sign-in.** It binds `127.0.0.1`, checks `Host` and,
   on state-changing requests, `Origin`, and sets the same CSP as `bottown
-  web ui`. There is no token: it serves only checked-in fixture data, and
-  its actions do nothing.
+  ui`. There is no token: it serves only checked-in fixture data, and
+  it serves no action routes.
 
 Runs never get a signed-in UI: a second kind of login, and a read-only
 mode on every endpoint, would cost security surface that preview, shot and
@@ -1054,12 +1253,12 @@ data looks like, the owner captures it:
 bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
 ```
 
-- **It runs where `bottown web ui` does:** in the owner's main checkout,
+- **It runs where `bottown ui` does:** in the owner's main checkout,
   with the owner's key. In a run or actor worktree it refuses, saying it
   needs the owner's key.
 - **It writes what the UI shows now** as `web/fixtures/NAME.json`,
-  computed by the same code as `bottown web ui`'s API: the status, inbox,
-  live runs and checks, active flows, history and milestones. The file loads back
+  computed by the same code as `bottown ui`'s API: the status, inbox,
+  live runs and checks, active flows, the live view, history and milestones. The file loads back
   strictly, as every fixture does, before it is written. It does not
   serve.
 - **`--issue N` adds an issue's details and timeline, `--log RUN` a run's
@@ -1067,13 +1266,12 @@ bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
   the capture. With neither, it takes the issues, issue-less PR threads
   and run logs the views link to, live work first, up to a cap (30 issues,
   20 logs), so popups and log views work in the preview; what it cannot
-  read it skips, saying so. `actions` stays empty: a preview action does
-  nothing.
+  read it skips, saying so. There is no `actions` section.
 - **It refuses to replace a fixture** without `--force`. It prints the
   path, and on stderr the count per section.
 - **A capture holds real data:** issue titles and bodies, timelines, log
   lines from this forge. What looks like a secret is dropped: bottown API
-  keys (`btk_…`) and the owner key, the one-time logins of `web ui`
+  keys (`btk_…`) and the owner key, the logins of `bottown ui`
   (`?token=`) and `web forgejo` (`/v1/web/login/…`), credentials in URLs,
   and encoded payloads, as in logs. Read it before committing it. The
   owner commits the fixture, or attaches it to an issue, for a run to
@@ -1090,7 +1288,7 @@ so a run that can fetch the page still cannot see what it renders.
 out, as numbers to assert on first and pictures second:
 
 ```
-bottown web shot [--fixture NAME] [--path /#milestones] [--width 1440,390]
+bottown web shot [--fixture NAME] [--path /#/milestones] [--width 1440,390]
                  [--height 900] [--scheme light,dark] [--selector CSS]…
                  [--eval JS] [--wait CSS] [--out DIR] [--browser PATH]
 ```
@@ -1134,7 +1332,7 @@ Each phase is one issue, small enough for one implement run:
    the server.
 2. **Run digests:** per-harness extraction at run end, stored by the
    server and kept by `gc`; `GET /v1/runs` filters and digests.
-3. **The host UI and repository health:** `bottown web ui` as a local
+3. **The host UI and repository health:** `bottown ui` as a local
    server (§8), with the upstream and health view (§4.3) and its pull and
    push actions.
 4. **Inbox** (§4.1).

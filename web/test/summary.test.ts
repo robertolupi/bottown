@@ -21,12 +21,10 @@ test('anyTruncated: any clipped line counts', () => {
 });
 
 test('every history summary cell can expand its text inline', () => {
-  for (const f of ['FlowThreadRow.svelte', 'DiscussThreadRow.svelte', 'ConstituentRuns.svelte']) {
+  for (const f of ['FlowThreadRow.svelte', 'DiscussThreadRow.svelte', 'RunFlowPage.svelte']) {
     const s = src(f);
-    const cells = [...s.matchAll(/<td class="summary-cell"[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
-    assert.equal(cells.length, 2, `${f}: a failure cell and a summary cell`);
-    assert.ok(cells.some((c) => /<FailureReason\b/.test(c)), `${f}: failure cell`);
-    assert.ok(cells.some((c) => /<SummaryText\b/.test(c)), `${f}: summary cell`);
+    assert.match(s, /summary-cell[^>]*>\s*<FailureReason\b/, `${f}: a failure cell`);
+    assert.match(s, /summary-cell[^>]*>\s*<SummaryText\b/, `${f}: a summary cell`);
   }
 });
 

@@ -1,87 +1,126 @@
 <script lang="ts">
-  // Live runs and flow actions (§4.2, §5): active flows with their runs
-  // and post-implement checks, then standalone runs and checks, and the
-  // buttons that start flows and runs or clean up.
-  import type { ActiveFlowInfo, LiveCheckInfo, LiveRunInfo } from './types';
-  import { groupLiveFlows, standaloneLiveChecks, standaloneLiveRuns } from './state';
-  import FlowGroupCard from './FlowGroupCard.svelte';
-  import LiveCheckCard from './LiveCheckCard.svelte';
-  import LiveRunCard from './LiveRunCard.svelte';
+  // Live, in Now (monitor-ui design §3): the server's live view (GET
+  // /api/live) laid out: a wall of tiles, one per item in its order; one
+  // line per row; the threads that just ended; with links to their run and
+  // flow pages.
+  import type { Live } from './types';
+  import { endedHref, rowHref, rowText } from './now';
+  import NowTile from './NowTile.svelte';
 
   interface Props {
-    liveRuns: LiveRunInfo[] | undefined;
-    liveChecks: LiveCheckInfo[] | undefined;
-    activeFlows: ActiveFlowInfo[] | undefined;
-    issuesLink: string;
+    live: Live;
     now: number;
-    onStartFlow: () => void;
-    onStartRun: () => void;
-    onGC: () => void;
-    onStop: (runId: string) => void;
   }
 
-  let { liveRuns, liveChecks, activeFlows, issuesLink, now, onStartFlow, onStartRun, onGC, onStop }: Props = $props();
+  let { live, now }: Props = $props();
 
-  let flowGroups = $derived(groupLiveFlows(activeFlows, liveRuns, liveChecks));
-  let standaloneRuns = $derived(standaloneLiveRuns(liveRuns));
-  let standaloneChecks = $derived(standaloneLiveChecks(liveChecks, flowGroups));
-  let activeCount = $derived((liveRuns?.length || 0) + (activeFlows?.length || 0) + standaloneChecks.length);
+  let tiles = $derived(live.items ?? []);
+  let rows = $derived(live.rows ?? []);
+  let ended = $derived(live.ended ?? []);
+  let summary = $derived(live.summary);
+  let summaryRest = $derived(
+    [summary.waiting > 0 ? `${summary.waiting} waiting` : '', summary.interactive > 0 ? `${summary.interactive} interactive` : ''].filter(Boolean),
+  );
 </script>
 
-<section class="card full-width">
+<section class="card full-width live-section">
   <div class="card-header">
     <div class="card-header-left">
-      <h2>Live Runs</h2>
-      {#if activeCount > 0}
-        <span class="badge badge-accent">{activeCount} active</span>
-      {:else}
-        <span class="badge badge-neutral">0 active</span>
-      {/if}
+      <h2>Live</h2>
+      <span class="muted live-summary">
+        {`${summary.running} running`}{#if summary.quiet > 0}{' · '}<span class="quiet-count">{summary.quiet} quiet</span>{/if}{#each summaryRest as part (part)}{` · ${part}`}{/each}
+      </span>
     </div>
-    <div class="card-header-right">
-      <button class="btn btn-sm btn-primary" onclick={onStartFlow}>
-        Start Flow
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onStartRun}>
-        Start Run
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onGC}>
-        Clean up (gc)
-      </button>
-    </div>
+
   </div>
 
   <div class="card-body">
-    {#if (!liveRuns || liveRuns.length === 0) && (!activeFlows || activeFlows.length === 0) && (!liveChecks || liveChecks.length === 0)}
-      <div class="inbox-zero">
-        <span class="inbox-zero-icon">💤</span>
-        <span>No runs or flows currently active in this repository.</span>
+    {#if tiles.length === 0 && rows.length === 0}
+      <div class="muted live-idle">Nothing running in this repository.</div>
+    {/if}
+
+    {#if tiles.length > 0}
+      <div class="now-grid">
+        {#each tiles as item (item.id)}
+          <NowTile {item} {now} />
+        {/each}
       </div>
-    {:else}
-      <div class="live-runs-list">
-        <!-- Active Flows -->
-        {#each flowGroups as fg (fg.flow.issue)}
-          <FlowGroupCard group={fg} {issuesLink} {now} {onStop} />
-        {/each}
+    {/if}
 
-        <!-- Standalone Runs -->
-        {#each standaloneRuns as run (run.id)}
-          <LiveRunCard {run} {now} stopLabel="Stop" {onStop} />
+    {#if rows.length > 0}
+      <ul class="now-rows">
+        {#each rows as row (row.key)}
+          <li class="now-row" data-key={row.key}>
+            <a href={rowHref(row)} data-nav={row.key}>
+              <strong>{row.target}</strong>
+              {#if row.title}<span class="now-row-title">{row.title}</span>{/if}
+              <span class="muted">{`· ${rowText(row, now)}`}</span>
+            </a>
+          </li>
         {/each}
+      </ul>
+    {/if}
 
-        <!-- Post-implement checks of flows not started here -->
-        {#each standaloneChecks as check (check.id)}
-          <LiveCheckCard {check} {now} />
-        {/each}
+    {#if ended.length > 0}
+      <div class="just-ended muted">
+        Just ended:
+        {#each ended as t, i (t.key)}{i > 0 ? ', ' : ''}<a href={endedHref(t)} title={t.title}>{t.title ? `${t.target} ${t.title}` : t.target}</a>{/each}
       </div>
     {/if}
   </div>
 </section>
 
 <style>
-  .live-runs-list {
+  .now-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+    gap: 12px;
+  }
+
+  .quiet-count {
+    color: var(--warning);
+    font-weight: 600;
+  }
+
+  .now-rows {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 4px;
+  }
+
+  .now-row a {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: inherit;
+    text-decoration: none;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+
+  .now-row a:hover {
+    background: rgba(125, 125, 125, 0.08);
+  }
+
+  .now-row-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .just-ended {
+    margin-top: 12px;
+    font-size: 13px;
+  }
+
+  .just-ended a {
+    color: var(--accent);
   }
 </style>

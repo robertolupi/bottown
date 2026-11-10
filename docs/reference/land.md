@@ -58,16 +58,9 @@ groups at it, and merging once they pass. `merge-all` prints them; Land
 prints nothing itself.
 
 The web inbox shows every approved candidate as **Ready to land**, even
-when behind its base. **Land** calls `POST /api/actions/land` with
-`{number, head_sha}` and starts a background worker using the Main policy:
-both check and e2e groups run at the combined tree. A moved offered head
-is refused. Conflicts, lost approvals and failed checks stop the landing
-for the owner, without an automatic repair flow.
-
-The worker outlives the UI server. Its record and log are stored as
-`.bottown/runs/land-<PR>.json` and `.log`; Live Runs shows the landing,
-its log and a Stop control. A milestone child's node shows its active
-landing like its flow. The log remains available after the worker exits.
-Merging in Forgejo instead skips these checks at the combined tree, as
-the inbox item explains. The old PR-first merge action and
-`POST /v1/forge/pr/merge-base` are removed; the GET status read remains.
+when behind its base, with `bottown merge-all N` to copy and run in the
+terminal. Its landing checks show on Now as check items. The UI has no
+landing worker, landing records or write action. Merging in Forgejo
+instead skips these checks at the combined tree, as the inbox item explains.
+The old PR-first merge action and `POST /v1/forge/pr/merge-base` are
+removed; the GET status read remains.

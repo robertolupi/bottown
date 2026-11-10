@@ -1,25 +1,16 @@
 package webui
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"slices"
 	"strings"
-	"time"
 
 	"github.com/robertolupi/bottown/internal/config"
 	"github.com/robertolupi/bottown/internal/runs"
 )
-
-// afterPullTimeout bounds one run of the after-pull steps. bottown's own
-// step, `make install`, can rebuild and upgrade prod.
-const afterPullTimeout = 30 * time.Minute
 
 // RepoSettingsCheck is the repository's .bottown.toml as read from the
 // forge's default branch (§4.4). Without the file the repository gets the
@@ -35,10 +26,6 @@ type RepoSettingsCheck struct {
 	// default without the file. It is empty when the file is invalid.
 	MilestonesDir string `json:"milestones_dir,omitempty"`
 	Error         string `json:"error,omitempty"`
-}
-
-type afterPullRequest struct {
-	Steps []string `json:"steps"`
 }
 
 // LoadRepoSettings reads .bottown.toml from the forge's default branch,
@@ -93,70 +80,6 @@ func (s *Server) LoadRepoSettings(ctx context.Context) RepoSettingsCheck {
 	}
 	res.MilestonesDir = st.MilestonesDir
 	return res
-}
-
-// ExecuteAfterPull runs the after-pull steps in the main checkout, one at a
-// time with `sh -c`, stopping at the first that fails. steps is what the
-// owner was shown and confirmed: the steps are read again from the forge's
-// default branch, and nothing runs unless they are exactly those.
-func (s *Server) ExecuteAfterPull(ctx context.Context, steps []string) (string, error) {
-	if !s.afterPullMu.TryLock() {
-		return "", fmt.Errorf("after-pull steps are already running")
-	}
-	defer s.afterPullMu.Unlock()
-
-	st := s.LoadRepoSettings(ctx)
-	switch {
-	case st.Error != "":
-		return "", fmt.Errorf("read %s: %s", st.File, st.Error)
-	case !st.Found || len(st.AfterPull) == 0:
-		return "", fmt.Errorf("%s on %s declares no after-pull steps", st.File, st.Branch)
-	case !slices.Equal(steps, st.AfterPull):
-		return "", fmt.Errorf("the after-pull steps in %s on %s changed; refresh and review them", st.File, st.Branch)
-	}
-
-	var out bytes.Buffer
-	short := st.Commit
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	fmt.Fprintf(&out, "# %s at %s %s\n", st.File, st.Branch, short)
-	for _, step := range st.AfterPull {
-		fmt.Fprintf(&out, "$ %s\n", step)
-		cmd := exec.CommandContext(ctx, "sh", "-c", step)
-		cmd.Dir = s.cfg.RepoTop
-		cmd.Stdout, cmd.Stderr = &out, &out
-		if err := cmd.Run(); err != nil {
-			return strings.TrimSpace(out.String()), fmt.Errorf("%s: %w", step, err)
-		}
-	}
-	return strings.TrimSpace(out.String()), nil
-}
-
-func (s *Server) handleActionAfterPull(w http.ResponseWriter, r *http.Request) {
-	var req afterPullRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	if len(req.Steps) == 0 {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "the confirmed steps are required"})
-		return
-	}
-	// The steps can outlast the server's write timeout, and must not be
-	// killed halfway (`make install` upgrades prod) if the page goes away.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(afterPullTimeout + time.Minute))
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), afterPullTimeout)
-	defer cancel()
-
-	out, err := s.ExecuteAfterPull(ctx, req.Steps)
-	res := ActionResult{Success: err == nil, Output: out}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 // getServerRaw is callServer for a response that is not JSON: it returns

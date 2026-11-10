@@ -64,8 +64,8 @@ a branch cannot change what its own checks are.
   and `milestone finish` ask for `e2e` alone. Each group logs to its own
   file, `.bottown/runs/flow-<issue>-<sha>-<check>.check.log` and
   `.e2e.log`, and while it runs a record
-  (`flow-<issue>-<sha>-<check>.<group>.check`) shows it in Live Runs as a
-  card of its own, named for its group. A group the repository names no
+  (`flow-<issue>-<sha>-<check>.<group>.check`) shows it on the web UI's Now
+  view as a tile of its own, named for its group. A group the repository names no
   commands for (`check = []`, `e2e = []`) is skipped, and the outcome says
   so (`the repository names no e2e commands`); with no group to run the
   whole check is skipped, as the flow's gate is when there are no `e2e`

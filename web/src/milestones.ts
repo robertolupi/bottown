@@ -4,7 +4,7 @@
 import type { MilestoneGroup, MilestoneNode } from './types';
 
 export const NODE_WIDTH = 232;
-export const NODE_HEIGHT = 112;
+export const NODE_HEIGHT = 180;
 export const PILL_HEIGHT = 36;
 export const GAP_X = 72;
 export const GAP_Y = 16;
@@ -113,10 +113,9 @@ export function canStart(node: MilestoneNode): boolean {
   return !node.external && (node.status === 'ready' || node.status === 'stopped');
 }
 
-// canOpenFlow says whether clicking a node opens the flow dialog for it:
-// any open issue of the group without a live run or flow.
+// Every issue node opens its read-only flow page.
 export function canOpenFlow(node: MilestoneNode): boolean {
-  return !node.external && node.state !== 'closed' && node.status !== 'running';
+  return !node.external;
 }
 
 export interface StatusBadge {
@@ -153,13 +152,7 @@ export function actorPair(node: MilestoneNode): string {
   return parts.join(' · ');
 }
 
-// canStartMilestoneRun: an open epic with a plan, and no milestone run the
-// UI started running for it.
+// An open epic with a plan offers the command to copy.
 export function canStartMilestoneRun(group: MilestoneGroup): boolean {
-  return !!group.epic && group.epic.state !== 'closed' && !!group.plan && !group.scheduler;
-}
-
-// schedulerFlows are a group's child flows: its nodes a flow drives.
-export function schedulerFlows(group: Pick<MilestoneGroup, 'nodes'>): MilestoneNode[] {
-  return group.nodes.filter((n) => !n.external && n.flow);
+  return !!group.epic && group.epic.state !== 'closed' && !!group.plan;
 }

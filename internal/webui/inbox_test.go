@@ -304,6 +304,9 @@ func TestInbox_CleanBehindPROffersLand(t *testing.T) {
 	if len(items) != 1 || items[0].Kind != InboxReadyToLand || items[0].HeadSHA != sha {
 		t.Fatalf("items = %+v, want one landing action", items)
 	}
+	if items[0].Action == nil || items[0].Action.Command != "bottown merge-all 15" {
+		t.Fatalf("land command: %+v", items[0].Action)
+	}
 	if items[0].Action == nil || items[0].Action.Label != "Land" || items[0].Title != "PR !15 is ready to land" {
 		t.Fatalf("landing action = %+v, title = %q", items[0].Action, items[0].Title)
 	}
@@ -1050,5 +1053,21 @@ func TestInbox_PagesAllOpenPRsAndIssues(t *testing.T) {
 	}
 	if !filed {
 		t.Fatalf("actor-filed issue on page 2 missing; items: %+v", items)
+	}
+}
+
+func TestInboxFlowCommand(t *testing.T) {
+	now := time.Now()
+	records := []serverapi.RunItem{
+		{Run: secrets.Run{Issue: 12, Kind: "implement", Actor: "old", Created: now.Add(-time.Hour)}},
+		{Run: secrets.Run{Issue: 12, Kind: "implement", Actor: "codex", Created: now}},
+		{Run: secrets.Run{PR: 15, Kind: "verify", Actor: "claude", Created: now}},
+		{Run: secrets.Run{Issue: 13, Kind: "verify", Actor: "other", Created: now.Add(time.Hour)}},
+	}
+	if got := inboxFlowCommand(12, "!15", records); got != "bottown flow 12 --implement codex --verify claude" {
+		t.Fatal(got)
+	}
+	if got := inboxFlowCommand(14, "#14", records); got != "bottown flow 14 --implement ACTOR --verify ACTOR" {
+		t.Fatal(got)
 	}
 }

@@ -58,7 +58,7 @@ still serves the page for someone to open.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&s.fixture, "fixture", "default", "the scenario in web/fixtures to serve")
-	f.StringVar(&s.path, "path", "/", "the page to load, such as /#milestones")
+	f.StringVar(&s.path, "path", "/", "the page to load, such as /#/milestones")
 	f.IntSliceVar(&s.widths, "width", []int{1440, 390}, "viewport widths to capture")
 	f.IntVar(&s.height, "height", 900, "viewport height")
 	f.StringSliceVar(&s.schemes, "scheme", []string{"light", "dark"}, "color schemes to capture (light, dark)")

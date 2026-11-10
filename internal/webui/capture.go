@@ -33,7 +33,7 @@ type CaptureOptions struct {
 
 // Capture computes what the web UI's API answers now, with the same code
 // as its handlers, as a Fixture `bottown web preview` can serve. Its
-// actions are empty: a preview action does nothing. The returned warnings
+// The returned warnings
 // name what the views link to but could not be read; an issue or log
 // asked for by name that cannot be read is an error.
 func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []string, error) {
@@ -49,8 +49,13 @@ func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []
 	if err != nil {
 		return nil, nil, fmt.Errorf("milestones: %w", err)
 	}
+	live, err := s.Live(ctx, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("live: %w", err)
+	}
 	status := *st
 	fx := &Fixture{
+		Live:        &live,
 		Inbox:       orEmpty(st.Inbox),
 		LiveRuns:    orEmpty(st.LiveRuns),
 		LiveChecks:  orEmpty(st.LiveChecks),
@@ -60,7 +65,6 @@ func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []
 		Logs:        map[string][]runs.LogLine{},
 		Issues:      map[string]IssueDetails{},
 		Timelines:   map[string]IssueTimeline{},
-		Actions:     map[string]ActionResult{},
 	}
 	// The preview serves the fixture's own inbox, live runs and checks and
 	// active flows in the status: keep one copy.
@@ -157,6 +161,16 @@ func linked(fx *Fixture) (issues, prs []int64, logs []string) {
 	for _, f := range fx.ActiveFlows {
 		addIssue(f.Issue)
 	}
+	if fx.Live != nil {
+		for _, it := range fx.Live.Items {
+			addIssue(it.Issue)
+			addPR(it.Issue, it.PR)
+			addLog(it.ID)
+		}
+		for _, r := range fx.Live.Rows {
+			addIssue(r.Issue)
+		}
+	}
 	for _, it := range fx.Inbox {
 		addIssue(it.Issue)
 	}
@@ -181,7 +195,7 @@ func linked(fx *Fixture) (issues, prs []int64, logs []string) {
 }
 
 // What a capture drops because it could be a secret: bottown API keys (a
-// run's or the owner's), the one-time logins of `bottown web ui` and
+// run's or the owner's), the logins of `bottown ui` and
 // `bottown web forgejo`, and the credentials in a URL. The replacements
 // have no quotes or backslashes, so JSON stays valid.
 var (

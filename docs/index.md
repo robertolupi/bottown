@@ -11,7 +11,7 @@ full, then only the document, or section, your work needs.
 - [Reference](reference/index.md): how bottown behaves today, one file per
   topic. Read its index, then the one topic you need.
 - [Local web UI and supervisor](design/web-ui.md): read for `bottown flow`
-  (implement and cross-family verify), `bottown web ui` (runs, the inbox,
+  (implement and cross-family verify), `bottown ui` (runs, the inbox,
   host state) and `.bottown.toml`. Its status line says what is built.
 - [Milestones: plan, check, apply and run](design/milestones.md): read for
   plan runs, plan files and milestone epics: a reviewed plan on `main`

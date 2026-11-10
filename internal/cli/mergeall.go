@@ -708,6 +708,15 @@ func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Opt
 	return flow.Options{
 		Issue: issue, Repo: m.repo, Implement: implement, Verify: verify,
 		Rounds: m.rounds, CheckRounds: m.checkRounds, Timeout: m.timeout, CheckTimeout: m.checkTimeout,
+		// The flow's status file, beside its lock, as `bottown flow`
+		// writes it for the flow it starts itself.
+		Status: func(st runs.FlowStatusView) {
+			_ = runs.WriteFlowStatus(m.ws.RunsDir, m.repo, issue, st)
+		},
+		// OnEnd runs before the flow releases its lock, so only the flow
+		// that took the lock removes the file; one refused by the lock
+		// leaves the holder's file alone.
+		OnEnd: func() { _ = runs.RemoveFlowStatus(m.ws.RunsDir, m.repo, issue) },
 	}
 }
 

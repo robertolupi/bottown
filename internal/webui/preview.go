@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,8 +40,12 @@ type Fixture struct {
 	LiveRuns    []LiveRunInfo    `json:"live_runs"`
 	LiveChecks  []LiveCheckInfo  `json:"live_checks,omitempty"`
 	ActiveFlows []ActiveFlowInfo `json:"active_flows"`
-	History     []HistoryRunInfo `json:"history"`
-	Milestones  []MilestoneGroup `json:"milestones"`
+	// Live is GET /api/live, the Now view's: each item's tail is the last
+	// lines of its log here when it has one, else its own, cut to the
+	// ?tail asked for. Without one, the answer is an empty live view.
+	Live       *Live            `json:"live,omitempty"`
+	History    []HistoryRunInfo `json:"history"`
+	Milestones []MilestoneGroup `json:"milestones"`
 	// Timeline is GET /api/timeline, whatever window it asks for: the
 	// view draws the window the answer names. Without one, the answer is
 	// an empty timeline of the window asked for.
@@ -58,10 +63,6 @@ type Fixture struct {
 	// Timelines are GET /api/issues/{number}/timeline, keyed by issue
 	// number, or by "!N" for a PR without an issue (?pr=N).
 	Timelines map[string]IssueTimeline `json:"timelines"`
-	// Actions are the answers to POST /api/actions/{name}, by name (pull,
-	// push, after-pull, flow, milestone-run, run, stop, gc). An action without one
-	// succeeds, doing nothing.
-	Actions map[string]ActionResult `json:"actions"`
 }
 
 // LoadFixture reads the fixture name from dir.
@@ -192,17 +193,18 @@ func (s *PreviewServer) Close() error {
 }
 
 func (s *PreviewServer) registerRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/", http.NotFoundHandler())
 	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("POST /api/actions/refresh", s.handleStatus)
+	mux.HandleFunc("POST /api/refresh", s.handleStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleMilestones)
+	mux.HandleFunc("GET /api/live", s.handleLive)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/timeline", s.handleTimelineView)
 	mux.HandleFunc("GET /api/stats", s.handleStatsView)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleIssue)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleTimeline)
-	mux.HandleFunc("POST /api/actions/{name}", s.handleAction)
 
 	// Preview controls, for a test or a person to change what the API
 	// answers while the page is open.
@@ -294,6 +296,43 @@ func (s *PreviewServer) handleMilestones(w http.ResponseWriter, _ *http.Request)
 	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any { return orEmpty(fx.Milestones) }))
 }
 
+// handleLive serves the fixture's live view, with ?tail=N as the web UI
+// takes it.
+func (s *PreviewServer) handleLive(w http.ResponseWriter, r *http.Request) {
+	n, err := liveTailParam(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if n == 0 {
+		n = liveTail
+	}
+	n = min(n, maxLiveTail)
+	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any { return fixtureLive(fx, n) }))
+}
+
+// fixtureLive is fx's live view with each item's last n lines.
+func fixtureLive(fx *Fixture, n int) Live {
+	var out Live
+	if fx.Live != nil {
+		out = *fx.Live
+	}
+	items := make([]LiveItem, 0, len(out.Items))
+	for _, it := range out.Items {
+		if log, ok := fx.Logs[it.ID]; ok {
+			it.Tail = log
+		}
+		it.Tail = tail(it.Tail, n)
+		items = append(items, it)
+	}
+	out.Items = items
+	out.Rows, out.Ended = orEmpty(out.Rows), orEmpty(out.Ended)
+	if out.Summary.Inbox == nil {
+		out.Summary.Inbox = map[InboxItemKind]int{}
+	}
+	return out
+}
+
 func (s *PreviewServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var since time.Time
@@ -368,14 +407,19 @@ func (s *PreviewServer) handleRunLog(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(runs.RedactEncoded([]byte(raw)))
 		return
 	}
-	n, _ := strconv.Atoi(r.URL.Query().Get("tail"))
-	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any {
-		lines := fx.Logs[id]
-		if n > 0 {
-			lines = tail(lines, n)
-		}
-		return map[string]any{"id": id, "lines": orEmpty(lines)}
-	}))
+	// A fixture's run has ended unless it is one of its live runs or checks.
+	s.mu.Lock()
+	lines := slices.Clone(s.fx.Logs[id])
+	ended := !slices.ContainsFunc(s.fx.LiveRuns, func(r LiveRunInfo) bool { return r.ID == id }) &&
+		!slices.ContainsFunc(s.fx.LiveChecks, func(c LiveCheckInfo) bool { return c.ID == id }) &&
+		(s.fx.Live == nil || !slices.ContainsFunc(s.fx.Live.Items, func(it LiveItem) bool { return it.ID == id }))
+	s.mu.Unlock()
+	page, err := pageLog(id, lines, ended, r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *PreviewServer) handleIssue(w http.ResponseWriter, r *http.Request) {
@@ -419,21 +463,6 @@ func (s *PreviewServer) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	tl.Events = orEmpty(tl.Events)
 	writeJSON(w, http.StatusOK, tl)
-}
-
-func (s *PreviewServer) handleAction(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.mu.Lock()
-	res, ok := s.fx.Actions[name]
-	s.mu.Unlock()
-	if !ok {
-		res = ActionResult{Success: true, Output: fmt.Sprintf("preview: %s not performed", name)}
-	}
-	code := http.StatusOK
-	if !res.Success {
-		code = http.StatusInternalServerError
-	}
-	writeJSON(w, code, res)
 }
 
 func (s *PreviewServer) handlePreviewInfo(w http.ResponseWriter, _ *http.Request) {

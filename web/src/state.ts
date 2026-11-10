@@ -1,6 +1,5 @@
 import type {
   ActiveFlowInfo,
-  ActorDetail,
   FailureDescription,
   FlowStateInfo,
   FlowStateKind,
@@ -18,113 +17,6 @@ import type {
   TimelineEvent,
   UsageInfo,
 } from './types';
-
-export interface ActorSelection {
-  flowImplement: string;
-  flowVerify: string;
-  runActor: string;
-}
-
-// Pick default actors for the Flow and Run forms when status arrives, without
-// overwriting choices the user already made. The verifier defaults to the
-// first actor from another model family when one exists.
-export function selectDefaultActors(
-  actors: ActorDetail[] | undefined | null,
-  current: ActorSelection,
-): ActorSelection {
-  let { flowImplement, flowVerify, runActor } = current;
-  if (actors && actors.length > 0) {
-    if (!flowImplement) flowImplement = actors[0].name;
-    if (!flowVerify && actors.length > 1) {
-      const diffFamily = actors.find((a) => a.family !== actors[0].family);
-      flowVerify = diffFamily ? diffFamily.name : actors[1].name;
-    }
-    if (!runActor) runActor = actors[0].name;
-  }
-  return { flowImplement, flowVerify, runActor };
-}
-
-// Whether two chosen actors share a model family, which blocks starting a flow.
-export function isSameFamilyPair(
-  actors: ActorDetail[] | undefined | null,
-  implement: string,
-  verify: string,
-): boolean {
-  if (!implement || !verify || !actors) return false;
-  const implActor = actors.find((a) => a.name === implement);
-  const verActor = actors.find((a) => a.name === verify);
-  return implActor?.family !== undefined && implActor.family === verActor?.family;
-}
-
-export interface FlowGroup {
-  flow: ActiveFlowInfo;
-  runs: LiveRunInfo[];
-  checks: LiveCheckInfo[]; // the flow's post-implement checks, while they run
-}
-
-// Group live runs and checks under their active flows, or synthesize flow
-// groups from run flow metadata when active_flows is absent.
-export function groupLiveFlows(
-  activeFlows: ActiveFlowInfo[] | undefined | null,
-  liveRuns: LiveRunInfo[] | undefined | null,
-  liveChecks?: LiveCheckInfo[] | undefined | null,
-): FlowGroup[] {
-  const flows = activeFlows || [];
-  const runs = liveRuns || [];
-  const checks = liveChecks || [];
-  if (flows.length > 0) {
-    return flows.map((f) => ({
-      flow: f,
-      runs: runs.filter((r) => r.flow && r.flow.issue === f.issue),
-      checks: checks.filter((c) => c.issue === f.issue),
-    }));
-  }
-  const groups: FlowGroup[] = [];
-  const map = new Map<number, FlowGroup>();
-  for (const r of runs) {
-    if (r.flow) {
-      let g = map.get(r.flow.issue);
-      if (!g) {
-        g = {
-          flow: {
-            issue: r.flow.issue,
-            implement: '',
-            verify: '',
-            round: r.flow.round,
-            max_rounds: r.flow.max_rounds,
-            step: r.flow.step,
-            label: r.flow.label,
-            waiting: false,
-          },
-          runs: [],
-          checks: [],
-        };
-        map.set(r.flow.issue, g);
-        groups.push(g);
-      }
-      g.runs.push(r);
-    }
-  }
-  for (const c of checks) {
-    if (c.issue) map.get(c.issue)?.checks.push(c);
-  }
-  return groups;
-}
-
-export function standaloneLiveRuns(liveRuns: LiveRunInfo[] | undefined | null): LiveRunInfo[] {
-  if (!liveRuns) return [];
-  return liveRuns.filter((r) => !r.flow);
-}
-
-// The live checks no flow group shows: those of a flow the UI did not start
-// (`bottown flow` in a terminal), whose runs are standalone too.
-export function standaloneLiveChecks(
-  liveChecks: LiveCheckInfo[] | undefined | null,
-  groups: FlowGroup[],
-): LiveCheckInfo[] {
-  if (!liveChecks) return [];
-  return liveChecks.filter((c) => !groups.some((g) => g.checks.includes(c)));
-}
 
 export interface HistoryFilters {
   actor?: string;
@@ -212,101 +104,12 @@ export function statusDue(loadedAt: number, now: number): boolean {
   return now - loadedAt >= statusRefreshMs;
 }
 
-// actorSpec joins an actor and an optional model as ACTOR[:SPEC]; an empty
-// model leaves the host's default ([actor_models]) to the CLI.
-export function actorSpec(actor: string, model: string | undefined): string {
-  const m = (model ?? '').trim();
-  return m ? `${actor}:${m}` : actor;
-}
-
-// actorModelPlaceholder is a model field's hint: the host's default for the
-// actor, or the harness's own when the host names none.
-export function actorModelPlaceholder(actors: ActorDetail[] | undefined | null, name: string): string {
-  const model = actors?.find((a) => a.name === name)?.model;
-  return model ? `default: ${model}` : 'harness default';
-}
-
-export interface FlowActionPayload {
-  issue: number;
-  implement: string;
-  verify: string;
-  rounds: number;
-  timeout: string;
-}
-
-export function buildFlowActionPayload(input: {
-  issue: number | string;
-  implement: string;
-  implementModel?: string;
-  verify: string;
-  verifyModel?: string;
-  rounds: number | string;
-  timeout: string;
-}): FlowActionPayload {
-  return {
-    issue: Number(input.issue),
-    implement: actorSpec(input.implement, input.implementModel),
-    verify: actorSpec(input.verify, input.verifyModel),
-    rounds: Number(input.rounds) || 3,
-    timeout: input.timeout || '60m',
-  };
-}
-
-export interface RunActionPayload {
-  kind: 'implement' | 'verify' | 'discuss';
-  target: number;
-  actor: string;
-  question?: string;
-  allow_same_family?: boolean;
-}
-
-export function buildRunActionPayload(input: {
-  kind: 'implement' | 'verify' | 'discuss';
-  target: number | string;
-  actor: string;
-  model?: string;
-  question: string;
-  allowSameFamily: boolean;
-}): RunActionPayload {
-  return {
-    kind: input.kind,
-    target: Number(input.target),
-    actor: actorSpec(input.actor, input.model),
-    question: input.kind === 'discuss' ? input.question : undefined,
-    allow_same_family: input.kind === 'verify' ? input.allowSameFamily : undefined,
-  };
-}
-
 export function filterInboxItems(
   inbox: InboxItem[] | undefined | null,
   showActorFiled: boolean,
 ): InboxItem[] {
   const items = inbox || [];
   return showActorFiled ? items : items.filter((item) => item.kind !== 'actor_filed_issue');
-}
-
-export type ResolvedInboxAction =
-  | { modal: 'gc'; includeFailed: boolean }
-  | { modal: 'stop'; stopRunId: string }
-  | { action: 'land'; number: number; headSHA: string }
-  | null;
-
-export function resolveInboxAction(item: Pick<InboxItem, 'target' | 'action' | 'head_sha'>): ResolvedInboxAction {
-  const cmd = item.action?.command;
-  if (!cmd) return null;
-  if (cmd.includes('gc')) {
-    return { modal: 'gc', includeFailed: cmd.includes('--failed') };
-  }
-  if (cmd.includes('stop')) {
-    return { modal: 'stop', stopRunId: item.target };
-  }
-  if (cmd.includes('land')) {
-    const number = parseIssueNumber(item.target);
-    if (number !== null && item.head_sha) {
-      return { action: 'land', number, headSHA: item.head_sha };
-    }
-  }
-  return null;
 }
 
 export function parseIssueNumber(target: string): number | null {
@@ -641,7 +444,7 @@ export function aggregateThreadUsage(runs: HistoryRunInfo[]): UsageInfo | undefi
   return hasUsage ? sum : undefined;
 }
 
-function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: number } {
+export function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: number } {
   if (!threadKey) return {};
   const issueMatch = threadKey.match(/(?:^|:)issue:(\d+)(?:$|:)/);
   const prMatch = threadKey.match(/(?:^|:)pr:(\d+)(?:$|:)/);
@@ -653,15 +456,24 @@ function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: nu
   };
 }
 
-function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: number } {
-  const fromKey = parseThreadKeyIssueAndPR(run.thread_key);
-  let issue = run.issue && run.issue > 0 ? run.issue : undefined;
-  let pr = run.pr && run.pr > 0 ? run.pr : undefined;
-  if (!issue && run.target?.startsWith('#')) {
-    issue = parseIssueNumber(run.target) ?? undefined;
+export function resolveItemIssueAndPR(item: {
+  issue?: number;
+  pr?: number;
+  target?: string;
+  thread_key?: string;
+  flow?: { issue?: number };
+}): { issue?: number; pr?: number } {
+  const fromKey = parseThreadKeyIssueAndPR(item.thread_key);
+  let issue = item.issue && item.issue > 0 ? item.issue : undefined;
+  let pr = item.pr && item.pr > 0 ? item.pr : undefined;
+  if (!issue && item.flow?.issue && item.flow.issue > 0) {
+    issue = item.flow.issue;
   }
-  if (!pr && run.target?.startsWith('!')) {
-    pr = parseIssueNumber(run.target) ?? undefined;
+  if (!issue && item.target?.startsWith('#')) {
+    issue = parseIssueNumber(item.target) ?? undefined;
+  }
+  if (!pr && item.target?.startsWith('!')) {
+    pr = parseIssueNumber(item.target) ?? undefined;
   }
   if (!issue && fromKey.issue) {
     issue = fromKey.issue;
@@ -672,17 +484,33 @@ function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: numbe
   return { issue, pr };
 }
 
+// Whether a run or check belongs to the specified flow and optional PR.
+// When expectedPr is undefined, only pre-PR runs (runs with no associated PR) match.
+export function runMatchesFlow(
+  item: {
+    issue?: number;
+    pr?: number;
+    target?: string;
+    thread_key?: string;
+    flow?: { issue?: number };
+  },
+  flowIssue: number,
+  expectedPr: number | undefined
+): boolean {
+  const { issue, pr } = resolveItemIssueAndPR(item);
+  if (issue !== flowIssue) return false;
+  if (expectedPr !== undefined) {
+    return pr === expectedPr;
+  }
+  return !pr;
+}
+
+function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: number } {
+  return resolveItemIssueAndPR(run);
+}
+
 function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
-  const fromKey = parseThreadKeyIssueAndPR(lr.thread_key);
-  const issue =
-    lr.issue ||
-    lr.flow?.issue ||
-    (lr.target?.startsWith('#') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
-    fromKey.issue;
-  const pr =
-    lr.pr ||
-    (lr.target?.startsWith('!') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
-    fromKey.pr;
+  const { issue, pr } = resolveItemIssueAndPR(lr);
   return {
     id: lr.id,
     target: lr.target || (pr ? `!${pr}` : issue ? `#${issue}` : ''),
@@ -1363,6 +1191,25 @@ export function buildFlowTimeline(
         target_url: existing.target_url || ev.url || '',
       });
       continue;
+    }
+
+    // Do not incorporate runs from another thread's timeline
+    if (issueTimeline?.thread_key && thread.key && issueTimeline.thread_key !== thread.key) {
+      continue;
+    }
+    if (issueTimeline?.pr && thread.pr !== undefined && issueTimeline.pr !== thread.pr) {
+      continue;
+    }
+    if (thread.issue) {
+      if (thread.pr !== undefined) {
+        if (ev.url?.includes('/pulls/') && !ev.url.includes(`/pulls/${thread.pr}`)) {
+          continue;
+        }
+      } else {
+        if (ev.url?.includes('/pulls/') || ev.title?.startsWith('!')) {
+          continue;
+        }
+      }
     }
 
     const kind =

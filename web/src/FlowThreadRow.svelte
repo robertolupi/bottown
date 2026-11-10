@@ -1,58 +1,64 @@
 <script lang="ts">
-  // A flow thread in the run history: one row for the flow (issue, PR,
-  // milestone, actors, status) that expands, one flow at a time, to the
-  // flow's combined timeline and its constituent runs. When its latest run
-  // failed, the summary cell is that run's failure reason.
-  import type { HistoryThread, IssueTimeline, RunLogState } from './types';
-  import { buildFlowConstituentRuns, buildFlowTimeline, describeRunFailure, formatThreadMainLine } from './state';
-  import { formatTime, formatUsage } from './format';
-  import ConstituentRuns from './ConstituentRuns.svelte';
+  // A flow thread in the run history (§4.2): one row with five cells —
+  // target, actors, state, duration and cost, last activity. Clicking it
+  // opens the flow page. The target holds the issue and PR references,
+  // the title, the kind and run count as a muted suffix, the summary as a
+  // second clipped line, and, when its latest run failed, that reason
+  // under the summary.
+  import type { HistoryThread } from './types';
+  import { describeRunFailure, formatThreadMainLine } from './state';
+  import { formatCost, formatDateTime, formatRelativeTime } from './format';
+  import { flowRouteHash, runRouteHash } from './routes';
   import FailureReason from './FailureReason.svelte';
   import FlowStateBadge from './FlowStateBadge.svelte';
-  import FlowTimeline from './FlowTimeline.svelte';
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
-  import StatusBadge from './StatusBadge.svelte';
   import SummaryText from './SummaryText.svelte';
   import TargetLink from './TargetLink.svelte';
 
   interface Props {
     thread: HistoryThread;
-    expanded: boolean;
-    timeline: IssueTimeline | undefined;
-    timelineLoading: boolean | undefined;
-    timelineError: string | undefined;
-    expandedLogs: Record<string, RunLogState>;
-    onSelect: (thread: HistoryThread) => void;
-    onShowRun: (thread: HistoryThread, runId: string) => void;
-    onToggleLog: (runId: string) => void;
+    now: number;
   }
 
-  let { thread, expanded, timeline, timelineLoading, timelineError, expandedLogs, onSelect, onShowRun, onToggleLog }: Props =
-    $props();
+  let { thread, now }: Props = $props();
 
   let mainLine = $derived(formatThreadMainLine(thread));
   let lastRun = $derived(thread.runs[thread.runs.length - 1]);
-  // A flow whose latest run failed, and that is not going again, leads
-  // with why.
+  // A flow whose latest run failed, and that is not going again, keeps
+  // why on the row.
   let failure = $derived(thread.active || !lastRun ? null : describeRunFailure(lastRun));
+
+  // These flow states already imply the run's recorded outcome (they fold
+  // the review verdict in); elsewhere the row shows a recorded outcome too.
+  const outcomeImplied = new Set(['merged', 'ready_to_merge', 'needs_changes', 'needs_intervention']);
+  let showOutcome = $derived(
+    !!lastRun?.outcome && (!thread.flow_state || !outcomeImplied.has(thread.flow_state.state)),
+  );
+  let cost = $derived(formatCost(thread.usage));
+
+  function navigateToFlow() {
+    location.hash = flowRouteHash(thread.issue ?? 0, thread.pr);
+  }
 </script>
 
 <tr
   class="flow-thread-row"
   class:flow-row-active={thread.active}
-  class:flow-row-expanded={expanded}
-  onclick={() => onSelect(thread)}
+  role="link"
+  tabindex="0"
+  data-nav={thread.key}
+  onclick={navigateToFlow}
 >
-  <td>
+  <td class="target-cell">
     <div class="thread-main-line">
-      <span class="thread-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
       {#if mainLine.issueLabel}
         <IssueReference
           number={thread.issue || 0}
-          href={mainLine.issueUrl || lastRun.target_url}
+          href={mainLine.issueUrl || lastRun?.target_url || ''}
           label={mainLine.issueLabel}
           title={mainLine.issueTitle}
+          showTitle
         />
       {/if}
       {#if mainLine.prLabel}
@@ -64,12 +70,25 @@
       {#if mainLine.milestone}
         <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
       {/if}
+      <span class="thread-meta text-sm">
+        flow · {thread.run_count} {thread.run_count === 1 ? 'run' : 'runs'}
+      </span>
     </div>
-  </td>
-  <td>
-    <span class="badge badge-neutral">
-      flow · {thread.run_count} {thread.run_count === 1 ? 'run' : 'runs'}
-    </span>
+    {#if thread.summary}
+      <div class="thread-summary summary-cell">
+        <SummaryText text={thread.summary} />
+      </div>
+    {/if}
+    {#if failure}
+      <div class="thread-failure summary-cell">
+        <FailureReason
+          {failure}
+          onDetails={() => {
+            if (lastRun) location.hash = runRouteHash(lastRun.id);
+          }}
+        />
+      </div>
+    {/if}
   </td>
   <td>
     <div class="thread-actors">
@@ -79,16 +98,13 @@
     </div>
   </td>
   <td>
-    <div class="thread-status-badges">
+    <div class="thread-state">
       {#if thread.flow_state}
         <FlowStateBadge state={thread.flow_state} />
       {/if}
-      {#if thread.active && thread.active_label}
-        <span class="badge badge-accent flow-live-badge">
-          {thread.active_label}
-        </span>
+      {#if showOutcome && lastRun}
+        <OutcomeBadge run={lastRun} />
       {/if}
-      <StatusBadge status={thread.status} />
       {#if thread.total_denials > 0}
         <span class="badge badge-error" title="Operations refused by server policy in this flow">
           {thread.total_denials} denied
@@ -96,56 +112,15 @@
       {/if}
     </div>
   </td>
-  <td><OutcomeBadge run={lastRun} /></td>
-  <td class="muted">{thread.duration || '—'}</td>
-  <td class="muted text-sm">{formatUsage(thread.usage)}</td>
-  {#if failure}
-    <td class="summary-cell">
-      <FailureReason {failure} onDetails={() => onShowRun(thread, lastRun.id)} />
-    </td>
-  {:else}
-    <td class="summary-cell"><SummaryText text={thread.summary} /></td>
-  {/if}
-  <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
-  <td>
-    <div class="row-actions">
-      <button
-        class="btn btn-sm btn-secondary"
-        aria-expanded={expanded}
-        onclick={(e) => {
-          e.stopPropagation();
-          onSelect(thread);
-        }}
-      >
-        {expanded ? 'Collapse' : `Runs (${thread.run_count})`}
-      </button>
-    </div>
+  <td class="muted">
+    {thread.duration || '—'}{#if cost} · {cost}{/if}
+  </td>
+  <td class="muted text-sm">
+    <span title={formatDateTime(thread.last_activity)}>
+      {formatRelativeTime(thread.last_activity, now)}
+    </span>
   </td>
 </tr>
-
-{#if expanded}
-  {@const entries = buildFlowTimeline(thread, timeline)}
-  {@const constituentRuns = buildFlowConstituentRuns(thread, entries)}
-  <tr class="flow-expand-row">
-    <td colspan="10">
-      <div class="flow-expanded-panel">
-        <!-- 1. Combined Flow Timeline at the top of the expanded flow -->
-        <FlowTimeline
-          {thread}
-          {mainLine}
-          {entries}
-          loading={timelineLoading}
-          error={timelineError}
-          {expandedLogs}
-          {onToggleLog}
-        />
-
-        <!-- 2. Constituent Runs in this Flow -->
-        <ConstituentRuns runs={constituentRuns} {expandedLogs} {onToggleLog} />
-      </div>
-    </td>
-  </tr>
-{/if}
 
 <style>
   .flow-thread-row {
@@ -157,16 +132,16 @@
     background: rgba(125, 125, 125, 0.06);
   }
 
-  .flow-row-expanded {
-    background: rgba(37, 99, 235, 0.06);
-  }
-
   .flow-row-active {
     background: rgba(37, 99, 235, 0.09);
   }
 
   .flow-row-active td:first-child {
     box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .target-cell {
+    min-width: 0;
   }
 
   .thread-main-line {
@@ -176,11 +151,16 @@
     flex-wrap: wrap;
   }
 
-  .thread-chevron {
-    display: inline-block;
-    width: 14px;
+  .thread-meta {
     color: var(--text-muted);
-    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .thread-summary,
+  .thread-failure {
+    margin-top: 4px;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .milestone-badge {
@@ -189,40 +169,14 @@
     border: 1px solid rgba(16, 185, 129, 0.3);
   }
 
-  .thread-actors, .thread-status-badges {
+  .thread-actors, .thread-state {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
   }
 
-  .flow-live-badge {
-    font-weight: 600;
-  }
-
   .summary-cell {
-    max-width: max(280px, 25vw);
-  }
-
-  .row-actions {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-
-  /* Every cell in the expanded panel, the constituent runs' and their log
-     rows' included; tr outranks the history table's cell padding
-     (RunHistory). */
-  tr.flow-expand-row :global(td) {
-    padding: 0;
-    background: rgba(125, 125, 125, 0.03);
-  }
-
-  .flow-expanded-panel {
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    border-left: 3px solid var(--accent);
+    max-width: 100%;
   }
 </style>

@@ -69,7 +69,6 @@ type Config struct {
 	OwnerKey       string
 	Port           int
 	CLIVersion     string
-	BottownPath    string
 	HarnessChecker func(home string) []HarnessCommandInfo
 	// GuideChecker reports the state of the fam guide file in an actor
 	// worktree (runs.GuideStatus), or why it could not tell.
@@ -78,17 +77,13 @@ type Config struct {
 
 // Server is the local HTTP server for the bottown web UI.
 type Server struct {
-	landingMu           sync.Mutex
 	cfg                 Config
 	listener            net.Listener
 	port                int
 	oneTimeToken        string
-	tokenUsed           bool
 	sessionToken        string
 	cookieName          string
-	mu                  sync.Mutex // guards auth state (token/cookie)
 	statusMu            sync.Mutex // guards git fetch and status computation
-	afterPullMu         sync.Mutex // one run of the after-pull steps at a time
 	httpServer          *http.Server
 	lastStatusMu        sync.RWMutex
 	lastStatus          *UIStatusResponse
@@ -97,6 +92,7 @@ type Server struct {
 	lastOriginErr       string
 	activityCache       activity.Cache // ComputeActivity's comment and closed PR reads
 	diffs               diffCache      // ComputeStats' merged-PR diffstat reads
+	liveInbox           liveInboxCache // Live's inbox counts, between polls
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.
@@ -145,7 +141,9 @@ func (s *Server) BaseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", s.port)
 }
 
-// LoginURL returns the one-time URL containing the login token.
+// LoginURL returns the login URL containing the token. `bottown ui` shows
+// it in the terminal view's header; it stays usable for as long as the
+// server runs.
 func (s *Server) LoginURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.port, s.oneTimeToken)
 }
@@ -183,25 +181,18 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/", http.NotFoundHandler())
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleGetMilestones)
+	mux.HandleFunc("GET /api/live", s.handleGetLive)
 	mux.HandleFunc("GET /api/runs", s.handleGetRuns)
 	mux.HandleFunc("GET /api/timeline", s.handleGetTimeline)
 	mux.HandleFunc("GET /api/stats", s.handleGetStats)
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleGetRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleGetIssueDetails)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleGetIssueTimeline)
-	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
-	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
-	mux.HandleFunc("POST /api/actions/after-pull", s.handleActionAfterPull)
-	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
-	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
-	mux.HandleFunc("POST /api/actions/milestone-run", s.handleActionMilestoneRun)
-	mux.HandleFunc("POST /api/actions/land", s.handleActionLand)
-	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
-	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
-	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
+	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
 
 	mux.Handle("GET /", staticHandler(uiFS(distFS)))
 }
@@ -251,7 +242,7 @@ func staticHandler(ui fs.FS) http.Handler {
 // 1. Host header check (against DNS rebinding)
 // 2. Strict Content-Security-Policy (no inline scripts)
 // 3. Origin header check on state-changing requests (CSRF protection)
-// 4. One-time token exchange for HttpOnly SameSite=Strict session cookie
+// 4. Login token -> HttpOnly SameSite=Strict session cookie
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1-3. Host check, CSP, Origin check
@@ -259,42 +250,44 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 4. One-time token exchange
+		// 4. Login token. The terminal view's header shows the URL, and a
+		// login URL recovered from history or scrollback must keep working
+		// while the command runs, so the token is accepted on every request
+		// that carries it, not just the first. Each such request sets the
+		// session cookie and redirects to the address without the token.
+		// This is safe because the server has no route that changes a run,
+		// a flow, the forge or the checkout.
 		if token := r.URL.Query().Get("token"); token != "" {
-			s.mu.Lock()
-			if !s.tokenUsed && token == s.oneTimeToken {
-				s.tokenUsed = true
-				s.mu.Unlock()
-
-				// Set HttpOnly SameSite=Strict cookie
-				http.SetCookie(w, &http.Cookie{
-					Name:     s.cookieName,
-					Value:    s.sessionToken,
-					Path:     "/",
-					HttpOnly: true,
-					SameSite: http.SameSiteStrictMode,
-				})
-
-				// Redirect to strip token from URL address bar
-				cleanURL := *r.URL
-				q := cleanURL.Query()
-				q.Del("token")
-				cleanURL.RawQuery = q.Encode()
-				if cleanURL.Path == "" {
-					cleanURL.Path = "/"
-				}
-				http.Redirect(w, r, cleanURL.String(), http.StatusSeeOther)
+			if token != s.oneTimeToken {
+				http.Error(w, "unauthorized: invalid login token", http.StatusUnauthorized)
 				return
 			}
-			s.mu.Unlock()
-			http.Error(w, "unauthorized: login token expired or invalid", http.StatusUnauthorized)
+
+			// Set HttpOnly SameSite=Strict cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     s.cookieName,
+				Value:    s.sessionToken,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+
+			// Redirect to strip token from URL address bar
+			cleanURL := *r.URL
+			q := cleanURL.Query()
+			q.Del("token")
+			cleanURL.RawQuery = q.Encode()
+			if cleanURL.Path == "" {
+				cleanURL.Path = "/"
+			}
+			http.Redirect(w, r, cleanURL.String(), http.StatusSeeOther)
 			return
 		}
 
 		// Verify session cookie
 		cookie, err := r.Cookie(s.cookieName)
 		if err != nil || cookie.Value != s.sessionToken {
-			http.Error(w, "unauthorized: please open the web UI using the URL provided by `bottown web ui`", http.StatusUnauthorized)
+			http.Error(w, "unauthorized: please open the web UI using the URL provided by `bottown ui`", http.StatusUnauthorized)
 			return
 		}
 
@@ -365,6 +358,34 @@ func (s *Server) handleGetInbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inbox)
 }
 
+// handleGetLive serves Live; ?tail=N asks for each item's last N lines.
+func (s *Server) handleGetLive(w http.ResponseWriter, r *http.Request) {
+	n, err := liveTailParam(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	live, err := s.Live(r.Context(), n)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, live)
+}
+
+// liveTailParam is GET /api/live's ?tail=N: 0 (the default) without one.
+func liveTailParam(r *http.Request) (int, error) {
+	v := r.URL.Query().Get("tail")
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("tail must be a positive number of lines, not %q", v)
+	}
+	return n, nil
+}
+
 func (s *Server) handleGetMilestones(w http.ResponseWriter, r *http.Request) {
 	groups, err := s.ComputeMilestones(r.Context())
 	if err != nil {
@@ -374,81 +395,13 @@ func (s *Server) handleGetMilestones(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, groups)
 }
 
-func (s *Server) handleActionRefresh(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	st, err := s.ComputeStatus(r.Context(), true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
-}
-
-func (s *Server) handleActionLand(w http.ResponseWriter, r *http.Request) {
-	var req LandRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteLand(r.Context(), req)
-	res := ActionResult{Success: err == nil, Output: out}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) handleActionPull(w http.ResponseWriter, r *http.Request) {
-	out, err := s.ExecutePull(r.Context())
-	res := ActionResult{
-		Success: err == nil,
-		Output:  out,
-	}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-type pushRequest struct {
-	Head string `json:"head"`
-}
-
-func (s *Server) handleActionPush(w http.ResponseWriter, r *http.Request) {
-	if r.Body == nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "missing request body",
-		})
-		return
-	}
-	var req pushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "invalid JSON body: " + err.Error(),
-		})
-		return
-	}
-	head := strings.TrimSpace(req.Head)
-	if head == "" {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "head commit SHA is required",
-		})
-		return
-	}
-	out, err := s.ExecutePush(r.Context(), head)
-	res := ActionResult{
-		Success: err == nil,
-		Output:  out,
-	}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -542,52 +495,86 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 
 	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")
 	logBytes, err := runs.ReadLog(logPath)
-	if err != nil {
-		if r.URL.Query().Get("raw") == "1" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":    id,
-			"lines": []runs.LogLine{},
-		})
+	raw := r.URL.Query().Get("raw") == "1"
+	switch {
+	case err != nil && raw:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
 		return
-	}
-	if r.URL.Query().Get("raw") == "1" {
+	case raw:
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write(runs.RedactEncoded(logBytes))
 		return
 	}
 
-	lines := s.renderRunLog(r.Context(), id, logBytes)
-	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
-		if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
+	var lines []runs.LogLine
+	var ended bool
+	if err == nil {
+		lines, ended = s.renderRunLog(r.Context(), id, logBytes)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":    id,
-		"lines": lines,
-	})
+	page, err := pageLog(id, lines, ended, r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
-// renderRunLog renders run id's log, read as logBytes, for its harness.
-func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) []runs.LogLine {
-	if validCheckID.MatchString(id) || strings.HasPrefix(id, "land-") {
-		return runs.RenderLog("", logBytes) // the checks' commands' output: plain lines
+// renderRunLog renders run id's log, read as logBytes, for its harness,
+// and says whether the run has ended. A check's log, and a
+// run the server does not answer for, are taken as live: that only keeps
+// their last line out of the stable prefix (pageLog).
+func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) (lines []runs.LogLine, ended bool) {
+	if validCheckID.MatchString(id) {
+		return runs.RenderLog("", logBytes), false // the checks' commands' output: plain lines
 	}
-	actorMap, _ := s.fetchActorMap(ctx)
-	harness := ""
-	var serverRun secrets.Run
-	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &serverRun); err == nil {
-		harness = serverRun.Harness
-		if harness == "" && actorMap[serverRun.Actor] != nil {
-			harness = actorMap[serverRun.Actor].Harness
+	harness, run, _ := s.runHarness(ctx, id)
+	return runs.RenderLog(harness, logBytes), run.Ended != nil
+}
+
+// runHarness is run id's record from the server and the harness its log is
+// rendered for: the run's own, else its actor's.
+func (s *Server) runHarness(ctx context.Context, id string) (string, secrets.Run, error) {
+	var run secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &run); err != nil {
+		return "", secrets.Run{}, err
+	}
+	harness := run.Harness
+	if harness == "" {
+		if actorMap, _ := s.fetchActorMap(ctx); actorMap[run.Actor] != nil {
+			harness = actorMap[run.Actor].Harness
 		}
 	}
-	return runs.RenderLog(harness, logBytes)
+	return harness, run, nil
+}
+
+// LogFollower returns a follower of item id's log, a run's or a check
+// group's, rendered as GET /api/runs/{id}/log renders it: for the terminal
+// view's full-screen log (monitor-ui design §8).
+func (s *Server) LogFollower(ctx context.Context, id string) (*runs.LogFollower, error) {
+	if !validRunID.MatchString(id) {
+		return nil, fmt.Errorf("invalid run ID %q", id)
+	}
+	f := &runs.LogFollower{Path: filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")}
+	if !validCheckID.MatchString(id) {
+		f.Harness, _, _ = s.runHarness(ctx, id)
+	}
+	return f, nil
+}
+
+// RunEnd says how run id ended: its status (succeeded, failed, revoked)
+// and the outcome the server recorded, if any. ok is false when the run
+// has not ended, or the server does not answer for it; a check group has
+// no record, and is never ok.
+func (s *Server) RunEnd(ctx context.Context, id string) (status, outcome string, ok bool) {
+	if !validRunID.MatchString(id) || validCheckID.MatchString(id) {
+		return "", "", false
+	}
+	var run secrets.Run
+	if err := s.callServer(ctx, http.MethodGet, "/v1/runs/"+id, nil, &run); err != nil || run.Ended == nil {
+		return "", "", false
+	}
+	return run.Status, run.Outcome, true
 }
 
 // ComputeRunLog returns run id's rendered log as GET /api/runs/{id}/log
@@ -600,7 +587,8 @@ func (s *Server) ComputeRunLog(ctx context.Context, id string) ([]runs.LogLine, 
 	if err != nil {
 		return []runs.LogLine{}, false, nil
 	}
-	return s.renderRunLog(ctx, id, logBytes), true, nil
+	lines, _ := s.renderRunLog(ctx, id, logBytes)
+	return lines, true, nil
 }
 
 func (s *Server) handleGetIssueDetails(w http.ResponseWriter, r *http.Request) {
@@ -640,71 +628,4 @@ func (s *Server) handleGetIssueTimeline(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, timeline)
-}
-
-func (s *Server) handleActionFlow(w http.ResponseWriter, r *http.Request) {
-	var req FlowRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteFlow(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionMilestoneRun(w http.ResponseWriter, r *http.Request) {
-	var req MilestoneRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteMilestoneRun(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionRun(w http.ResponseWriter, r *http.Request) {
-	var req RunActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteRun(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionStop(w http.ResponseWriter, r *http.Request) {
-	var req StopRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteStop(r.Context(), req.ID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionGC(w http.ResponseWriter, r *http.Request) {
-	var req GCRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	out, err := s.ExecuteGC(r.Context(), req.Failed)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
 }

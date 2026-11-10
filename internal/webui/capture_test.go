@@ -82,8 +82,9 @@ func TestCapture(t *testing.T) {
 	if len(fx.Logs["r-live"]) == 0 || len(fx.Logs["r-done"]) == 0 {
 		t.Errorf("logs not captured: %v", fx.Summary())
 	}
-	if len(fx.Actions) != 0 {
-		t.Errorf("actions: %v", fx.Actions)
+	// The live view is captured too, for Now.
+	if fx.Live == nil || len(fx.Live.Items) == 0 || fx.Live.Items[0].ID != "r-live" {
+		t.Errorf("live view not captured: %+v", fx.Live)
 	}
 
 	b, err := s.EncodeFixture(fx)
@@ -155,7 +156,8 @@ func TestCapture(t *testing.T) {
 	}
 	same("/api/issues/0/timeline?pr=77", prTL)
 	done, _, _ := s.ComputeRunLog(ctx, "r-done")
-	same("/api/runs/r-done/log", map[string]any{"id": "r-done", "lines": done})
+	donePage, _ := pageLog("r-done", done, true, nil) // r-done has ended: its whole log is stable
+	same("/api/runs/r-done/log", donePage)
 
 	var st UIStatusResponse
 	c.get("/api/status", &st)

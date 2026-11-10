@@ -1,9 +1,7 @@
 package webui
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -121,12 +119,6 @@ type RepoLinks struct {
 	Issues  string `json:"issues"`
 	Pulls   string `json:"pulls"`
 	Commits string `json:"commits"`
-}
-
-type ActionResult struct {
-	Success bool   `json:"success"`
-	Output  string `json:"output"`
-	Error   string `json:"error,omitempty"`
 }
 
 var prRegex = regexp.MustCompile(`(?:Merge pull request '.*'|PR)\s+[#!](\d+)|\([#!](\d+)\)`)
@@ -532,55 +524,6 @@ func (s *Server) ephemeralWorktrees(ctx context.Context, liveRuns map[string]boo
 		wts = append(wts, info)
 	}
 	return wts
-}
-
-// ExecutePull runs `git pull --ff-only bottown <base>` in the main checkout.
-func (s *Server) ExecutePull(ctx context.Context) (string, error) {
-	remote := s.cfg.Instance.Remote()
-	base := "main"
-	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
-		base = b
-	}
-
-	cmd := runs.GitCommand(ctx, s.cfg.RepoTop, nil, "pull", "--ff-only", remote, base)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git pull: %w: %s", err, strings.TrimSpace(out.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
-}
-
-// ExecutePush runs `git push origin <head>:refs/heads/<base>` from the main checkout,
-// verifying that refs/heads/<base> has not moved if expectedHead is specified.
-func (s *Server) ExecutePush(ctx context.Context, expectedHead string) (string, error) {
-	remote := s.cfg.Instance.Remote()
-	base := "main"
-	if b, err := runs.RemoteDefaultBranch(ctx, s.cfg.RepoTop, remote); err == nil && b != "" {
-		base = b
-	}
-
-	localRef := "refs/heads/" + base
-	currentHead, err := s.git(ctx, "rev-parse", localRef)
-	if err != nil {
-		return "", fmt.Errorf("rev-parse %s: %w", localRef, err)
-	}
-
-	if expectedHead == "" {
-		return "", fmt.Errorf("head commit SHA is required")
-	}
-	if currentHead != expectedHead {
-		return "", fmt.Errorf("branch %s moved to %s (was %s); refresh and review commits before pushing", base, currentHead, expectedHead)
-	}
-
-	refspec := fmt.Sprintf("%s:refs/heads/%s", currentHead, base)
-	cmd := runs.GitCommand(ctx, s.cfg.RepoTop, nil, "push", "origin", refspec)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git push origin %s: %w: %s", refspec, err, strings.TrimSpace(out.String()))
-	}
-	return strings.TrimSpace(out.String()), nil
 }
 
 // serverTimeout bounds the web UI's calls to the bottown server: a page

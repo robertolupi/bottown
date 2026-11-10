@@ -1,0 +1,10 @@
+{
+  "land": "bottown merge-all NUMBER",
+  "flow": "bottown flow NUMBER --implement IMPLEMENT --verify VERIFY",
+  "gc": "bottown run gc",
+  "gcFailed": "bottown run gc --failed",
+  "milestone": "bottown milestone run SLUG --agents POOL --parallel PARALLEL",
+  "pull": "git pull --ff-only bottown BRANCH",
+  "push": "git push origin BRANCH",
+  "run": "bottown run show ID"
+}

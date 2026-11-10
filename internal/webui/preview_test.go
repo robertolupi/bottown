@@ -41,6 +41,13 @@ func TestPreviewFixturesLoad(t *testing.T) {
 				t.Errorf("%s: batch live run %s has no log", name, r.ID)
 			}
 		}
+		if fx.Live != nil {
+			for _, it := range fx.Live.Items {
+				if fx.Logs[it.ID] == nil {
+					t.Errorf("%s: live item %s has no log", name, it.ID)
+				}
+			}
+		}
 	}
 	fx, err := LoadFixture(fixturesDir, "default")
 	if err != nil {
@@ -161,6 +168,10 @@ func TestPreviewRoutes(t *testing.T) {
 	if want := tail(fx.Logs[id], liveTailLines); len(st.LiveRuns[0].LogTail) != len(want) || st.LiveRuns[0].LogTail[len(want)-1] != want[len(want)-1] {
 		t.Errorf("log tail of %s: %v", id, st.LiveRuns[0].LogTail)
 	}
+	// The fixture's last output reaches the UI, for Now's quiet tiles.
+	if want := fx.LiveRuns[0].LastOutput; want == nil || st.LiveRuns[0].LastOutput == nil || !st.LiveRuns[0].LastOutput.Equal(*want) {
+		t.Errorf("last_output of %s: %v, want %v", id, st.LiveRuns[0].LastOutput, want)
+	}
 
 	var live struct {
 		LiveRuns    []LiveRunInfo    `json:"live_runs"`
@@ -169,6 +180,27 @@ func TestPreviewRoutes(t *testing.T) {
 	c.get("/api/runs?state=live", &live)
 	if len(live.LiveRuns) != len(fx.LiveRuns) || len(live.ActiveFlows) != len(fx.ActiveFlows) {
 		t.Errorf("live: %+v", live)
+	}
+
+	// GET /api/live is the fixture's live section, each item's tail its
+	// fixture log's last lines, 12 or ?tail=N.
+	var lv Live
+	c.get("/api/live", &lv)
+	if fx.Live == nil || len(lv.Items) != len(fx.Live.Items) || len(lv.Rows) != len(fx.Live.Rows) || len(lv.Ended) != len(fx.Live.Ended) ||
+		lv.Summary.Running != fx.Live.Summary.Running || lv.Summary.Quiet != fx.Live.Summary.Quiet {
+		t.Errorf("live view: %+v", lv)
+	}
+	for _, it := range lv.Items {
+		if want := tail(fx.Logs[it.ID], liveTail); fmt.Sprint(it.Tail) != fmt.Sprint(want) {
+			t.Errorf("live item %s's tail: %v, want %v", it.ID, it.Tail, want)
+		}
+	}
+	var lv2 Live
+	c.get("/api/live?tail=2", &lv2)
+	for _, it := range lv2.Items {
+		if want := tail(fx.Logs[it.ID], 2); fmt.Sprint(it.Tail) != fmt.Sprint(want) {
+			t.Errorf("tail=2: %s's tail: %v, want %v", it.ID, it.Tail, want)
+		}
 	}
 
 	var ended []HistoryRunInfo
@@ -251,17 +283,14 @@ func TestPreviewRoutes(t *testing.T) {
 		t.Errorf("inbox: %d", len(inbox))
 	}
 
-	// Actions do nothing, and succeed unless the fixture says otherwise.
-	for _, a := range []string{"pull", "push", "flow", "run", "stop", "after-pull"} {
-		if code, body := c.do(http.MethodPost, "/api/actions/"+a, `{}`); code != http.StatusOK || !strings.Contains(body, "not performed") {
-			t.Errorf("action %s: %d %s", a, code, body)
-		}
-	}
-	if code, body := c.do(http.MethodPost, "/api/actions/gc", `{}`); code != http.StatusOK || !strings.Contains(body, fx.Actions["gc"].Output) {
-		t.Errorf("gc: %d %s", code, body)
-	}
-	if code, body := c.do(http.MethodPost, "/api/actions/refresh", ``); code != http.StatusOK || !strings.Contains(body, `"live_runs"`) {
+	if code, body := c.do(http.MethodPost, "/api/refresh", ``); code != http.StatusOK || !strings.Contains(body, `"live_runs"`) {
 		t.Errorf("refresh returns the status: %d %s", code, body)
+	}
+
+	for _, name := range []string{"pull", "push", "after-pull", "flow", "milestone-run", "land", "run", "stop", "gc", "refresh"} {
+		if code, body := c.do(http.MethodPost, "/api/actions/"+name, `{}`); code != http.StatusNotFound {
+			t.Errorf("removed %s: %d %s", name, code, body)
+		}
 	}
 
 	// Not in the fixture, or not a route: 404 (400 for a bad number).

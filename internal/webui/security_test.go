@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +38,7 @@ func newTestServer(t *testing.T) *Server {
 	return s
 }
 
-func TestSecurity_OneTimeTokenAndCookie(t *testing.T) {
+func TestSecurity_TokenReusableAndCookie(t *testing.T) {
 	s := newTestServer(t)
 
 	client := &http.Client{
@@ -71,46 +70,45 @@ func TestSecurity_OneTimeTokenAndCookie(t *testing.T) {
 		t.Fatalf("expected 401 Unauthorized for bogus token, got %d", resp.StatusCode)
 	}
 
-	// 3. Request with valid one-time token -> 303 See Other with Set-Cookie
-	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /?token=valid: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("expected 303 See Other after valid token, got %d", resp.StatusCode)
-	}
-
-	var sessionCookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == s.cookieName {
-			sessionCookie = c
-			break
+	// 3. The token is accepted on every request while the server runs, and
+	// each such request sets the cookie and redirects without the token.
+	redeem := func() (*http.Response, *http.Cookie) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET /?token=valid: %v", err)
 		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303 See Other after valid token, got %d", resp.StatusCode)
+		}
+		if loc := resp.Header.Get("Location"); strings.Contains(loc, "token=") {
+			t.Errorf("redirect still carries the token: %q", loc)
+		}
+		var cookie *http.Cookie
+		for _, c := range resp.Cookies() {
+			if c.Name == s.cookieName {
+				cookie = c
+				break
+			}
+		}
+		if cookie == nil {
+			t.Fatalf("expected Set-Cookie %s in response", s.cookieName)
+		}
+		if !cookie.HttpOnly {
+			t.Errorf("cookie must be HttpOnly")
+		}
+		if cookie.SameSite != http.SameSiteStrictMode {
+			t.Errorf("cookie must have SameSite=Strict")
+		}
+		return resp, cookie
 	}
-	if sessionCookie == nil {
-		t.Fatalf("expected Set-Cookie %s in response", s.cookieName)
-	}
-	if !sessionCookie.HttpOnly {
-		t.Errorf("cookie must be HttpOnly")
-	}
-	if sessionCookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("cookie must have SameSite=Strict")
-	}
+	_, sessionCookie := redeem()
+	// Twice: a login URL kept on screen or in scrollback still works.
+	redeem()
 
-	// 4. Try redeeming the same token again -> 401 Unauthorized (one-time use)
-	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /?token=valid second time: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 Unauthorized on reused token, got %d", resp.StatusCode)
-	}
-
-	// 5. Subsequent request with session cookie -> 200 OK
+	// 4. Subsequent request with session cookie -> 200 OK
 	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", s.Port()), nil)
 	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
@@ -173,7 +171,7 @@ func TestSecurity_OriginCheck(t *testing.T) {
 	client := &http.Client{}
 
 	// 1. POST with valid Origin -> allowed
-	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/actions/refresh", s.Port()), nil)
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/refresh", s.Port()), nil)
 	req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
 	req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", s.Port()))
 	resp, err := client.Do(req)
@@ -186,7 +184,7 @@ func TestSecurity_OriginCheck(t *testing.T) {
 	}
 
 	// 2. POST with evil Origin -> 403 Forbidden
-	req, _ = http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/actions/refresh", s.Port()), nil)
+	req, _ = http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/refresh", s.Port()), nil)
 	req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
 	req.Header.Set("Origin", "http://attacker.example.com")
 	resp, err = client.Do(req)
@@ -199,7 +197,7 @@ func TestSecurity_OriginCheck(t *testing.T) {
 	}
 
 	// 3. POST without Origin or Referer -> 403 Forbidden
-	req, _ = http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/actions/refresh", s.Port()), nil)
+	req, _ = http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/refresh", s.Port()), nil)
 	req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
 	resp, err = client.Do(req)
 	if err != nil {
@@ -312,51 +310,24 @@ func TestStaticAssets_FixedNames(t *testing.T) {
 	}
 }
 
-func TestPush_Validation(t *testing.T) {
+func TestRemovedActionRoutes(t *testing.T) {
 	s := newTestServer(t)
-	client := &http.Client{}
-
-	pushURL := fmt.Sprintf("http://127.0.0.1:%d/api/actions/push", s.Port())
-
-	doPost := func(body io.Reader) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, pushURL, body)
-		req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
-		req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", s.Port()))
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("POST push: %v", err)
-		}
-		return resp
-	}
-
-	// 1. Missing body -> 400
-	resp := doPost(nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for nil body, got %d", resp.StatusCode)
-	}
-
-	// 2. Empty / invalid JSON -> 400
-	resp = doPost(strings.NewReader("{invalid-json"))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for invalid JSON body, got %d", resp.StatusCode)
-	}
-
-	// 3. Missing head field -> 400
-	resp = doPost(strings.NewReader(`{}`))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for empty head field, got %d", resp.StatusCode)
-	}
-
-	// 4. Blank head field -> 400
-	resp = doPost(strings.NewReader(`{"head": "   "}`))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for blank head field, got %d", resp.StatusCode)
+	for _, name := range []string{"pull", "push", "after-pull", "flow", "milestone-run", "land", "run", "stop", "gc", "refresh"} {
+		t.Run(name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, s.BaseURL()+"/api/actions/"+name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(&http.Cookie{Name: s.cookieName, Value: s.sessionToken})
+			req.Header.Set("Origin", s.BaseURL())
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("got %d, want 404", resp.StatusCode)
+			}
+		})
 	}
 }

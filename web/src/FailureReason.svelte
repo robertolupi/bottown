@@ -11,12 +11,17 @@
   interface Props {
     failure: FailureDescription;
     onDetails?: () => void;
+    expanded?: boolean;
   }
 
-  let { failure, onDetails }: Props = $props();
+  let { failure, onDetails, expanded: defaultExpanded = false }: Props = $props();
 
   let expanded = $state(false);
   let truncated = $state(false);
+
+  $effect(() => {
+    expanded = defaultExpanded;
+  });
 </script>
 
 <div

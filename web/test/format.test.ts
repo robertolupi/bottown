@@ -2,8 +2,7 @@
 // --test, with Node stripping the types.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, formatUsage, statusTone } from '../src/format.ts';
-import { postAction } from '../src/actions.ts';
+import { formatElapsed, formatRelativeTime, formatCost, formatUsage, statusTone } from '../src/format.ts';
 
 test('formatElapsed counts minutes and padded seconds since created', () => {
   const created = '2026-11-02T12:00:00Z';
@@ -12,6 +11,7 @@ test('formatElapsed counts minutes and padded seconds since created', () => {
   assert.equal(formatElapsed(created, at(425)), '7m 05s');
   assert.equal(formatElapsed(created, at(-5)), '0m 00s', 'never negative');
   assert.equal(formatElapsed('', at(5)), '');
+  assert.equal(formatElapsed(created, at(192 * 60 + 7)), '3h 12m', 'hours past an hour');
 });
 
 test('formatUsage joins tokens, cost and turns', () => {
@@ -32,35 +32,21 @@ test('statusTone maps execution statuses to badge tones', () => {
   assert.equal(statusTone('revoked'), 'warning');
 });
 
-function stubFetch(ok: boolean, body: unknown) {
-  const calls: Array<{ path: string; init: RequestInit }> = [];
-  globalThis.fetch = (async (path: string, init: RequestInit) => {
-    calls.push({ path, init });
-    return { ok, json: async () => body };
-  }) as any;
-  return calls;
-}
+test('formatRelativeTime gives a coarse age, and formatCost a cost', () => {
+  const now = Date.parse('2026-11-10T12:00:00Z');
+  const ago = (s: number) => new Date(now - s * 1000).toISOString();
+  assert.equal(formatRelativeTime(ago(5), now), 'just now');
+  assert.equal(formatRelativeTime(ago(12 * 60), now), '12m ago');
+  assert.equal(formatRelativeTime(ago(3 * 3600), now), '3h ago');
+  assert.equal(formatRelativeTime(ago(2 * 86400), now), '2d ago');
+  assert.equal(formatRelativeTime(ago(45 * 86400), now), '1mo ago');
+  assert.equal(formatRelativeTime(ago(400 * 86400), now), '1y ago');
+  assert.equal(formatRelativeTime(ago(-30), now), 'just now', 'never a future age');
+  assert.equal(formatRelativeTime('', now), '');
+  assert.equal(formatRelativeTime('not-a-date', now), 'not-a-date');
 
-test('postAction posts JSON, or no body, and returns the result', async () => {
-  let calls = stubFetch(true, { success: true, output: 'done' });
-  assert.deepEqual(await postAction('/api/actions/gc', { failed: true }, 'GC failed'), { success: true, output: 'done' });
-  assert.deepEqual(calls, [
-    {
-      path: '/api/actions/gc',
-      init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"failed":true}' },
-    },
-  ]);
-
-  calls = stubFetch(true, { success: true, output: '' });
-  await postAction('/api/actions/pull', undefined, 'Pull failed');
-  assert.deepEqual(calls[0].init, { method: 'POST' });
-});
-
-test('postAction throws the error, else the output, else the fallback', async () => {
-  stubFetch(false, { success: false, output: 'out', error: 'boom' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'boom' });
-  stubFetch(true, { success: false, output: 'out' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'out' });
-  stubFetch(false, { success: false, output: '' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'X failed' });
+  assert.equal(formatCost(undefined), '');
+  assert.equal(formatCost({ cost_usd: 0 }), '$0.00');
+  assert.equal(formatCost({ input_tokens: 100 }), '', 'tokens alone are no cost');
+  assert.equal(formatCost({ cost_usd: 1.239 }), '$1.24');
 });
