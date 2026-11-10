@@ -19,8 +19,10 @@ else.
 The file is written atomically (a temporary file, renamed over the target),
 so a reader sees the old file or the new one, never a partial write. A flow
 reports the step `between runs` whenever it is reading the forge or deciding
-rather than running: the start, and again after a run ends and it polls for
-a verdict. When a flow ends normally it removes the file; one that is
+rather than running: the start, before each read, and again after a run or
+the checks end. It reports `implementing`, `verifying` or `checks` only
+while that run or check is going, so a forge read never runs under a run or
+check step. When a flow ends normally it removes the file; one that is
 killed, or that crashes, leaves it behind as stale. Removal happens while
 the flow owns its lock, so a second flow refused by the lock never touches
 the holder's file. A file is live only while its flow's lock is held:

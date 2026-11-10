@@ -11,19 +11,99 @@ import (
 
 	"github.com/robertolupi/bottown/internal/policy"
 	"github.com/robertolupi/bottown/internal/runs"
+	"github.com/robertolupi/bottown/internal/secrets"
 	"github.com/robertolupi/bottown/internal/server"
 )
+
+// forgeCall is one call the flow made to the forge, with the step it had
+// last reported when it made it.
+type forgeCall struct {
+	method string
+	step   string
+}
+
+// watchedAPI wraps the fake API and records every call with the flow's
+// reported step, so a test can assert a run or check is never reported as
+// current while the flow is reading the forge. This is what the step
+// sequence alone does not catch: the reads that follow a run, and the
+// recording that follows the checks, used to run under the old step.
+type watchedAPI struct {
+	*fakeAPI
+	step  func() string
+	calls []forgeCall
+}
+
+func (w *watchedAPI) seen(method string) {
+	w.calls = append(w.calls, forgeCall{method: method, step: w.step()})
+}
+
+func (w *watchedAPI) Actors(ctx context.Context) ([]server.ActorInfo, error) {
+	w.seen("Actors")
+	return w.fakeAPI.Actors(ctx)
+}
+
+func (w *watchedAPI) Issue(ctx context.Context, repo string, number int64) (server.IssueOut, error) {
+	w.seen("Issue")
+	return w.fakeAPI.Issue(ctx, repo, number)
+}
+
+func (w *watchedAPI) OpenPR(ctx context.Context, repo, branch string) (server.PRItem, bool, error) {
+	w.seen("OpenPR")
+	return w.fakeAPI.OpenPR(ctx, repo, branch)
+}
+
+func (w *watchedAPI) PR(ctx context.Context, repo string, number int64) (server.PROut, error) {
+	w.seen("PR")
+	return w.fakeAPI.PR(ctx, repo, number)
+}
+
+func (w *watchedAPI) ReconcileCarries(ctx context.Context, repo string, number int64) error {
+	w.seen("ReconcileCarries")
+	return w.fakeAPI.ReconcileCarries(ctx, repo, number)
+}
+
+func (w *watchedAPI) LiveRuns(ctx context.Context, repo string) ([]secrets.Run, error) {
+	w.seen("LiveRuns")
+	return w.fakeAPI.LiveRuns(ctx, repo)
+}
+
+func (w *watchedAPI) Comment(ctx context.Context, repo string, number int64, body string) error {
+	w.seen("Comment")
+	return w.fakeAPI.Comment(ctx, repo, number, body)
+}
+
+func (w *watchedAPI) PRMergeStatus(ctx context.Context, repo string, number int64) (server.PRMergeStatus, error) {
+	w.seen("PRMergeStatus")
+	return w.fakeAPI.PRMergeStatus(ctx, repo, number)
+}
+
+func (w *watchedAPI) RecordGate(ctx context.Context, repo, sha, check, state, description string) error {
+	w.seen("RecordGate")
+	return w.fakeAPI.RecordGate(ctx, repo, sha, check, state, description)
+}
+
+func (w *watchedAPI) GateFailures(ctx context.Context, repo string, number int64) ([]string, error) {
+	w.seen("GateFailures")
+	return w.fakeAPI.GateFailures(ctx, repo, number)
+}
 
 // TestFlowReportsStatus drives the flow through an implement run that
 // waits for a busy actor, the post-implement checks, a verify round that
 // requests changes, a second implement and verify, and an approval, and
 // checks the steps the flow reports through Options.Status: the wait for
 // the busy actor with its detail, the checks, the verify, and the wait
-// between the review rounds.
+// between the review rounds. It also watches every forge call, so the
+// status never claims a run or check that has ended is still going.
 func TestFlowReportsStatus(t *testing.T) {
-	api := &fakeAPI{}
-	checker := &fakeChecker{check: passing}
 	var steps []runs.FlowStatusView
+	api := &watchedAPI{fakeAPI: &fakeAPI{}}
+	api.step = func() string {
+		if len(steps) == 0 {
+			return ""
+		}
+		return steps[len(steps)-1].Step
+	}
+	checker := &fakeChecker{check: passing}
 	attempts, implements := 0, 0
 	verdicts := []string{"REQUEST_CHANGES", "APPROVED"}
 	runner := RunnerFunc(func(_ context.Context, req RunRequest) error {
@@ -65,13 +145,33 @@ func TestFlowReportsStatus(t *testing.T) {
 	want := strings.Join([]string{
 		runs.StepBetweenRuns,
 		runs.StepImplementing, runs.StepWaitingActor, runs.StepImplementing,
-		runs.StepBetweenRuns, runs.StepChecks, runs.StepVerifying,
+		runs.StepBetweenRuns, runs.StepChecks, runs.StepBetweenRuns, runs.StepVerifying,
 		runs.StepBetweenRuns, runs.StepImplementing,
-		runs.StepBetweenRuns, runs.StepChecks, runs.StepVerifying,
+		runs.StepBetweenRuns, runs.StepChecks, runs.StepBetweenRuns, runs.StepVerifying,
 		runs.StepBetweenRuns,
 	}, ",")
 	if got := strings.Join(names, ","); got != want {
 		t.Fatalf("steps =\n  %s\nwant\n  %s", got, want)
+	}
+
+	// Every forge call happens while the flow reports between runs, or
+	// waiting for a busy actor: never while it claims a run or check that
+	// has ended is still going. The reads that follow a run and the
+	// recording that follows the checks are the cases this guards.
+	var reads, recorded bool
+	for _, c := range api.calls {
+		if c.step != runs.StepBetweenRuns && c.step != runs.StepWaitingActor {
+			t.Errorf("%s ran while the flow reported %q, want between runs or waiting for actor", c.method, c.step)
+		}
+		switch c.method {
+		case "OpenPR", "PR":
+			reads = true
+		case "RecordGate":
+			recorded = true
+		}
+	}
+	if !reads || !recorded {
+		t.Fatalf("the flow never read the PR or recorded the checks: %+v", api.calls)
 	}
 
 	// The status carries the issue, the actors with their specs, the

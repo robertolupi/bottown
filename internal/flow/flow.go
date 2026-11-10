@@ -378,6 +378,10 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		defer opts.OnEnd()
 	}
 	s.lastStep, s.lastDetail = "", ""
+	// The flow holds its lock and is reading the forge, not running: it is
+	// between runs, in its first review round until the PR says otherwise.
+	opts.round = 1
+	s.report(opts, runs.StepBetweenRuns, "")
 	if err := s.checkFamilies(ctx, opts); err != nil {
 		return result, err
 	}
@@ -394,6 +398,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		// The flow is reading the forge and deciding, not running anything:
+		// between runs, and with no detail. Reported before the reads, so
+		// the file never claims a run or check that has ended is still
+		// going.
+		s.report(opts, runs.StepBetweenRuns, "")
 		item, open, err := s.API.OpenPR(ctx, opts.Repo, fmt.Sprintf("issue/%d", opts.Issue))
 		if err != nil {
 			return result, err
@@ -411,9 +420,6 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err := s.checkLiveRuns(ctx, opts, pr.Number); err != nil {
 			return result, err
 		}
-		// The flow is reading the forge and deciding, not running anything:
-		// between runs, and with no detail.
-		s.report(opts, runs.StepBetweenRuns, "")
 		if !open {
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
 				return s.runFailure(ctx, result, err)
@@ -597,10 +603,6 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return s.runFailure(ctx, result, err)
 			}
 			resuming = false
-			// The verify run has ended; the flow now polls the forge for
-			// the verifier's verdict, which is time between runs, not
-			// verifying.
-			s.report(opts, runs.StepBetweenRuns, "")
 			after, err := s.waitReview(ctx, opts, pr.Number, head)
 			if err != nil {
 				return result, err
@@ -639,6 +641,10 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	}
 	s.report(opts, runs.StepChecks, "")
 	outcome, err := RunCheck(ctx, s.Checker, req, opts.CheckTimeout)
+	// The checks have ended, whether they passed, failed or could not run:
+	// recording their result, and the forge reads that follow, are between
+	// runs, not the checks themselves.
+	s.report(opts, runs.StepBetweenRuns, "")
 	if err != nil {
 		return outcome, err
 	}
@@ -897,6 +903,9 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err == nil {
+			// The run has ended; whatever the flow reads or decides next
+			// is between runs, not the run itself.
+			s.report(opts, runs.StepBetweenRuns, "")
 			return nil
 		}
 		if opts.SerializeActors && errors.Is(err, ErrActorBusy) {
@@ -921,6 +930,9 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 			req.Retry = true
 			continue
 		}
+		// The run ended in failure; the flow reads the forge and stops,
+		// which is between runs, not the failed run.
+		s.report(opts, runs.StepBetweenRuns, "")
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
