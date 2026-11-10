@@ -45,6 +45,9 @@
 <tr
   class="flow-thread-row"
   class:flow-row-active={thread.active}
+  role="link"
+  tabindex="0"
+  data-nav={thread.key}
   onclick={navigateToFlow}
 >
   <td class="target-cell">

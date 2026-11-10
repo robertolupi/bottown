@@ -16,6 +16,7 @@
   <input
     type="text"
     class="input input-sm"
+    data-history-search
     placeholder="Search issue, PR, milestone, or summary..."
     bind:value={filters.search}
   />
