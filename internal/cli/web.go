@@ -62,52 +62,7 @@ func newWeb(g *globals) *cobra.Command {
 		},
 	}
 	forgejoCmd.Flags().BoolVar(&reset, "reset-password", false, "set a new owner password first (if it was changed in Forgejo)")
-	var port int
-	uiCmd := &cobra.Command{
-		Use:   "ui",
-		Short: "Start the local web UI for this checkout and open it in the browser",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			inst, err := g.loadInstance()
-			if err != nil {
-				return err
-			}
-			top, err := mainCheckout()
-			if err != nil {
-				return err
-			}
-			repo, ok := repoOnInstance(top, inst)
-			if !ok {
-				return fmt.Errorf("this checkout is not hosted on instance %s; run `bottown -i %s repo add` first", inst.Name, inst.Name)
-			}
-			key, err := ownerKey(g)
-			if err != nil {
-				return err
-			}
-			srv, err := webui.NewServer(webui.Config{
-				Instance:       inst,
-				RepoTop:        top,
-				FullRepo:       repo,
-				OwnerKey:       key,
-				Port:           port,
-				CLIVersion:     Version,
-				HarnessChecker: checkHarnessCurrent,
-				GuideChecker:   guideStatus,
-			})
-			if err != nil {
-				return err
-			}
-			defer srv.Close()
-
-			loginURL := srv.LoginURL()
-			if err := openLogin(cmd, loginURL, srv.BaseURL(), printOnly); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "bottown web ui listening on %s (press Ctrl+C to stop)\n", srv.BaseURL())
-			return srv.Serve(cmd.Context())
-		},
-	}
-	uiCmd.Flags().IntVar(&port, "port", 0, "port to listen on (default: random free port)")
+	uiCmd := newWebUIAlias(g)
 	healthCmd := &cobra.Command{
 		Use:   "health",
 		Short: "Open the instance's container health page signed in as the owner",
@@ -124,7 +79,7 @@ func newWeb(g *globals) *cobra.Command {
 			return openLogin(cmd, inst.ServerURL()+res.LoginPath, inst.ServerURL()+"/", printOnly)
 		},
 	}
-	for _, c := range []*cobra.Command{forgejoCmd, uiCmd, healthCmd} {
+	for _, c := range []*cobra.Command{forgejoCmd, healthCmd} {
 		c.Flags().BoolVar(&printOnly, "print", false, "print the one-time login URL instead of opening a browser")
 	}
 	web.AddCommand(forgejoCmd, uiCmd, healthCmd, newWebPreview(g), newWebShot())
@@ -186,7 +141,7 @@ The controls take the same Origin check as the UI's refresh: send
 -H "Origin: <the URL>" with curl.
 
 --capture NAME does not serve: in the owner's main checkout, with the
-owner's key, it computes what bottown web ui's API answers now and writes
+owner's key, it computes what bottown ui's API answers now and writes
 it as web/fixtures/NAME.json, for a run to serve with --fixture NAME.
 --issue adds an issue's details and timeline and --log a run's log; with
 neither, it takes the issues and runs the views link to, up to a cap. The
@@ -214,8 +169,8 @@ key, a login URL or URL credentials is dropped.`,
 	return cmd
 }
 
-// webCapture writes what `bottown web ui` would show now as a preview
-// fixture. Like web ui, it needs the owner's key, so it runs only in the
+// webCapture writes what `bottown ui` would show now as a preview
+// fixture. Like ui, it needs the owner's key, so it runs only in the
 // main checkout.
 func webCapture(cmd *cobra.Command, g *globals, s previewSettings) error {
 	if s.detach || s.stop || s.watch {

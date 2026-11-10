@@ -81,10 +81,8 @@ type Server struct {
 	listener            net.Listener
 	port                int
 	oneTimeToken        string
-	tokenUsed           bool
 	sessionToken        string
 	cookieName          string
-	mu                  sync.Mutex // guards auth state (token/cookie)
 	statusMu            sync.Mutex // guards git fetch and status computation
 	httpServer          *http.Server
 	lastStatusMu        sync.RWMutex
@@ -143,7 +141,9 @@ func (s *Server) BaseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", s.port)
 }
 
-// LoginURL returns the one-time URL containing the login token.
+// LoginURL returns the login URL containing the token. `bottown ui` shows
+// it in the terminal view's header; it stays usable for as long as the
+// server runs.
 func (s *Server) LoginURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.port, s.oneTimeToken)
 }
@@ -242,7 +242,7 @@ func staticHandler(ui fs.FS) http.Handler {
 // 1. Host header check (against DNS rebinding)
 // 2. Strict Content-Security-Policy (no inline scripts)
 // 3. Origin header check on state-changing requests (CSRF protection)
-// 4. One-time token exchange for HttpOnly SameSite=Strict session cookie
+// 4. Login token -> HttpOnly SameSite=Strict session cookie
 func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1-3. Host check, CSP, Origin check
@@ -250,42 +250,44 @@ func (s *Server) securityMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 4. One-time token exchange
+		// 4. Login token. The terminal view's header shows the URL, and a
+		// login URL recovered from history or scrollback must keep working
+		// while the command runs, so the token is accepted on every request
+		// that carries it, not just the first. Each such request sets the
+		// session cookie and redirects to the address without the token.
+		// This is safe because the server has no route that changes a run,
+		// a flow, the forge or the checkout.
 		if token := r.URL.Query().Get("token"); token != "" {
-			s.mu.Lock()
-			if !s.tokenUsed && token == s.oneTimeToken {
-				s.tokenUsed = true
-				s.mu.Unlock()
-
-				// Set HttpOnly SameSite=Strict cookie
-				http.SetCookie(w, &http.Cookie{
-					Name:     s.cookieName,
-					Value:    s.sessionToken,
-					Path:     "/",
-					HttpOnly: true,
-					SameSite: http.SameSiteStrictMode,
-				})
-
-				// Redirect to strip token from URL address bar
-				cleanURL := *r.URL
-				q := cleanURL.Query()
-				q.Del("token")
-				cleanURL.RawQuery = q.Encode()
-				if cleanURL.Path == "" {
-					cleanURL.Path = "/"
-				}
-				http.Redirect(w, r, cleanURL.String(), http.StatusSeeOther)
+			if token != s.oneTimeToken {
+				http.Error(w, "unauthorized: invalid login token", http.StatusUnauthorized)
 				return
 			}
-			s.mu.Unlock()
-			http.Error(w, "unauthorized: login token expired or invalid", http.StatusUnauthorized)
+
+			// Set HttpOnly SameSite=Strict cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     s.cookieName,
+				Value:    s.sessionToken,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+
+			// Redirect to strip token from URL address bar
+			cleanURL := *r.URL
+			q := cleanURL.Query()
+			q.Del("token")
+			cleanURL.RawQuery = q.Encode()
+			if cleanURL.Path == "" {
+				cleanURL.Path = "/"
+			}
+			http.Redirect(w, r, cleanURL.String(), http.StatusSeeOther)
 			return
 		}
 
 		// Verify session cookie
 		cookie, err := r.Cookie(s.cookieName)
 		if err != nil || cookie.Value != s.sessionToken {
-			http.Error(w, "unauthorized: please open the web UI using the URL provided by `bottown web ui`", http.StatusUnauthorized)
+			http.Error(w, "unauthorized: please open the web UI using the URL provided by `bottown ui`", http.StatusUnauthorized)
 			return
 		}
 

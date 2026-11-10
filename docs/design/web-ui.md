@@ -16,9 +16,10 @@ verdict, start a follow-up run, merge. This design adds two things:
   loop and stops where the owner has to act. It is the supervisor that the
   [problem statement](../problem-statement.md) describes (§4, §5.3), in its
   first concrete form.
-- **A local web UI:** `bottown web ui` becomes a local HTTP server on the
-  host that shows what is going on in one repository and its runs, and
-  shows commands to copy and run in the terminal.
+- **A local web UI:** `bottown ui` becomes a local HTTP server on the
+  host that shows what is going on in one repository and its runs, in the
+  browser and, since the terminal view, in the terminal it was started in.
+  It shows commands to copy and run in the terminal.
 
 bottown will mostly host repositories other than itself, so nothing here
 assumes bottown's own tooling.
@@ -32,7 +33,7 @@ several agents means reading logs and running `git` by hand.
 ## 2. Architecture
 
 ```
-browser ──localhost, one-time token──▶ bottown web ui   (host, owner's process)
+browser ──localhost, login token──▶ bottown ui   (host, owner's process)
                                          │  reads: run logs, actor worktrees,
                                          │         upstream origin (owner's creds)
                                          │  calls: supervisor, run commands (Go)
@@ -41,10 +42,11 @@ browser ──localhost, one-time token──▶ bottown web ui   (host, owner's
                                          runs, keys, policy, audit, forge
 ```
 
-- **`bottown web ui` runs on the host,** in the `bottown` process, started
+- **`bottown ui` runs on the host,** in the `bottown` process, started
   by the owner from a repository's `main` checkout like the other owner
-  commands. It binds to localhost only and opens the browser with a
-  one-time token.
+  commands. It binds to localhost only. On a terminal it shows the live
+  view in the same terminal; otherwise it prints the login URL and serves.
+  `bottown web ui` is an alias of it.
 - **One UI, one repository.** The UI is about the repository whose
   checkout it was started in: its inbox, its runs, its upstream. The owner
   starts it in the repository they want to work on, and starts another
@@ -1136,13 +1138,26 @@ live, as a round) is decided in one place.
 
 ## 8. Security
 
-- **Localhost only.** `bottown web ui` binds `127.0.0.1` on a random port
-  (or `--port`), checks the `Host` header against it (against DNS
+- **The command.** `bottown ui [--port N] [--print] [--once] [--repo R]`
+  starts the server for one repository (`--repo`, default the checkout's).
+  On a terminal it shows the live view in the alternate screen; `--print`,
+  or an output that is not a terminal, prints the login URL and serves
+  until interrupted, and `--once` prints one frame as plain text and exits
+  without serving. `bottown web ui` is an alias of it. The terminal view
+  calls the server's `Live` in-process, so the browser and the terminal
+  read the same view.
+- **Localhost only.** It binds `127.0.0.1` on a random port
+  (or `--port`), and checks the `Host` header against it (against DNS
   rebinding). Its one write route, `POST /api/refresh`, refuses requests
   whose `Origin` is not its own (against CSRF).
-- **One-time token.** The URL it opens carries a token that is exchanged,
-  once, for an `HttpOnly`, `SameSite=Strict` session cookie. The session
-  lives as long as the process: when `bottown web ui` exits, it is gone.
+- **Reusable login token.** The URL it shows carries a token that is
+  accepted on every request that carries it, for as long as the command
+  runs: each such request sets an `HttpOnly`, `SameSite=Strict` session
+  cookie and redirects to the address without the token. A new token is
+  made at each start. This is safe only because the server has no route
+  that changes a run, a flow, the forge or the checkout, so a login URL
+  left in a browser's history or a terminal's scrollback can reach nothing
+  that acts; the session lives as long as the process.
 - **The owner key never reaches the browser.** The Go process holds it and
   makes every server call itself.
 - **Everything the agents wrote is untrusted:** issue and PR text, review
@@ -1160,7 +1175,7 @@ live, as a round) is decided in one place.
 
 ### 8.1 Previewing the UI in a run
 
-`bottown web ui` needs the owner's key and a `main` checkout, so a run that
+`bottown ui` needs the owner's key and a `main` checkout, so a run that
 changes the UI cannot use it. `bottown web preview` is for that run, and
 for its verifier:
 
@@ -1208,7 +1223,7 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   /api/preview` names the one in use and the pid serving it.
 - **Same checks, no sign-in.** It binds `127.0.0.1`, checks `Host` and,
   on state-changing requests, `Origin`, and sets the same CSP as `bottown
-  web ui`. There is no token: it serves only checked-in fixture data, and
+  ui`. There is no token: it serves only checked-in fixture data, and
   it serves no action routes.
 
 Runs never get a signed-in UI: a second kind of login, and a read-only
@@ -1220,11 +1235,11 @@ data looks like, the owner captures it:
 bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
 ```
 
-- **It runs where `bottown web ui` does:** in the owner's main checkout,
+- **It runs where `bottown ui` does:** in the owner's main checkout,
   with the owner's key. In a run or actor worktree it refuses, saying it
   needs the owner's key.
 - **It writes what the UI shows now** as `web/fixtures/NAME.json`,
-  computed by the same code as `bottown web ui`'s API: the status, inbox,
+  computed by the same code as `bottown ui`'s API: the status, inbox,
   live runs and checks, active flows, the live view, history and milestones. The file loads back
   strictly, as every fixture does, before it is written. It does not
   serve.
@@ -1238,7 +1253,7 @@ bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
   path, and on stderr the count per section.
 - **A capture holds real data:** issue titles and bodies, timelines, log
   lines from this forge. What looks like a secret is dropped: bottown API
-  keys (`btk_…`) and the owner key, the one-time logins of `web ui`
+  keys (`btk_…`) and the owner key, the logins of `bottown ui`
   (`?token=`) and `web forgejo` (`/v1/web/login/…`), credentials in URLs,
   and encoded payloads, as in logs. Read it before committing it. The
   owner commits the fixture, or attaches it to an issue, for a run to
@@ -1299,7 +1314,7 @@ Each phase is one issue, small enough for one implement run:
    the server.
 2. **Run digests:** per-harness extraction at run end, stored by the
    server and kept by `gc`; `GET /v1/runs` filters and digests.
-3. **The host UI and repository health:** `bottown web ui` as a local
+3. **The host UI and repository health:** `bottown ui` as a local
    server (§8), with the upstream and health view (§4.3) and its pull and
    push actions.
 4. **Inbox** (§4.1).

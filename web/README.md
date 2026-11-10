@@ -1,7 +1,7 @@
 # web/: the local web UI
 
 A Svelte 5 app, built by Vite into `internal/webui/dist/ui` (`make web`) and
-served by `bottown web ui`; its design is
+served by `bottown ui` (`bottown web ui` is an alias); its design is
 [docs/design/web-ui.md](../docs/design/web-ui.md).
 
 ## Tests
