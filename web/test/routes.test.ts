@@ -397,3 +397,65 @@ test('an unknown run id shows an empty state, not an error banner', async () => 
     view.unmount();
   }
 });
+
+test('a failed run with no log displays failure details and distinguishes from missing run', async () => {
+  const failedRunId = 'r-6a7b8c9d';
+  const view = await mountAt(`#/run/${failedRunId}`);
+  try {
+    const root = view.target;
+
+    // Header target and title
+    const headerTitle = root.querySelector('.header-title');
+    assert.ok(headerTitle, 'header title rendered');
+    assert.ok(headerTitle.textContent!.includes('#62'));
+    assert.ok(headerTitle.textContent!.includes('Retry webhook deliveries with jitter'));
+
+    // Failure details section is rendered
+    const failureSection = root.querySelector('.run-failure-section');
+    assert.ok(failureSection, 'run failure section rendered');
+    assert.ok(failureSection.textContent!.includes('Startup failed'));
+    assert.ok(failureSection.textContent!.includes('git worktree add'));
+
+    // Empty state distinguishes known run with no log from an unknown ID
+    const emptyState = root.querySelector('.empty-state');
+    assert.ok(emptyState, 'empty state rendered in log section');
+    assert.ok(
+      emptyState.textContent!.includes(`No log was written for run ${failedRunId}`) ||
+      emptyState.textContent!.includes(`No log lines recorded for run ${failedRunId}`)
+    );
+    assert.ok(
+      !emptyState.textContent!.includes('No log or record found'),
+      'does not misreport known run as missing'
+    );
+
+    // No error banner
+    const errorBanner = root.querySelector('.banner-error');
+    assert.equal(errorBanner, null, 'no error banner rendered');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a flow Log tab polls its live run and updates with new lines', async () => {
+  const issue = 42;
+  const liveRunId = 'r-1a2b3c4d';
+  const view = await mountAt(`#/flow/${issue}`, { pollInterval: 20 });
+  try {
+    const root = view.target;
+    const initialCount = root.querySelectorAll('.run-page-log .log-line').length;
+    assert.ok(initialCount > 0, 'initial log lines rendered in flow Log tab');
+
+    // Append a line to dynamicLogs for the flow's live run
+    dynamicLogs[liveRunId].push({ kind: 'text', text: 'newly polled line on flow log tab' });
+
+    // Wait for poll
+    await new Promise((r) => setTimeout(r, 60));
+    await settle();
+
+    const afterCount = root.querySelectorAll('.run-page-log .log-line').length;
+    assert.equal(afterCount, initialCount + 1, 'new line rendered after poll on flow log tab');
+    assert.ok(root.textContent!.includes('newly polled line on flow log tab'));
+  } finally {
+    view.unmount();
+  }
+});

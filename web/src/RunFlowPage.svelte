@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import type {
     Denial,
+    FailureDescription,
     HistoryRunInfo,
     HistoryThread,
     IssueTimeline,
@@ -85,8 +86,6 @@
   let resolvedHistoryRun = $derived<HistoryRunInfo | undefined>(
     route.kind === 'run' ? historyRuns.find((r) => r.id === route.id) : undefined
   );
-
-  let isRunLive = $derived(Boolean(resolvedLiveRun || resolvedLiveCheck));
 
   // For flow route: find matching thread and active flow
   let activeFlowInfo = $derived(
@@ -181,6 +180,41 @@
 
   // Denials for the current active run
   let currentDenials = $derived<Denial[]>(currentRunObj?.denials || []);
+
+  // Liveness derived from the selected activeRunId (for both run and flow routes)
+  let isRunLive = $derived.by<boolean>(() => {
+    if (!activeRunId) return false;
+    return Boolean(
+      status?.live_runs?.some((r) => r.id === activeRunId) ||
+      status?.live_checks?.some((c) => c.id === activeRunId)
+    );
+  });
+
+  // Known run / flow detection for empty states
+  let isKnownRun = $derived.by<boolean>(() => {
+    if (route.kind !== 'run') return true;
+    return Boolean(
+      resolvedLiveRun ||
+      resolvedLiveCheck ||
+      resolvedHistoryRun ||
+      currentRunObj ||
+      logLines.length > 0
+    );
+  });
+
+  let isKnownFlow = $derived.by<boolean>(() => {
+    if (route.kind !== 'flow') return true;
+    return Boolean(
+      flowThread ||
+      activeFlowInfo ||
+      (timelineData && timelineData.events && timelineData.events.length > 0)
+    );
+  });
+
+  // Failure description for the resolved run
+  let runFailure = $derived<FailureDescription | null>(
+    currentRunObj ? describeRunFailure(currentRunObj) : null
+  );
 
   // Filtered log lines
   let filteredLines = $derived(
@@ -509,7 +543,7 @@
 
     async function pollLog() {
       if (destroyed) return;
-      if (activeRunId && isRunLive) {
+      if (activeRunId && isRunLive && (route.kind === 'run' || activeFlowTab === 'log')) {
         await loadLog(activeRunId, true);
       }
       if (!destroyed) {
@@ -554,6 +588,9 @@
       {/if}
       {#if headerMode}
         <span class="badge instance-badge">{headerMode}</span>
+      {/if}
+      {#if currentRunObj && (currentRunObj.status === 'failed' || currentRunObj.status === 'revoked' || currentRunObj.ended)}
+        <OutcomeBadge run={currentRunObj} />
       {/if}
       {#if headerElapsed}
         <span class="meta-item muted">{headerElapsed}</span>
@@ -615,14 +652,27 @@
     </div>
   </div>
 
-  <!-- 2. Denials for Run -->
+  <!-- 2. Failure Details for Run / Flow Log -->
+  {#if runFailure && (route.kind === 'run' || activeFlowTab === 'log')}
+    <div class="run-failure-section card" role="region" aria-label="Failure details">
+      <div class="run-failure-header">
+        <span class="badge badge-error">{currentRunObj?.status === 'revoked' ? 'Revoked' : 'Failed'}</span>
+        <span class="failure-title">Failure details</span>
+      </div>
+      <div class="run-failure-body">
+        <FailureReason failure={runFailure} expanded={true} />
+      </div>
+    </div>
+  {/if}
+
+  <!-- 3. Denials for Run -->
   {#if currentDenials.length > 0}
     <div class="denials-section">
       <DenialList denials={currentDenials} />
     </div>
   {/if}
 
-  <!-- 3. Flow Tabs (only on Flow route) -->
+  <!-- 4. Flow Tabs (only on Flow route) -->
   {#if route.kind === 'flow'}
     <div class="flow-tabs" role="tablist">
       <button
@@ -630,7 +680,10 @@
         class="flow-tab"
         class:flow-tab-active={activeFlowTab === 'log'}
         aria-selected={activeFlowTab === 'log'}
-        onclick={() => (activeFlowTab = 'log')}
+        onclick={() => {
+          activeFlowTab = 'log';
+          if (activeRunId) void loadLog(activeRunId, true);
+        }}
       >
         Log
       </button>
@@ -788,7 +841,7 @@
         </div>
 
         <div class="log-actions">
-          {#if activeRunId}
+          {#if activeRunId && (!runFailure || runFailure.hasLog)}
             <a
               class="log-raw-link"
               href="/api/runs/{encodeURIComponent(activeRunId)}/log?raw=1"
@@ -826,12 +879,28 @@
       <div class="run-page-log">
         {#if loadingLog && logLines.length === 0}
           <div class="log-line muted">Loading log...</div>
-        {:else if !activeRunId || (!loadingLog && logLines.length === 0)}
+        {:else if !isKnownRun && route.kind === 'run'}
+          <div class="empty-state">
+            <p class="muted">No log or record found for run {route.id}.</p>
+          </div>
+        {:else if !isKnownFlow && route.kind === 'flow' && !activeRunId}
+          <div class="empty-state">
+            <p class="muted">No runs or timeline recorded for this flow.</p>
+          </div>
+        {:else if logLines.length === 0}
           <div class="empty-state">
             <p class="muted">
-              {route.kind === 'run'
-                ? `No log or record found for run ${route.id}.`
-                : 'No log lines recorded for this flow.'}
+              {#if route.kind === 'run'}
+                {#if runFailure && !runFailure.hasLog}
+                  No log was written for run {route.id}.
+                {:else if currentRunObj?.purged}
+                  No log lines recorded for run {route.id}; run gc may have removed the log.
+                {:else}
+                  No log lines recorded for run {route.id}.
+                {/if}
+              {:else}
+                No log lines recorded for this flow.
+              {/if}
             </p>
           </div>
         {:else if filteredLines.length === 0}
@@ -1039,6 +1108,45 @@
     padding: 16px;
     min-width: 0;
     box-sizing: border-box;
+  }
+
+  /* Run failure section */
+  .run-failure-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 18px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--error);
+    border-radius: 8px;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .run-failure-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .failure-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .run-failure-body {
+    font-size: 13px;
+    line-height: 1.5;
+    min-width: 0;
+  }
+
+  .denials-section {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
   }
 
   /* Log section */

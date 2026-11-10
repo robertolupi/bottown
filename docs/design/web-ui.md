@@ -587,10 +587,11 @@ position. The page shares one unified layout component with runs:
   (`[ implement ]──[ checks ]──[ verify ]──[ land ]`).
 - **Run page (`#/run/<id>`):** displays the full log from `GET /api/runs/{id}/log`
   in the page's own scroll (without inner scroll boxes or max-height limits),
-  with kind filters, raw log link, and the follow toggle of `LiveLogTail`. While
-  the run is live, the log reloads at the live poll interval and auto-scrolls to
-  the bottom when following is on. Below or alongside the log, any policy denials
-  are listed.
+  with kind filters, raw log link, and the follow toggle of `LiveLogTail`. When
+  the run recorded a failure or revoked reason, the page renders that reason
+  above the log. While the run is live, the log reloads at the live poll interval
+  and auto-scrolls to the bottom when following is on. Below or alongside the
+  log, any policy denials are listed.
 - **Flow page (`#/flow/<issue>`):** offers three tabs: **Log** (displaying the
   live run's log, or the last run's log), **Timeline** (the full flow timeline
   from `GET /api/issues/{issue}/timeline`), and **Runs** (listing the flow's
