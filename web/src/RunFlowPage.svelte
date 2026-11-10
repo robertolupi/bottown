@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CommandCopy from './CommandCopy.svelte';
   // One page for a run (`#/run/<id>`) and for a flow (`#/flow/<issue>`),
   // design §4. It shows target, title, kind, round, actor, model, elapsed,
   // Forgejo links, the phase bar, and either the run's full log or the flow's
@@ -73,9 +74,6 @@
   let timelineData = $state<IssueTimeline | null>(null);
   let timelineLoading = $state<boolean>(false);
   let timelineError = $state<string | null>(null);
-
-  // Copied command state
-  let copied = $state<boolean>(false);
 
   // Derive threads
   let allThreads = $derived(groupHistoryThreads(historyRuns, status?.live_runs, status?.active_flows));
@@ -475,16 +473,6 @@
     isFollowing = updateLogTailFollow(isFollowing, atBottom, 'scroll');
   }
 
-  function copyCommand() {
-    if (!commandText || typeof navigator === 'undefined') return;
-    navigator.clipboard?.writeText(commandText).then(() => {
-      copied = true;
-      setTimeout(() => {
-        copied = false;
-      }, 1500);
-    });
-  }
-
   function goBack() {
     if (onBack) {
       onBack();
@@ -715,18 +703,7 @@
 
     <div class="header-actions">
       {#if commandText}
-        <div class="command-chip">
-          <code>{commandText}</code>
-          <button
-            type="button"
-            class="copy-btn"
-            onclick={copyCommand}
-            title="Copy command to clipboard"
-            aria-label="Copy command"
-          >
-            {copied ? '✓' : '⧉'}
-          </button>
-        </div>
+        <CommandCopy command={commandText} />
       {/if}
 
       <div class="forge-links">
@@ -1119,38 +1096,6 @@
     flex-wrap: wrap;
     padding-top: 4px;
     border-top: 1px solid var(--border);
-  }
-
-  .command-chip {
-    display: inline-flex;
-    align-items: center;
-    background: rgba(125, 125, 125, 0.1);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 8px;
-    gap: 6px;
-    font-size: 12px;
-    max-width: 100%;
-    overflow: hidden;
-  }
-
-  .command-chip code {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .copy-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0 2px;
-    font-size: 13px;
-  }
-
-  .copy-btn:hover {
-    color: var(--text);
   }
 
   .forge-links {

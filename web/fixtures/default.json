@@ -149,7 +149,7 @@
       "head_sha": "9e1d2c3456789012345678901234567890abcdef",
       "action": {
         "label": "Land",
-        "command": "bottown land !56"
+        "command": "bottown merge-all 56"
       },
       "created": "2026-11-02T09:45:00Z"
     },
@@ -166,7 +166,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !55"
+        "command": "bottown merge-all 55"
       }
     },
     {
@@ -179,8 +179,8 @@
       "issue": 49,
       "issue_title": "Expose the export job status",
       "action": {
-        "label": "Re-run flow",
-        "command": "bottown flow 49 --implement codex --verify claude"
+        "label": "Flow",
+        "command": "bottown flow 49 --implement ACTOR --verify ACTOR"
       },
       "created": "2026-11-02T09:30:00Z"
     },
@@ -194,8 +194,8 @@
       "issue": 47,
       "issue_title": "Migrate settings to TOML",
       "action": {
-        "label": "Re-run flow",
-        "command": "bottown flow 47 --implement agy --verify claude"
+        "label": "Flow",
+        "command": "bottown flow 47 --implement ACTOR --verify ACTOR"
       },
       "created": "2026-11-02T08:52:00Z"
     },

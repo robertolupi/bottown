@@ -1,8 +1,8 @@
 <script lang="ts">
   // Live, in Now (monitor-ui design §3): the server's live view (GET
   // /api/live) laid out: a wall of tiles, one per item in its order; one
-  // line per row; the threads that just ended; and the buttons that start
-  // flows and runs or clean up.
+  // line per row; the threads that just ended; with links to their run and
+  // flow pages.
   import type { Live } from './types';
   import { endedHref, rowHref, rowText } from './now';
   import NowTile from './NowTile.svelte';
@@ -10,12 +10,9 @@
   interface Props {
     live: Live;
     now: number;
-    onStartFlow: () => void;
-    onStartRun: () => void;
-    onGC: () => void;
   }
 
-  let { live, now, onStartFlow, onStartRun, onGC }: Props = $props();
+  let { live, now }: Props = $props();
 
   let tiles = $derived(live.items ?? []);
   let rows = $derived(live.rows ?? []);
@@ -34,17 +31,7 @@
         {`${summary.running} running`}{#if summary.quiet > 0}{' · '}<span class="quiet-count">{summary.quiet} quiet</span>{/if}{#each summaryRest as part (part)}{` · ${part}`}{/each}
       </span>
     </div>
-    <div class="card-header-right">
-      <button class="btn btn-sm btn-primary" onclick={onStartFlow}>
-        Start Flow
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onStartRun}>
-        Start Run
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onGC}>
-        Clean up (gc)
-      </button>
-    </div>
+
   </div>
 
   <div class="card-body">
