@@ -511,6 +511,46 @@ func TestMergeAllRepairFlowRunsImplementAndVerify(t *testing.T) {
 	}
 }
 
+// TestMergeAllRepairWritesStatus: the in-process repair flow writes the
+// status file beside its issue lock as `bottown flow` does, so a reader
+// sees what it is doing, and removes it when it ends.
+func TestMergeAllRepairWritesStatus(t *testing.T) {
+	f := newFakeForge(t)
+	p := f.add(&fakePR{number: 1, author: "amy", headBranch: "issue/10", headSHA: "h1", baseBranch: "main", behind: true})
+	f.approve(p, "vera", "h1")
+	f.conflicts[1] = []string{"a.go"}
+	f.files[1] = []string{"a.go"}
+	f.issues[10] = server.IssueOut{Number: 10, Author: "owner", State: "open"}
+
+	var out bytes.Buffer
+	m := newMergeAlly(t, f, &out, "nick", "vera")
+	var seen []runs.FlowStatusView
+	inner := &repairRuns{f: f}
+	m.runFlow = repairFlow(m, f.flowAPI(t), flow.RunnerFunc(func(ctx context.Context, req flow.RunRequest) error {
+		seen = append(seen, runs.FlowStatus(m.ws.RunsDir, "demo", 10))
+		return inner.Run(ctx, req)
+	}))
+	ok, err := m.run(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("the repair did not land:\n%s", out.String())
+	}
+	want := []string{runs.StepImplementing, runs.StepVerifying}
+	if len(seen) != len(want) {
+		t.Fatalf("the repair's runs saw %+v, want %v", seen, want)
+	}
+	for i, st := range seen {
+		if st.Step != want[i] || st.Issue != 10 || st.Implement != "nick" || st.Verify != "vera" {
+			t.Errorf("status at run %d = %+v, want step %s for #10 nick/vera", i, st, want[i])
+		}
+	}
+	if got := runs.FlowStatus(m.ws.RunsDir, "demo", 10); got != (runs.FlowStatusView{}) {
+		t.Errorf("the status file outlived the repair: %+v", got)
+	}
+}
+
 // TestMergeAllRepairFlowRetriesFailedChecks is the CheckRounds case: the
 // first post-implement check after the conflict round fails, so the repair
 // spends a check round on a second implement run instead of stopping at

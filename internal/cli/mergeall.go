@@ -708,6 +708,11 @@ func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Opt
 	return flow.Options{
 		Issue: issue, Repo: m.repo, Implement: implement, Verify: verify,
 		Rounds: m.rounds, CheckRounds: m.checkRounds, Timeout: m.timeout, CheckTimeout: m.checkTimeout,
+		// The flow's status file, beside its lock, as `bottown flow`
+		// writes it for the flow it starts itself.
+		Status: func(st runs.FlowStatusView) {
+			_ = runs.WriteFlowStatus(m.ws.RunsDir, m.repo, issue, st)
+		},
 	}
 }
 
@@ -718,6 +723,9 @@ func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Opt
 func repairFlow(m *mergeAll, api flow.API, runner flow.Runner) func(context.Context, int64, string, string) error {
 	sup := m.repairSupervisor(api, runner)
 	return func(ctx context.Context, issue int64, implement, verify string) error {
+		// The status file lives while the flow does; a normal end removes
+		// it, a killed one leaves it stale.
+		defer func() { _ = runs.RemoveFlowStatus(m.ws.RunsDir, m.repo, issue) }()
 		_, err := sup.Run(ctx, m.repairOptions(issue, implement, verify))
 		return err
 	}

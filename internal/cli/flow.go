@@ -114,10 +114,18 @@ base cleanly is gated and verified at its own head, with no merge commit.`,
 				}
 				return err
 			})
+			// The status file lives while the flow does; a flow that ends
+			// normally removes it, a killed one leaves it stale.
+			defer func() { _ = runs.RemoveFlowStatus(rc.ws.RunsDir, repo, issue) }()
 			result, err := supervisor.Run(cmd.Context(), flow.Options{
 				Issue: issue, Repo: repo, Implement: implement, Verify: verify,
 				Rounds: rounds, CheckRounds: checkRounds, Timeout: timeout, CheckTimeout: checkTimeout, SerializeActors: serializeActors, ActorWait: actorWait,
 				Attended: !unattended,
+				// The flow's status file, beside its lock, is a view for
+				// readers: the flow reports each step, this process writes.
+				Status: func(st runs.FlowStatusView) {
+					_ = runs.WriteFlowStatus(rc.ws.RunsDir, repo, issue, st)
+				},
 			})
 			if err == nil {
 				fmt.Fprintf(supervisor.Out, "flow #%d stopped: %s\n", result.Issue, result.Reason)

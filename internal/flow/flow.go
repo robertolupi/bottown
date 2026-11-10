@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -98,6 +99,13 @@ type Options struct {
 	// SerializeActors is set.
 	ActorWait time.Duration
 	Attended  bool
+	// Status, if set, is called at every step change with what the flow is
+	// doing now: the steps runs.StepImplementing, StepChecks,
+	// StepVerifying, StepWaitingActor and StepBetweenRuns, a wait's detail,
+	// and the run's round. The flow keeps no file knowledge: the caller
+	// writes the status file, and a nil callback (a caller that keeps
+	// none) is a no-op.
+	Status func(runs.FlowStatusView)
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -387,6 +395,9 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err := s.checkLiveRuns(ctx, opts, pr.Number); err != nil {
 			return result, err
 		}
+		// The flow is reading the forge and deciding, not running anything:
+		// between runs, and with no detail.
+		s.report(opts, runs.StepBetweenRuns, "")
 		if !open {
 			if err := s.runStep(ctx, opts, RunRequest{Kind: policy.Implement, Repo: opts.Repo, Actor: opts.Implement, Issue: opts.Issue}); err != nil {
 				return s.runFailure(ctx, result, err)
@@ -606,6 +617,7 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks at %s\n", opts.Issue, shortSHA(pr.HeadSHA))
 	}
+	s.report(opts, runs.StepChecks, "")
 	outcome, err := RunCheck(ctx, s.Checker, req, opts.CheckTimeout)
 	if err != nil {
 		return outcome, err
@@ -840,6 +852,10 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		after = time.After
 	}
 	var deadline time.Time // of the wait for a busy actor, once one starts
+	step := runs.StepImplementing
+	if req.Kind == policy.Verify {
+		step = runs.StepVerifying
+	}
 	for {
 		// The owner may merge the PR while a run, or the wait for a busy
 		// actor, goes on: then no run is left to start.
@@ -855,6 +871,7 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 			}
 			fmt.Fprintf(s.Out, "flow #%d: %s %s with %s\n", opts.Issue, req.Kind, target, req.Actor)
 		}
+		s.report(opts, step, "")
 		runCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 		err := s.Runner.Run(runCtx, req)
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
@@ -870,6 +887,8 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 					fmt.Fprintf(s.Out, "flow #%d: waiting up to %s for %s's other batch run to end: %v\n", opts.Issue, opts.ActorWait, req.Actor, err)
 				}
 			}
+			// The refusal names the actor and the run that holds it.
+			s.report(opts, runs.StepWaitingActor, err.Error())
 			if !now.Before(deadline) {
 				return &actorWaitError{actor: req.Actor, wait: opts.ActorWait, err: err}
 			}
@@ -894,6 +913,26 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		}
 		return err
 	}
+}
+
+// report tells Options.Status what the flow is doing now, at each step
+// change; a nil callback (a caller that keeps no status file) is a no-op.
+// The flow keeps no file knowledge: the caller writes the file.
+func (s *Supervisor) report(opts Options, step, detail string) {
+	if opts.Status == nil {
+		return
+	}
+	opts.Status(runs.FlowStatusView{
+		PID:       os.Getpid(),
+		Issue:     opts.Issue,
+		Implement: opts.Implement,
+		Verify:    opts.Verify,
+		Rounds:    opts.Rounds,
+		Round:     opts.round,
+		Step:      step,
+		Detail:    detail,
+		Since:     time.Now().UTC(),
+	})
 }
 
 // idleRunError is a batch run whose agent made no tool call, for the
