@@ -74,6 +74,10 @@
 
   // Timer & Polling
   let nowTime = $state<number>(Date.now());
+  // When live state last arrived (a live poll or a status load), for the
+  // header's freshness chip, and the last poll's error while polls fail.
+  let lastLiveOk = $state<number>(0);
+  let liveError = $state<string | null>(null);
 
   // Run history: runs, filters, and threads
   const runHistory = new RunHistoryState();
@@ -135,6 +139,7 @@
         throw new Error(`Failed to load status: ${res.statusText}`);
       }
       status = await res.json();
+      lastLiveOk = Date.now();
       // Set default actor in forms if available and unset
       ({
         flowImplement: flowForm.implement,
@@ -331,9 +336,12 @@
       if (destroyed) return;
       try {
         const res = await fetch('/api/runs?state=live');
-        if (res.ok) {
+        if (!res.ok) throw new Error(`live poll: ${res.status} ${res.statusText}`);
+        {
           const data = await res.json();
           const { liveRuns, liveChecks, activeFlows } = parseLivePollSnapshot(data);
+          lastLiveOk = Date.now();
+          liveError = null;
 
           if (status) {
             const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
@@ -350,8 +358,9 @@
             }
           }
         }
-      } catch {
-        // Ignore background polling errors
+      } catch (e: any) {
+        // The header's freshness chip turns stale; the error is its title.
+        liveError = e?.message || String(e);
       } finally {
         if (!destroyed) {
           const delay = pollInterval ?? nextPollDelayMs(status?.live_runs, status?.active_flows, status?.live_checks);
@@ -376,6 +385,9 @@
     {status}
     {refreshing}
     onRefresh={handleRefresh}
+    {lastLiveOk}
+    {liveError}
+    now={nowTime}
   />
 
   {#if actionMessage}
@@ -454,24 +466,24 @@
         </div>
       {:else}
         <div class="grid">
-          <LiveRuns
-            liveRuns={status.live_runs}
-            liveChecks={status.live_checks}
-            activeFlows={status.active_flows}
-            issuesLink={status.links.issues}
-            now={nowTime}
-            onStartFlow={() => (showFlowModal = true)}
-            onStartRun={() => (showRunModal = true)}
-            onGC={() => (showGCModal = true)}
-            onStop={openStop}
-          />
-
           <OwnerInbox
             inbox={status.inbox}
             inboxError={status.inbox_error}
             onGC={openGC}
             onStop={openStop}
             onLand={handleLand}
+          />
+
+          <LiveRuns
+            liveRuns={status.live_runs}
+            liveChecks={status.live_checks}
+            activeFlows={status.active_flows}
+            historyRuns={runHistory.runs}
+            threads={historyThreads}
+            now={nowTime}
+            onStartFlow={() => (showFlowModal = true)}
+            onStartRun={() => (showRunModal = true)}
+            onGC={() => (showGCModal = true)}
           />
         </div>
       {/if}

@@ -16,7 +16,6 @@ import {
   filterInboxItems,
   filterHistoryThreads,
   groupHistoryThreads,
-  groupLiveFlows,
   isSameFamilyPair,
   isScrolledToBottom,
   nextPollDelayMs,
@@ -24,8 +23,6 @@ import {
   parseLivePollSnapshot,
   resolveInboxAction,
   selectDefaultActors,
-  standaloneLiveChecks,
-  standaloneLiveRuns,
   statusDue,
   statusRefreshMs,
   updateLogTailFollow,
@@ -53,50 +50,6 @@ test('isSameFamilyPair flags matching families and allows cross-family pairs', (
   assert.equal(isSameFamilyPair(actors, 'claude', 'claude-2'), true);
   assert.equal(isSameFamilyPair(actors, 'claude', 'agy'), false);
   assert.equal(isSameFamilyPair(actors, 'claude', ''), false);
-});
-
-test('groupLiveFlows pairs runs with active flows and falls back to run flow metadata', () => {
-  const activeFlows = [
-    { issue: 10, implement: 'claude', verify: 'agy', round: 1, max_rounds: 3, step: 'implement', label: '', waiting: false },
-    { issue: 11, implement: 'agy', verify: 'claude', round: 2, max_rounds: 3, step: 'verify', label: '', waiting: true },
-  ];
-  const liveRuns = [
-    { id: 'r-1', flow: { issue: 10, round: 1, max_rounds: 3, step: 'implement', label: '' } },
-    { id: 'r-solo' },
-  ] as any[];
-
-  const grouped = groupLiveFlows(activeFlows, liveRuns);
-  assert.equal(grouped.length, 2);
-  assert.deepEqual(grouped[0].runs.map((r) => r.id), ['r-1']);
-  assert.deepEqual(grouped[1].runs, []);
-
-  const fallback = groupLiveFlows([], liveRuns);
-  assert.equal(fallback.length, 1);
-  assert.equal(fallback[0].flow.issue, 10);
-  assert.deepEqual(fallback[0].runs.map((r) => r.id), ['r-1']);
-
-  assert.deepEqual(standaloneLiveRuns(liveRuns).map((r) => r.id), ['r-solo']);
-});
-
-test('groupLiveFlows puts post-implement checks under their flow, and the rest stand alone', () => {
-  const activeFlows = [
-    { issue: 11, implement: 'agy', verify: 'claude', round: 1, max_rounds: 3, step: 'post-implement checks at 1a2b3c4d5e', label: '', waiting: false },
-  ];
-  const checks = [
-    { id: 'flow-11-1a2b3c4d5e.e2e', issue: 11 },
-    { id: 'flow-12-ffffffffff.e2e', issue: 12 },
-  ] as any[];
-  const grouped = groupLiveFlows(activeFlows, [], checks);
-  assert.deepEqual(grouped[0].checks.map((c) => c.id), ['flow-11-1a2b3c4d5e.e2e']);
-  assert.deepEqual(standaloneLiveChecks(checks, grouped).map((c) => c.id), ['flow-12-ffffffffff.e2e']);
-
-  // Without active flows (a terminal's flow), a check joins the group its
-  // flow's run metadata makes, if any.
-  const runs = [{ id: 'r-1', flow: { issue: 12, round: 1, max_rounds: 3, step: 'implement', label: '' } }] as any[];
-  const fallback = groupLiveFlows([], runs, checks);
-  assert.deepEqual(fallback[0].checks.map((c) => c.id), ['flow-12-ffffffffff.e2e']);
-  assert.deepEqual(standaloneLiveChecks(checks, fallback).map((c) => c.id), ['flow-11-1a2b3c4d5e.e2e']);
-  assert.deepEqual(standaloneLiveChecks(undefined, fallback), []);
 });
 
 test('filterHistoryRuns filters by actor, kind, status, age window, and search text', () => {
