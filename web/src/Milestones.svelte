@@ -3,6 +3,7 @@
   // Implementation Epic, or Forgejo milestone without one, with its
   // progress and its dependency DAG. Inline SVG draws the edges and plain
   // DOM the nodes, so every title is escaped text under the page's CSP.
+  import CommandCopy from './CommandCopy.svelte';
   import { onMount } from 'svelte';
   import type { MilestoneGroup, MilestoneNode } from './types';
   import { flowRouteHash } from './routes';
@@ -12,14 +13,9 @@
 
   interface Props {
     refreshKey: number;
-    onFlow: (issue: number) => void;
-    onRun: (issue: number) => void;
-    // Start a milestone run for a plan slug; stop one by its id.
-    onMilestoneRun: (slug: string) => void;
-    onMilestoneStop: (id: string) => void;
   }
 
-  let { refreshKey, onFlow, onRun, onMilestoneRun, onMilestoneStop }: Props = $props();
+  let { refreshKey }: Props = $props();
 
   let groups = $state<MilestoneGroup[]>([]);
   let loading = $state(false);
@@ -96,16 +92,7 @@
       >!{n.pr.number}{n.pr.state !== 'open' ? ` ${n.pr.state}` : ''}</a>
     {/if}
     {#if canStart(n)}
-      <span class="ms-actions">
-        <button
-          class="btn btn-xs btn-primary"
-          onclick={(e) => { e.stopPropagation(); onFlow(n.number); }}
-        >Flow</button>
-        <button
-          class="btn btn-xs btn-secondary"
-          onclick={(e) => { e.stopPropagation(); onRun(n.number); }}
-        >Run</button>
-      </span>
+      <CommandCopy command={`bottown flow ${n.number} --implement ${n.implement || "ACTOR"} --verify ${n.verify || "ACTOR"}`} />
     {/if}
   </div>
 {/snippet}
@@ -128,11 +115,7 @@
         {#if g.scheduler}
           <span class="badge badge-accent">milestone run · running</span>
         {:else if canStartMilestoneRun(g)}
-          <button
-            class="btn btn-sm btn-primary ms-run-start"
-            title="Start bottown milestone run {g.plan}"
-            onclick={() => onMilestoneRun(g.plan!)}
-          >Run milestone</button>
+          <CommandCopy command={`bottown milestone run ${g.plan} --agents POOL --parallel N`} />
         {/if}
         <span class="badge badge-neutral ms-base" title="Base branch for this milestone's issues">base: {g.base}</span>
       </div>
@@ -176,7 +159,6 @@
           <div class="ms-scheduler-head">
             <strong>Milestone run</strong>
             <span class="muted">running {sc.elapsed} · parallel {sc.parallel}</span>
-            <button class="btn btn-xs btn-danger ms-run-stop" onclick={() => onMilestoneStop(sc.id)}>Stop</button>
           </div>
           <div class="ms-scheduler-row">
             <span class="muted">Pool</span>
@@ -387,10 +369,6 @@
     min-width: 0;
   }
 
-  .ms-scheduler-head .ms-run-stop {
-    margin-left: auto;
-  }
-
   .ms-scheduler-row code {
     overflow-wrap: anywhere;
   }
@@ -526,12 +504,6 @@
     font-size: 12px;
   }
 
-  .ms-actions {
-    margin-left: auto;
-    display: inline-flex;
-    gap: 4px;
-  }
-
   .ms-pill {
     display: flex;
     align-items: center;
@@ -553,8 +525,4 @@
     white-space: nowrap;
   }
 
-  .btn-xs {
-    padding: 2px 8px;
-    font-size: 11px;
-  }
 </style>

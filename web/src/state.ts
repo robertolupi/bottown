@@ -1,6 +1,5 @@
 import type {
   ActiveFlowInfo,
-  ActorDetail,
   FailureDescription,
   FlowStateInfo,
   FlowStateKind,
@@ -18,43 +17,6 @@ import type {
   TimelineEvent,
   UsageInfo,
 } from './types';
-
-export interface ActorSelection {
-  flowImplement: string;
-  flowVerify: string;
-  runActor: string;
-}
-
-// Pick default actors for the Flow and Run forms when status arrives, without
-// overwriting choices the user already made. The verifier defaults to the
-// first actor from another model family when one exists.
-export function selectDefaultActors(
-  actors: ActorDetail[] | undefined | null,
-  current: ActorSelection,
-): ActorSelection {
-  let { flowImplement, flowVerify, runActor } = current;
-  if (actors && actors.length > 0) {
-    if (!flowImplement) flowImplement = actors[0].name;
-    if (!flowVerify && actors.length > 1) {
-      const diffFamily = actors.find((a) => a.family !== actors[0].family);
-      flowVerify = diffFamily ? diffFamily.name : actors[1].name;
-    }
-    if (!runActor) runActor = actors[0].name;
-  }
-  return { flowImplement, flowVerify, runActor };
-}
-
-// Whether two chosen actors share a model family, which blocks starting a flow.
-export function isSameFamilyPair(
-  actors: ActorDetail[] | undefined | null,
-  implement: string,
-  verify: string,
-): boolean {
-  if (!implement || !verify || !actors) return false;
-  const implActor = actors.find((a) => a.name === implement);
-  const verActor = actors.find((a) => a.name === verify);
-  return implActor?.family !== undefined && implActor.family === verActor?.family;
-}
 
 export interface HistoryFilters {
   actor?: string;
@@ -142,101 +104,12 @@ export function statusDue(loadedAt: number, now: number): boolean {
   return now - loadedAt >= statusRefreshMs;
 }
 
-// actorSpec joins an actor and an optional model as ACTOR[:SPEC]; an empty
-// model leaves the host's default ([actor_models]) to the CLI.
-export function actorSpec(actor: string, model: string | undefined): string {
-  const m = (model ?? '').trim();
-  return m ? `${actor}:${m}` : actor;
-}
-
-// actorModelPlaceholder is a model field's hint: the host's default for the
-// actor, or the harness's own when the host names none.
-export function actorModelPlaceholder(actors: ActorDetail[] | undefined | null, name: string): string {
-  const model = actors?.find((a) => a.name === name)?.model;
-  return model ? `default: ${model}` : 'harness default';
-}
-
-export interface FlowActionPayload {
-  issue: number;
-  implement: string;
-  verify: string;
-  rounds: number;
-  timeout: string;
-}
-
-export function buildFlowActionPayload(input: {
-  issue: number | string;
-  implement: string;
-  implementModel?: string;
-  verify: string;
-  verifyModel?: string;
-  rounds: number | string;
-  timeout: string;
-}): FlowActionPayload {
-  return {
-    issue: Number(input.issue),
-    implement: actorSpec(input.implement, input.implementModel),
-    verify: actorSpec(input.verify, input.verifyModel),
-    rounds: Number(input.rounds) || 3,
-    timeout: input.timeout || '60m',
-  };
-}
-
-export interface RunActionPayload {
-  kind: 'implement' | 'verify' | 'discuss';
-  target: number;
-  actor: string;
-  question?: string;
-  allow_same_family?: boolean;
-}
-
-export function buildRunActionPayload(input: {
-  kind: 'implement' | 'verify' | 'discuss';
-  target: number | string;
-  actor: string;
-  model?: string;
-  question: string;
-  allowSameFamily: boolean;
-}): RunActionPayload {
-  return {
-    kind: input.kind,
-    target: Number(input.target),
-    actor: actorSpec(input.actor, input.model),
-    question: input.kind === 'discuss' ? input.question : undefined,
-    allow_same_family: input.kind === 'verify' ? input.allowSameFamily : undefined,
-  };
-}
-
 export function filterInboxItems(
   inbox: InboxItem[] | undefined | null,
   showActorFiled: boolean,
 ): InboxItem[] {
   const items = inbox || [];
   return showActorFiled ? items : items.filter((item) => item.kind !== 'actor_filed_issue');
-}
-
-export type ResolvedInboxAction =
-  | { modal: 'gc'; includeFailed: boolean }
-  | { modal: 'stop'; stopRunId: string }
-  | { action: 'land'; number: number; headSHA: string }
-  | null;
-
-export function resolveInboxAction(item: Pick<InboxItem, 'target' | 'action' | 'head_sha'>): ResolvedInboxAction {
-  const cmd = item.action?.command;
-  if (!cmd) return null;
-  if (cmd.includes('gc')) {
-    return { modal: 'gc', includeFailed: cmd.includes('--failed') };
-  }
-  if (cmd.includes('stop')) {
-    return { modal: 'stop', stopRunId: item.target };
-  }
-  if (cmd.includes('land')) {
-    const number = parseIssueNumber(item.target);
-    if (number !== null && item.head_sha) {
-      return { action: 'land', number, headSHA: item.head_sha };
-    }
-  }
-  return null;
 }
 
 export function parseIssueNumber(target: string): number | null {

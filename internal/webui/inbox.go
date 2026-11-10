@@ -175,7 +175,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				Title:       fmt.Sprintf("PR !%d is ready to land", pr.Number),
 				Description: approvedDescription(a, pr.HeadSHA, approver) + ". Merging in Forgejo instead skips the checks at the combined tree.",
 				HeadSHA:     pr.HeadSHA,
-				Action:      &InboxAction{Label: "Land", Command: fmt.Sprintf("bottown land !%d", pr.Number)},
+				Action:      &InboxAction{Label: "Land", Command: fmt.Sprintf("bottown merge-all %d", pr.Number)},
 				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     created,
@@ -544,6 +544,12 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 		}
 	}
 
+	for i := range items {
+		if items[i].Kind == InboxStoppedFlow || items[i].Kind == InboxConflictsWithBase {
+			items[i].Action = &InboxAction{Label: "Flow", Command: inboxFlowCommand(items[i].Issue, items[i].Target, serverRuns)}
+		}
+	}
+
 	// Sort newest first
 	slices.SortFunc(items, func(a, b InboxItem) int {
 		return b.Created.Compare(a.Created)
@@ -628,4 +634,24 @@ func (s *Server) prMergeStatus(ctx context.Context, repo string, n int64) (serve
 	path := fmt.Sprintf("/v1/forge/pr/merge-base?repo=%s&number=%d", url.QueryEscape(repo), n)
 	err := s.callServer(ctx, http.MethodGet, path, nil, &status)
 	return status, err
+}
+
+// inboxFlowCommand resumes with the most recent actors known for this issue.
+func inboxFlowCommand(issue int64, target string, records []serverapi.RunItem) string {
+	var pr int64
+	_, _ = fmt.Sscanf(target, "!%d", &pr)
+	implement, verify := "ACTOR", "ACTOR"
+	var implTime, verifyTime time.Time
+	for _, r := range records {
+		if (issue == 0 || r.Issue != issue) && (pr == 0 || r.PR != pr) || r.Actor == "" {
+			continue
+		}
+		if r.Kind == "implement" && r.Created.After(implTime) {
+			implement, implTime = r.Actor, r.Created
+		}
+		if r.Kind == "verify" && r.Created.After(verifyTime) {
+			verify, verifyTime = r.Actor, r.Created
+		}
+	}
+	return fmt.Sprintf("bottown flow %d --implement %s --verify %s", issue, implement, verify)
 }

@@ -2,7 +2,7 @@
   // Live, in Now (monitor-ui design §3): a wall of tiles, one per live
   // batch run and check group in start order; one line per flow with
   // nothing live and per interactive run; the threads that just ended;
-  // and the buttons that start flows and runs or clean up.
+  // with links to their run and flow pages.
   import type { ActiveFlowInfo, HistoryRunInfo, HistoryThread, LiveCheckInfo, LiveRunInfo } from './types';
   import { formatSpan, justEnded, lastOutputStatus, nowRows, nowTiles, type NowRow as NowRowInfo } from './now';
   import NowTile from './NowTile.svelte';
@@ -14,12 +14,9 @@
     historyRuns: HistoryRunInfo[] | undefined;
     threads: HistoryThread[] | undefined;
     now: number;
-    onStartFlow: () => void;
-    onStartRun: () => void;
-    onGC: () => void;
   }
 
-  let { liveRuns, liveChecks, activeFlows, historyRuns, threads, now, onStartFlow, onStartRun, onGC }: Props = $props();
+  let { liveRuns, liveChecks, activeFlows, historyRuns, threads, now }: Props = $props();
 
   let tiles = $derived(nowTiles(liveRuns, liveChecks));
   let rows = $derived(nowRows(activeFlows, liveRuns, liveChecks, historyRuns));
@@ -39,17 +36,7 @@
         {`${tiles.length} running`}{#if quiet > 0}{' · '}<span class="quiet-count">{quiet} quiet</span>{/if}{#each summaryRest as part (part)}{` · ${part}`}{/each}
       </span>
     </div>
-    <div class="card-header-right">
-      <button class="btn btn-sm btn-primary" onclick={onStartFlow}>
-        Start Flow
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onStartRun}>
-        Start Run
-      </button>
-      <button class="btn btn-sm btn-secondary" onclick={onGC}>
-        Clean up (gc)
-      </button>
-    </div>
+
   </div>
 
   <div class="card-body">
