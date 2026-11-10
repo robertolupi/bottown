@@ -43,3 +43,37 @@ export function formatUsage(u?: UsageInfo): string {
 export function statusTone(status: string): string {
   return status === 'succeeded' ? 'success' : status === 'failed' ? 'error' : status === 'running' ? 'accent' : 'warning';
 }
+
+// A timestamp's exact local date and time, for a title that reveals what a
+// relative age hides.
+export function formatDateTime(isoStr?: string): string {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return isNaN(d.getTime()) ? isoStr : d.toLocaleString();
+}
+
+// A timestamp as a relative age ("just now", "12m ago", "3d ago"), as of
+// now (ms). An unparseable timestamp is shown as it is.
+export function formatRelativeTime(isoStr: string | undefined, now: number): string {
+  if (!isoStr) return '';
+  const t = new Date(isoStr).getTime();
+  if (isNaN(t)) return isoStr;
+  const s = Math.floor(Math.max(0, now - t) / 1000);
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${Math.max(1, m)}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+// A thread's total cost, for the Duration · cost column, or '' when none
+// was recorded (the token counts live on the run page).
+export function formatCost(u?: UsageInfo): string {
+  if (!u || u.cost_usd === undefined || u.cost_usd === null) return '';
+  return `$${u.cost_usd.toFixed(2)}`;
+}
