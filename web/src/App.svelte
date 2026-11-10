@@ -26,6 +26,7 @@
   import TimelineRunModal from './TimelineRunModal.svelte';
   import UpstreamForge from './UpstreamForge.svelte';
   import ViewTabs from './ViewTabs.svelte';
+  import { parseRoute, type View } from './routes';
   import {
     buildFlowActionPayload,
     buildRunActionPayload,
@@ -86,22 +87,15 @@
 
   let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowForm.implement, flowForm.verify));
 
-  // Views: the overview (inbox, runs, health), Milestones, the Timeline and
-  // Stats, kept in the URL's fragment so a reload stays on the same one.
-  type View = 'overview' | 'milestones' | 'timeline' | 'stats';
-  const hashView = location.hash.slice(1);
-  let view = $state<View>(hashView === 'milestones' || hashView === 'timeline' || hashView === 'stats' ? hashView : 'overview');
+  // Views, addressed by the URL's fragment (routes.ts): a tab is a link,
+  // so Back and Forward, and editing the address, switch the view.
+  let view = $state<View>(parseRoute(location.hash));
   let milestonesRefresh = $state<number>(0);
   // Bumped when a run or flow starts or ends, to reload the Timeline and
   // the Stats.
   let timelineRefresh = $state<number>(0);
   let statsRefresh = $state<number>(0);
   let timelineRun = $state<TimelineRun | null>(null);
-
-  function selectView(next: View) {
-    view = next;
-    history.replaceState(null, '', next === 'overview' ? location.pathname + location.search : `#${next}`);
-  }
 
   // The Milestones view starts flows and runs on an issue with the same
   // dialogs as the Live Runs card.
@@ -350,6 +344,9 @@
   }
 
   onMount(() => {
+    const onHashChange = () => (view = parseRoute(location.hash));
+    window.addEventListener('hashchange', onHashChange);
+
     loadStatus();
     loadHistory();
 
@@ -413,6 +410,7 @@
 
     return () => {
       destroyed = true;
+      window.removeEventListener('hashchange', onHashChange);
       clearInterval(timerInterval);
       clearTimeout(pollTimeout);
     };
@@ -440,7 +438,7 @@
     </div>
   {/if}
 
-  <ViewTabs {view} onSelect={selectView} />
+  <ViewTabs {view} />
 
   {#if view === 'milestones'}
     <Milestones
@@ -457,44 +455,50 @@
   {:else if loading && !status}
     <div class="loading-state">Loading status...</div>
   {:else if status}
-    <div class="grid">
-      <LiveRuns
-        liveRuns={status.live_runs}
-        liveChecks={status.live_checks}
-        activeFlows={status.active_flows}
-        issuesLink={status.links.issues}
-        now={nowTime}
-        onStartFlow={() => (showFlowModal = true)}
-        onStartRun={() => (showRunModal = true)}
-        onGC={() => (showGCModal = true)}
-        onStop={openStop}
-      />
+    {#if view === 'history'}
+      <div class="grid">
+        <RunHistory
+          history={runHistory}
+          threads={historyThreads}
+          actors={status.actors}
+          now={nowTime}
+        />
+      </div>
+    {:else if view === 'repo'}
+      <div class="grid">
+        <UpstreamForge
+          {status}
+          {actionLoading}
+          onPull={handlePull}
+          onPush={() => (showPushModal = true)}
+          onAfterPull={openAfterPull}
+        />
 
-      <OwnerInbox
-        inbox={status.inbox}
-        inboxError={status.inbox_error}
-        onGC={openGC}
-        onStop={openStop}
-        onLand={handleLand}
-      />
+        <HealthChecklist health={status.health} />
+      </div>
+    {:else}
+      <div class="grid">
+        <LiveRuns
+          liveRuns={status.live_runs}
+          liveChecks={status.live_checks}
+          activeFlows={status.active_flows}
+          issuesLink={status.links.issues}
+          now={nowTime}
+          onStartFlow={() => (showFlowModal = true)}
+          onStartRun={() => (showRunModal = true)}
+          onGC={() => (showGCModal = true)}
+          onStop={openStop}
+        />
 
-      <RunHistory
-        history={runHistory}
-        threads={historyThreads}
-        actors={status.actors}
-        now={nowTime}
-      />
-
-      <UpstreamForge
-        {status}
-        {actionLoading}
-        onPull={handlePull}
-        onPush={() => (showPushModal = true)}
-        onAfterPull={openAfterPull}
-      />
-
-      <HealthChecklist health={status.health} />
-    </div>
+        <OwnerInbox
+          inbox={status.inbox}
+          inboxError={status.inbox_error}
+          onGC={openGC}
+          onStop={openStop}
+          onLand={handleLand}
+        />
+      </div>
+    {/if}
   {/if}
 </main>
 

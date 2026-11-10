@@ -34,7 +34,7 @@ const browserEnv = BrowserEnv
 type Options struct {
 	CheckoutDir string        // optional: root of checkout containing web/ (defaults to git top from ".")
 	Fixture     string        // the scenario in web/fixtures to serve (defaults to "default")
-	Path        string        // the page to load, such as /#milestones (defaults to "/")
+	Path        string        // the page to load, such as /#/milestones (defaults to "/")
 	Widths      []int         // viewport widths to capture (defaults to [1440, 390])
 	Height      int           // viewport height (defaults to 900)
 	Schemes     []string      // color schemes to capture (defaults to ["light", "dark"])

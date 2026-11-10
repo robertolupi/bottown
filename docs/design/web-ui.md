@@ -459,12 +459,25 @@ and when a milestone flow is done.
 
 ## 4. Views
 
-The first phases build three views: the owner inbox, runs (live and
-history), and upstream and repository health, on one tab. A second tab,
-Milestones, shows each Implementation Epic's dependency DAG
-([milestones design](milestones.md) §2.7), and a third, Timeline, the
-runs of a time window in lanes (§4.6). A run detail view with the
-transcript comes later.
+Each view has a tab and an address in the URL's fragment. A tab is a link
+to its route, so switching views adds a history entry: Back and Forward
+return to the previous view, and editing the address switches it. An
+empty fragment, or one the UI does not know, shows Now; the fragments
+before routes, `#milestones`, `#timeline` and `#stats`, still name their
+views.
+
+| Tab | Route | Shows |
+|---|---|---|
+| Now | `#/now` (the default) | Live Runs (§4.2) and the Owner Inbox (§4.1) |
+| History | `#/history` | Run History (§4.2) |
+| Milestones | `#/milestones` | each Implementation Epic's dependency DAG ([milestones design](milestones.md) §2.7) |
+| Timeline | `#/timeline` | the runs of a time window in lanes (§4.6) |
+| Stats | `#/stats` | the fam's work in numbers (§4.7) |
+| Repository | `#/repo` | Upstream & Forge and the Health Checklist (§4.3) |
+
+The UI loads run history and polls live runs whichever view is shown, so
+History follows live runs while another view is open. A run detail view
+with the transcript comes later.
 
 ### 4.1 Owner inbox
 
@@ -727,7 +740,7 @@ by hand) nothing runs the checks but the agents.
 
 ### 4.6 Timeline
 
-A third tab, **Timeline** (`#timeline`), shows where time went in a
+The **Timeline** tab (`#/timeline`), shows where time went in a
 window: every run on one time scale, from `GET /api/timeline`
 ([reference](../reference/activity.md)), drawn as plain SVG.
 
@@ -761,7 +774,7 @@ derives nothing.
 
 ### 4.7 Stats
 
-A fourth tab, **Stats** (`#stats`), answers the owner's questions about the
+The **Stats** tab (`#/stats`), answers the owner's questions about the
 fam's work from `GET /api/stats` ([reference](../reference/activity.md),
 `internal/stats`), built on the same activity derivation as the Timeline so
 the two cannot disagree. It follows the ground rules of #309: show
@@ -1090,7 +1103,7 @@ so a run that can fetch the page still cannot see what it renders.
 out, as numbers to assert on first and pictures second:
 
 ```
-bottown web shot [--fixture NAME] [--path /#milestones] [--width 1440,390]
+bottown web shot [--fixture NAME] [--path /#/milestones] [--width 1440,390]
                  [--height 900] [--scheme light,dark] [--selector CSS]…
                  [--eval JS] [--wait CSS] [--out DIR] [--browser PATH]
 ```
