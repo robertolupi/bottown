@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -24,7 +23,6 @@ import (
 	"github.com/robertolupi/bottown/internal/milestone"
 	"github.com/robertolupi/bottown/internal/runs"
 	"github.com/robertolupi/bottown/internal/server"
-	"github.com/robertolupi/bottown/internal/webui"
 )
 
 func newMilestoneRun(g *globals) *cobra.Command {
@@ -280,11 +278,9 @@ func (l *flowLauncher) Flow(ctx context.Context, req milestone.FlowRequest) mile
 		"--implement", req.Implement, "--verify", req.Verify, "--unattended",
 		"--repo", l.repo, "--rounds", fmt.Sprint(l.rounds), "--timeout", l.timeout.String(), "--check-timeout", l.checkTimeout.String())
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = l.dir, os.Environ(), log, log
-	// A group of its own, as the web UI starts flows, so the UI's stop
-	// reaches the flow and its runs; this process forwards its own stop.
+	// A group of its own so this process can forward its stop to the flow.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// One flow per issue: another flow (from the web UI, or another run
-	// invocation) driving this child keeps it, and its record.
+	// One flow per issue: leave a child another invocation is driving to it.
 	if pid, held := runs.FlowHolder(l.runsDir, l.repo, req.Issue); held {
 		busy := &runs.FlowBusyError{Repo: l.repo, Issue: req.Issue, PID: pid}
 		return milestone.Outcome{Kind: milestone.FlowStopped, Reason: "flow busy", Detail: busy.Error()}
@@ -293,34 +289,14 @@ func (l *flowLauncher) Flow(ctx context.Context, req milestone.FlowRequest) mile
 		return failed(err)
 	}
 	pid := cmd.Process.Pid
-	rec := &flowRecord{path: filepath.Join(l.logDir, fmt.Sprintf("flow-%d.json", req.Issue)), pid: pid,
-		rec: webui.FlowRecord{Issue: req.Issue, Implement: req.Implement, Verify: req.Verify,
-			Rounds: l.rounds, Timeout: l.timeout.String(), PID: pid, StartedAt: time.Now().UTC()}}
-	defer rec.remove()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	// The record is written once the flow holds the issue's lock, not
-	// before: a flow that another one beat to the lock exits, and must
-	// not replace that one's record, nor remove it.
-	tick := time.NewTicker(flowLockPoll)
-	defer tick.Stop()
 	var waitErr error
-wait:
-	for {
-		select {
-		case waitErr = <-done:
-			break wait
-		case <-tick.C:
-			if !rec.written {
-				if holder, held := runs.FlowHolder(l.runsDir, l.repo, req.Issue); held && holder == pid {
-					rec.write()
-				}
-			}
-		case <-ctx.Done():
-			_ = syscall.Kill(-pid, syscall.SIGINT)
-			waitErr = <-done
-			break wait
-		}
+	select {
+	case waitErr = <-done:
+	case <-ctx.Done():
+		_ = syscall.Kill(-pid, syscall.SIGINT)
+		waitErr = <-done
 	}
 	if ctx.Err() != nil {
 		return failed(ctx.Err())
@@ -347,35 +323,6 @@ wait:
 		oc.Kind, oc.Actor = milestone.FlowIdle, stop.Actor
 	}
 	return oc
-}
-
-// flowLockPoll is how often the launcher looks for its flow holding the
-// issue's lock.
-var flowLockPoll = 100 * time.Millisecond
-
-// flowRecord is the web UI's record of a flow the launcher started.
-type flowRecord struct {
-	path    string
-	pid     int
-	rec     webui.FlowRecord
-	written bool
-}
-
-func (r *flowRecord) write() {
-	if b, err := json.Marshal(r.rec); err == nil && os.WriteFile(r.path, b, 0o600) == nil {
-		r.written = true
-	}
-}
-
-// remove deletes the record if it is still this flow's.
-func (r *flowRecord) remove() {
-	if !r.written {
-		return
-	}
-	var have webui.FlowRecord
-	if b, err := os.ReadFile(r.path); err == nil && json.Unmarshal(b, &have) == nil && have.PID == r.pid {
-		_ = os.Remove(r.path)
-	}
 }
 
 // lastStop is the owner's last flow stop comment on issue n with an ID

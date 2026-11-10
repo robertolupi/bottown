@@ -8,10 +8,10 @@ import UpstreamForge from '../src/UpstreamForge.svelte';
 import Milestones from '../src/Milestones.svelte';
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/default.json', import.meta.url), 'utf8'));
 
-test('only Refresh can post an action from the frontend', () => {
+test('frontend has no obsolete action URLs', () => {
   for (const file of readdirSync(new URL('../src', import.meta.url))) {
     const source = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8');
-    assert.deepEqual([...source.matchAll(/\/api\/actions\/([\w-]+)/g)].map(m => m[1]).filter(a => a !== 'refresh'), [], file);
+    assert.deepEqual([...source.matchAll(/\/api\/actions\/([\w-]+)/g)].map(m => m[1]), [], file);
   }
 });
 

@@ -283,17 +283,14 @@ func TestPreviewRoutes(t *testing.T) {
 		t.Errorf("inbox: %d", len(inbox))
 	}
 
-	// Actions do nothing, and succeed unless the fixture says otherwise.
-	for _, a := range []string{"pull", "push", "flow", "run", "stop", "after-pull"} {
-		if code, body := c.do(http.MethodPost, "/api/actions/"+a, `{}`); code != http.StatusOK || !strings.Contains(body, "not performed") {
-			t.Errorf("action %s: %d %s", a, code, body)
-		}
-	}
-	if code, body := c.do(http.MethodPost, "/api/actions/gc", `{}`); code != http.StatusOK || !strings.Contains(body, fx.Actions["gc"].Output) {
-		t.Errorf("gc: %d %s", code, body)
-	}
-	if code, body := c.do(http.MethodPost, "/api/actions/refresh", ``); code != http.StatusOK || !strings.Contains(body, `"live_runs"`) {
+	if code, body := c.do(http.MethodPost, "/api/refresh", ``); code != http.StatusOK || !strings.Contains(body, `"live_runs"`) {
 		t.Errorf("refresh returns the status: %d %s", code, body)
+	}
+
+	for _, name := range []string{"pull", "push", "after-pull", "flow", "milestone-run", "land", "run", "stop", "gc", "refresh"} {
+		if code, body := c.do(http.MethodPost, "/api/actions/"+name, `{}`); code != http.StatusNotFound {
+			t.Errorf("removed %s: %d %s", name, code, body)
+		}
 	}
 
 	// Not in the fixture, or not a route: 404 (400 for a bad number).

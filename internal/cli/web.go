@@ -91,7 +91,6 @@ func newWeb(g *globals) *cobra.Command {
 				OwnerKey:       key,
 				Port:           port,
 				CLIVersion:     Version,
-				BottownPath:    selfPath(),
 				HarnessChecker: checkHarnessCurrent,
 				GuideChecker:   guideStatus,
 			})
@@ -183,7 +182,7 @@ While it runs:
   POST /api/preview/logs/RUN            append {"lines": [{"kind": "text", "text": "…"}]}
                                         to a run's log and live tail
 
-The controls take the same Origin check as the UI's actions: send
+The controls take the same Origin check as the UI's refresh: send
 -H "Origin: <the URL>" with curl.
 
 --capture NAME does not serve: in the owner's main checkout, with the
@@ -248,7 +247,6 @@ func webCapture(cmd *cobra.Command, g *globals, s previewSettings) error {
 		FullRepo:       repo,
 		OwnerKey:       key,
 		CLIVersion:     Version,
-		BottownPath:    selfPath(),
 		HarnessChecker: checkHarnessCurrent,
 		GuideChecker:   guideStatus,
 	})

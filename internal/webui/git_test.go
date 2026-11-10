@@ -72,7 +72,7 @@ func setupThrowawayRepos(t *testing.T) (mainCheckout, originDir, forgeDir string
 	return mainCheckout, originDir, forgeDir
 }
 
-func TestGitState_UpstreamAndActions(t *testing.T) {
+func TestGitState_Upstream(t *testing.T) {
 	mainCheckout, originDir, forgeDir := setupThrowawayRepos(t)
 
 	mockHarnessCalled := false
@@ -146,22 +146,7 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		t.Errorf("expected subject to contain 'add feature', got %q", uc.Subject)
 	}
 
-	// Test head required: empty head is refused
-	if _, err := srv.ExecutePush(ctx, ""); err == nil || !strings.Contains(err.Error(), "head commit SHA is required") {
-		t.Fatalf("expected ExecutePush with empty head to be refused, got error: %v", err)
-	}
-
-	// Test head mismatch protection: trying to push with a stale head SHA is refused
-	staleHead := "1111222233334444555566667777888899990000"
-	if _, err := srv.ExecutePush(ctx, staleHead); err == nil || !strings.Contains(err.Error(), "moved to") {
-		t.Fatalf("expected ExecutePush with stale head to be refused, got error: %v", err)
-	}
-
-	// 3. Test ExecutePush with matching head SHA: push main to origin
-	pushOut, err := srv.ExecutePush(ctx, st.Upstream.HeadSHA)
-	if err != nil {
-		t.Fatalf("ExecutePush: %v, out: %s", err, pushOut)
-	}
+	runGit(t, mainCheckout, "push", "origin", "main")
 	// Also push to bottown forge so base is synchronized
 	runGit(t, mainCheckout, "push", "bottown", "main")
 
@@ -194,7 +179,7 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		t.Fatalf("expected Upstream.BehindCount=1 after forced fetch, got %d", st.Upstream.BehindCount)
 	}
 
-	// 4. Test Behind Forge & ExecutePull
+	// 4. Test Behind Forge
 	// Clone a secondary worktree to simulate a commit pushed to forge from elsewhere
 	otherClone := filepath.Join(t.TempDir(), "other")
 	runGit(t, t.TempDir(), "clone", forgeDir, otherClone)
@@ -216,11 +201,7 @@ func TestGitState_UpstreamAndActions(t *testing.T) {
 		t.Fatalf("expected Forge.BehindCount=1, got %d", st.Forge.BehindCount)
 	}
 
-	// ExecutePull
-	pullOut, err := srv.ExecutePull(ctx)
-	if err != nil {
-		t.Fatalf("ExecutePull: %v, out: %s", err, pullOut)
-	}
+	runGit(t, mainCheckout, "pull", "--ff-only", "bottown", "main")
 
 	st, err = srv.ComputeStatus(ctx, false)
 	if err != nil {

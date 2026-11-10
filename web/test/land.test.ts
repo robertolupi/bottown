@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { render } from '../testing/dom.ts';
 import OwnerInbox from '../src/OwnerInbox.svelte';
-import LiveRuns from '../src/LiveRuns.svelte';
-import Milestones from '../src/Milestones.svelte';
 import { flushSync } from '../testing/dom.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/default.json', import.meta.url), 'utf8'));
@@ -23,32 +21,5 @@ test('approved behind candidate offers Land and explains the combined checks', (
     assert.ok(!buttons.some((b) => b.textContent?.includes('Merge main')));
     assert.match(view.target.textContent!, /bottown merge-all 56/);
     assert.deepEqual(calls, []);
-  } finally { view.unmount(); }
-});
-
-test('a landing in progress is a tile in Live with its log, opening its page', () => {
-  const landing = fixture.live.items.find((i: any) => i.kind === 'land');
-  // The preview fills a tile's tail from the fixture's logs.
-  const item = { ...landing, tail: fixture.logs[landing.id] };
-  const live = { ...fixture.live, items: [item], rows: [], ended: [] };
-  const view = render(LiveRuns, { live, now: Date.now(), onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {} });
-  try {
-    const tile = view.target.querySelector<HTMLElement>('.now-tile')!;
-    assert.match(tile.textContent!, /land/);
-    assert.match(tile.textContent!, /Running checks at the landing commit/);
-    tile.click();
-    assert.equal(location.hash, '#/run/land-59');
-  } finally { view.unmount(); location.hash = ''; }
-});
-
-
-
-
-test('a milestone child shows its landing on the node', async () => {
-  globalThis.fetch = (async () => new Response(JSON.stringify(fixture.milestones), { status: 200 })) as typeof fetch;
-  const view = render(Milestones, { refreshKey: 0, onFlow: () => {}, onRun: () => {}, onMilestoneRun: () => {}, onMilestoneStop: () => {} });
-  try {
-    for (let i = 0; i < 4; i++) { await new Promise((r) => setTimeout(r, 5)); flushSync(); }
-    assert.match(view.target.textContent!, /land · bottown · 2m 0s/);
   } finally { view.unmount(); }
 });

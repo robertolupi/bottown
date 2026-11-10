@@ -86,9 +86,6 @@ func TestCapture(t *testing.T) {
 	if fx.Live == nil || len(fx.Live.Items) == 0 || fx.Live.Items[0].ID != "r-live" {
 		t.Errorf("live view not captured: %+v", fx.Live)
 	}
-	if len(fx.Actions) != 0 {
-		t.Errorf("actions: %v", fx.Actions)
-	}
 
 	b, err := s.EncodeFixture(fx)
 	if err != nil {

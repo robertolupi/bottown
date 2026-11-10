@@ -45,7 +45,7 @@ type MilestoneGroup struct {
 	Edges     []MilestoneEdge `json:"edges"`
 	Layers    int             `json:"layers"`
 	Error     string          `json:"error,omitempty"`
-	// Scheduler is the plan's milestone run the UI started, while it runs.
+	// Scheduler is the plan's CLI milestone run, while it runs.
 	Scheduler *MilestoneScheduler `json:"scheduler,omitempty"`
 	members   []int64
 	deps      map[int64][]int64
@@ -120,7 +120,7 @@ type NodePR struct {
 	Review string `json:"review,omitempty"`
 }
 
-// ActiveFlowRef is the UI-started flow supervising a node.
+// ActiveFlowRef is the CLI flow supervising a node.
 type ActiveFlowRef struct {
 	Implement string `json:"implement"`
 	Verify    string `json:"verify"`
@@ -488,14 +488,7 @@ func (s *Server) buildGraph(
 		if live != nil {
 			node.Run = &NodeRun{ID: live.ID, Kind: live.Kind, Actor: live.Actor, Created: live.Created, Elapsed: formatDuration(now.Sub(live.Created))}
 		}
-		landing := false
-		if node.PR != nil {
-			if rec := s.getLanding(node.PR.Number); rec != nil {
-				landing = true
-				node.Run = &NodeRun{ID: fmt.Sprintf("land-%d", rec.Number), Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(now.Sub(rec.StartedAt))}
-			}
-		}
-		flowRec := s.getActiveFlow(n)
+		flowRec := s.activeFlow(n)
 		if flowRec != nil {
 			node.Flow = &ActiveFlowRef{Implement: flowRec.Implement, Verify: flowRec.Verify}
 		}
@@ -518,7 +511,7 @@ func (s *Server) buildGraph(
 		switch {
 		case is.State == string(sdk.StateClosed):
 			node.Status = NodeClosed
-		case live != nil || flowRec != nil || landing:
+		case live != nil || flowRec != nil:
 			node.Status = NodeRunning
 		default:
 			var lastRun *serverapi.RunItem

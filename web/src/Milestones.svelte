@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { suggestedCommand } from './commands';
   // The Milestones view (docs/design/milestones.md §2.7): each
   // Implementation Epic, or Forgejo milestone without one, with its
   // progress and its dependency DAG. Inline SVG draws the edges and plain
@@ -92,7 +93,7 @@
       >!{n.pr.number}{n.pr.state !== 'open' ? ` ${n.pr.state}` : ''}</a>
     {/if}
     {#if canStart(n)}
-      <CommandCopy command={`bottown flow ${n.number} --implement ${n.implement || "ACTOR"} --verify ${n.verify || "ACTOR"}`} />
+      <CommandCopy command={suggestedCommand("flow", { NUMBER: n.number, IMPLEMENT: n.implement || "ACTOR", VERIFY: n.verify || "ACTOR" })} />
     {/if}
   </div>
 {/snippet}
@@ -115,7 +116,7 @@
         {#if g.scheduler}
           <span class="badge badge-accent">milestone run · running</span>
         {:else if canStartMilestoneRun(g)}
-          <CommandCopy command={`bottown milestone run ${g.plan} --agents POOL --parallel N`} />
+          <CommandCopy command={suggestedCommand("milestone", { SLUG: g.plan || "SLUG", PARALLEL: "N" })} />
         {/if}
         <span class="badge badge-neutral ms-base" title="Base branch for this milestone's issues">base: {g.base}</span>
       </div>

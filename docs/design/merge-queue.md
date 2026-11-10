@@ -403,14 +403,11 @@ Land. The owner can still merge in Forgejo; the inbox says what that skips
 
 ## 8. The web UI
 
-The inbox's **Ready to merge** item today hides a PR that is behind and
-offers "merge main into the PR" (`POST /v1/forge/pr/merge-base`, the
-PR-first merge the flow also made). It becomes: every candidate shows as
-**Ready to land**, with a **Land** action that runs `land.Land` for that
-PR in the background like a flow, with its log under Live Runs, and a
-note that merging in Forgejo instead skips the checks at the combined
-tree. The PR-first merge operation and its action go once nothing calls
-them. The Milestones tab shows a child's landing like its flow.
+The inbox shows candidates as **Ready to land**, with the command
+`bottown merge-all N` to copy and run in the terminal. Its landing checks
+show on Now as check items. The UI has no landing worker or write action.
+The item explains that merging in Forgejo instead skips checks at the
+combined tree.
 
 ## 9. Server operations and policy
 

@@ -69,7 +69,6 @@ type Config struct {
 	OwnerKey       string
 	Port           int
 	CLIVersion     string
-	BottownPath    string
 	HarnessChecker func(home string) []HarnessCommandInfo
 	// GuideChecker reports the state of the fam guide file in an actor
 	// worktree (runs.GuideStatus), or why it could not tell.
@@ -78,7 +77,6 @@ type Config struct {
 
 // Server is the local HTTP server for the bottown web UI.
 type Server struct {
-	landingMu           sync.Mutex
 	cfg                 Config
 	listener            net.Listener
 	port                int
@@ -88,7 +86,6 @@ type Server struct {
 	cookieName          string
 	mu                  sync.Mutex // guards auth state (token/cookie)
 	statusMu            sync.Mutex // guards git fetch and status computation
-	afterPullMu         sync.Mutex // one run of the after-pull steps at a time
 	httpServer          *http.Server
 	lastStatusMu        sync.RWMutex
 	lastStatus          *UIStatusResponse
@@ -184,6 +181,7 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/", http.NotFoundHandler())
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleGetMilestones)
@@ -194,16 +192,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleGetRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleGetIssueDetails)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleGetIssueTimeline)
-	mux.HandleFunc("POST /api/actions/pull", s.handleActionPull)
-	mux.HandleFunc("POST /api/actions/push", s.handleActionPush)
-	mux.HandleFunc("POST /api/actions/after-pull", s.handleActionAfterPull)
-	mux.HandleFunc("POST /api/actions/refresh", s.handleActionRefresh)
-	mux.HandleFunc("POST /api/actions/flow", s.handleActionFlow)
-	mux.HandleFunc("POST /api/actions/milestone-run", s.handleActionMilestoneRun)
-	mux.HandleFunc("POST /api/actions/land", s.handleActionLand)
-	mux.HandleFunc("POST /api/actions/run", s.handleActionRun)
-	mux.HandleFunc("POST /api/actions/stop", s.handleActionStop)
-	mux.HandleFunc("POST /api/actions/gc", s.handleActionGC)
+	mux.HandleFunc("POST /api/refresh", s.handleRefresh)
 
 	mux.Handle("GET /", staticHandler(uiFS(distFS)))
 }
@@ -404,81 +393,13 @@ func (s *Server) handleGetMilestones(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, groups)
 }
 
-func (s *Server) handleActionRefresh(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	st, err := s.ComputeStatus(r.Context(), true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
-}
-
-func (s *Server) handleActionLand(w http.ResponseWriter, r *http.Request) {
-	var req LandRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteLand(r.Context(), req)
-	res := ActionResult{Success: err == nil, Output: out}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *Server) handleActionPull(w http.ResponseWriter, r *http.Request) {
-	out, err := s.ExecutePull(r.Context())
-	res := ActionResult{
-		Success: err == nil,
-		Output:  out,
-	}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
-}
-
-type pushRequest struct {
-	Head string `json:"head"`
-}
-
-func (s *Server) handleActionPush(w http.ResponseWriter, r *http.Request) {
-	if r.Body == nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "missing request body",
-		})
-		return
-	}
-	var req pushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "invalid JSON body: " + err.Error(),
-		})
-		return
-	}
-	head := strings.TrimSpace(req.Head)
-	if head == "" {
-		writeJSON(w, http.StatusBadRequest, ActionResult{
-			Error: "head commit SHA is required",
-		})
-		return
-	}
-	out, err := s.ExecutePush(r.Context(), head)
-	res := ActionResult{
-		Success: err == nil,
-		Output:  out,
-	}
-	if err != nil {
-		res.Error = err.Error()
-		writeJSON(w, http.StatusInternalServerError, res)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -598,11 +519,11 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // renderRunLog renders run id's log, read as logBytes, for its harness,
-// and says whether the run has ended. A check's or landing's log, and a
+// and says whether the run has ended. A check's log, and a
 // run the server does not answer for, are taken as live: that only keeps
 // their last line out of the stable prefix (pageLog).
 func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) (lines []runs.LogLine, ended bool) {
-	if validCheckID.MatchString(id) || strings.HasPrefix(id, "land-") {
+	if validCheckID.MatchString(id) {
 		return runs.RenderLog("", logBytes), false // the checks' commands' output: plain lines
 	}
 	actorMap, _ := s.fetchActorMap(ctx)
@@ -669,71 +590,4 @@ func (s *Server) handleGetIssueTimeline(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, timeline)
-}
-
-func (s *Server) handleActionFlow(w http.ResponseWriter, r *http.Request) {
-	var req FlowRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteFlow(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionMilestoneRun(w http.ResponseWriter, r *http.Request) {
-	var req MilestoneRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteMilestoneRun(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionRun(w http.ResponseWriter, r *http.Request) {
-	var req RunActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteRun(r.Context(), req)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionStop(w http.ResponseWriter, r *http.Request) {
-	var req StopRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ActionResult{Error: "invalid JSON body: " + err.Error()})
-		return
-	}
-	out, err := s.ExecuteStop(r.Context(), req.ID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
-}
-
-func (s *Server) handleActionGC(w http.ResponseWriter, r *http.Request) {
-	var req GCRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	out, err := s.ExecuteGC(r.Context(), req.Failed)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ActionResult{Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, ActionResult{Success: true, Output: out})
 }

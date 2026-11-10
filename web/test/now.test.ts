@@ -56,18 +56,18 @@ test('one tile per item, in the order the server gives', () => {
   try {
     const tiles = [...view.target.querySelectorAll<HTMLElement>('.now-tile')];
     assert.deepEqual(tiles.map((t) => t.dataset.id), live.items.map((i) => i.id));
-    assert.deepEqual(tiles.map((t) => t.dataset.id), ['r-1a2b3c4d', 'land-59', 'r-9c8d7e6f', 'flow-56-7c1d2e3f4a.e2e', 'flow-64-9e8d7c6b5a.check']);
+    assert.deepEqual(tiles.map((t) => t.dataset.id), ['r-1a2b3c4d', 'flow-52-abcdef0123.check', 'r-9c8d7e6f', 'flow-56-7c1d2e3f4a.e2e', 'flow-64-9e8d7c6b5a.check']);
     assert.match(byId(view.target, 'r-1a2b3c4d').textContent!, /#42\s*Retry webhook deliveries with backoff/);
     assert.match(byId(view.target, 'r-1a2b3c4d').textContent!, /implement 1\/3 · claude · 12m\/1h 0m/);
     assert.match(byId(view.target, 'r-9c8d7e6f').textContent!, /verify 2\/3 · kimi · 4m\/1h 0m/);
     assert.match(byId(view.target, 'r-9c8d7e6f').textContent!, /1 denied/);
-    assert.match(byId(view.target, 'land-59').textContent!, /land · bottown · 5m/);
+    assert.match(byId(view.target, 'flow-52-abcdef0123.check').textContent!, /checks · !59 · abcdef0/);
     assert.match(byId(view.target, 'flow-56-7c1d2e3f4a.e2e').textContent!, /checks e2e · !62 · 7c1d2e3/);
     assert.match(byId(view.target, 'flow-64-9e8d7c6b5a.check').textContent!, /checks · !65 · 9e8d7c6/);
     // No filter bar: the tail is LogLineView lines only.
     assert.equal(view.target.querySelector('.log-follow-btn'), null);
     tiles[1].click();
-    assert.equal(location.hash, '#/run/land-59');
+    assert.equal(location.hash, '#/run/flow-52-abcdef0123.check');
   } finally { view.unmount(); location.hash = ''; }
 });
 
@@ -79,7 +79,7 @@ test('a tile shows the last lines of its tail', () => {
     const lines = [...byId(view.target, 'r-1a2b3c4d').querySelectorAll('.tile-tail .log-line')].map((l) => l.textContent!.trim());
     assert.equal(lines.length, 8);
     assert.equal(lines.at(-1), 'line 12');
-    assert.equal(byId(view.target, 'land-59').querySelector('.tile-empty')?.textContent, 'No output yet.');
+    assert.equal(byId(view.target, 'flow-52-abcdef0123.check').querySelector('.tile-empty')?.textContent, 'No output yet.');
   } finally { view.unmount(); }
 });
 

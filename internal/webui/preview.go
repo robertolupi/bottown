@@ -63,10 +63,6 @@ type Fixture struct {
 	// Timelines are GET /api/issues/{number}/timeline, keyed by issue
 	// number, or by "!N" for a PR without an issue (?pr=N).
 	Timelines map[string]IssueTimeline `json:"timelines"`
-	// Actions are the answers to POST /api/actions/{name}, by name (pull,
-	// push, after-pull, flow, milestone-run, run, stop, gc). An action without one
-	// succeeds, doing nothing.
-	Actions map[string]ActionResult `json:"actions"`
 }
 
 // LoadFixture reads the fixture name from dir.
@@ -197,8 +193,9 @@ func (s *PreviewServer) Close() error {
 }
 
 func (s *PreviewServer) registerRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/", http.NotFoundHandler())
 	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("POST /api/actions/refresh", s.handleStatus)
+	mux.HandleFunc("POST /api/refresh", s.handleStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleMilestones)
 	mux.HandleFunc("GET /api/live", s.handleLive)
@@ -208,7 +205,6 @@ func (s *PreviewServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	mux.HandleFunc("GET /api/issues/{number}", s.handleIssue)
 	mux.HandleFunc("GET /api/issues/{number}/timeline", s.handleTimeline)
-	mux.HandleFunc("POST /api/actions/{name}", s.handleAction)
 
 	// Preview controls, for a test or a person to change what the API
 	// answers while the page is open.
@@ -467,21 +463,6 @@ func (s *PreviewServer) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	tl.Events = orEmpty(tl.Events)
 	writeJSON(w, http.StatusOK, tl)
-}
-
-func (s *PreviewServer) handleAction(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	s.mu.Lock()
-	res, ok := s.fx.Actions[name]
-	s.mu.Unlock()
-	if !ok {
-		res = ActionResult{Success: true, Output: fmt.Sprintf("preview: %s not performed", name)}
-	}
-	code := http.StatusOK
-	if !res.Success {
-		code = http.StatusInternalServerError
-	}
-	writeJSON(w, code, res)
 }
 
 func (s *PreviewServer) handlePreviewInfo(w http.ResponseWriter, _ *http.Request) {

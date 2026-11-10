@@ -2,7 +2,6 @@ package webui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	sdk "codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3"
@@ -237,39 +235,12 @@ type IssueTimeline struct {
 	Events    []TimelineEvent `json:"events"`
 }
 
-func (s *Server) getActiveFlow(issue int64) *FlowRecord {
-	if issue <= 0 {
-		return nil
-	}
-	infoPath := filepath.Join(s.cfg.RepoTop, ".bottown", fmt.Sprintf("flow-%d.json", issue))
-	data, err := os.ReadFile(infoPath)
-	if err != nil {
-		return nil
-	}
-	var rec FlowRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return nil
-	}
-	// The UI always records a real PID. Without one there is no process
-	// to check or stop, and ExecuteStop's kill(-PID) would signal the
-	// UI's own process group for PID 0.
-	if rec.PID <= 0 {
-		return nil
-	}
-	if err := syscall.Kill(rec.PID, 0); err != nil {
-		_ = os.Remove(infoPath)
-		return nil
-	}
-	return &rec
-}
-
 // ComputeLiveRuns calculates active runs with flow grouping and readable log tails.
 func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	return s.computeLiveRuns(ctx, liveTailLines)
 }
 
-// computeLiveRuns is ComputeLiveRuns with each batch run's (and
-// landing's) last n rendered log lines.
+// computeLiveRuns is ComputeLiveRuns with each batch run's last n rendered log lines.
 func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, error) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
@@ -286,7 +257,7 @@ func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, err
 		return nil, fmt.Errorf("fetch live runs: %w", err)
 	}
 	if len(serverRuns) == 0 {
-		return s.liveLandings(n), nil
+		return []LiveRunInfo{}, nil
 	}
 	denials := s.fetchDenials(ctx)
 
@@ -331,7 +302,7 @@ func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, err
 	}
 
 	now := time.Now().UTC()
-	live := s.liveLandings(n)
+	live := []LiveRunInfo{}
 
 	for _, sr := range serverRuns {
 		act := actorMap[sr.Actor]
@@ -384,7 +355,7 @@ func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, err
 		}
 
 		if (sr.Kind == "implement" || sr.Kind == "verify") && issueNum > 0 {
-			flowRec := s.getActiveFlow(issueNum)
+			flowRec := s.activeFlow(issueNum)
 			if flowRec != nil {
 				pr := prByIssue[issueNum]
 				round := 1
@@ -480,97 +451,6 @@ func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, err
 	}
 
 	return live, nil
-}
-
-// ComputeActiveFlows returns all active flows supervising issues, including those between runs.
-func (s *Server) ComputeActiveFlows(ctx context.Context, liveRuns []LiveRunInfo) []ActiveFlowInfo {
-	bottownDir := filepath.Join(s.cfg.RepoTop, ".bottown")
-	entries, err := os.ReadDir(bottownDir)
-	if err != nil {
-		return []ActiveFlowInfo{}
-	}
-
-	liveByIssue := make(map[int64]LiveRunInfo)
-	for _, r := range liveRuns {
-		if r.Flow != nil {
-			liveByIssue[r.Flow.Issue] = r
-		}
-	}
-	// A flow between runs may be running its post-implement checks.
-	checking := make(map[int64]runs.CheckRecord)
-	for _, c := range s.liveCheckRecords() {
-		checking[c.Issue] = c
-	}
-
-	var flows []ActiveFlowInfo
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, "flow-") || !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		var issueNum int64
-		if _, err := fmt.Sscanf(name, "flow-%d.json", &issueNum); err != nil || issueNum <= 0 {
-			continue
-		}
-
-		flowRec := s.getActiveFlow(issueNum)
-		if flowRec == nil {
-			continue
-		}
-
-		maxRounds := flowRec.Rounds
-		if maxRounds <= 0 {
-			maxRounds = 3
-		}
-
-		if liveRun, ok := liveByIssue[issueNum]; ok && liveRun.Flow != nil {
-			flows = append(flows, ActiveFlowInfo{
-				Issue:     issueNum,
-				Implement: flowRec.Implement,
-				Verify:    flowRec.Verify,
-				Round:     liveRun.Flow.Round,
-				MaxRounds: liveRun.Flow.MaxRounds,
-				Step:      liveRun.Flow.Step,
-				Label:     liveRun.Flow.Label,
-				Waiting:   false,
-			})
-			continue
-		}
-
-		// When waiting between runs, compute current round from PR reviews
-		round := 1
-		prs, _ := s.pullRequests(ctx, "open", false)
-		for _, pr := range prs {
-			if pr.HeadBranch == fmt.Sprintf("issue/%d", issueNum) {
-				round += pr.ChangesRequested
-				break
-			}
-		}
-
-		step, waiting := "waiting between rounds", true
-		if c, ok := checking[issueNum]; ok {
-			step, waiting = "post-implement checks at "+shortSHA(c.SHA), false
-		}
-		label := fmt.Sprintf("#%d · round %d/%d · %s", issueNum, round, maxRounds, step)
-		flows = append(flows, ActiveFlowInfo{
-			Issue:     issueNum,
-			Implement: flowRec.Implement,
-			Verify:    flowRec.Verify,
-			Round:     round,
-			MaxRounds: maxRounds,
-			Step:      step,
-			Label:     label,
-			Waiting:   waiting,
-		})
-	}
-
-	if flows == nil {
-		flows = []ActiveFlowInfo{}
-	}
-	sort.Slice(flows, func(i, j int) bool {
-		return flows[i].Issue < flows[j].Issue
-	})
-	return flows
 }
 
 // liveCheckRecords are the flows' post-implement checks running in this
@@ -726,7 +606,7 @@ func (s *Server) resolveRunsMeta(
 		seenIssues[issueNum] = true
 	}
 	for issueNum := range seenIssues {
-		if s.getActiveFlow(issueNum) != nil {
+		if s.activeFlow(issueNum) != nil {
 			cands := prsForIssue[issueNum]
 			if len(cands) > 0 && activity.PROpen(prsByIndex[cands[len(cands)-1]]) {
 				activeThreads[activity.ThreadKey(issueNum, cands[len(cands)-1], "")] = true
@@ -1269,4 +1149,38 @@ func (s *Server) orgAndRepo() (string, string) {
 		return "bottown", s.cfg.FullRepo
 	}
 	return org, repo
+}
+
+// activeFlow reads the CLI's status only while its flow lock is held.
+func (s *Server) activeFlow(issue int64) *runs.FlowStatusView {
+	_, repo := s.orgAndRepo()
+	dir := filepath.Join(s.cfg.RepoTop, ".bottown", "runs")
+	if _, held := runs.FlowHolder(dir, repo, issue); !held {
+		return nil
+	}
+	st := runs.FlowStatus(dir, repo, issue)
+	return &st
+}
+
+// ComputeActiveFlows returns held CLI flows, including those between runs.
+func (s *Server) ComputeActiveFlows(_ context.Context, liveRuns []LiveRunInfo) []ActiveFlowInfo {
+	_, repo := s.orgAndRepo()
+	out := []ActiveFlowInfo{}
+	for _, st := range runs.HeldFlows(filepath.Join(s.cfg.RepoTop, ".bottown", "runs"), repo) {
+		f := ActiveFlowInfo{Issue: st.Issue, Implement: st.Implement, Verify: st.Verify, Round: st.Round, MaxRounds: st.Rounds, Step: st.Step, Label: st.Detail, Waiting: true}
+		for _, r := range liveRuns {
+			if r.Flow != nil && r.Flow.Issue == st.Issue {
+				f.Round, f.MaxRounds, f.Step, f.Label, f.Waiting = r.Flow.Round, r.Flow.MaxRounds, r.Flow.Step, r.Flow.Label, false
+				break
+			}
+		}
+		for _, c := range s.liveCheckRecords() {
+			if c.Issue == st.Issue {
+				f.Step = "checking"
+				f.Label = fmt.Sprintf("#%d · checking", st.Issue)
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }

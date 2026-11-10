@@ -175,7 +175,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				Title:       fmt.Sprintf("PR !%d is ready to land", pr.Number),
 				Description: approvedDescription(a, pr.HeadSHA, approver) + ". Merging in Forgejo instead skips the checks at the combined tree.",
 				HeadSHA:     pr.HeadSHA,
-				Action:      &InboxAction{Label: "Land", Command: fmt.Sprintf("bottown merge-all %d", pr.Number)},
+				Action:      &InboxAction{Label: "Land", Command: suggestedCommand("land", "NUMBER", fmt.Sprint(pr.Number))},
 				Target:      fmt.Sprintf("!%d", pr.Number),
 				TargetURL:   prURL,
 				Created:     created,
@@ -354,7 +354,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
 				Action: &InboxAction{
 					Label:   "Clean up",
-					Command: "bottown run gc",
+					Command: suggestedCommand("gc"),
 				},
 				Created: r.Started,
 			})
@@ -379,7 +379,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 				TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
 				Action: &InboxAction{
 					Label:   "Clean up",
-					Command: "bottown run gc",
+					Command: suggestedCommand("gc"),
 				},
 				Created: sr.Expires,
 			})
@@ -404,7 +404,7 @@ func (s *Server) ComputeInbox(ctx context.Context) ([]InboxItem, error) {
 					TargetURL:   fmt.Sprintf("%s/%s", forgeURL, s.cfg.FullRepo),
 					Action: &InboxAction{
 						Label:   "Clean up",
-						Command: "bottown run gc --failed",
+						Command: suggestedCommand("gcFailed"),
 					},
 					Created: r.Started,
 				})
@@ -653,5 +653,5 @@ func inboxFlowCommand(issue int64, target string, records []serverapi.RunItem) s
 			verify, verifyTime = r.Actor, r.Created
 		}
 	}
-	return fmt.Sprintf("bottown flow %d --implement %s --verify %s", issue, implement, verify)
+	return suggestedCommand("flow", "NUMBER", fmt.Sprint(issue), "IMPLEMENT", implement, "VERIFY", verify)
 }

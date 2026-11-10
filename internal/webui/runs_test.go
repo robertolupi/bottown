@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -181,10 +180,7 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	}
 
 	// Active flow record for issue 51
-	flowRec := fmt.Sprintf(`{"issue":51,"implement":"agy","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
-	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-51.json"), []byte(flowRec), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	holdTestFlow(t, top, 51, "agy", "kimi", 3)
 
 	cfg := Config{
 		Instance: config.Instance{
@@ -277,16 +273,6 @@ func TestLastOutput(t *testing.T) {
 	}
 }
 
-// deadPID returns the PID of a process that has exited and been reaped.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-	return cmd.Process.Pid
-}
-
 // A flow's post-implement checks show in Live Runs while they run, with
 // the tail of their log as plain lines, and as the step of their flow
 // between runs; the run-log endpoint serves their log. A check of another
@@ -301,10 +287,7 @@ func TestRuns_LiveChecks(t *testing.T) {
 	if err := os.MkdirAll(runsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	flowRec := fmt.Sprintf(`{"issue":60,"implement":"agy","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
-	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-60.json"), []byte(flowRec), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	holdTestFlow(t, top, 60, "agy", "kimi", 3)
 	started := time.Now().Add(-2 * time.Minute)
 	hold := func(rec runs.CheckRecord, log string) {
 		t.Helper()
@@ -351,12 +334,6 @@ func TestRuns_LiveChecks(t *testing.T) {
 		t.Fatalf("live check = %+v", c)
 	}
 
-	flows := s.ComputeActiveFlows(ctx, nil)
-	if len(flows) != 1 || flows[0].Waiting || flows[0].Step != "post-implement checks at 1a2b3c4d5e" ||
-		flows[0].Label != "#60 · round 1/3 · post-implement checks at 1a2b3c4d5e" {
-		t.Fatalf("flow while checking = %+v", flows)
-	}
-
 	lines, ok, err := s.ComputeRunLog(ctx, id)
 	if err != nil || !ok || fmt.Sprint(lines) != fmt.Sprint(want) {
 		t.Fatalf("check log: %+v, %v, %v", lines, ok, err)
@@ -365,101 +342,6 @@ func TestRuns_LiveChecks(t *testing.T) {
 		if _, _, err := s.ComputeRunLog(ctx, bad); err == nil {
 			t.Errorf("log id %q accepted", bad)
 		}
-	}
-}
-
-func TestRuns_ActiveFlows(t *testing.T) {
-	fix := defaultRunsFixture()
-	now := time.Now().UTC()
-
-	// Issue 51 has a live verify run on PR 52. Issue 60 is between runs:
-	// its PR 61 has two REQUEST_CHANGES reviews, one dismissed, which
-	// both count, as in flow.countRounds, and reviews of other states,
-	// which do not.
-	fix.prs = []*sdk.PullRequest{
-		{Index: 52, State: sdk.StateOpen, Head: &sdk.PRBranchInfo{Ref: "issue/51", Sha: "11112222"}},
-		{Index: 61, State: sdk.StateOpen, Head: &sdk.PRBranchInfo{Ref: "issue/60", Sha: "33334444"}},
-	}
-	fix.reviews[52] = []*sdk.PullReview{
-		{ID: 1, State: sdk.ReviewStateRequestChanges, Submitted: now.Add(-30 * time.Minute)},
-	}
-	fix.reviews[61] = []*sdk.PullReview{
-		{ID: 2, State: sdk.ReviewStateRequestChanges, Dismissed: true, Submitted: now.Add(-50 * time.Minute)},
-		{ID: 3, State: sdk.ReviewStateComment, Submitted: now.Add(-40 * time.Minute)},
-		{ID: 4, State: sdk.ReviewStateRequestChanges, Submitted: now.Add(-20 * time.Minute)},
-		{ID: 5, State: sdk.ReviewStateApproved, Dismissed: true, Submitted: now.Add(-10 * time.Minute)},
-	}
-	fix.runs = []secrets.Run{
-		{
-			ID: "r-verify-1", Kind: "verify", Actor: "kimi", Family: "moonshot", Harness: "kimi",
-			Repo: "bottown", PR: 52, Created: now.Add(-5 * time.Minute), Expires: now.Add(55 * time.Minute),
-		},
-	}
-	_, port := newRunsFixtureServer(t, fix)
-
-	top := t.TempDir()
-	dir := filepath.Join(top, ".bottown")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeFlow := func(issue int64, rounds, pid int) string {
-		t.Helper()
-		p := filepath.Join(dir, fmt.Sprintf("flow-%d.json", issue))
-		rec := fmt.Sprintf(`{"issue":%d,"implement":"agy","verify":"kimi","rounds":%d,"pid":%d}`, issue, rounds, pid)
-		if err := os.WriteFile(p, []byte(rec), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	writeFlow(51, 3, os.Getpid())
-	writeFlow(60, 4, os.Getpid())
-	stale := writeFlow(70, 3, deadPID(t))
-	// A record with no PID is malformed: it is not active, and stopping
-	// it must not signal kill(-0), the UI's own process group.
-	noPID := writeFlow(80, 3, 0)
-
-	s, err := NewServer(Config{
-		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
-		RepoTop:  top,
-		FullRepo: "bottown/bottown",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	ctx := context.Background()
-	live, err := s.ComputeLiveRuns(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	flows := s.ComputeActiveFlows(ctx, live)
-	if len(flows) != 2 {
-		t.Fatalf("expected flows for #51 and #60, got %+v", flows)
-	}
-
-	f := flows[0]
-	if f.Issue != 51 || f.Waiting || f.Implement != "agy" || f.Verify != "kimi" ||
-		f.Round != 2 || f.MaxRounds != 3 || f.Step != "verifying with kimi" ||
-		f.Label != "#51 · round 2/3 · verifying with kimi" {
-		t.Fatalf("flow #51 should take its label from the live run, got %+v", f)
-	}
-
-	f = flows[1]
-	if f.Issue != 60 || !f.Waiting || f.Round != 3 || f.MaxRounds != 4 ||
-		f.Step != "waiting between rounds" || f.Label != "#60 · round 3/4 · waiting between rounds" {
-		t.Fatalf("flow #60 should be waiting in round 3/4, got %+v", f)
-	}
-
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale flow-70.json should be removed, stat err=%v", err)
-	}
-
-	if _, err := s.ExecuteStop(ctx, "flow-80"); err == nil || !strings.Contains(err.Error(), "no active flow for issue #80") {
-		t.Fatalf("stopping a flow without a PID should fail, got err=%v", err)
-	}
-	if _, err := os.Stat(noPID); err != nil {
-		t.Fatalf("flow-80.json should be left alone, stat err=%v", err)
 	}
 }
 
@@ -842,10 +724,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(top, ".bottown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	flowRec := fmt.Sprintf(`{"issue":50,"implement":"claude","verify":"agy","rounds":3,"pid":%d}`, os.Getpid())
-	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-50.json"), []byte(flowRec), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	holdTestFlow(t, top, 50, "agy", "kimi", 3)
 
 	s, err := NewServer(Config{
 		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},
@@ -978,112 +857,7 @@ func TestRuns_FlowThreadsAndScopedTimelines(t *testing.T) {
 	}
 }
 
-func TestActions_FlowCrossFamilyValidation(t *testing.T) {
-	fix := defaultRunsFixture()
-	// Two actors in the same family
-	fix.actors = []ActorDetail{
-		{Name: "claude-1", Family: "anthropic"},
-		{Name: "claude-2", Family: "anthropic"},
-		{Name: "agy", Family: "google"},
-	}
-
-	_, port := newRunsFixtureServer(t, fix)
-	cfg := Config{
-		Instance: config.Instance{
-			Name:       "prod",
-			ServerPort: port,
-			OwnerLogin: "rlupi",
-		},
-		RepoTop:  t.TempDir(),
-		FullRepo: "bottown/bottown",
-	}
-	s, err := NewServer(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	ctx := context.Background()
-
-	// 1. Same-family verifier refused upfront
-	_, err = s.ExecuteFlow(ctx, FlowRequest{
-		Issue:     50,
-		Implement: "claude-1",
-		Verify:    "claude-2", // Same family!
-	})
-	if err == nil || !strings.Contains(err.Error(), "same model family") {
-		t.Fatalf("expected same family error, got: %v", err)
-	}
-
-	// 2. Different family accepted
-	// Note: will fail to run binary if not found, but must pass validation
-	fakeScript := filepath.Join(cfg.RepoTop, "fake_bottown.sh")
-	_ = os.WriteFile(fakeScript, []byte("#!/bin/sh\nexit 0\n"), 0o755)
-	s.cfg.BottownPath = fakeScript
-
-	out, err := s.ExecuteFlow(ctx, FlowRequest{
-		Issue:     50,
-		Implement: "claude-1",
-		Verify:    "agy", // Different family!
-	})
-	if err != nil {
-		t.Fatalf("unexpected error starting flow: %v", err)
-	}
-	if !strings.Contains(out, "Flow started for issue #50") {
-		t.Fatalf("unexpected output: %s", out)
-	}
-}
-
-func TestActions_StopAndGC(t *testing.T) {
-	top := t.TempDir()
-	fakeScript := filepath.Join(top, "fake_bottown.sh")
-	script := `#!/bin/sh
-if [ "$1" = "-i" ] && [ "$3" = "run" ] && [ "$4" = "stop" ]; then
-    echo "run $5 stopped"
-    exit 0
-fi
-if [ "$1" = "-i" ] && [ "$3" = "run" ] && [ "$4" = "gc" ]; then
-    echo "cleaned up runs"
-    exit 0
-fi
-exit 1
-`
-	if err := os.WriteFile(fakeScript, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := Config{
-		Instance: config.Instance{
-			Name:       "prod",
-			ServerPort: 3031,
-			OwnerLogin: "rlupi",
-		},
-		RepoTop:     top,
-		FullRepo:    "bottown/bottown",
-		BottownPath: fakeScript,
-	}
-	s, err := NewServer(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	ctx := context.Background()
-
-	// Stop
-	out, err := s.ExecuteStop(ctx, "r-test-1")
-	if err != nil || !strings.Contains(out, "run r-test-1 stopped") {
-		t.Fatalf("expected run stopped, got out=%q, err=%v", out, err)
-	}
-
-	// GC
-	out, err = s.ExecuteGC(ctx, false)
-	if err != nil || !strings.Contains(out, "cleaned up runs") {
-		t.Fatalf("expected cleaned up runs, got out=%q, err=%v", out, err)
-	}
-}
-
-func TestEndpoints_RunsAndActions(t *testing.T) {
+func TestEndpoints_Runs(t *testing.T) {
 	fix := defaultRunsFixture()
 	now := time.Now().UTC()
 	fix.runs = []secrets.Run{
@@ -1115,18 +889,14 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 	_ = os.MkdirAll(runsDir, 0o700)
 	_ = os.WriteFile(filepath.Join(runsDir, "r-live-api.log"), []byte("starting task\ntask done\n"), 0o600)
 
-	fakeScript := filepath.Join(top, "fake_bottown.sh")
-	_ = os.WriteFile(fakeScript, []byte("#!/bin/sh\necho \"fake ok\"\nexit 0\n"), 0o755)
-
 	cfg := Config{
 		Instance: config.Instance{
 			Name:       "prod",
 			ServerPort: port,
 			OwnerLogin: "rlupi",
 		},
-		RepoTop:     top,
-		FullRepo:    "bottown/bottown",
-		BottownPath: fakeScript,
+		RepoTop:  top,
+		FullRepo: "bottown/bottown",
 	}
 	s, err := NewServer(cfg)
 	if err != nil {
@@ -1214,36 +984,6 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Issue 42") {
 		t.Fatalf("GET /api/issues/42/timeline: status %d, body %s", resp.StatusCode, body)
 	}
-
-	// 4. POST /api/actions/flow - same family refused (400)
-	resp, body = doReq(http.MethodPost, "/api/actions/flow", `{"issue":42,"implement":"claude","verify":"claude"}`)
-	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "same model family") {
-		t.Fatalf("expected 400 for same family flow, got %d: %s", resp.StatusCode, body)
-	}
-
-	// 5. POST /api/actions/flow - different family accepted (200)
-	resp, body = doReq(http.MethodPost, "/api/actions/flow", `{"issue":42,"implement":"claude","verify":"agy"}`)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Flow started") {
-		t.Fatalf("expected 200 for flow start, got %d: %s", resp.StatusCode, body)
-	}
-
-	// 6. POST /api/actions/run
-	resp, body = doReq(http.MethodPost, "/api/actions/run", `{"kind":"implement","target":42,"actor":"agy"}`)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Run (implement) started") {
-		t.Fatalf("expected 200 for run start, got %d: %s", resp.StatusCode, body)
-	}
-
-	// 7. POST /api/actions/stop
-	resp, body = doReq(http.MethodPost, "/api/actions/stop", `{"id":"r-live-api"}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for stop, got %d: %s", resp.StatusCode, body)
-	}
-
-	// 8. POST /api/actions/gc
-	resp, body = doReq(http.MethodPost, "/api/actions/gc", `{"failed":true}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for gc, got %d: %s", resp.StatusCode, body)
-	}
 }
 
 func TestHistoryTableScrollStyles(t *testing.T) {
@@ -1321,5 +1061,42 @@ func TestRunTarget(t *testing.T) {
 		if target != tc.target || targetURL != tc.wantURL {
 			t.Errorf("runTarget(%+v) = %q, %q; want %q, %q", tc.run, target, targetURL, tc.target, tc.wantURL)
 		}
+	}
+}
+
+func holdTestFlow(t *testing.T, top string, issue int64, implement, verify string, rounds int) {
+	t.Helper()
+	dir := filepath.Join(top, ".bottown", "runs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release, err := runs.HoldFlow(dir, "bottown", issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+	if err := runs.WriteFlowStatus(dir, "bottown", issue, runs.FlowStatusView{Issue: issue, PID: os.Getpid(), Implement: implement, Verify: verify, Rounds: rounds}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActiveFlowsUseCLILocks(t *testing.T) {
+	top := t.TempDir()
+	s, err := NewServer(Config{RepoTop: top, FullRepo: "bottown/bottown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	holdTestFlow(t, top, 51, "claude", "codex", 3)
+	// Old UI records and status files without held locks are ignored.
+	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-99.json"), []byte(fmt.Sprintf(`{"issue":99,"pid":%d}`, os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runs.WriteFlowStatus(filepath.Join(top, ".bottown", "runs"), "bottown", 99, runs.FlowStatusView{Issue: 99, PID: os.Getpid()}); err != nil {
+		t.Fatal(err)
+	}
+	flows := s.ComputeActiveFlows(t.Context(), nil)
+	if len(flows) != 1 || flows[0].Issue != 51 || flows[0].Implement != "claude" || flows[0].Verify != "codex" || !flows[0].Waiting {
+		t.Fatalf("held flows: %+v", flows)
 	}
 }

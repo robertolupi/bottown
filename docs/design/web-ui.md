@@ -18,7 +18,7 @@ verdict, start a follow-up run, merge. This design adds two things:
   first concrete form.
 - **A local web UI:** `bottown web ui` becomes a local HTTP server on the
   host that shows what is going on in one repository and its runs, and
-  offers the CLI's actions, the supervisor's included, as buttons.
+  shows commands to copy and run in the terminal.
 
 bottown will mostly host repositories other than itself, so nothing here
 assumes bottown's own tooling.
@@ -50,9 +50,8 @@ browser ──localhost, one-time token──▶ bottown web ui   (host, owner's
   starts it in the repository they want to work on, and starts another
   one for another repository. Nothing on the host records where
   checkouts are, and nothing needs to.
-- **The UI is a view plus actions.** It reads what only the host has and
-  calls the server's API as the owner for the rest. Its actions are the
-  CLI's actions, through the same Go code and the same checks.
+- **The UI is read-only, except for Refresh.** It reads what only the host has and
+  calls the server's API as the owner for the rest. It suggests CLI commands to copy.
 - **The server stays authoritative:** runs, keys, policy, the audit trail
   and the forge. Section 7 lists the read APIs it needs. The container's own
   page stays as a small health page (`bottown web health`).
@@ -210,7 +209,7 @@ or when one pushes no new commit; the owner then resolves them or starts
 an implement run.
 
 Flows are implement → verify only. Discuss runs stay a separate owner
-action (the UI offers it); a flow never starts one.
+action in the terminal; a flow never starts one.
 
 Every stop says why, on the issue as well as in the command's output, so
 the owner sees it in Forgejo and in the UI:
@@ -506,10 +505,10 @@ checkbox, in the expanded list, reveals them; the counts and the
 inbox-zero line follow the current filter.
 
 Each row links to the issue or PR in Forgejo and offers the matching
-bottown action (§5): Land the PR, re-run the flow, or end or clean up the
-run. **Land** starts a background landing with the Main policy: check and
-e2e at the combined tree, with a record, log and stop control under Live
-Runs. Merging in Forgejo instead skips these checks, as the item explains.
+command to copy (§5): land the PR with `bottown merge-all N`, re-run the
+flow, or clean up the run. A landing started with `bottown merge-all`
+shows on Now through its check items. Merging in Forgejo instead skips
+these checks, as the item explains.
 Issue-backed rows show the full issue title next to the reference.
 
 ### 4.2 Runs
@@ -596,7 +595,7 @@ in the terminal's ANSI palette, without escape sequences from the log. The
 launcher's and the flow's own lines print above the view too. An attended
 flow's merge prompt pauses the program and gives the terminal back for
 the answer. Ctrl+C interrupts the command as without the tail. Output that
-is not a terminal (piped, redirected, the web UI's background flows),
+is not a terminal (piped or redirected),
 `TERM=dumb`, interactive runs, and `bottown flow --unattended` keep the
 plain output: one line per step and the `log:` path.
 
@@ -918,8 +917,11 @@ clipboard copy, with text selection when clipboard access is unavailable.
 - Run pages: `bottown run show ID`.
 
 There are no start, stop, cleanup, pull, push or landing dialogs. Failed
-loads appear in a fixed notice visible while the page scrolls. Server action
-routes remain registered until the separate actions-removed change.
+loads appear in a fixed notice visible while the page scrolls. The only
+write route is `POST /api/refresh`, which fetches origin and
+keeps the matching-Origin check. The former `/api/actions/*` routes return
+404. The shared command templates are exported with concrete samples and
+validated against the CLI command tree, flags and required flags.
 
 ## 6. Data sources
 
@@ -1006,8 +1008,7 @@ The UI uses the server's existing API where it can. What changes:
   `GET /api/live?tail=N` (monitor-ui design §7). It returns:
 
   - `items`, the tiles, oldest first (by start, then id): every live
-    batch run (`GET /v1/runs?state=live`, landings from their
-    `land-<N>.json` records) and every live check group (its `.check`
+    batch run (`GET /v1/runs?state=live`) and every live check group (its `.check`
     record, held while the group runs, §4.2). Each has its `id`, `kind`
     (the run's kind, or `check`/`e2e` for a check group), `target` and
     `target_url` (a run's `runTarget`; a check group's issue, else its
@@ -1053,18 +1054,16 @@ The UI uses the server's existing API where it can. What changes:
   newest modification time among the files its tail is read from, a run's
   log and its live transcript (`runs.ReadLog` appends the transcript, and
   `runs.FollowTranscript` rewrites it only when it changes), a check
-  group's or landing's own log. It is omitted while none exists. Live's
+  group's own log. It is omitted while none exists. Live's
   items carry the same `last_output`, and their `quiet` is decided from it
   (§4.2).
 
-- **Landing.** **Land** posts the PR number and offered head SHA to
-  `POST /api/actions/land`. A background worker runs `land.Land` with the
-  Main policy (check and e2e at the combined tree). Its record and log
-  appear on Now as a tile; milestone child nodes show
-  their landing like their flow. The inbox warns that merging in Forgejo
-  instead skips the checks at the combined tree. Owner-only
-  `GET /v1/forge/pr/merge-base` still reports behind and conflict status;
-  the PR-first merge POST and inbox action are removed.
+- **Refresh.** `POST /api/refresh` is the UI's only write route. It fetches
+  origin and returns the status, with the same Origin check as before.
+- **Landing.** The inbox suggests `bottown merge-all N` in the terminal.
+  Its checks show on Now as check items; there is no UI landing worker,
+  landing record or landing kind. Flows are discovered through held CLI
+  locks and their status files, without UI-specific `flow-<N>.json` files.
 - **Run digests.** Ending a run (`DELETE /v1/runs/{id}`, from the launcher
   or from an agent's `run end`) can carry a digest: `summary` (cut to 4000
   bytes) and `usage`, whatever the host extracted, each field absent when
@@ -1139,8 +1138,8 @@ live, as a round) is decided in one place.
 
 - **Localhost only.** `bottown web ui` binds `127.0.0.1` on a random port
   (or `--port`), checks the `Host` header against it (against DNS
-  rebinding), and refuses state-changing requests whose `Origin` is not
-  its own (against CSRF).
+  rebinding). Its one write route, `POST /api/refresh`, refuses requests
+  whose `Origin` is not its own (against CSRF).
 - **One-time token.** The URL it opens carries a token that is exchanged,
   once, for an `HttpOnly`, `SameSite=Strict` session cookie. The session
   lives as long as the process: when `bottown web ui` exits, it is gone.
@@ -1150,18 +1149,14 @@ live, as a round) is decided in one place.
   bodies, handovers, logs. The UI escapes text, sanitizes the HTML produced
   from issue-description Markdown, and sets a strict Content-Security-Policy
   with no inline scripts, so text an agent controls cannot run in the page
-  that can start runs or push.
-- **Actions are the CLI's.** Each goes through the same Go code and checks
-  as its CLI command, and the server enforces policy regardless of who
-  calls. Repository-declared commands (after-pull steps) run only when the
-  owner clicks, after seeing them in full, and only from `main`'s
-  `.bottown.toml`.
+  that displays the data.
+- **Commands run in the terminal.** The UI cannot start or stop runs, land,
+  pull, push or execute repository-declared after-pull steps. Refresh only
+  changes remote-tracking refs by fetching origin.
 - **Logs stay on the host.** Transcripts can contain secrets. The UI shows
   them locally, and only the digest goes to the server.
-- **Flows outlive the UI.** A flow started from the UI is its own
-  background `bottown flow` process, with its output in `.bottown/`.
-  Closing the UI does not stop it; a restarted UI finds it through the
-  server's run records.
+- **Flows outlive the UI.** CLI flows are independent of the UI and are
+  discovered from their held locks and status files.
 
 ### 8.1 Previewing the UI in a run
 
@@ -1203,8 +1198,8 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   A fixture is decoded strictly into the Go types the API uses, and a test
   loads every one, so a renamed field fails the tests instead of showing
   as a blank. `default` exercises every view; `empty` is a repository with
-  nothing going on; `errors` has every error state. Actions do nothing and
-  succeed, unless the fixture's `actions` gives their answer. A change
+  nothing going on; `errors` has every error state. The preview has no action
+  answers; Refresh returns the fixture status. A change
   that shows something new adds it to the fixtures.
 - **Tests and people can change the state** while the page is open:
   `POST /api/preview/logs/RUN` appends lines to a run's log and live tail,
@@ -1214,7 +1209,7 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
 - **Same checks, no sign-in.** It binds `127.0.0.1`, checks `Host` and,
   on state-changing requests, `Origin`, and sets the same CSP as `bottown
   web ui`. There is no token: it serves only checked-in fixture data, and
-  its actions do nothing.
+  it serves no action routes.
 
 Runs never get a signed-in UI: a second kind of login, and a read-only
 mode on every endpoint, would cost security surface that preview, shot and
@@ -1238,8 +1233,7 @@ bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
   the capture. With neither, it takes the issues, issue-less PR threads
   and run logs the views link to, live work first, up to a cap (30 issues,
   20 logs), so popups and log views work in the preview; what it cannot
-  read it skips, saying so. `actions` stays empty: a preview action does
-  nothing.
+  read it skips, saying so. There is no `actions` section.
 - **It refuses to replace a fixture** without `--force`. It prints the
   path, and on stderr the count per section.
 - **A capture holds real data:** issue titles and bodies, timelines, log

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { suggestedCommand } from './commands';
   // Upstream and forge status (§4.3): the checkout against the forge and
   // origin, with pull, push and after-pull actions when they apply.
   import CommandCopy from './CommandCopy.svelte';
@@ -62,7 +63,7 @@
           <strong>Checkout is behind forge main.</strong>
           <p class="muted text-sm">Pull fast-forward changes merged in Forgejo.</p>
         </div>
-        <CommandCopy command={`git pull --ff-only bottown ${status.forge.default_branch}`} />
+        <CommandCopy command={suggestedCommand("pull", { BRANCH: status.forge.default_branch })} />
       </div>
     {/if}
 
@@ -73,7 +74,7 @@
           <strong>Local main is ahead of origin.</strong>
           <p class="muted text-sm">{status.upstream.ahead_count} commit(s) ready to push.</p>
         </div>
-        <CommandCopy command={`git push origin ${status.forge.default_branch}`} />
+        <CommandCopy command={suggestedCommand("push", { BRANCH: status.forge.default_branch })} />
       </div>
     {/if}
 

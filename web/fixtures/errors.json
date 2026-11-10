@@ -139,42 +139,5 @@
   ],
   "logs": {},
   "issues": {},
-  "timelines": {},
-  "actions": {
-    "pull": {
-      "success": false,
-      "output": "",
-      "error": "preview: pull failed (the errors fixture)"
-    },
-    "push": {
-      "success": false,
-      "output": "",
-      "error": "preview: push failed (the errors fixture)"
-    },
-    "after-pull": {
-      "success": false,
-      "output": "",
-      "error": "preview: after-pull failed (the errors fixture)"
-    },
-    "flow": {
-      "success": false,
-      "output": "",
-      "error": "preview: flow failed (the errors fixture)"
-    },
-    "run": {
-      "success": false,
-      "output": "",
-      "error": "preview: run failed (the errors fixture)"
-    },
-    "stop": {
-      "success": false,
-      "output": "",
-      "error": "preview: stop failed (the errors fixture)"
-    },
-    "gc": {
-      "success": false,
-      "output": "",
-      "error": "preview: gc failed (the errors fixture)"
-    }
-  }
+  "timelines": {}
 }

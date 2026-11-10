@@ -33,7 +33,7 @@ type CaptureOptions struct {
 
 // Capture computes what the web UI's API answers now, with the same code
 // as its handlers, as a Fixture `bottown web preview` can serve. Its
-// actions are empty: a preview action does nothing. The returned warnings
+// The returned warnings
 // name what the views link to but could not be read; an issue or log
 // asked for by name that cannot be read is an error.
 func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []string, error) {
@@ -65,7 +65,6 @@ func (s *Server) Capture(ctx context.Context, opts CaptureOptions) (*Fixture, []
 		Logs:        map[string][]runs.LogLine{},
 		Issues:      map[string]IssueDetails{},
 		Timelines:   map[string]IssueTimeline{},
-		Actions:     map[string]ActionResult{},
 	}
 	// The preview serves the fixture's own inbox, live runs and checks and
 	// active flows in the status: keep one copy.

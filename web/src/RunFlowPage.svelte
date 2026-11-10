@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { suggestedCommand } from './commands';
   import CommandCopy from './CommandCopy.svelte';
   // One page for a run (`#/run/<id>`) and for a flow (`#/flow/<issue>`),
   // design §4. It shows target, title, kind, round, actor, model, elapsed,
@@ -402,7 +403,7 @@
 
     const kindText = headerKind.toLowerCase();
 
-    if (stepText.includes('land') || stepText.includes('merge') || kindText === 'land') return 3;
+    if (stepText.includes('land') || stepText.includes('merge')) return 3;
     if (stepText.includes('verif') || kindText === 'verify') return 2;
     if (stepText.includes('check') || kindText.includes('check')) return 1;
     if (stepText.includes('implement') || kindText === 'implement') return 0;
@@ -440,8 +441,8 @@
 
   // CLI command
   let commandText = $derived.by<string>(() => {
-    if (route.kind === 'run') return `bottown run show ${route.id}`;
-    if (route.kind === 'flow') return `bottown flow ${route.issue}`;
+    if (route.kind === 'run') return suggestedCommand("run", { ID: route.id });
+    if (route.kind === 'flow') return suggestedCommand("flow", { NUMBER: route.issue, IMPLEMENT: "ACTOR", VERIFY: "ACTOR" });
     return '';
   });
 
