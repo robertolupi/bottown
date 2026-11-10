@@ -23,6 +23,11 @@ full, then only the document, or section, your work needs.
   base-first landing commit, the checks at it, a fast-forward-only merge
   as `manager`), `bottown merge-all`, and why the flow no longer merges a
   base into a PR. Its status line says what is built.
+- [The monitor UI](design/monitor-ui.md): read for where the UI is going:
+  a read-only live view of log tails (Now), one page per run and flow,
+  commands to copy in place of buttons, and `bottown ui`, which serves the
+  web UI and shows the same view in the terminal. Nothing of it is built
+  yet; `design/web-ui.md` describes the UI as it is.
 - [Sizing issues](design/sizing.md): read for the sizing guide, how
   implement runs size an unsized issue (`issue_size`), and `bottown
   estimate`. Its status line says what is built.
