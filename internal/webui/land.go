@@ -119,7 +119,7 @@ func (s *Server) liveLandings() []LiveRunInfo {
 		if tail == nil {
 			tail = []runs.LogLine{}
 		}
-		live = append(live, LiveRunInfo{ID: id, Target: fmt.Sprintf("!%d", n), TargetURL: fmt.Sprintf("%s/%s/pulls/%d", s.cfg.Instance.ForgejoURL(), s.cfg.FullRepo, n), PR: n, Issue: rec.Issue, Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(time.Since(rec.StartedAt)), LogTail: tail, Denials: []Denial{}})
+		live = append(live, LiveRunInfo{ID: id, Target: fmt.Sprintf("!%d", n), TargetURL: fmt.Sprintf("%s/%s/pulls/%d", s.cfg.Instance.ForgejoURL(), s.cfg.FullRepo, n), PR: n, Issue: rec.Issue, Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(time.Since(rec.StartedAt)), LogTail: tail, LastOutput: lastOutput(s.landingPath(n, ".log")), Denials: []Denial{}})
 	}
 	return live
 }

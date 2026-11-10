@@ -12,6 +12,7 @@ test('formatElapsed counts minutes and padded seconds since created', () => {
   assert.equal(formatElapsed(created, at(425)), '7m 05s');
   assert.equal(formatElapsed(created, at(-5)), '0m 00s', 'never negative');
   assert.equal(formatElapsed('', at(5)), '');
+  assert.equal(formatElapsed(created, at(192 * 60 + 7)), '3h 12m', 'hours past an hour');
 });
 
 test('formatUsage joins tokens, cost and turns', () => {

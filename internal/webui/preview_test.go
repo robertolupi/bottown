@@ -161,6 +161,10 @@ func TestPreviewRoutes(t *testing.T) {
 	if want := tail(fx.Logs[id], liveTailLines); len(st.LiveRuns[0].LogTail) != len(want) || st.LiveRuns[0].LogTail[len(want)-1] != want[len(want)-1] {
 		t.Errorf("log tail of %s: %v", id, st.LiveRuns[0].LogTail)
 	}
+	// The fixture's last output reaches the UI, for Now's quiet tiles.
+	if want := fx.LiveRuns[0].LastOutput; want == nil || st.LiveRuns[0].LastOutput == nil || !st.LiveRuns[0].LastOutput.Equal(*want) {
+		t.Errorf("last_output of %s: %v, want %v", id, st.LiveRuns[0].LastOutput, want)
+	}
 
 	var live struct {
 		LiveRuns    []LiveRunInfo    `json:"live_runs"`

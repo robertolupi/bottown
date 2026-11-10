@@ -157,7 +157,7 @@ random id per check, so two checks at the same head (overlapping flows)
 neither share nor overwrite a worktree or log; a check removes the check
 worktrees whose record is no longer held (what interrupted checks left),
 and a resumed flow cites the newest log at H of a check that has ended.
-Live Runs and the terminal tail show the checks with a live tail of their
+Now and the terminal tail show the checks with a live tail of their
 log, like a run (§4.2).
 
 - **Passed:** the verify run starts, and its prompt says the checks passed
@@ -468,7 +468,7 @@ views.
 
 | Tab | Route | Shows |
 |---|---|---|
-| Now | `#/now` (the default) | Live Runs (§4.2) and the Owner Inbox (§4.1) |
+| Now | `#/now` (the default) | Needs you, the owner inbox (§4.1), above Live, a wall of live tails (§4.2) |
 | History | `#/history` | Run History (§4.2) |
 | Milestones | `#/milestones` | each Implementation Epic's dependency DAG ([milestones design](milestones.md) §2.7) |
 | Timeline | `#/timeline` | the runs of a time window in lanes (§4.6) |
@@ -495,9 +495,15 @@ be recomputed.
 | Discuss answer | a discuss run answered on an issue (the discussant's last comment by the run's end), and the owner has not commented there since | the owner comments, or closes the issue |
 | Actor-filed issue | an actor filed an issue the owner has not triaged: not queued, no milestone, not closed | any of those |
 
+On Now the inbox is **Needs you**, one line above Live: the counts by
+kind ("2 ready to land · 1 stopped flow · 1 conflict"), and an **expand**
+control that shows the items in place. Whether it is expanded is kept in
+the browser's `localStorage` (a browser that refuses storage starts
+collapsed and still toggles). Inbox zero is one muted line.
+
 Actor-filed issues are hidden by default. The **Show actor-filed issues**
-checkbox reveals them; the inbox count and inbox-zero state follow the
-current filter.
+checkbox, in the expanded list, reveals them; the counts and the
+inbox-zero line follow the current filter.
 
 Each row links to the issue or PR in Forgejo and offers the matching
 bottown action (§5): Land the PR, re-run the flow, or end or clean up the
@@ -508,12 +514,42 @@ Issue-backed rows show the full issue title next to the reference.
 
 ### 4.2 Runs
 
-**Live.** Active runs: target, issue title, kind, actor and family, batch or
-interactive, and elapsed time against the timeout. Runs of one flow are
-grouped under it ("#51 · round 2/3 · verifying with kimi"). A batch run
-shows a **live tail of its log**, readable rather than raw JSON (assistant
-text and tool calls, one line each), refreshed while it runs; the UI is
-on the host, so it reads `.bottown/runs/<id>.log` directly. Each line
+**Now.** The page header carries three chips: health ("✓ healthy", or "N
+problems", counting the Health Checklist's failing items: missing agent
+instructions, an unprotected main, a repository settings error, a CLI and
+server version mismatch, outdated harness commands), upstream (the default
+branch against origin: "main · up to date", "main · 1 ahead", "main · 2
+behind"), both linking to `#/repo`, with **Refresh** beside the upstream
+chip; and freshness, "live · 2s ago" from the last successful live poll
+(or status load), which turns to "stale · 40s" after 30 seconds without
+one. A failed poll is not ignored: its error is the chip's tooltip.
+
+Below Needs you (§4.1), **Live** is a summary ("5 running · 1 quiet · 1
+waiting · 1 interactive"), the Start Flow, Start Run and Clean up buttons,
+and a grid of **tiles** (`repeat(auto-fill, minmax(420px, 1fr))`, one
+column on a narrow screen): one per live batch run, landing included, and
+per live check group, ordered by start time and never reordered. A tile
+has a two-line header, the target and title, then the kind with the
+flow's round ("verify 2/3"), the actor, elapsed time against the limit
+("12m/1h 0m"), the denials count ("1 denied"), and the time since its
+**last output**; below, a fixed-height tail of its last lines, as the live
+tail renders them without the filter bar. A click anywhere on the tile
+opens its page, `#/run/<id>`. Last output counts from `last_output` (§7),
+or from the start when there is none yet, every second; at five minutes
+(`quietAfterMs` in `web/src/now.ts`) it reads "no output for 6m" in the
+warning colour and the tile gets a warning border: the tile is **quiet**.
+Under the grid, one-line **rows** for what is live but has no tail: an
+active flow with no live run or check, with its round, what it waits for
+and how long since the last run on its issue ended, linking
+`#/flow/<issue>`; and an interactive run, linking `#/run/<id>`. Rows are
+never quiet. Last, **Just ended** names up to five history threads whose
+last run ended in the past hour, newest first, each a link to its page.
+Durations past an hour read in hours ("3h 12m").
+
+**Live tail.** A batch run's tail, readable rather than raw JSON
+(assistant text and tool calls, one line each), refreshes while it runs;
+the UI is on the host, so it reads `.bottown/runs/<id>.log` directly, with
+the live transcript (`runs.ReadLog`). Each line
 carries a kind (`text`, `tool`, `output`, `error`, `status`, or `plain`
 for harnesses whose parts are not told apart yet) and, for a tool call,
 the tool's name, class (`shell`, `read`, `edit`, `search`, `forge`,
@@ -527,13 +563,12 @@ header. Both also link to `GET /api/runs/{id}/log?raw=1`, which serves the
 complete original log as redacted plain text for diagnosis. Encoded
 attachment payloads are elided from both the rendered and raw views.
 
-A flow's **post-implement checks** (§3.2) are not a run, but Live Runs
+A flow's **post-implement checks** (§3.2) are not a run, but Now
 shows them while they run, as `live_checks` in `GET /api/status` and `GET
 /api/runs?state=live`: the issue and PR, the head, the commands, elapsed
 time against the flow's `--check-timeout`, and the live tail of their log
-in plain lines. A check sits under its flow when the UI started that flow,
-whose step then reads "post-implement checks at <sha>", and on its own
-otherwise. Its id, `flow-<issue>-<sha>-<check>.e2e`, names its log for `GET
+in plain lines, each check group a tile; the flow's step reads
+"post-implement checks at <sha>" while they run. Its id, `flow-<issue>-<sha>-<check>.e2e`, names its log for `GET
 /api/runs/{id}/log` and the raw link.
 
 **Terminal tail.** `bottown flow`, and a batch `bottown run implement`,
@@ -562,7 +597,7 @@ is not a terminal (piped, redirected, the web UI's background flows),
 `TERM=dumb`, interactive runs, and `bottown flow --unattended` keep the
 plain output: one line per step and the `log:` path.
 
-Issue references in Live Runs, Run History and Owner Inbox show the issue
+Issue references in Run History and the Owner Inbox show the issue
 title and Markdown description in a popup on hover or keyboard focus. The
 browser loads `GET /api/issues/{number}` on first display or interaction,
 sharing and caching concurrent and completed reads; a failed read affects
@@ -641,8 +676,8 @@ do not imply readiness. Missing or read-failed data remains explicitly neutral
 and screen-reader prefix so it is accessible without color, consistent with
 Inbox and flow stop reasons.
 
-**Denials.** A live run's card and a run's page (`#/run/<id>`) list
-the operations the server's policy refused the run (denied or rejected),
+**Denials.** A live run's tile counts them, and a run's page
+(`#/run/<id>`) lists the operations the server's policy refused the run (denied or rejected),
 including those outside its repository: when, the request or operation,
 the rule, and why. History marks a run with denials with a count. They
 come from `GET /v1/audit` (§7); while the server cannot say,
@@ -899,8 +934,8 @@ session's transcript to its log (`crush session last --json`, if crush
 created that session during the run), as JSON lines: the session's meta,
 then each message. While the run goes on, the launcher exports the
 transcript every 3 seconds into `<id>.transcript` beside the log,
-replacing it whole; the tail reads it after the log, so Live Runs follows
-the session as it grows, and the launcher removes it before appending the
+replacing it whole; the tail reads it after the log, so Now's tile follows
+the session as it grows (and its `last_output` moves with it), and the launcher removes it before appending the
 final transcript. Its lines are typed: assistant text, tool calls with
 their class, tool results crush marks as errors, commands whose output
 ends `Exit code N` with N non-zero, and finishes other than a normal end
@@ -914,10 +949,18 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
+- **Last output.** Each of `live_runs` and `live_checks` (in `GET
+  /api/status` and `GET /api/runs?state=live`) carries `last_output`: the
+  newest modification time among the files its tail is read from, a run's
+  log and its live transcript (`runs.ReadLog` appends the transcript, and
+  `runs.FollowTranscript` rewrites it only when it changes), a check
+  group's or landing's own log. It is omitted while none exists. Now's
+  tiles count their last output and quiet from it (§4.2).
+
 - **Landing.** **Land** posts the PR number and offered head SHA to
   `POST /api/actions/land`. A background worker runs `land.Land` with the
   Main policy (check and e2e at the combined tree). Its record and log
-  appear under Live Runs with a stop control; milestone child nodes show
+  appear on Now as a tile; milestone child nodes show
   their landing like their flow. The inbox warns that merging in Forgejo
   instead skips the checks at the combined tree. Owner-only
   `GET /v1/forge/pr/merge-base` still reports behind and conflict status;

@@ -175,6 +175,10 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(runsDir, "r-verify-1.log"), []byte(logContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	logWritten := now.Add(-3 * time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(runsDir, "r-verify-1.log"), logWritten, logWritten); err != nil {
+		t.Fatal(err)
+	}
 
 	// Active flow record for issue 51
 	flowRec := fmt.Sprintf(`{"issue":51,"implement":"agy","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
@@ -223,6 +227,9 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if !strings.Contains(r.Flow.Label, "#51 · round 2/3 · verifying with kimi") {
 		t.Fatalf("unexpected flow label: %q", r.Flow.Label)
 	}
+	if r.LastOutput == nil || !r.LastOutput.Equal(logWritten) {
+		t.Fatalf("last_output = %v, want the log's mtime %v", r.LastOutput, logWritten)
+	}
 	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LineTool, Tool: "Bash", ToolClass: runs.ToolShell, State: "running", Text: "Bash: make check", Parameters: "{\n  \"command\": \"make check\"\n}"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LineText, Text: "Running checks now"}) {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
@@ -231,6 +238,42 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if len(r.Denials) != 3 || r.Denials[0].Rule != "issue-dependencies" ||
 		r.Denials[1].Path != "/repos/bottown/other/issues/1/comments" || r.Denials[2].Rule != "unclean-path" {
 		t.Fatalf("expected the run's three refusals, got %+v", r.Denials)
+	}
+}
+
+// A tile's last output is the newest of its log and its live transcript,
+// so a run whose log is old but whose transcript the launcher keeps
+// rewriting is not quiet; with neither file there is none.
+func TestLastOutput(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "r-1.log")
+	transcript := filepath.Join(dir, "r-1"+runs.LiveTranscriptSuffix)
+	if got := lastOutput(logPath, transcript); got != nil {
+		t.Fatalf("no files: last_output = %v, want none", got)
+	}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.WriteFile(logPath, []byte("started\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastOutput(logPath, transcript); got == nil || !got.Equal(old) {
+		t.Fatalf("log only: last_output = %v, want %v", got, old)
+	}
+	fresh := time.Now().Add(-10 * time.Second).Truncate(time.Second)
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(transcript, fresh, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastOutput(logPath, transcript); got == nil || !got.Equal(fresh) {
+		t.Fatalf("stale log, fresh transcript: last_output = %v, want the transcript's %v", got, fresh)
+	}
+	b, err := json.Marshal(LiveRunInfo{})
+	if err != nil || strings.Contains(string(b), "last_output") {
+		t.Fatalf("a run without output marshals last_output: %s, %v", b, err)
 	}
 }
 
@@ -299,6 +342,9 @@ func TestRuns_LiveChecks(t *testing.T) {
 		t.Fatalf("live checks = %+v", checks)
 	}
 	c := checks[0]
+	if c.LastOutput == nil || time.Since(*c.LastOutput) > time.Minute {
+		t.Fatalf("check last_output = %v, want its log's recent mtime", c.LastOutput)
+	}
 	want := []runs.LogLine{{Kind: runs.LinePlain, Text: "==> [check] make check"}, {Kind: runs.LinePlain, Text: "=== RUN   TestE2E"}}
 	if c.ID != id || c.Group != "check" || c.Issue != 60 || c.IssueTitle != "Add the thing" || c.PR != 61 || !strings.HasSuffix(c.PRURL, "/bottown/bottown/pulls/61") ||
 		c.Timeout != formatDuration(time.Hour) || len(c.Commands) != 1 || fmt.Sprint(c.LogTail) != fmt.Sprint(want) {
@@ -1238,8 +1284,9 @@ func TestOwnerInboxScrollStyles(t *testing.T) {
 	}
 }
 
-func TestOverviewOrdersLiveRunsFirst(t *testing.T) {
-	// The overview shows Live Runs above the Owner Inbox.
+func TestOverviewOrdersNeedsYouFirst(t *testing.T) {
+	// Now shows Needs you (the Owner Inbox) above the Live tiles, so both
+	// are in the first screen (monitor-ui design §3).
 	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "App.svelte"))
 	if err != nil {
 		t.Fatalf("read App.svelte: %v", err)
@@ -1247,8 +1294,8 @@ func TestOverviewOrdersLiveRunsFirst(t *testing.T) {
 	src := string(data)
 	liveIdx := strings.Index(src, "<LiveRuns")
 	inboxIdx := strings.Index(src, "<OwnerInbox")
-	if liveIdx < 0 || inboxIdx < 0 || liveIdx > inboxIdx {
-		t.Errorf("expected LiveRuns before OwnerInbox in App.svelte (live %d, inbox %d)", liveIdx, inboxIdx)
+	if liveIdx < 0 || inboxIdx < 0 || inboxIdx > liveIdx {
+		t.Errorf("expected OwnerInbox before LiveRuns in App.svelte (inbox %d, live %d)", inboxIdx, liveIdx)
 	}
 }
 

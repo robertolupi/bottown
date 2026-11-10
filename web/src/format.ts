@@ -1,12 +1,14 @@
 import type { UsageInfo } from './types';
 
-// A run's elapsed time since createdIso, as of now (ms): "7m 05s".
+// A run's elapsed time since createdIso, as of now (ms): "7m 05s", and
+// hours past an hour: "3h 12m".
 export function formatElapsed(createdIso: string, now: number): string {
   if (!createdIso) return '';
   const start = new Date(createdIso).getTime();
   const diffSec = Math.max(0, Math.floor((now - start) / 1000));
   const m = Math.floor(diffSec / 60);
   const s = diffSec % 60;
+  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
   return `${m}m ${s < 10 ? '0' : ''}${s}s`;
 }
 

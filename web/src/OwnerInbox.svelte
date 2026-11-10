@@ -1,9 +1,12 @@
 <script lang="ts">
-  // The owner inbox (§4.1): what waits on the owner in this repository,
-  // each item with a link and, for some, an action (gc, stop) that opens
-  // its confirmation dialog.
+  // Needs you (§4.1, monitor-ui design §3): what waits on the owner in
+  // this repository, as one line of counts by kind that expands in place
+  // to the items, each with a link and, for some, an action (gc, stop,
+  // land) that opens its confirmation dialog. Whether it is expanded is
+  // remembered in localStorage.
   import type { InboxItem } from './types';
   import { filterInboxItems, resolveInboxAction } from './state';
+  import { inboxCounts, loadInboxExpanded, saveInboxExpanded } from './now';
   import IssueReference from './IssueReference.svelte';
   import TargetLink from './TargetLink.svelte';
 
@@ -17,40 +20,46 @@
 
   let { inbox, inboxError, onGC, onStop, onLand }: Props = $props();
   let showActorFiled = $state(false);
+  let expanded = $state(loadInboxExpanded());
   let visibleInbox = $derived(filterInboxItems(inbox, showActorFiled));
+  let counts = $derived(inboxCounts(visibleInbox));
+  // Actor-filed issues the filter hides: the expanded list offers them.
+  let hiddenFiled = $derived((inbox ?? []).length - visibleInbox.length);
+
+  function toggle() {
+    expanded = !expanded;
+    saveInboxExpanded(expanded);
+  }
 </script>
 
-<section class="card full-width">
-  <div class="card-header">
-    <div class="card-header-left">
-      <h2>Owner Inbox</h2>
-      {#if inboxError}
-        <span class="badge badge-error">Error</span>
-      {:else if visibleInbox.length > 0}
-        <span class="badge badge-warning">{visibleInbox.length} item{visibleInbox.length > 1 ? 's' : ''}</span>
-      {:else}
-        <span class="badge badge-success">Inbox zero</span>
-      {/if}
-    </div>
-    <div class="card-header-right">
-      <label class="muted">
-        <input type="checkbox" bind:checked={showActorFiled} />
-        Show actor-filed issues
-      </label>
-    </div>
+<section class="card full-width needs-you" aria-label="Needs you">
+  <div class="needs-you-line">
+    <h2>Needs you</h2>
+    {#if inboxError}
+      <span class="badge badge-error">Failed to load inbox: {inboxError}</span>
+    {:else if counts.length === 0}
+      <span class="muted inbox-zero-line">Nothing waiting on you.</span>
+    {:else}
+      <span class="needs-you-counts">
+        {#each counts as c (c.kind)}
+          <span class="badge badge-{c.tone}" data-kind={c.kind}>{c.label}</span>
+        {/each}
+      </span>
+    {/if}
+    {#if !inboxError && (visibleInbox.length > 0 || hiddenFiled > 0)}
+      <button class="btn btn-sm btn-secondary needs-you-toggle" aria-expanded={expanded} onclick={toggle}>
+        {expanded ? 'collapse ▴' : 'expand ▾'}
+      </button>
+    {/if}
   </div>
 
+  {#if expanded && !inboxError && (visibleInbox.length > 0 || hiddenFiled > 0)}
   <div class="card-body">
-    {#if inboxError}
-      <div class="banner banner-error">
-        <span>Failed to load inbox: {inboxError}</span>
-      </div>
-    {:else if visibleInbox.length === 0}
-      <div class="inbox-zero">
-        <span class="inbox-zero-icon">✓</span>
-        <span>Nothing waiting on the owner in this repository.</span>
-      </div>
-    {:else}
+    <label class="muted actor-filed-toggle">
+      <input type="checkbox" bind:checked={showActorFiled} />
+      Show actor-filed issues
+    </label>
+    {#if visibleInbox.length > 0}
       <div class="inbox-list">
         {#each visibleInbox as item (item.id)}
           <div class="inbox-item">
@@ -115,9 +124,43 @@
       </div>
     {/if}
   </div>
+  {/if}
 </section>
 
 <style>
+  .needs-you-line {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+
+  .needs-you-line h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .needs-you-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .inbox-zero-line {
+    flex: 1;
+  }
+
+  .needs-you-toggle {
+    margin-left: auto;
+  }
+
+  .actor-filed-toggle {
+    display: block;
+    margin-bottom: 12px;
+  }
+
   .inbox-list {
     display: flex;
     flex-direction: column;

@@ -187,6 +187,8 @@ export interface LiveRunInfo {
   timeout: string;
   flow?: FlowInfo;
   log_tail: LogLine[];
+  // When it last wrote its log or live transcript; absent before either.
+  last_output?: string;
   denials: Denial[];
 }
 
@@ -209,6 +211,7 @@ export interface LiveCheckInfo {
   elapsed: string;
   timeout?: string; // the flow's --check-timeout
   log_tail: LogLine[];
+  last_output?: string; // its log's modification time; absent before it has one
 }
 
 export interface Denial {

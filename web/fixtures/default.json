@@ -264,7 +264,8 @@
         "label": "#42 · round 1/3 · implementing with claude"
       },
       "log_tail": [],
-      "denials": []
+      "denials": [],
+      "last_output": "2026-11-02T10:42:56Z"
     },
     {
       "id": "r-9c8d7e6f",
@@ -305,7 +306,8 @@
           "rule": "role",
           "detail": "verify runs cannot push"
         }
-      ]
+      ],
+      "last_output": "2026-11-02T10:41:00Z"
     },
     {
       "id": "r-0f1e2d3c",
@@ -349,7 +351,8 @@
         }
       ],
       "denials": [],
-      "issue_title": "API keys per client"
+      "issue_title": "API keys per client",
+      "last_output": "2026-11-02T10:42:30Z"
     }
   ],
   "active_flows": [
@@ -410,7 +413,8 @@
       "created": "2026-11-05T11:52:00Z",
       "elapsed": "4m 05s",
       "timeout": "60m",
-      "log_tail": []
+      "log_tail": [],
+      "last_output": "2026-11-05T11:55:10Z"
     },
     {
       "id": "flow-64-9e8d7c6b5a.check",

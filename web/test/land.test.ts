@@ -15,6 +15,9 @@ test('approved behind candidate offers Land and explains the combined checks', (
   const calls: unknown[] = [];
   const view = render(OwnerInbox, { inbox: [candidate], inboxError: undefined, onGC: () => {}, onStop: () => {}, onLand: (number: number, head: string) => calls.push([number, head]) });
   try {
+    // Needs you starts collapsed; its items are in the expanded list.
+    view.target.querySelector<HTMLButtonElement>('.needs-you-toggle')!.click();
+    flushSync();
     assert.match(view.target.textContent!, /ready to land/);
     assert.match(view.target.textContent!, /skips the checks at the combined tree/);
     const buttons = [...view.target.querySelectorAll('button')];
@@ -24,16 +27,16 @@ test('approved behind candidate offers Land and explains the combined checks', (
   } finally { view.unmount(); }
 });
 
-test('a landing in progress renders under Live Runs with its log and stop control', () => {
+test('a landing in progress is a tile in Live with its log, opening its page', () => {
   const landing = fixture.live_runs.find((r: any) => r.kind === 'land');
-  const stops: string[] = [];
-  const view = render(LiveRuns, { liveRuns: [landing], liveChecks: [], activeFlows: [], issuesLink: '', now: Date.now(), onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {}, onStop: (id: string) => stops.push(id) });
+  const view = render(LiveRuns, { liveRuns: [landing], liveChecks: [], activeFlows: [], historyRuns: [], threads: [], now: Date.now(), onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {} });
   try {
-    assert.match(view.target.textContent!, /land/);
-    assert.match(view.target.textContent!, /Running checks at the landing commit/);
-    [...view.target.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Stop')!.click();
-    assert.deepEqual(stops, ['land-59']);
-  } finally { view.unmount(); }
+    const tile = view.target.querySelector<HTMLElement>('.now-tile')!;
+    assert.match(tile.textContent!, /land/);
+    assert.match(tile.textContent!, /Running checks at the landing commit/);
+    tile.click();
+    assert.equal(location.hash, '#/run/land-59');
+  } finally { view.unmount(); location.hash = ''; }
 });
 
 test('stopping a landing explains that the PR may remain unmerged', () => {
