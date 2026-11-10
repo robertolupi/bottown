@@ -2,80 +2,44 @@
   // One tile of Now (monitor-ui design §3): a live batch run or check
   // group, its two-line header, the time since its last output, and a
   // fixed-height tail of its log. A click anywhere opens its page.
-  import type { NowTile } from './now';
-  import { formatSpan, lastOutputStatus } from './now';
+  import type { LiveItem } from './types';
+  import { lastOutputText, tileMeta } from './now';
   import { runRouteHash } from './routes';
   import LogLineView from './LogLineView.svelte';
 
   // The lines a tile shows; its height fits them, so it never jumps.
   const tailLines = 8;
 
-  let { tile, now }: { tile: NowTile; now: number } = $props();
+  let { item, now }: { item: LiveItem; now: number } = $props();
 
-  let item = $derived(tile.kind === 'run' ? tile.run : tile.check);
-  let last = $derived(lastOutputStatus(item, now));
-  let lines = $derived((item.log_tail ?? []).slice(-tailLines));
-  let elapsed = $derived(formatSpan(now - new Date(tile.created).getTime()));
-
-  let target = $derived.by(() => {
-    if (tile.kind === 'check') {
-      const c = tile.check;
-      return c.issue ? `#${c.issue}` : c.pr ? `!${c.pr}` : c.id;
-    }
-    return tile.run.target;
-  });
-  let title = $derived(tile.kind === 'run' ? tile.run.issue_title || tile.run.pr_title : tile.check.issue_title);
-
-  // The run's limit: its key's lifetime, else what the server reports.
-  let limit = $derived.by(() => {
-    if (tile.kind === 'check') return tile.check.timeout;
-    const r = tile.run;
-    const span = new Date(r.expires).getTime() - new Date(r.created).getTime();
-    return span > 0 ? formatSpan(span) : r.timeout;
-  });
-
-  let meta = $derived.by(() => {
-    const parts: string[] = [];
-    if (tile.kind === 'check') {
-      const c = tile.check;
-      parts.push(c.group === 'check' ? 'checks' : 'checks e2e');
-      if (c.pr) parts.push(`!${c.pr}`);
-      parts.push(c.sha.slice(0, 7));
-    } else {
-      const r = tile.run;
-      parts.push(r.flow ? `${r.kind} ${r.flow.round}/${r.flow.max_rounds}` : r.kind);
-      parts.push(r.actor);
-    }
-    parts.push(limit ? `${elapsed}/${limit}` : elapsed);
-    return parts.join(' · ');
-  });
-
-  let denials = $derived(tile.kind === 'run' ? tile.run.denials?.length ?? 0 : 0);
+  let last = $derived(lastOutputText(item, now));
+  let lines = $derived((item.tail ?? []).slice(-tailLines));
+  let meta = $derived(tileMeta(item, now));
 
   function open() {
-    location.hash = runRouteHash(tile.id);
+    location.hash = runRouteHash(item.id);
   }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events (Enter is handled by App's one keydown listener, so it is not handled here) -->
 <div
   class="now-tile"
-  class:quiet={last.quiet}
+  class:quiet={item.quiet}
   role="link"
   tabindex="0"
-  data-id={tile.id}
-  data-nav={tile.id}
+  data-id={item.id}
+  data-nav={item.id}
   onclick={open}
 >
   <div class="tile-head">
     <div class="tile-line">
-      <strong class="tile-target">{target}</strong>
-      {#if title}<span class="tile-title">{title}</span>{/if}
+      <strong class="tile-target">{item.target}</strong>
+      {#if item.title}<span class="tile-title">{item.title}</span>{/if}
     </div>
     <div class="tile-line tile-meta">
       <span class="tile-meta-text">{meta}</span>
-      {#if denials > 0}<span class="badge badge-error tile-denials">{denials} denied</span>{/if}
-      <span class="tile-last" class:quiet={last.quiet} title="Since its last output">{last.text}</span>
+      {#if item.denials > 0}<span class="badge badge-error tile-denials">{item.denials} denied</span>{/if}
+      <span class="tile-last" class:quiet={item.quiet} title="Since its last output">{last}</span>
     </div>
   </div>
   <div class="tile-tail log-tail-box">

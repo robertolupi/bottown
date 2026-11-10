@@ -169,6 +169,8 @@ function stubFetch(overrides?: {
           return json({ live_runs: stub.live_runs, live_checks: stub.live_checks, active_flows: stub.active_flows });
         }
         return json(stub.history);
+      case '/api/live':
+        return json(fx.live);
       case '/api/milestones':
         return json(fx.milestones);
       case '/api/timeline':

@@ -27,8 +27,11 @@ test('approved behind candidate offers Land and explains the combined checks', (
 });
 
 test('a landing in progress is a tile in Live with its log, opening its page', () => {
-  const landing = fixture.live_runs.find((r: any) => r.kind === 'land');
-  const view = render(LiveRuns, { liveRuns: [landing], liveChecks: [], activeFlows: [], historyRuns: [], threads: [], now: Date.now(), onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {} });
+  const landing = fixture.live.items.find((i: any) => i.kind === 'land');
+  // The preview fills a tile's tail from the fixture's logs.
+  const item = { ...landing, tail: fixture.logs[landing.id] };
+  const live = { ...fixture.live, items: [item], rows: [], ended: [] };
+  const view = render(LiveRuns, { live, now: Date.now(), onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {} });
   try {
     const tile = view.target.querySelector<HTMLElement>('.now-tile')!;
     assert.match(tile.textContent!, /land/);

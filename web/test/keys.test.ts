@@ -59,6 +59,8 @@ function stubFetch() {
             ? { live_runs: fx.live_runs, live_checks: fx.live_checks ?? [], active_flows: fx.active_flows }
             : fx.history,
         );
+      case '/api/live':
+        return json(fx.live);
       case '/api/milestones':
         return json(fx.milestones);
       case '/api/timeline':

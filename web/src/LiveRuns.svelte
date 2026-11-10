@@ -1,31 +1,26 @@
 <script lang="ts">
-  // Live, in Now (monitor-ui design §3): a wall of tiles, one per live
-  // batch run and check group in start order; one line per flow with
-  // nothing live and per interactive run; the threads that just ended;
-  // with links to their run and flow pages.
-  import type { ActiveFlowInfo, HistoryRunInfo, HistoryThread, LiveCheckInfo, LiveRunInfo } from './types';
-  import { formatSpan, justEnded, lastOutputStatus, nowRows, nowTiles, type NowRow as NowRowInfo } from './now';
+  // Live, in Now (monitor-ui design §3): the server's live view (GET
+  // /api/live) laid out: a wall of tiles, one per item in its order; one
+  // line per row; the threads that just ended; with links to their run and
+  // flow pages.
+  import type { Live } from './types';
+  import { endedHref, rowHref, rowText } from './now';
   import NowTile from './NowTile.svelte';
 
   interface Props {
-    liveRuns: LiveRunInfo[] | undefined;
-    liveChecks: LiveCheckInfo[] | undefined;
-    activeFlows: ActiveFlowInfo[] | undefined;
-    historyRuns: HistoryRunInfo[] | undefined;
-    threads: HistoryThread[] | undefined;
+    live: Live;
     now: number;
   }
 
-  let { liveRuns, liveChecks, activeFlows, historyRuns, threads, now }: Props = $props();
+  let { live, now }: Props = $props();
 
-  let tiles = $derived(nowTiles(liveRuns, liveChecks));
-  let rows = $derived(nowRows(activeFlows, liveRuns, liveChecks, historyRuns));
-  let ended = $derived(justEnded(threads, now));
-  let quiet = $derived(tiles.filter((t) => lastOutputStatus(t.kind === 'run' ? t.run : t.check, now).quiet).length);
-  let waiting = $derived(rows.filter((r) => r.key.startsWith('flow-')).length);
-  let interactive = $derived(rows.length - waiting);
-  let summaryRest = $derived([waiting > 0 ? `${waiting} waiting` : '', interactive > 0 ? `${interactive} interactive` : ''].filter(Boolean));
-  const rowText = (row: NowRowInfo) => [row.detail, row.since ? formatSpan(now - new Date(row.since).getTime()) : ''].filter(Boolean).join(' · ');
+  let tiles = $derived(live.items ?? []);
+  let rows = $derived(live.rows ?? []);
+  let ended = $derived(live.ended ?? []);
+  let summary = $derived(live.summary);
+  let summaryRest = $derived(
+    [summary.waiting > 0 ? `${summary.waiting} waiting` : '', summary.interactive > 0 ? `${summary.interactive} interactive` : ''].filter(Boolean),
+  );
 </script>
 
 <section class="card full-width live-section">
@@ -33,7 +28,7 @@
     <div class="card-header-left">
       <h2>Live</h2>
       <span class="muted live-summary">
-        {`${tiles.length} running`}{#if quiet > 0}{' · '}<span class="quiet-count">{quiet} quiet</span>{/if}{#each summaryRest as part (part)}{` · ${part}`}{/each}
+        {`${summary.running} running`}{#if summary.quiet > 0}{' · '}<span class="quiet-count">{summary.quiet} quiet</span>{/if}{#each summaryRest as part (part)}{` · ${part}`}{/each}
       </span>
     </div>
 
@@ -46,8 +41,8 @@
 
     {#if tiles.length > 0}
       <div class="now-grid">
-        {#each tiles as tile (tile.id)}
-          <NowTile {tile} {now} />
+        {#each tiles as item (item.id)}
+          <NowTile {item} {now} />
         {/each}
       </div>
     {/if}
@@ -56,10 +51,10 @@
       <ul class="now-rows">
         {#each rows as row (row.key)}
           <li class="now-row" data-key={row.key}>
-            <a href={row.href} data-nav={row.key}>
-              <strong>{row.label}</strong>
+            <a href={rowHref(row)} data-nav={row.key}>
+              <strong>{row.target}</strong>
               {#if row.title}<span class="now-row-title">{row.title}</span>{/if}
-              <span class="muted">{`· ${rowText(row)}`}</span>
+              <span class="muted">{`· ${rowText(row, now)}`}</span>
             </a>
           </li>
         {/each}
@@ -69,7 +64,7 @@
     {#if ended.length > 0}
       <div class="just-ended muted">
         Just ended:
-        {#each ended as t, i (t.key)}{i > 0 ? ', ' : ''}<a href={t.href} title={t.title}>{t.title ? `${t.label} ${t.title}` : t.label}</a>{/each}
+        {#each ended as t, i (t.key)}{i > 0 ? ', ' : ''}<a href={endedHref(t)} title={t.title}>{t.title ? `${t.target} ${t.title}` : t.target}</a>{/each}
       </div>
     {/if}
   </div>

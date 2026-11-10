@@ -41,6 +41,13 @@ func TestPreviewFixturesLoad(t *testing.T) {
 				t.Errorf("%s: batch live run %s has no log", name, r.ID)
 			}
 		}
+		if fx.Live != nil {
+			for _, it := range fx.Live.Items {
+				if fx.Logs[it.ID] == nil {
+					t.Errorf("%s: live item %s has no log", name, it.ID)
+				}
+			}
+		}
 	}
 	fx, err := LoadFixture(fixturesDir, "default")
 	if err != nil {
@@ -173,6 +180,27 @@ func TestPreviewRoutes(t *testing.T) {
 	c.get("/api/runs?state=live", &live)
 	if len(live.LiveRuns) != len(fx.LiveRuns) || len(live.ActiveFlows) != len(fx.ActiveFlows) {
 		t.Errorf("live: %+v", live)
+	}
+
+	// GET /api/live is the fixture's live section, each item's tail its
+	// fixture log's last lines, 12 or ?tail=N.
+	var lv Live
+	c.get("/api/live", &lv)
+	if fx.Live == nil || len(lv.Items) != len(fx.Live.Items) || len(lv.Rows) != len(fx.Live.Rows) || len(lv.Ended) != len(fx.Live.Ended) ||
+		lv.Summary.Running != fx.Live.Summary.Running || lv.Summary.Quiet != fx.Live.Summary.Quiet {
+		t.Errorf("live view: %+v", lv)
+	}
+	for _, it := range lv.Items {
+		if want := tail(fx.Logs[it.ID], liveTail); fmt.Sprint(it.Tail) != fmt.Sprint(want) {
+			t.Errorf("live item %s's tail: %v, want %v", it.ID, it.Tail, want)
+		}
+	}
+	var lv2 Live
+	c.get("/api/live?tail=2", &lv2)
+	for _, it := range lv2.Items {
+		if want := tail(fx.Logs[it.ID], 2); fmt.Sprint(it.Tail) != fmt.Sprint(want) {
+			t.Errorf("tail=2: %s's tail: %v, want %v", it.ID, it.Tail, want)
+		}
 	}
 
 	var ended []HistoryRunInfo

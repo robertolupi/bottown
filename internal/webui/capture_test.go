@@ -82,6 +82,10 @@ func TestCapture(t *testing.T) {
 	if len(fx.Logs["r-live"]) == 0 || len(fx.Logs["r-done"]) == 0 {
 		t.Errorf("logs not captured: %v", fx.Summary())
 	}
+	// The live view is captured too, for Now.
+	if fx.Live == nil || len(fx.Live.Items) == 0 || fx.Live.Items[0].ID != "r-live" {
+		t.Errorf("live view not captured: %+v", fx.Live)
+	}
 	if len(fx.Actions) != 0 {
 		t.Errorf("actions: %v", fx.Actions)
 	}

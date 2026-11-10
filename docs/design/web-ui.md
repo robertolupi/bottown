@@ -524,26 +524,29 @@ chip; and freshness, "live · 2s ago" from the last successful live poll
 (or status load), which turns to "stale · 40s" after 30 seconds without
 one. A failed poll is not ignored: its error is the chip's tooltip.
 
-Below Needs you (§4.1), **Live** is a summary ("5 running · 1 quiet · 1
-waiting · 1 interactive"), the Start Flow, Start Run and Clean up buttons,
-and a grid of **tiles** (`repeat(auto-fill, minmax(420px, 1fr))`, one
-column on a narrow screen): one per live batch run, landing included, and
-per live check group, ordered by start time and never reordered. A tile
+Below Needs you (§4.1), **Live** lays out the server's live view, `GET
+/api/live` (§7), polled with the live runs: what is live, how it groups,
+its order and what is quiet are decided there, and the browser only words
+them. Live is a summary ("5 running · 1 quiet · 1 waiting · 1
+interactive"), the Start Flow, Start Run and Clean up buttons, and a grid
+of **tiles** (`repeat(auto-fill, minmax(420px, 1fr))`, one column on a
+narrow screen), one per item: each live batch run, landing included, and
+each live check group, ordered by start time and never reordered. A tile
 has a two-line header, the target and title, then the kind with the
 flow's round ("verify 2/3"), the actor, elapsed time against the limit
 ("12m/1h 0m"), the denials count ("1 denied"), and the time since its
 **last output**; below, a fixed-height tail of its last lines, as the live
 tail renders them without the filter bar. A click anywhere on the tile
-opens its page, `#/run/<id>`. Last output counts from `last_output` (§7),
-or from the start when there is none yet, every second; at five minutes
-(`quietAfterMs` in `web/src/now.ts`) it reads "no output for 6m" in the
-warning colour and the tile gets a warning border: the tile is **quiet**.
-Under the grid, one-line **rows** for what is live but has no tail: an
-active flow with no live run or check, with its round, what it waits for
-and how long since the last run on its issue ended, linking
+opens its page, `#/run/<id>`. Last output counts from `last_output`, or
+from the start when there is none yet, every second; when the server
+marks the item **quiet** (five minutes without output, §7) it reads "no
+output for 6m" in the warning colour and the tile gets a warning border.
+Under the grid, one-line **rows** for what is live but has no tail: a
+flow whose lock is held with no live run or check on its issue, with its
+round, its step, what it waits for and since when, linking
 `#/flow/<issue>`; and an interactive run, linking `#/run/<id>`. Rows are
-never quiet. Last, **Just ended** names up to five history threads whose
-last run ended in the past hour, newest first, each a link to its page.
+never quiet. Last, **Just ended** names up to five threads whose last run
+ended in the past hour, newest first, each a link to its page.
 Durations past an hour read in hours ("3h 12m").
 
 **Live tail.** A batch run's tail, readable rather than raw JSON
@@ -923,6 +926,7 @@ routes remain registered until the separate actions-removed change.
 | Data | Where | How the UI gets it |
 |---|---|---|
 | Runs: live and ended, with digests and each run's state | server | `GET /v1/runs` (§7) |
+| The live view: items, rows, threads just ended, summary | host, from the rows below | `GET /api/live` (`(*Server).Live`, §7): live runs from `GET /v1/runs?state=live`, check groups from their held `.check` records, flows from their held locks and status files in `.bottown/runs/`, tails and last output from the logs there, titles from the forge, the inbox's counts from §4.1's |
 | Policy decisions (allow/deny per forge write) | server | `GET /v1/audit` (new, §7) |
 | PRs, with where their reviews leave each open one | server | `GET /v1/forge/prs?state=open\|all[&checks=1]` (`pr list`): each item carries the PR's branches, mergeability, milestone, dates, its `assessment` and rounds spent, and with `checks=1` the statuses at its head |
 | One PR's reviews (bodies and times, for a timeline) | server | `GET /v1/forge/pr` (`pr show`) |
@@ -997,13 +1001,61 @@ Unknown usage stays unknown.
 
 The UI uses the server's existing API where it can. What changes:
 
+- **The live view.** `(*Server).Live(ctx, tail)` in `internal/webui`
+  makes the live picture once, for Now and the terminal alike, served as
+  `GET /api/live?tail=N` (monitor-ui design §7). It returns:
+
+  - `items`, the tiles, oldest first (by start, then id): every live
+    batch run (`GET /v1/runs?state=live`, landings from their
+    `land-<N>.json` records) and every live check group (its `.check`
+    record, held while the group runs, §4.2). Each has its `id`, `kind`
+    (the run's kind, or `check`/`e2e` for a check group), `target` and
+    `target_url` (a run's `runTarget`; a check group's issue, else its
+    PR), `issue`/`pr` with their URLs, `title` (the issue's, else the
+    PR's, from the forge), a check group's `sha`, `actor`, `family` and
+    `spec` (the run's record, or the actor's), `started`, `limit` in
+    seconds (a run's key lifetime; a check group's `--check-timeout`;
+    absent when it has none), `last_output`, `quiet`, `tail` (the last
+    N rendered lines of its log, 12 by default, at most 500) and
+    `denials` (the count of its refusals in `GET /v1/audit`). An
+    implement or verify run, or a check group, whose issue has a held
+    flow lock has a `flow`: the issue, and the `round`, `max_rounds` and
+    `step` the flow reports in its status file (`runs.HeldFlows`,
+    monitor-ui design §7.3), with the run's or check's own step
+    (`implementing`, `verifying`, `checks`) when the flow has not reported
+    one. Active flows come from held locks only, whoever started them,
+    not from the UI's `flow-<N>.json`.
+  - `rows`: each flow whose lock is held with no item on its issue, as
+    `key` `flow-<issue>`, its `flow`, `what` (its step), `detail` (what
+    it waits for, from the status file) and `since` (when the step
+    began); then each interactive run, by start, with `what`
+    `interactive`, `detail` its kind and actor, and `since` its start.
+  - `ended`: up to five threads whose runs have all ended, the last in
+    the past hour, newest first: threads as `activity.Group` makes them
+    for History, from every run and every PR (read only when some run
+    ended in the past hour), each with its `key`, `kind` (`flow`, or a
+    standalone run's kind), `issue`, `pr`, `run_id` (the last run to
+    end), `target`, `title` and `ended`. A flow thread whose issue's
+    lock is held has not ended.
+  - `summary`: `running` (the items), `quiet`, `waiting` (the flow rows),
+    `interactive`, and `inbox`, the owner inbox's counts by kind
+    (`ComputeInbox`, recomputed at most every 30 seconds), with
+    `inbox_error` when it could not be read.
+
+  `quiet` is `now − last_output ≥ quietAfter`, five minutes, one constant
+  in `internal/webui`; an item with no output yet counts from its start,
+  and rows are never quiet. `GET /api/runs?state=live` (`live_runs`,
+  `live_checks`, `active_flows`) stays for History's reconciliation of
+  its threads with what is live.
+
 - **Last output.** Each of `live_runs` and `live_checks` (in `GET
   /api/status` and `GET /api/runs?state=live`) carries `last_output`: the
   newest modification time among the files its tail is read from, a run's
   log and its live transcript (`runs.ReadLog` appends the transcript, and
   `runs.FollowTranscript` rewrites it only when it changes), a check
-  group's or landing's own log. It is omitted while none exists. Now's
-  tiles count their last output and quiet from it (§4.2).
+  group's or landing's own log. It is omitted while none exists. Live's
+  items carry the same `last_output`, and their `quiet` is decided from it
+  (§4.2).
 
 - **Landing.** **Land** posts the PR number and offered head SHA to
   `POST /api/actions/land`. A background worker runs `land.Land` with the
@@ -1143,6 +1195,8 @@ bottown web preview [--fixture NAME] [--port N] [--watch] [--detach] [--stop]
   forever.
 - **The API answers from a fixture,** `web/fixtures/NAME.json` (default
   `default`): the status, inbox, live runs and checks with their logs, active flows,
+  the live view (`live`, `GET /api/live`, each item's tail cut from its
+  log in the fixture when it has one, to `?tail=N`),
   history, milestones, issue details and timelines, and the Timeline
   view's answer (`timeline`, served for any window; without it, an empty
   one), in the API's own JSON.
@@ -1176,7 +1230,7 @@ bottown web preview --capture NAME [--issue N]... [--log RUN]... [--force]
   needs the owner's key.
 - **It writes what the UI shows now** as `web/fixtures/NAME.json`,
   computed by the same code as `bottown web ui`'s API: the status, inbox,
-  live runs and checks, active flows, history and milestones. The file loads back
+  live runs and checks, active flows, the live view, history and milestones. The file loads back
   strictly, as every fixture does, before it is written. It does not
   serve.
 - **`--issue N` adds an issue's details and timeline, `--log RUN` a run's
