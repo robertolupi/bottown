@@ -93,6 +93,15 @@ function press(key: string, target: EventTarget = window, init: KeyboardEventIni
   flushSync();
 }
 
+// pressReturning is press, keeping the event so a test can see whether the
+// app left the key to the page (defaultPrevented).
+function pressReturning(key: string, target: EventTarget = window, init: KeyboardEventInit = {}) {
+  const e = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(e);
+  flushSync();
+  return e;
+}
+
 const keyEvent = (key: string, init: KeyboardEventInit = {}) => new KeyboardEvent('keydown', { key, ...init });
 
 test('keyIntent maps a key to what the UI does', () => {
@@ -203,6 +212,57 @@ test('j moves a visible selection among History rows, and Enter opens the row', 
     press('Enter');
     await settle();
     assert.match(location.hash, /^#\/(flow|run)\//, 'Enter opens the selected row');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('Enter respects focus: a button keeps it, and a focused tile wins over the selection', async () => {
+  const view = await mountAt('#/now');
+  try {
+    const items = document.querySelectorAll<HTMLElement>('[data-nav]');
+    const refresh = Array.from(document.querySelectorAll<HTMLElement>('button')).find((b) =>
+      (b.textContent || '').includes('Refresh'),
+    );
+    assert.ok(refresh, 'the header has a Refresh button');
+    assert.ok(items.length > 1, 'Now has focusable tiles and rows');
+
+    // j selects the first tile; focus then moves to the Refresh button.
+    press('j');
+    assert.equal(document.querySelector('.nav-selected'), items[0]);
+    refresh!.focus();
+    const onButton = pressReturning('Enter');
+    await settle();
+    assert.equal(onButton.defaultPrevented, false, 'a focused button keeps Enter');
+    assert.equal(location.hash, '#/now', 'Enter on the button does not open the selection');
+
+    // Tab to a tile that is not the selection: Enter opens the focused one.
+    items[1].focus();
+    assert.equal(document.querySelector('.nav-selected'), items[1], 'focus moves the selection');
+    press('Enter');
+    await settle();
+    assert.equal(
+      location.hash,
+      `#/run/${items[1].getAttribute('data-nav')}`,
+      'Enter opens the focused tile, not the selection',
+    );
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a dialog owns the keyboard: keys behind the ? panel do nothing', async () => {
+  const view = await mountAt('#/now');
+  try {
+    press('?');
+    assert.ok(document.querySelector('.keys-panel'));
+    press('2');
+    await settle();
+    assert.equal(location.hash, '#/now', 'a digit behind the panel does not switch view');
+    press('j');
+    assert.equal(document.querySelector('.nav-selected'), null, 'j behind the panel does not select');
+    press('Escape');
+    assert.equal(document.querySelector('.keys-panel'), null, 'Esc still closes the panel');
   } finally {
     view.unmount();
   }

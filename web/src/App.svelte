@@ -356,13 +356,16 @@
     return true;
   }
 
-  // openSelection returns the nav item Enter should open: the selection,
-  // or the focused item when Tab reached it. Null when neither (a button
-  // keeps Enter for itself).
+  // openSelection returns the nav item Enter should open. Focus decides:
+  // a focused nav item wins (Tab reached it), and any other focused
+  // control (a button) keeps Enter for itself. The j/k selection is used
+  // only when nothing but the body has focus.
   function openSelection(): HTMLElement | null {
-    if (navSelected && document.contains(navSelected)) return navSelected;
     const focused = document.activeElement;
-    return focused instanceof HTMLElement && focused.matches('[data-nav]') ? focused : null;
+    if (focused instanceof HTMLElement && focused !== document.body) {
+      return focused.matches('[data-nav]') ? focused : null;
+    }
+    return navSelected && document.contains(navSelected) ? navSelected : null;
   }
 
   function focusHistorySearch() {
@@ -388,6 +391,9 @@
       helpOpen = false;
       return;
     }
+    // A dialog on screen owns the keyboard: its own keys, and Esc, are
+    // its to handle, whether or not focus is inside it.
+    if (document.querySelector('[aria-modal="true"]')) return;
     const intent = keyIntent(e, route.kind === 'run' || route.kind === 'flow');
     if (!intent) return;
     switch (intent.kind) {
@@ -445,6 +451,14 @@
     };
     window.addEventListener('hashchange', onHashChange);
 
+    // A nav item Tab lands on becomes the selection, so j/k carry on from
+    // where Tab left off.
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target;
+      if (target instanceof HTMLElement && target.matches('[data-nav]')) selectNav(target);
+    };
+    window.addEventListener('focusin', onFocusIn);
+
     loadStatus();
     loadHistory();
 
@@ -497,6 +511,7 @@
     return () => {
       destroyed = true;
       window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener('focusin', onFocusIn);
       clearInterval(timerInterval);
       clearTimeout(pollTimeout);
     };

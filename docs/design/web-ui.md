@@ -888,7 +888,13 @@ browser's shortcuts win.
 | `?` | Show these keys in a small panel |
 
 The selection is visible, scrolls into view, and is reachable by Tab as
-well: tiles and rows are focusable and announce themselves as links.
+well: tiles and rows are focusable and announce themselves as links. Focus
+decides what `Enter` opens: a focused tile or row wins (Tab reached it),
+any other focused control (a button) keeps `Enter` for itself, and the
+`j`/`k` selection is used only when nothing else has focus. Focusing a
+tile or row also moves the selection there, so `j`/`k` carry on from where
+Tab left off. While a dialog (the `?` panel or a modal) is on screen it
+owns the keyboard: the nav keys and `Esc` are left for it to handle.
 
 ## 5. Actions
 
