@@ -246,8 +246,8 @@ func (f *runForge) Comment(ctx context.Context, n int64, body string) error {
 // flowLauncher runs each child's flow as a `bottown flow` process of its
 // own: the flow command swaps its cobra command's context per run, so one
 // process holds one flow supervisor. Its output goes to the log the web UI
-// shows for a flow, .bottown/flow-<N>.log, and a record next to it lets
-// the web UI show and stop it.
+// shows for a flow, .bottown/flow-<N>.log. The flow publishes its own
+// status beside its held lock for the UI.
 type flowLauncher struct {
 	bin, instance, repo string
 	dir, logDir         string
