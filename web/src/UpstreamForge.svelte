@@ -1,17 +1,14 @@
 <script lang="ts">
   // Upstream and forge status (§4.3): the checkout against the forge and
   // origin, with pull, push and after-pull actions when they apply.
+  import CommandCopy from './CommandCopy.svelte';
   import type { UIStatusResponse } from './types';
 
   interface Props {
     status: UIStatusResponse;
-    actionLoading: boolean;
-    onPull: () => void;
-    onPush: () => void;
-    onAfterPull: () => void;
   }
 
-  let { status, actionLoading, onPull, onPush, onAfterPull }: Props = $props();
+  let { status }: Props = $props();
 </script>
 
 <section class="card">
@@ -27,13 +24,13 @@
   <div class="card-body">
     <div class="metric-row">
       <span class="metric-label">Local Default Branch</span>
-      <span class="metric-value font-mono">{status.forge.default_branch} ({status.forge.checkout_sha})</span>
+      <span class="metric-value font-mono">{status.forge.default_branch} (<CommandCopy command={status.forge.checkout_sha} label={status.forge.checkout_sha.slice(0, 8)} />)</span>
     </div>
 
     <div class="metric-row">
       <span class="metric-label">Forge ({status.forge.remote})</span>
       <span class="metric-value font-mono">
-        <a href={status.links.commits} target="_blank" rel="noreferrer">{status.forge.forge_sha}</a>
+        <CommandCopy command={status.forge.forge_sha} label={status.forge.forge_sha.slice(0, 8)} />
         {#if status.forge.behind_count > 0}
           <span class="badge badge-warning">{status.forge.behind_count} behind</span>
         {/if}
@@ -47,7 +44,7 @@
       <div class="metric-row">
         <span class="metric-label">Origin Head</span>
         <span class="metric-value font-mono">
-          {status.upstream.head_sha || 'unknown'}
+          <CommandCopy command={status.upstream.head_sha || 'unknown'} label={status.upstream.head_sha?.slice(0, 8) || 'unknown'} />
           {#if status.upstream.ahead_count > 0}
             <span class="badge badge-accent">{status.upstream.ahead_count} ahead</span>
           {/if}
@@ -65,9 +62,7 @@
           <strong>Checkout is behind forge main.</strong>
           <p class="muted text-sm">Pull fast-forward changes merged in Forgejo.</p>
         </div>
-        <button class="btn btn-primary" onclick={onPull} disabled={actionLoading}>
-          {actionLoading ? 'Pulling...' : 'Pull'}
-        </button>
+        <CommandCopy command={`git pull --ff-only bottown ${status.forge.default_branch}`} />
       </div>
     {/if}
 
@@ -78,9 +73,7 @@
           <strong>Local main is ahead of origin.</strong>
           <p class="muted text-sm">{status.upstream.ahead_count} commit(s) ready to push.</p>
         </div>
-        <button class="btn btn-accent" onclick={onPush} disabled={actionLoading}>
-          Push to Origin...
-        </button>
+        <CommandCopy command={`git push origin ${status.forge.default_branch}`} />
       </div>
     {/if}
 
@@ -89,15 +82,11 @@
         <h3>After-pull steps (<code>{status.health.repo_settings.file}</code> on <code>{status.health.repo_settings.branch}</code>):</h3>
         <ul>
           {#each status.health.repo_settings.after_pull as step}
-            <li class="commit-item"><code>{step}</code></li>
+            <li class="commit-item"><CommandCopy command={step} /></li>
           {/each}
         </ul>
       </div>
-      <div class="actions-row">
-        <button class="btn btn-secondary" onclick={onAfterPull} disabled={actionLoading}>
-          Run after-pull steps…
-        </button>
-      </div>
+
     {/if}
   </div>
 </section>

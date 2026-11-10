@@ -4,7 +4,7 @@
 import type { MilestoneGroup, MilestoneNode } from './types';
 
 export const NODE_WIDTH = 232;
-export const NODE_HEIGHT = 112;
+export const NODE_HEIGHT = 180;
 export const PILL_HEIGHT = 36;
 export const GAP_X = 72;
 export const GAP_Y = 16;
@@ -113,10 +113,9 @@ export function canStart(node: MilestoneNode): boolean {
   return !node.external && (node.status === 'ready' || node.status === 'stopped');
 }
 
-// canOpenFlow says whether clicking a node opens the flow dialog for it:
-// any open issue of the group without a live run or flow.
+// Every issue node opens its read-only flow page.
 export function canOpenFlow(node: MilestoneNode): boolean {
-  return !node.external && node.state !== 'closed' && node.status !== 'running';
+  return !node.external;
 }
 
 export interface StatusBadge {

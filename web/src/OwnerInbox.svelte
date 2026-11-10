@@ -1,11 +1,11 @@
 <script lang="ts">
   // Needs you (§4.1, monitor-ui design §3): what waits on the owner in
   // this repository, as one line of counts by kind that expands in place
-  // to the items, each with a link and, for some, an action (gc, stop,
-  // land) that opens its confirmation dialog. Whether it is expanded is
+  // to the items, each with a link and, for some, a command to copy. Expansion is
   // remembered in localStorage.
+  import CommandCopy from './CommandCopy.svelte';
   import type { InboxItem } from './types';
-  import { filterInboxItems, resolveInboxAction } from './state';
+  import { filterInboxItems } from './state';
   import { inboxCounts, loadInboxExpanded, saveInboxExpanded } from './now';
   import IssueReference from './IssueReference.svelte';
   import TargetLink from './TargetLink.svelte';
@@ -13,12 +13,9 @@
   interface Props {
     inbox: InboxItem[];
     inboxError: string | undefined;
-    onGC: (includeFailed: boolean) => void;
-    onStop: (runId: string) => void;
-    onLand: (number: number, headSHA: string) => void;
   }
 
-  let { inbox, inboxError, onGC, onStop, onLand }: Props = $props();
+  let { inbox, inboxError }: Props = $props();
   let showActorFiled = $state(false);
   let expanded = $state(loadInboxExpanded());
   let visibleInbox = $derived(filterInboxItems(inbox, showActorFiled));
@@ -99,21 +96,7 @@
 
             <div class="inbox-action-col">
               {#if item.action}
-                <button
-                  class="btn btn-sm btn-secondary"
-                  onclick={() => {
-                    const resolved = resolveInboxAction(item);
-                    if (resolved && 'modal' in resolved && resolved.modal === 'gc') {
-                      onGC(resolved.includeFailed);
-                    } else if (resolved && 'modal' in resolved && resolved.modal === 'stop') {
-                      onStop(resolved.stopRunId);
-                    } else if (resolved && 'action' in resolved && resolved.action === 'land') {
-                      onLand(resolved.number, resolved.headSHA);
-                    }
-                  }}
-                >
-                  {item.action.label}
-                </button>
+                <CommandCopy command={item.action.command} />
               {/if}
               <a class="btn btn-sm btn-primary" href={item.target_url} target="_blank" rel="noreferrer">
                 View ↗

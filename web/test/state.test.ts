@@ -3,54 +3,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  actorModelPlaceholder,
-  actorSpec,
-  buildFlowActionPayload,
   buildFlowConstituentRuns,
   buildFlowTimeline,
   buildKeyedLogLines,
-  buildRunActionPayload,
   computePreservedScrollTop,
   detectTrimmedLineCount,
   filterHistoryRuns,
   filterInboxItems,
   filterHistoryThreads,
   groupHistoryThreads,
-  isSameFamilyPair,
   isScrolledToBottom,
   nextPollDelayMs,
   parseIssueNumber,
   parseLivePollSnapshot,
-  resolveInboxAction,
-  selectDefaultActors,
   statusDue,
   statusRefreshMs,
   updateLogTailFollow,
 } from '../src/state.ts';
-
-const actors = [
-  { name: 'claude', family: 'anthropic', harness: 'claude' },
-  { name: 'claude-2', family: 'anthropic', harness: 'claude' },
-  { name: 'agy', family: 'google', harness: 'agy' },
-];
-
-test('selectDefaultActors picks cross-family verifier and preserves existing selections', () => {
-  assert.deepEqual(
-    selectDefaultActors(actors, { flowImplement: '', flowVerify: '', runActor: '' }),
-    { flowImplement: 'claude', flowVerify: 'agy', runActor: 'claude' },
-  );
-
-  assert.deepEqual(
-    selectDefaultActors(actors, { flowImplement: 'agy', flowVerify: 'claude', runActor: 'agy' }),
-    { flowImplement: 'agy', flowVerify: 'claude', runActor: 'agy' },
-  );
-});
-
-test('isSameFamilyPair flags matching families and allows cross-family pairs', () => {
-  assert.equal(isSameFamilyPair(actors, 'claude', 'claude-2'), true);
-  assert.equal(isSameFamilyPair(actors, 'claude', 'agy'), false);
-  assert.equal(isSameFamilyPair(actors, 'claude', ''), false);
-});
 
 test('filterHistoryRuns filters by actor, kind, status, age window, and search text', () => {
   const now = Date.parse('2026-11-01T20:00:00Z');
@@ -109,130 +78,6 @@ test('statusDue reloads status that is never loaded or older than statusRefreshM
   assert.equal(statusDue(now - statusRefreshMs, now), true);
 });
 
-test('buildFlowActionPayload and buildRunActionPayload normalize action requests', () => {
-  assert.deepEqual(
-    buildFlowActionPayload({
-      issue: '15',
-      implement: 'claude',
-      verify: 'agy',
-      rounds: 0,
-      timeout: '',
-    }),
-    {
-      issue: 15,
-      implement: 'claude',
-      verify: 'agy',
-      rounds: 3,
-      timeout: '60m',
-    },
-  );
-
-  assert.deepEqual(
-    buildRunActionPayload({
-      kind: 'implement',
-      target: '15',
-      actor: 'claude',
-      question: 'ignored for implement',
-      allowSameFamily: true,
-    }),
-    {
-      kind: 'implement',
-      target: 15,
-      actor: 'claude',
-      question: undefined,
-      allow_same_family: undefined,
-    },
-  );
-
-  assert.deepEqual(
-    buildRunActionPayload({
-      kind: 'verify',
-      target: '16',
-      actor: 'agy',
-      question: 'ignored for verify',
-      allowSameFamily: true,
-    }),
-    {
-      kind: 'verify',
-      target: 16,
-      actor: 'agy',
-      question: undefined,
-      allow_same_family: true,
-    },
-  );
-
-  assert.deepEqual(
-    buildRunActionPayload({
-      kind: 'discuss',
-      target: '17',
-      actor: 'claude',
-      question: 'Should we split this package?',
-      allowSameFamily: true,
-    }),
-    {
-      kind: 'discuss',
-      target: 17,
-      actor: 'claude',
-      question: 'Should we split this package?',
-      allow_same_family: undefined,
-    },
-  );
-});
-
-test('action payloads send a chosen model as ACTOR:SPEC and leave a blank one to the host', () => {
-  assert.deepEqual(
-    buildFlowActionPayload({
-      issue: 15,
-      implement: 'claude',
-      implementModel: ' opus ',
-      verify: 'crush',
-      verifyModel: 'openrouter:~deepseek/latest',
-      rounds: 2,
-      timeout: '30m',
-    }),
-    {
-      issue: 15,
-      implement: 'claude:opus',
-      verify: 'crush:openrouter:~deepseek/latest',
-      rounds: 2,
-      timeout: '30m',
-    },
-  );
-  assert.equal(
-    buildRunActionPayload({
-      kind: 'implement',
-      target: 15,
-      actor: 'agy',
-      model: '   ',
-      question: '',
-      allowSameFamily: false,
-    }).actor,
-    'agy',
-  );
-  assert.equal(
-    buildRunActionPayload({
-      kind: 'verify',
-      target: 16,
-      actor: 'agy',
-      model: 'gemini-3.8-flash',
-      question: '',
-      allowSameFamily: false,
-    }).actor,
-    'agy:gemini-3.8-flash',
-  );
-  assert.equal(actorSpec('kimi', undefined), 'kimi');
-});
-
-test('actorModelPlaceholder shows the host default model or the harness default', () => {
-  const withModels = [
-    { name: 'agy', family: 'google', harness: 'agy', model: 'gemini-3.8-flash' },
-    { name: 'claude', family: 'anthropic', harness: 'claude' },
-  ];
-  assert.equal(actorModelPlaceholder(withModels, 'agy'), 'default: gemini-3.8-flash');
-  assert.equal(actorModelPlaceholder(withModels, 'claude'), 'harness default');
-  assert.equal(actorModelPlaceholder(undefined, 'agy'), 'harness default');
-});
-
 test('filterInboxItems hides actor-filed issues unless requested', () => {
   const items = [
     { id: 'ready', kind: 'ready_to_land' },
@@ -243,38 +88,6 @@ test('filterInboxItems hides actor-filed issues unless requested', () => {
   assert.deepEqual(filterInboxItems(items, false).map((item) => item.id), ['ready', 'discuss']);
   assert.deepEqual(filterInboxItems(items, true).map((item) => item.id), ['ready', 'filed', 'discuss']);
   assert.deepEqual(filterInboxItems(undefined, false), []);
-});
-
-test('resolveInboxAction and parseIssueNumber route inbox and timeline actions', () => {
-  assert.deepEqual(
-    resolveInboxAction({ target: 'r-123', action: { label: 'Clean up', command: 'bottown run gc --failed' } }),
-    { modal: 'gc', includeFailed: true },
-  );
-  assert.deepEqual(
-    resolveInboxAction({ target: 'r-123', action: { label: 'Clean up', command: 'bottown run gc' } }),
-    { modal: 'gc', includeFailed: false },
-  );
-  assert.deepEqual(
-    resolveInboxAction({ target: 'r-456', action: { label: 'Stop', command: 'bottown run stop r-456' } }),
-    { modal: 'stop', stopRunId: 'r-456' },
-  );
-  assert.deepEqual(
-    resolveInboxAction({
-      target: '!19',
-      head_sha: 'abc123',
-      action: { label: 'Land', command: 'bottown land !19' },
-    }),
-    { action: 'land', number: 19, headSHA: 'abc123' },
-  );
-  assert.equal(
-    resolveInboxAction({ target: '!19', action: { label: 'Land', command: 'bottown land !19' } }),
-    null,
-  );
-  assert.equal(resolveInboxAction({ target: '#10', action: undefined }), null);
-
-  assert.equal(parseIssueNumber('#42'), 42);
-  assert.equal(parseIssueNumber('!19'), 19);
-  assert.equal(parseIssueNumber('invalid'), null);
 });
 
 test('buildFlowTimeline consumes backend type:"run" events by run_id, deduplicating ended runs and creating explicit boundaries for live runs', () => {
@@ -799,3 +612,8 @@ test('simulated live log session: follows initially, pauses on scroll away, pres
   assert.equal(scrollTop, 60);
 });
 
+test('parseIssueNumber accepts issue and PR references', () => {
+  assert.equal(parseIssueNumber('#42'), 42);
+  assert.equal(parseIssueNumber('!19'), 19);
+  assert.equal(parseIssueNumber('invalid'), null);
+});

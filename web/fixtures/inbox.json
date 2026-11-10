@@ -146,7 +146,7 @@
       "head_sha": "9e1d2c3456789012345678901234567890abcdef",
       "action": {
         "label": "Land",
-        "command": "bottown land !99"
+        "command": "bottown merge-all 99"
       },
       "created": "2026-11-02T08:12:00Z"
     },
@@ -163,7 +163,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !100"
+        "command": "bottown merge-all 100"
       }
     },
     {
@@ -175,7 +175,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/101",
       "issue": 101,
       "issue_title": "Demo issue 101",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 101 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "stopped:102",
@@ -186,7 +190,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/102",
       "issue": 102,
       "issue_title": "Demo issue 102",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 102 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "broken:103",
@@ -234,7 +242,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !106"
+        "command": "bottown merge-all 106"
       }
     },
     {
@@ -246,7 +254,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/107",
       "issue": 107,
       "issue_title": "Demo issue 107",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 107 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "stopped:108",
@@ -257,7 +269,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/108",
       "issue": 108,
       "issue_title": "Demo issue 108",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 108 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "broken:109",
@@ -305,7 +321,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !112"
+        "command": "bottown merge-all 112"
       }
     },
     {
@@ -317,7 +333,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/113",
       "issue": 113,
       "issue_title": "Demo issue 113",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 113 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "stopped:114",
@@ -328,7 +348,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/114",
       "issue": 114,
       "issue_title": "Demo issue 114",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 114 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "broken:115",
@@ -376,7 +400,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !118"
+        "command": "bottown merge-all 118"
       }
     },
     {
@@ -388,7 +412,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/119",
       "issue": 119,
       "issue_title": "Demo issue 119",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 119 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "stopped:120",
@@ -399,7 +427,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/120",
       "issue": 120,
       "issue_title": "Demo issue 120",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 120 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "broken:121",
@@ -447,7 +479,7 @@
       "head_sha": "abc123",
       "action": {
         "label": "Land",
-        "command": "bottown land !124"
+        "command": "bottown merge-all 124"
       }
     },
     {
@@ -459,7 +491,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/125",
       "issue": 125,
       "issue_title": "Demo issue 125",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 125 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "stopped:126",
@@ -470,7 +506,11 @@
       "target_url": "http://127.0.0.1:3030/bottown/demo/issues/126",
       "issue": 126,
       "issue_title": "Demo issue 126",
-      "created": "2026-11-02T08:11:00Z"
+      "created": "2026-11-02T08:11:00Z",
+      "action": {
+        "label": "Flow",
+        "command": "bottown flow 126 --implement ACTOR --verify ACTOR"
+      }
     },
     {
       "id": "broken:127",

@@ -3,7 +3,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatElapsed, formatRelativeTime, formatCost, formatUsage, statusTone } from '../src/format.ts';
-import { postAction } from '../src/actions.ts';
 
 test('formatElapsed counts minutes and padded seconds since created', () => {
   const created = '2026-11-02T12:00:00Z';
@@ -50,37 +49,4 @@ test('formatRelativeTime gives a coarse age, and formatCost a cost', () => {
   assert.equal(formatCost({ cost_usd: 0 }), '$0.00');
   assert.equal(formatCost({ input_tokens: 100 }), '', 'tokens alone are no cost');
   assert.equal(formatCost({ cost_usd: 1.239 }), '$1.24');
-});
-
-function stubFetch(ok: boolean, body: unknown) {
-  const calls: Array<{ path: string; init: RequestInit }> = [];
-  globalThis.fetch = (async (path: string, init: RequestInit) => {
-    calls.push({ path, init });
-    return { ok, json: async () => body };
-  }) as any;
-  return calls;
-}
-
-test('postAction posts JSON, or no body, and returns the result', async () => {
-  let calls = stubFetch(true, { success: true, output: 'done' });
-  assert.deepEqual(await postAction('/api/actions/gc', { failed: true }, 'GC failed'), { success: true, output: 'done' });
-  assert.deepEqual(calls, [
-    {
-      path: '/api/actions/gc',
-      init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"failed":true}' },
-    },
-  ]);
-
-  calls = stubFetch(true, { success: true, output: '' });
-  await postAction('/api/actions/pull', undefined, 'Pull failed');
-  assert.deepEqual(calls[0].init, { method: 'POST' });
-});
-
-test('postAction throws the error, else the output, else the fallback', async () => {
-  stubFetch(false, { success: false, output: 'out', error: 'boom' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'boom' });
-  stubFetch(true, { success: false, output: 'out' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'out' });
-  stubFetch(false, { success: false, output: '' });
-  await assert.rejects(postAction('/x', {}, 'X failed'), { message: 'X failed' });
 });
