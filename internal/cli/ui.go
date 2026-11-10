@@ -201,7 +201,8 @@ type uiModel struct {
 	showKeys bool
 	quitting bool
 
-	logv *uiLogView // the full-screen log, when one is shown
+	logv   *uiLogView // the full-screen log, when one is shown
+	logGen int        // the openings of the log view so far
 }
 
 func newUIModel(loginURL, repo, instance string, live func(int) (webui.Live, error)) *uiModel {
@@ -259,14 +260,14 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uiLiveMsg:
 		m.data, m.err = msg.live, msg.err
 		m.clampSelection()
-		m.logLive()
+		m.logLive(msg.err)
 		return m, m.tick()
 	case uiTickMsg:
 		return m, m.fetch()
 	case uiLogMsg:
 		return m, m.logMsg(msg)
 	case uiLogTickMsg:
-		if m.logv == nil || m.logv.item.ID != msg.id {
+		if m.logv == nil || m.logv.gen != msg.gen {
 			return m, nil
 		}
 		return m, m.pollLog()

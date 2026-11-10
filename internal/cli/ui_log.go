@@ -25,6 +25,10 @@ type uiLogSource interface {
 
 // uiLogView is the full-screen log's state.
 type uiLogView struct {
+	// gen is this opening of the view: polls and ticks carry it, and those
+	// of an earlier opening, even of the same item, are dropped, so one
+	// poll chain runs at a time.
+	gen  int
 	item webui.LiveItem // as Live last reported it
 	src  uiLogSource
 	err  error
@@ -48,7 +52,7 @@ type (
 	// uiLogMsg is a poll's result. final is the poll made after the item
 	// ended, with how it ended.
 	uiLogMsg struct {
-		id      string
+		gen     int
 		src     uiLogSource
 		err     error
 		lines   []runs.LogLine
@@ -58,23 +62,24 @@ type (
 		status, outcome string
 		endOK           bool
 	}
-	uiLogTickMsg struct{ id string }
+	uiLogTickMsg struct{ gen int }
 )
 
 // openLog shows item it's log full screen, following it.
 func (m *uiModel) openLog(it webui.LiveItem) tea.Cmd {
-	m.logv = &uiLogView{item: it, follow: true}
-	id, open := it.ID, m.logSource
+	m.logGen++
+	m.logv = &uiLogView{gen: m.logGen, item: it, follow: true}
+	gen, id, open := m.logGen, it.ID, m.logSource
 	return func() tea.Msg {
 		if open == nil {
-			return uiLogMsg{id: id}
+			return uiLogMsg{gen: gen}
 		}
 		src, err := open(id)
 		if err != nil {
-			return uiLogMsg{id: id, err: err}
+			return uiLogMsg{gen: gen, err: err}
 		}
 		lines, changed := src.Poll()
-		return uiLogMsg{id: id, src: src, lines: lines, changed: changed}
+		return uiLogMsg{gen: gen, src: src, lines: lines, changed: changed}
 	}
 }
 
@@ -82,9 +87,9 @@ func (m *uiModel) openLog(it webui.LiveItem) tea.Cmd {
 // item ended, it is the final poll, which also asks how it ended.
 func (m *uiModel) pollLog() tea.Cmd {
 	v := m.logv
-	id, src, final, runEnd := v.item.ID, v.src, v.ended, m.runEnd
+	gen, id, src, final, runEnd := v.gen, v.item.ID, v.src, v.ended, m.runEnd
 	return func() tea.Msg {
-		msg := uiLogMsg{id: id, src: src, final: final}
+		msg := uiLogMsg{gen: gen, src: src, final: final}
 		if src != nil {
 			msg.lines, msg.changed = src.Poll()
 		}
@@ -99,8 +104,8 @@ func (m *uiModel) pollLog() tea.Cmd {
 // is live; once it has ended, the next poll is the final one.
 func (m *uiModel) logMsg(msg uiLogMsg) tea.Cmd {
 	v := m.logv
-	if v == nil || v.item.ID != msg.id {
-		return nil // the view was left, or another item's opened since
+	if v == nil || v.gen != msg.gen {
+		return nil // the view was left, or opened again since
 	}
 	v.src, v.err = msg.src, msg.err
 	if msg.changed {
@@ -121,16 +126,16 @@ func (m *uiModel) logMsg(msg uiLogMsg) tea.Cmd {
 	if v.ended {
 		return m.pollLog()
 	}
-	id := msg.id
-	return tea.Tick(runs.FollowLogEvery, func(time.Time) tea.Msg { return uiLogTickMsg{id: id} })
+	gen := msg.gen
+	return tea.Tick(runs.FollowLogEvery, func(time.Time) tea.Msg { return uiLogTickMsg{gen: gen} })
 }
 
 // logLive updates the followed item from a new Live: its header while it is
 // there, and the end once it is gone. The next poll, waiting for its tick,
-// is then the final one.
-func (m *uiModel) logLive() {
+// is then the final one. A Live that failed says nothing about the item.
+func (m *uiModel) logLive(err error) {
 	v := m.logv
-	if v == nil || v.ended {
+	if v == nil || v.ended || err != nil {
 		return
 	}
 	for _, it := range m.data.Items {

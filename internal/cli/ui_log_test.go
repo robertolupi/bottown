@@ -40,7 +40,7 @@ func openLogOn(t *testing.T, m *uiModel, src *fakeLog) {
 // returns the command the poll's result schedules.
 func pollLogOnce(t *testing.T, m *uiModel) tea.Cmd {
 	t.Helper()
-	_, cmd := m.Update(uiLogTickMsg{id: m.logv.item.ID})
+	_, cmd := m.Update(uiLogTickMsg{gen: m.logv.gen})
 	if cmd == nil {
 		t.Fatal("the tick did not poll")
 	}
@@ -205,7 +205,7 @@ func TestUILogEscRestoresSelection(t *testing.T) {
 		t.Fatalf("selection after esc: %d %q\n%s", m.sel, m.keyAt(m.sel), uiView(m))
 	}
 	// A poll that comes back after esc is dropped.
-	if _, cmd := m.Update(uiLogMsg{id: "r-2", changed: true}); cmd != nil || m.logv != nil {
+	if _, cmd := m.Update(uiLogMsg{gen: 1, changed: true}); cmd != nil || m.logv != nil {
 		t.Fatal("a late poll reopened the log")
 	}
 }
@@ -338,5 +338,64 @@ func TestUILogOpenError(t *testing.T) {
 	}
 	if _, cmd := m.Update(uiKey("q")); cmd == nil {
 		t.Fatal("q does not quit from the log")
+	}
+}
+
+// A Live that fails to refresh says nothing about the followed run: the
+// view keeps following it, and the next Live that has it updates it.
+func TestUILogLiveErrorKeepsFollowing(t *testing.T) {
+	m := testUIModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 10})
+	setLive(m, oneItemLive(3))
+	src := &fakeLog{lines: uiLogLines(5)}
+	openLogOn(t, m, src)
+
+	m.live = func(int) (webui.Live, error) { return webui.Live{}, fmt.Errorf("connection refused") }
+	m.Update(m.fetch()())
+	if m.logv == nil || m.logv.ended {
+		t.Fatal("a failed refresh ended the followed run")
+	}
+	src.lines = uiLogLines(6)
+	if next := pollLogOnce(t, m); next == nil || m.logv.final {
+		t.Fatal("polling stopped after a failed refresh")
+	}
+	later := oneItemLive(3)
+	later.Items[0].Title = "Retry webhook deliveries, renamed"
+	setLive(m, later)
+	if m.logv.ended || !strings.Contains(viewRows(m)[0], "renamed") {
+		t.Fatalf("the refresh after the error did not update the item:\n%s", uiView(m))
+	}
+	if next := pollLogOnce(t, m); next == nil || !hasRow(m, "line 6") {
+		t.Fatalf("not following after the refresh:\n%s", uiView(m))
+	}
+}
+
+// Reopening the same item's log drops the earlier opening's tick and poll
+// result: they neither start a second poll chain nor replace the source.
+func TestUILogReopenDropsStaleMessages(t *testing.T) {
+	m := testUIModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 10})
+	setLive(m, oneItemLive(3))
+	first := &fakeLog{lines: uiLogLines(2)}
+	openLogOn(t, m, first)
+	oldTick := uiLogTickMsg{gen: m.logv.gen}
+	_, pollCmd := m.Update(oldTick)
+	oldPoll := pollCmd() // the first opening's poll, in flight
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	second := &fakeLog{lines: uiLogLines(4)}
+	openLogOn(t, m, second)
+
+	if _, cmd := m.Update(oldTick); cmd != nil {
+		t.Fatal("the first opening's tick polled the reopened view")
+	}
+	if _, cmd := m.Update(oldPoll); cmd != nil {
+		t.Fatal("the first opening's poll result scheduled a poll")
+	}
+	if m.logv.src != second || !hasRow(m, "line 4") {
+		t.Fatalf("the first opening's poll replaced the reopened view's:\n%s", uiView(m))
+	}
+	if next := pollLogOnce(t, m); next == nil {
+		t.Fatal("the reopened view does not poll")
 	}
 }
