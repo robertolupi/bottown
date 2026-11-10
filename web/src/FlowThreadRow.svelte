@@ -1,30 +1,41 @@
 <script lang="ts">
-  // A flow thread in the run history: one row for the flow (issue, PR,
-  // milestone, actors, status). Clicking it opens the flow page.
-  // When its latest run failed, the summary cell is that run's failure reason.
+  // A flow thread in the run history (§4.2): one row with five cells —
+  // target, actors, state, duration and cost, last activity. Clicking it
+  // opens the flow page. The target holds the issue and PR references,
+  // the title, the kind and run count as a muted suffix, the summary as a
+  // second clipped line, and, when its latest run failed, that reason
+  // under the summary.
   import type { HistoryThread } from './types';
   import { describeRunFailure, formatThreadMainLine } from './state';
-  import { formatTime, formatUsage } from './format';
+  import { formatCost, formatDateTime, formatRelativeTime } from './format';
   import { flowRouteHash, runRouteHash } from './routes';
   import FailureReason from './FailureReason.svelte';
   import FlowStateBadge from './FlowStateBadge.svelte';
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
-  import StatusBadge from './StatusBadge.svelte';
   import SummaryText from './SummaryText.svelte';
   import TargetLink from './TargetLink.svelte';
 
   interface Props {
     thread: HistoryThread;
+    now: number;
   }
 
-  let { thread }: Props = $props();
+  let { thread, now }: Props = $props();
 
   let mainLine = $derived(formatThreadMainLine(thread));
   let lastRun = $derived(thread.runs[thread.runs.length - 1]);
-  // A flow whose latest run failed, and that is not going again, leads
-  // with why.
+  // A flow whose latest run failed, and that is not going again, keeps
+  // why on the row.
   let failure = $derived(thread.active || !lastRun ? null : describeRunFailure(lastRun));
+
+  // These flow states already imply the run's recorded outcome (they fold
+  // the review verdict in); elsewhere the row shows a recorded outcome too.
+  const outcomeImplied = new Set(['merged', 'ready_to_merge', 'needs_changes', 'needs_intervention']);
+  let showOutcome = $derived(
+    !!lastRun?.outcome && (!thread.flow_state || !outcomeImplied.has(thread.flow_state.state)),
+  );
+  let cost = $derived(formatCost(thread.usage));
 
   function navigateToFlow() {
     location.hash = flowRouteHash(thread.issue ?? 0, thread.pr);
@@ -36,7 +47,7 @@
   class:flow-row-active={thread.active}
   onclick={navigateToFlow}
 >
-  <td>
+  <td class="target-cell">
     <div class="thread-main-line">
       {#if mainLine.issueLabel}
         <IssueReference
@@ -44,6 +55,7 @@
           href={mainLine.issueUrl || lastRun?.target_url || ''}
           label={mainLine.issueLabel}
           title={mainLine.issueTitle}
+          showTitle
         />
       {/if}
       {#if mainLine.prLabel}
@@ -55,12 +67,25 @@
       {#if mainLine.milestone}
         <span class="badge milestone-badge" title="Milestone">{mainLine.milestone}</span>
       {/if}
+      <span class="thread-meta text-sm">
+        flow · {thread.run_count} {thread.run_count === 1 ? 'run' : 'runs'}
+      </span>
     </div>
-  </td>
-  <td>
-    <span class="badge badge-neutral">
-      flow · {thread.run_count} {thread.run_count === 1 ? 'run' : 'runs'}
-    </span>
+    {#if thread.summary}
+      <div class="thread-summary summary-cell">
+        <SummaryText text={thread.summary} />
+      </div>
+    {/if}
+    {#if failure}
+      <div class="thread-failure summary-cell">
+        <FailureReason
+          {failure}
+          onDetails={() => {
+            if (lastRun) location.hash = runRouteHash(lastRun.id);
+          }}
+        />
+      </div>
+    {/if}
   </td>
   <td>
     <div class="thread-actors">
@@ -70,16 +95,13 @@
     </div>
   </td>
   <td>
-    <div class="thread-status-badges">
+    <div class="thread-state">
       {#if thread.flow_state}
         <FlowStateBadge state={thread.flow_state} />
       {/if}
-      {#if thread.active && thread.active_label}
-        <span class="badge badge-accent flow-live-badge">
-          {thread.active_label}
-        </span>
+      {#if showOutcome && lastRun}
+        <OutcomeBadge run={lastRun} />
       {/if}
-      <StatusBadge status={thread.status} />
       {#if thread.total_denials > 0}
         <span class="badge badge-error" title="Operations refused by server policy in this flow">
           {thread.total_denials} denied
@@ -87,32 +109,13 @@
       {/if}
     </div>
   </td>
-  <td><OutcomeBadge run={lastRun} /></td>
-  <td class="muted">{thread.duration || '—'}</td>
-  <td class="muted text-sm">{formatUsage(thread.usage)}</td>
-  {#if failure}
-    <td class="summary-cell">
-      <FailureReason
-        {failure}
-        onDetails={() => {
-          if (lastRun) location.hash = runRouteHash(lastRun.id);
-        }}
-      />
-    </td>
-  {:else}
-    <td class="summary-cell"><SummaryText text={thread.summary} /></td>
-  {/if}
-  <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
-  <td>
-    <div class="row-actions">
-      <a
-        class="btn btn-sm btn-secondary"
-        href={flowRouteHash(thread.issue ?? 0, thread.pr)}
-        onclick={(e) => e.stopPropagation()}
-      >
-        Flow ({thread.run_count})
-      </a>
-    </div>
+  <td class="muted">
+    {thread.duration || '—'}{#if cost} · {cost}{/if}
+  </td>
+  <td class="muted text-sm">
+    <span title={formatDateTime(thread.last_activity)}>
+      {formatRelativeTime(thread.last_activity, now)}
+    </span>
   </td>
 </tr>
 
@@ -134,11 +137,27 @@
     box-shadow: inset 3px 0 0 var(--accent);
   }
 
+  .target-cell {
+    min-width: 0;
+  }
+
   .thread-main-line {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+  }
+
+  .thread-meta {
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .thread-summary,
+  .thread-failure {
+    margin-top: 4px;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .milestone-badge {
@@ -147,24 +166,14 @@
     border: 1px solid rgba(16, 185, 129, 0.3);
   }
 
-  .thread-actors, .thread-status-badges {
+  .thread-actors, .thread-state {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
   }
 
-  .flow-live-badge {
-    font-weight: 600;
-  }
-
   .summary-cell {
-    max-width: max(280px, 25vw);
-  }
-
-  .row-actions {
-    display: flex;
-    gap: 6px;
-    align-items: center;
+    max-width: 100%;
   }
 </style>

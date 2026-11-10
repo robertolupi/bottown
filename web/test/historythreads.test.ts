@@ -1,0 +1,887 @@
+// The history threads' helpers (state.ts), tested apart from the rest of
+// state.ts: grouping runs into threads, filtering them, their main line,
+// the flow state and outcome a row shows, and the run's window. Run with
+// `npm test`: node --test, with Node stripping the types.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  aggregateThreadUsage,
+  deriveFlowState,
+  filterHistoryThreads,
+  formatThreadMainLine,
+  groupHistoryThreads,
+  reconcileExpandedThread,
+  resolveItemIssueAndPR,
+  retroWindowTitle,
+  runMatchesFlow,
+  runOutcome,
+  toggleExpandedThread,
+} from '../src/state.ts';
+
+test('groupHistoryThreads groups implement/verify loops by (issue, pr), separates distinct PRs, and keeps discuss separate', () => {
+  const runs = [
+    // Issue #10, PR !11: initial pre-PR failed attempt, retry that opened !11, verify requesting changes, resume implement, final verify
+    {
+      id: 'r-10-pre',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      issue_title: 'Threads in Run History',
+      milestone: 'Iteration 2',
+      thread_key: 'flow:issue:10',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'failed',
+      created: '2026-11-01T10:00:00Z',
+      ended: '2026-11-01T10:05:00Z',
+      duration: '5m0s',
+      summary: 'Interrupted before PR',
+      denials: [],
+    },
+    {
+      id: 'r-10-imp1',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      pr: 11,
+      pr_url: 'http://forge/pulls/11',
+      milestone: 'Iteration 2',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'succeeded',
+      created: '2026-11-01T10:10:00Z',
+      ended: '2026-11-01T10:25:00Z',
+      duration: '15m0s',
+      summary: 'Opened !11',
+      denials: [],
+    },
+    {
+      id: 'r-10-ver1',
+      target: '!11',
+      target_url: 'http://forge/pulls/11',
+      issue: 10,
+      pr: 11,
+      pr_url: 'http://forge/pulls/11',
+      milestone: 'Iteration 2',
+      kind: 'verify',
+      actor: 'agy',
+      family: 'google',
+      status: 'succeeded',
+      created: '2026-11-01T10:30:00Z',
+      ended: '2026-11-01T10:40:00Z',
+      duration: '10m0s',
+      summary: 'Requested changes on !11',
+      denials: [{ time: '2026-11-01T10:35:00Z', op: 'git push', rule: 'verifier-no-push' }],
+    },
+    {
+      id: 'r-10-imp2',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      pr: 11,
+      pr_url: 'http://forge/pulls/11',
+      milestone: 'Iteration 2',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'succeeded',
+      created: '2026-11-01T10:45:00Z',
+      ended: '2026-11-01T10:55:00Z',
+      duration: '10m0s',
+      summary: 'Addressed review feedback',
+      denials: [],
+    },
+    {
+      id: 'r-10-ver2',
+      target: '!11',
+      target_url: 'http://forge/pulls/11',
+      issue: 10,
+      pr: 11,
+      pr_url: 'http://forge/pulls/11',
+      milestone: 'Iteration 2',
+      kind: 'verify',
+      actor: 'agy',
+      family: 'google',
+      status: 'succeeded',
+      created: '2026-11-01T11:00:00Z',
+      ended: '2026-11-01T11:10:00Z',
+      duration: '10m0s',
+      summary: 'Approved !11',
+      denials: [],
+    },
+    // Standalone discuss run on #10
+    {
+      id: 'r-10-disc',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      milestone: 'Iteration 2',
+      kind: 'discuss',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'succeeded',
+      created: '2026-11-01T11:30:00Z',
+      ended: '2026-11-01T11:35:00Z',
+      duration: '5m0s',
+      summary: 'Answered design question',
+      denials: [],
+    },
+    // Second PR !12 on the same issue #10 -> must form a separate flow thread
+    {
+      id: 'r-10-pr12-imp',
+      target: '#10',
+      target_url: 'http://forge/issues/10',
+      issue: 10,
+      pr: 12,
+      pr_url: 'http://forge/pulls/12',
+      milestone: 'Iteration 2',
+      kind: 'implement',
+      actor: 'agy',
+      family: 'google',
+      status: 'succeeded',
+      created: '2026-11-01T12:00:00Z',
+      ended: '2026-11-01T12:20:00Z',
+      duration: '20m0s',
+      summary: 'Follow-up PR !12',
+      denials: [],
+    },
+    {
+      id: 'r-10-pr12-ver',
+      target: '!12',
+      target_url: 'http://forge/pulls/12',
+      issue: 10,
+      pr: 12,
+      pr_url: 'http://forge/pulls/12',
+      milestone: 'Iteration 2',
+      kind: 'verify',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'succeeded',
+      created: '2026-11-01T12:25:00Z',
+      ended: '2026-11-01T12:35:00Z',
+      duration: '10m0s',
+      summary: 'Approved !12',
+      denials: [],
+    },
+  ] as any[];
+
+  const threads = groupHistoryThreads(runs);
+  assert.equal(threads.length, 3);
+
+  // Ordered newest activity first: flow !12, discuss, flow !11
+  const pr12Thread = threads.find((t) => t.key === 'flow:issue:10:pr:12')!;
+  const discussThread = threads.find((t) => t.kind === 'discuss')!;
+  const pr11Thread = threads.find((t) => t.key === 'flow:issue:10:pr:11')!;
+
+  assert.ok(pr12Thread);
+  assert.equal(pr12Thread.run_count, 2);
+  assert.deepEqual(pr12Thread.runs.map((r) => r.id), ['r-10-pr12-imp', 'r-10-pr12-ver']);
+  assert.deepEqual(pr12Thread.actors, ['agy', 'claude']);
+
+  assert.ok(discussThread);
+  assert.equal(discussThread.key, 'discuss:r-10-disc');
+  assert.equal(discussThread.run_count, 1);
+  assert.deepEqual(discussThread.runs.map((r) => r.id), ['r-10-disc']);
+
+  assert.ok(pr11Thread);
+  assert.equal(pr11Thread.run_count, 5);
+  assert.deepEqual(
+    pr11Thread.runs.map((r) => r.id),
+    ['r-10-pre', 'r-10-imp1', 'r-10-ver1', 'r-10-imp2', 'r-10-ver2'],
+  );
+  assert.equal(pr11Thread.total_denials, 1);
+  assert.equal(pr11Thread.duration, '50m0s');
+});
+
+test('groupHistoryThreads keeps retro runs standalone, and the kind filter finds them', () => {
+  const base = { target: '#10', target_url: 'http://forge/issues/10', issue: 10, family: 'openai', status: 'succeeded', denials: [] };
+  const runs = [
+    { ...base, id: 'r-imp', pr: 11, kind: 'implement', actor: 'claude', family: 'anthropic', created: '2026-11-01T10:00:00Z', ended: '2026-11-01T10:20:00Z' },
+    { ...base, id: 'r-retro', kind: 'retro', actor: 'codex', created: '2026-11-02T10:00:00Z', ended: '2026-11-02T10:10:00Z', thread_key: 'retro:r-retro' },
+  ] as any[];
+  const threads = groupHistoryThreads(runs);
+  assert.equal(threads.length, 2);
+  const retro = threads.find((t) => t.key === 'retro:r-retro');
+  assert.ok(retro);
+  assert.equal(retro.kind, 'discuss');
+  assert.deepEqual(retro.runs.map((r) => r.id), ['r-retro']);
+  assert.deepEqual(threads.find((t) => t.kind === 'flow')?.runs.map((r) => r.id), ['r-imp']);
+
+  const now = Date.parse('2026-11-03T00:00:00Z');
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'retro' }, now).map((t) => t.key), ['retro:r-retro']);
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'discuss' }, now), []);
+  assert.deepEqual(filterHistoryThreads(threads, { kind: 'implement' }, now).map((t) => t.kind), ['flow']);
+});
+
+test('a windowed retro is on no issue: its thread keeps its window, live or ended, and no #0', () => {
+  const window = { since: 'last', base: '4b5c6d7e8f9a', page: '20261101-9a0b1c2-retrospective' };
+  const run = {
+    id: 'r-win',
+    target: '4b5c6d7e8f..9a0b1c2d3e',
+    target_url: 'http://forge/bottown/demo/wiki/20261101-9a0b1c2-retrospective',
+    window,
+    thread_key: 'retro:r-win',
+    kind: 'retro',
+    actor: 'claude',
+    family: 'anthropic',
+    created: '2026-11-02T10:00:00Z',
+    denials: [],
+  };
+  const ended = groupHistoryThreads([{ ...run, status: 'succeeded', ended: '2026-11-02T10:10:00Z' }] as any[]);
+  const live = groupHistoryThreads([], [{ ...run, interactive: false, log_tail: [] }] as any[]);
+  for (const threads of [ended, live]) {
+    assert.equal(threads.length, 1);
+    const [t] = threads;
+    assert.equal(t.issue, undefined);
+    assert.equal(t.runs[0].target, '4b5c6d7e8f..9a0b1c2d3e');
+    assert.deepEqual(t.runs[0].window, window);
+    assert.equal(formatThreadMainLine(t).issueLabel, undefined);
+  }
+  assert.equal(
+    retroWindowTitle(window),
+    'Windowed retro: --since last, after 4b5c6d7e8f9a. Writes the wiki page 20261101-9a0b1c2-retrospective.',
+  );
+  assert.equal(retroWindowTitle(undefined), undefined);
+});
+
+test('pre-PR runs group under issue before PR exists and preserve membership + selection when PR is created', () => {
+  const prePRHistory = [
+    {
+      id: 'r-pre',
+      target: '#20',
+      target_url: 'http://forge/issues/20',
+      issue: 20,
+      thread_key: 'flow:issue:20',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'failed',
+      created: '2026-11-01T14:00:00Z',
+      ended: '2026-11-01T14:10:00Z',
+      duration: '10m0s',
+      summary: 'First attempt failed',
+      denials: [],
+    },
+  ] as any[];
+
+  const prePRLive = [
+    {
+      id: 'r-open',
+      target: '#20',
+      target_url: 'http://forge/issues/20',
+      issue: 20,
+      thread_key: 'flow:issue:20',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      harness: 'claude',
+      interactive: false,
+      created: '2026-11-01T14:15:00Z',
+      expires: '2026-11-01T15:15:00Z',
+      elapsed: '2m0s',
+      timeout: '60m',
+      log_tail: [],
+      denials: [],
+    },
+  ] as any[];
+
+  const beforePRThreads = groupHistoryThreads(prePRHistory, prePRLive);
+  assert.equal(beforePRThreads.length, 1);
+  assert.equal(beforePRThreads[0].key, 'flow:issue:20');
+  assert.equal(beforePRThreads[0].active, true);
+  assert.deepEqual(beforePRThreads[0].runs.map((r) => r.id), ['r-pre', 'r-open']);
+
+  // User expands the pre-PR flow
+  let expandedKey = toggleExpandedThread(null, beforePRThreads[0].key);
+  assert.equal(expandedKey, 'flow:issue:20');
+
+  // Live pre-PR -> PR transition: r-open opens PR !21 while still running, while
+  // historyRuns still carries r-pre with backend thread_key "flow:issue:20".
+  const liveAfterPROpened = [
+    {
+      ...prePRLive[0],
+      pr: 21,
+      pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
+    },
+  ] as any[];
+
+  const livePRThreads = groupHistoryThreads(prePRHistory, liveAfterPROpened);
+  assert.equal(livePRThreads.length, 1);
+  assert.equal(livePRThreads[0].key, 'flow:issue:20:pr:21');
+  assert.equal(livePRThreads[0].pr, 21);
+  assert.equal(livePRThreads[0].active, true);
+  assert.deepEqual(livePRThreads[0].runs.map((r) => r.id), ['r-pre', 'r-open']);
+
+  // Selection immediately moves to the PR thread during the live poll
+  expandedKey = reconcileExpandedThread(expandedKey, beforePRThreads, livePRThreads);
+  assert.equal(expandedKey, 'flow:issue:20:pr:21');
+
+  // Now r-open ends and verify starts
+  const afterPRRuns = [
+    prePRHistory[0],
+    {
+      id: 'r-open',
+      target: '#20',
+      target_url: 'http://forge/issues/20',
+      issue: 20,
+      pr: 21,
+      pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
+      kind: 'implement',
+      actor: 'claude',
+      family: 'anthropic',
+      status: 'succeeded',
+      active: false,
+      created: '2026-11-01T14:15:00Z',
+      ended: '2026-11-01T14:25:00Z',
+      duration: '10m0s',
+      summary: 'Opened !21',
+      denials: [],
+    },
+    {
+      id: 'r-20-verify1',
+      target: '!21',
+      target_url: 'http://forge/pulls/21',
+      issue: 20,
+      pr: 21,
+      pr_url: 'http://forge/pulls/21',
+      thread_key: 'flow:issue:20:pr:21',
+      kind: 'verify',
+      actor: 'agy',
+      family: 'google',
+      status: 'running',
+      active: true,
+      created: '2026-11-01T14:26:00Z',
+      duration: '1m0s',
+      summary: '',
+      denials: [],
+    },
+  ] as any[];
+
+  const afterPRThreads = groupHistoryThreads(afterPRRuns);
+  assert.equal(afterPRThreads.length, 1);
+  assert.equal(afterPRThreads[0].key, 'flow:issue:20:pr:21');
+  assert.equal(afterPRThreads[0].pr, 21);
+  assert.equal(afterPRThreads[0].active, true);
+  assert.deepEqual(
+    afterPRThreads[0].runs.map((r) => r.id),
+    ['r-pre', 'r-open', 'r-20-verify1'],
+  );
+
+  // Selection stays on the PR thread
+  expandedKey = reconcileExpandedThread(expandedKey, livePRThreads, afterPRThreads);
+  assert.equal(expandedKey, 'flow:issue:20:pr:21');
+});
+
+test('toggleExpandedThread enforces at-most-one expanded flow andformatThreadMainLine formats issue, PR, and optional milestone', () => {
+  let expanded: string | null = null;
+  expanded = toggleExpandedThread(expanded, 'flow:issue:10:pr:11');
+  assert.equal(expanded, 'flow:issue:10:pr:11');
+
+  // Clicking another flow opens it and closes the previous flow
+  expanded = toggleExpandedThread(expanded, 'flow:issue:10:pr:12');
+  assert.equal(expanded, 'flow:issue:10:pr:12');
+
+  // Clicking the open flow collapses it
+  expanded = toggleExpandedThread(expanded, 'flow:issue:10:pr:12');
+  assert.equal(expanded, null);
+
+  // Main line with milestone assigned
+  const withMilestone = formatThreadMainLine({
+    key: 'flow:issue:10:pr:11',
+    kind: 'flow',
+    issue: 10,
+    issue_title: 'Threads in Run History',
+    pr: 11,
+    milestone: 'Iteration 2',
+    active: false,
+    status: 'succeeded',
+    run_count: 2,
+    last_activity: '2026-11-01T11:00:00Z',
+    actors: ['claude', 'agy'],
+    duration: '20m0s',
+    summary: 'Done',
+    total_denials: 0,
+    runs: [],
+  });
+  assert.equal(withMilestone.issueLabel, '#10');
+  assert.equal(withMilestone.prLabel, '!11');
+  assert.equal(withMilestone.milestone, 'Iteration 2');
+  assert.ok(withMilestone.text.includes('#10'));
+  assert.ok(withMilestone.text.includes('!11'));
+  assert.ok(withMilestone.text.includes('Iteration 2'));
+
+  // Main line when no milestone is assigned: milestone is omitted
+  const withoutMilestone = formatThreadMainLine({
+    key: 'flow:issue:30:pr:31',
+    kind: 'flow',
+    issue: 30,
+    pr: 31,
+    milestone: '',
+    active: true,
+    status: 'running',
+    run_count: 1,
+    last_activity: '2026-11-01T12:00:00Z',
+    actors: ['claude'],
+    duration: '5m0s',
+    summary: '',
+    total_denials: 0,
+    runs: [],
+  });
+  assert.equal(withoutMilestone.issueLabel, '#30');
+  assert.equal(withoutMilestone.prLabel, '!31');
+  assert.equal(withoutMilestone.milestone, undefined);
+  assert.equal(withoutMilestone.text, '#30 · !31');
+});
+
+test('first-ever live flow preserves issue milestone and issue/PR titles when historyRuns is empty', () => {
+  // Pre-PR live-only run on an issue with an issue-assigned milestone
+  const prePRLiveOnly = [
+    {
+      id: 'r-live-pre',
+      target: '#70',
+      target_url: 'http://forge/issues/70',
+      issue: 70,
+      issue_url: 'http://forge/issues/70',
+      issue_title: 'First-ever flow issue',
+      milestone: 'Milestone Beta',
+      thread_key: 'flow:issue:70',
+      kind: 'implement',
+      actor: 'agy',
+      family: 'google',
+      harness: 'agy',
+      interactive: false,
+      created: '2026-11-02T09:00:00Z',
+      expires: '2026-11-02T10:00:00Z',
+      elapsed: '1m 30s',
+      timeout: '60m',
+      log_tail: [],
+      denials: [],
+    },
+  ] as any[];
+
+  const [prePRThread] = groupHistoryThreads([], prePRLiveOnly);
+  assert.equal(prePRThread.key, 'flow:issue:70');
+  assert.equal(prePRThread.issue, 70);
+  assert.equal(prePRThread.issue_title, 'First-ever flow issue');
+  assert.equal(prePRThread.milestone, 'Milestone Beta');
+  const preMain = formatThreadMainLine(prePRThread);
+  assert.equal(preMain.milestone, 'Milestone Beta');
+  assert.equal(preMain.text, '#70 First-ever flow issue · Milestone Beta');
+
+  // Post-PR live-only run where the issue has a milestone and the PR has none (resolved from issue on backend)
+  const postPRLiveOnly = [
+    {
+      ...prePRLiveOnly[0],
+      pr: 71,
+      pr_url: 'http://forge/pulls/71',
+      pr_title: 'Implement #70',
+      thread_key: 'flow:issue:70:pr:71',
+    },
+  ] as any[];
+
+  const [postPRThread] = groupHistoryThreads([], postPRLiveOnly);
+  assert.equal(postPRThread.key, 'flow:issue:70:pr:71');
+  assert.equal(postPRThread.issue, 70);
+  assert.equal(postPRThread.issue_title, 'First-ever flow issue');
+  assert.equal(postPRThread.pr, 71);
+  assert.equal(postPRThread.pr_title, 'Implement #70');
+  assert.equal(postPRThread.milestone, 'Milestone Beta');
+  const postMain = formatThreadMainLine(postPRThread);
+  assert.equal(postMain.milestone, 'Milestone Beta');
+  assert.equal(postMain.text, '#70 First-ever flow issue · !71 Implement #70 · Milestone Beta');
+});
+
+test('aggregateThreadUsage preserves undefined for unknown usage fields on partial usage metadata', () => {
+  // Duration-only usage (e.g. harness did not report tokens, cost, or turns):
+  // unknown fields must remain undefined, never fabricated zeroes.
+  const durationOnlyRun = [
+    {
+      id: 'r-dur-only',
+      target: '#80',
+      target_url: 'http://forge/issues/80',
+      issue: 80,
+      kind: 'implement',
+      actor: 'agy',
+      family: 'google',
+      harness: 'agy',
+      mode: 'batch',
+      status: 'succeeded',
+      created: '2026-11-02T10:00:00Z',
+      ended: '2026-11-02T10:01:00Z',
+      duration: '1m 0s',
+      summary: 'Implemented',
+      usage: { duration_ms: 60000 },
+      purged: false,
+      denials: [],
+    },
+  ] as any[];
+
+  const durationOnlyUsage = aggregateThreadUsage(durationOnlyRun);
+  assert.deepEqual(durationOnlyUsage, { duration_ms: 60000 });
+  assert.equal(durationOnlyUsage?.input_tokens, undefined);
+  assert.equal(durationOnlyUsage?.output_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cache_read_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cache_write_tokens, undefined);
+  assert.equal(durationOnlyUsage?.cost_usd, undefined);
+  assert.equal(durationOnlyUsage?.turns, undefined);
+
+  const [durationOnlyThread] = groupHistoryThreads(durationOnlyRun);
+  assert.equal(durationOnlyThread.usage?.cost_usd, undefined);
+  assert.equal(durationOnlyThread.usage?.input_tokens, undefined);
+  assert.equal(durationOnlyThread.usage?.duration_ms, 60000);
+
+  // Mixed partial usage across multiple runs sums reported fields and leaves unreported fields undefined
+  const mixedRuns = [
+    ...durationOnlyRun,
+    {
+      ...durationOnlyRun[0],
+      id: 'r-tok-turns',
+      kind: 'verify',
+      actor: 'claude',
+      family: 'anthropic',
+      harness: 'claude',
+      created: '2026-11-02T10:02:00Z',
+      ended: '2026-11-02T10:03:00Z',
+      usage: { input_tokens: 1500, output_tokens: 500, turns: 2, duration_ms: 45000 },
+    },
+  ] as any[];
+
+  const mixedUsage = aggregateThreadUsage(mixedRuns);
+  assert.deepEqual(mixedUsage, {
+    input_tokens: 1500,
+    output_tokens: 500,
+    turns: 2,
+    duration_ms: 105000,
+  });
+  assert.equal(mixedUsage?.cost_usd, undefined);
+  assert.equal(mixedUsage?.cache_read_tokens, undefined);
+  assert.equal(mixedUsage?.cache_write_tokens, undefined);
+
+  // Empty usage object returns undefined
+  assert.equal(
+    aggregateThreadUsage([{ ...durationOnlyRun[0], usage: {} } as any]),
+    undefined,
+  );
+});
+
+test('runOutcome labels recorded outcomes apart from execution status, and keeps missing ones neutral', () => {
+  const ended = '2026-11-01T10:40:00Z';
+  const approved = runOutcome({ status: 'succeeded', outcome: 'approved', ended });
+  const changes = runOutcome({ status: 'succeeded', outcome: 'changes_requested', ended });
+  assert.equal(approved?.label, 'Approved');
+  assert.equal(changes?.label, 'Changes requested');
+  // Distinct in text and glyph, not only in tone.
+  assert.notEqual(approved?.icon, changes?.icon);
+  assert.notEqual(approved?.tone, changes?.tone);
+  assert.match(changes?.title || '', /^Outcome: Changes requested/);
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'pr_opened', ended })?.label, 'PR opened');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'commented', ended })?.label, 'Commented');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'sized', ended })?.label, 'Sized');
+  assert.equal(runOutcome({ status: 'succeeded', outcome: 'already_sized', ended })?.label, 'Already sized');
+  assert.equal(runOutcome({ status: 'failed', outcome: 'needs_clarification', ended })?.label, 'Needs clarification');
+
+  // A failed run keeps its recorded verdict; status stays separate, and no
+  // outcome uses the error tone that marks execution failures.
+  assert.equal(runOutcome({ status: 'failed', outcome: 'changes_requested', ended })?.label, 'Changes requested');
+  for (const o of ['approved', 'changes_requested', 'commented', 'pr_opened', 'sized', 'already_sized', 'needs_clarification']) {
+    assert.notEqual(runOutcome({ status: 'succeeded', outcome: o, ended })?.tone, 'error');
+  }
+
+  // No recorded outcome is explicit and neutral, whatever the summary says.
+  const none = runOutcome({ status: 'succeeded', ended });
+  assert.equal(none?.label, 'None recorded');
+  assert.equal(none?.tone, 'neutral');
+  assert.equal(runOutcome({ status: 'failed', ended })?.label, 'None recorded');
+  // A run still going has no outcome yet.
+  assert.equal(runOutcome({ status: 'running' }), null);
+  // An unknown recorded value is shown as-is, neutrally.
+  const unknown = runOutcome({ status: 'succeeded', outcome: 'merged_later', ended });
+  assert.equal(unknown?.label, 'merged later');
+  assert.equal(unknown?.tone, 'neutral');
+});
+
+test('deriveFlowState derives concise flow state from authoritative data without guessing from summary', () => {
+  // 1. Active work -> In progress
+  const activeState = deriveFlowState({
+    active: true,
+    active_label: 'round 2/3 · verifying with kimi',
+    status: 'running',
+    runs: [],
+  });
+  assert.equal(activeState.state, 'in_progress');
+  assert.equal(activeState.label, 'In progress');
+  assert.equal(activeState.tone, 'accent');
+  assert.equal(activeState.icon, '●');
+  assert.match(activeState.title, /round 2\/3 · verifying with kimi/);
+
+  // 2. Ready to merge (open PR, mergeable, approved at current head)
+  const readyState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved all checks', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'approved', review_at_head: true,
+    },
+  });
+  assert.equal(readyState.state, 'ready_to_merge');
+  assert.equal(readyState.label, 'Ready to merge');
+  assert.equal(readyState.tone, 'success');
+  assert.equal(readyState.icon, '✓');
+
+  // 3. Stale approval at an older head: must NOT imply readiness!
+  const staleState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved previous commit', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'needs_review', review_at_head: false,
+    },
+  });
+  assert.equal(staleState.state, 'needs_review');
+  assert.equal(staleState.label, 'Needs review');
+  assert.equal(staleState.tone, 'warning');
+  assert.equal(staleState.icon, '👁');
+  assert.notEqual(staleState.state, 'ready_to_merge');
+
+  // 3b. Approval with missing/false review_at_head: must NOT imply readiness!
+  const missingAtHeadState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-1b', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved without at_head confirmation', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'approved', review_at_head: false,
+    },
+  });
+  assert.equal(missingAtHeadState.state, 'needs_review');
+  assert.equal(missingAtHeadState.label, 'Needs review');
+  assert.notEqual(missingAtHeadState.state, 'ready_to_merge');
+
+  // 4. Changes requested
+  const changesState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-2', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'changes_requested', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Missing tests', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: true, review_decision: 'changes_requested', review_at_head: true,
+    },
+  });
+  assert.equal(changesState.state, 'needs_changes');
+  assert.equal(changesState.label, 'Needs changes');
+  assert.equal(changesState.tone, 'warning');
+  assert.equal(changesState.icon, '⟲');
+
+  // 5. Conflicts with main -> Needs intervention
+  const conflictState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-3', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Approved', purged: false, denials: [],
+      pr_merged: false, pr_mergeable: false,
+    },
+  });
+  assert.equal(conflictState.state, 'needs_intervention');
+  assert.equal(conflictState.label, 'Needs intervention');
+  assert.equal(conflictState.tone, 'error');
+
+  // 6. Verifier undecided (COMMENT) -> Needs intervention
+  const undecidedState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-4', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'commented', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Unclear direction', purged: false, denials: [],
+      review_decision: 'commented',
+    },
+  });
+  assert.equal(undecidedState.state, 'needs_intervention');
+
+  // 7. Successful completion: PR merged -> Merged
+  const mergedState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-5', target: '!10', target_url: 'http://forge/pulls/10', pr: 10,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      duration: '5m', summary: 'Merged PR !10', purged: false, denials: [],
+      pr_merged: true,
+    },
+  });
+  assert.equal(mergedState.state, 'merged');
+  assert.equal(mergedState.label, 'Merged');
+  assert.equal(mergedState.tone, 'neutral');
+  assert.equal(mergedState.icon, '⎇');
+
+  // 8. Run failure -> Needs intervention
+  const failedState = deriveFlowState({
+    active: false,
+    status: 'failed',
+    runs: [],
+    latestRun: {
+      id: 'r-6', target: '#15', target_url: 'http://forge/issues/15', issue: 15,
+      kind: 'implement', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'failed', created: '2026-11-01T10:00:00Z', duration: '2m', summary: 'Crashed', purged: false, denials: [],
+    },
+  });
+  assert.equal(failedState.state, 'needs_intervention');
+  assert.equal(failedState.label, 'Needs intervention');
+  assert.equal(failedState.tone, 'error');
+
+  // 9. Missing / read-failed data remains explicitly neutral/unknown, NEVER inferred from summaries
+  const unknownState = deriveFlowState({
+    active: false,
+    status: 'succeeded',
+    runs: [],
+    latestRun: {
+      id: 'r-7', target: '#20', target_url: 'http://forge/issues/20', issue: 20,
+      kind: 'implement', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'succeeded', created: '2026-11-01T10:00:00Z', duration: '10m',
+      summary: 'Merged and approved PR !25 into main without issues', purged: false, denials: [],
+    },
+  });
+  assert.equal(unknownState.state, 'unknown');
+  assert.equal(unknownState.label, 'Unknown');
+  assert.equal(unknownState.tone, 'neutral');
+  assert.equal(unknownState.icon, '?');
+});
+
+test('groupHistoryThreads attaches flow_state to flow threads while keeping status and outcome separate', () => {
+  const threads = groupHistoryThreads([
+    // Flow 1: Stale approval on PR !12
+    {
+      id: 'r-fl-1', target: '!12', target_url: 'http://forge/pulls/12', issue: 11, pr: 12,
+      kind: 'verify', actor: 'kimi', family: 'moonshot', harness: 'kimi', mode: 'batch',
+      status: 'succeeded', outcome: 'approved', created: '2026-11-01T10:00:00Z',
+      ended: '2026-11-01T10:10:00Z', duration: '10m', summary: 'Approved old commit',
+      purged: false, denials: [], review_decision: 'needs_review', review_at_head: false,
+      flow_state: 'needs_review',
+    },
+    // Discuss run (not a flow)
+    {
+      id: 'r-disc-1', target: '#30', target_url: 'http://forge/issues/30', issue: 30,
+      kind: 'discuss', actor: 'claude', family: 'anthropic', harness: 'claude', mode: 'batch',
+      status: 'succeeded', outcome: 'commented', created: '2026-11-01T09:00:00Z',
+      ended: '2026-11-01T09:10:00Z', duration: '10m', summary: 'Discussed architecture',
+      purged: false, denials: [],
+    },
+  ] as any[]);
+
+  const flowThread = threads.find((t) => t.kind === 'flow');
+  assert.ok(flowThread);
+  // Flow state is Needs review (stale approval)
+  assert.equal(flowThread?.flow_state?.label, 'Needs review');
+  assert.equal(flowThread?.flow_state?.state, 'needs_review');
+  // Execution status is succeeded (separate from flow state)
+  assert.equal(flowThread?.status, 'succeeded');
+  // Recorded outcome is approved (separate from flow state)
+  assert.equal(flowThread?.runs[0]?.outcome, 'approved');
+
+  // Discuss thread has no flow_state
+  const discussThread = threads.find((t) => t.kind === 'discuss');
+  assert.ok(discussThread);
+  assert.equal(discussThread?.flow_state, undefined);
+
+  // Active flow thread preserves both active_label and flow_state (In progress)
+  const activeThreads = groupHistoryThreads(
+    [
+      {
+        id: 'r-act-1', target: '#51', target_url: 'http://forge/issues/51', issue: 51,
+        kind: 'implement', actor: 'codex', family: 'openai', harness: 'codex', mode: 'batch',
+        status: 'running', created: '2026-11-01T10:00:00Z', summary: '', purged: false, denials: [],
+      } as any,
+    ],
+    null,
+    [
+      {
+        issue: 51, implement: 'codex', verify: 'kimi', round: 2, max_rounds: 3,
+        step: 'verifying with kimi', label: '#51 · round 2/3 · verifying with kimi', waiting: false,
+      },
+    ],
+  );
+  const activeFlow = activeThreads.find((t) => t.issue === 51);
+  assert.ok(activeFlow);
+  assert.equal(activeFlow?.active, true);
+  assert.equal(activeFlow?.active_label, '#51 · round 2/3 · verifying with kimi');
+  assert.equal(activeFlow?.flow_state?.state, 'in_progress');
+  assert.equal(activeFlow?.flow_state?.label, 'In progress');
+});
+
+test('resolveItemIssueAndPR and runMatchesFlow isolate same-issue runs by PR and pre-PR', () => {
+  const prePrRun = {
+    id: 'r-pre',
+    target: '#42',
+    issue: 42,
+    thread_key: 'flow:issue:42',
+  };
+  const pr57Run = {
+    id: 'r-pr57',
+    target: '!57',
+    issue: 42,
+    pr: 57,
+    thread_key: 'flow:issue:42:pr:57',
+  };
+  const pr58Run = {
+    id: 'r-pr58',
+    target: '!58',
+    issue: 42,
+    pr: 58,
+  };
+  const otherIssueRun = {
+    id: 'r-other',
+    target: '#99',
+    issue: 99,
+  };
+
+  assert.deepEqual(resolveItemIssueAndPR(prePrRun), { issue: 42, pr: undefined });
+  assert.deepEqual(resolveItemIssueAndPR(pr57Run), { issue: 42, pr: 57 });
+  assert.deepEqual(resolveItemIssueAndPR(pr58Run), { issue: 42, pr: 58 });
+
+  // Pre-PR flow matches only pre-PR run
+  assert.equal(runMatchesFlow(prePrRun, 42, undefined), true);
+  assert.equal(runMatchesFlow(pr57Run, 42, undefined), false);
+  assert.equal(runMatchesFlow(pr58Run, 42, undefined), false);
+  assert.equal(runMatchesFlow(otherIssueRun, 42, undefined), false);
+
+  // PR 57 flow matches only PR 57 run
+  assert.equal(runMatchesFlow(prePrRun, 42, 57), false);
+  assert.equal(runMatchesFlow(pr57Run, 42, 57), true);
+  assert.equal(runMatchesFlow(pr58Run, 42, 57), false);
+  assert.equal(runMatchesFlow(otherIssueRun, 42, 57), false);
+
+  // PR 58 flow matches only PR 58 run
+  assert.equal(runMatchesFlow(prePrRun, 42, 58), false);
+  assert.equal(runMatchesFlow(pr57Run, 42, 58), false);
+  assert.equal(runMatchesFlow(pr58Run, 42, 58), true);
+});
+
+
+
+

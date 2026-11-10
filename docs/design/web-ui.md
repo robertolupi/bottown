@@ -569,18 +569,33 @@ sharing and caching concurrent and completed reads; a failed read affects
 only that popup. The
 title stays plain text and rendered description HTML is sanitized.
 
-**History.** A flow-centric table of history threads. Each flow thread groups
+**History.** A flow-centric table of history threads with five columns.
+Each flow thread groups
 `implement` and `verify` runs for the same issue and PR (including manual
 runs, retries, stops/resumes, repeated rounds, and pre-PR implementation runs
 that stay in the thread once its PR is opened; a different PR on the same
 issue forms a separate thread). `discuss` runs appear as separate entries.
-The main line shows the issue, PR, and milestone name together (omitting the
-milestone when none is assigned), along with latest status, active flow
-highlighting, run count, actors, duration, usage, summary, and last activity.
-Clicking a flow row navigates to its dedicated page at `#/flow/<issue>`
+The columns are:
+- **Target:** the issue and PR references, the title, the milestone badge
+  when one is assigned, and the thread's kind
+  and run count as a muted suffix, with the summary as a second, clipped
+  line under them. A failed or revoked run's reason stays on the row, under
+  the summary.
+- **Actors:** the thread's actors.
+- **State:** one badge — the thread's status, which already folds the review
+  outcome in for merged, ready, needs-changes and needs-intervention
+  threads. The outcome badge shows next to it only when the status does not
+  imply it.
+- **Duration · cost:** the thread's duration and recorded cost.
+- **Last activity:** a relative age, with the exact time as its title.
+
+The token counts move to the run page. A row opens its page: clicking a flow
+row navigates to `#/flow/<issue>`
 (optionally `?pr=N`), while a discuss or single-run row navigates to
 `#/run/<id>`. Back returns to the view the owner came from, at its scroll
-position. The page shares one unified layout component with runs:
+position. The filters stay above the table, and the table fills the view's
+height with no sideways scroll. The page shares one unified layout component
+with runs:
 - **Header:** target, issue title, kind, active round, actor, model and mode,
   elapsed time against the limit, and links to the issue and PR in Forgejo.
   A flow, and any run belonging to one, shows the flow's phase bar
@@ -609,7 +624,9 @@ cell, wrapped, and **less** cuts it again (#133). Neither expands the flow.
 (succeeded, failed, revoked); its **outcome** says what work it produced,
 as the server recorded it from the run's tools: a verify run's latest
 review verdict (Approved, Changes requested, Commented) and an implement
-or plan run's opened PR (PR opened). History rows, flow rows (the latest
+or plan run's opened PR (PR opened). A History row's state badge folds the
+outcome in for merged, ready, needs-changes and needs-intervention threads
+and shows the outcome badge beside it otherwise; flow rows (the latest
 run's), the timeline's run boundaries and the constituent runs show both,
 the outcome as an outlined badge with a glyph and a label, so it reads
 without color. A run with no recorded outcome, including every run from

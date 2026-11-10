@@ -2,7 +2,7 @@
 // --test, with Node stripping the types.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, formatUsage, statusTone } from '../src/format.ts';
+import { formatElapsed, formatRelativeTime, formatCost, formatUsage, statusTone } from '../src/format.ts';
 import { postAction } from '../src/actions.ts';
 
 test('formatElapsed counts minutes and padded seconds since created', () => {
@@ -30,6 +30,25 @@ test('statusTone maps execution statuses to badge tones', () => {
   assert.equal(statusTone('failed'), 'error');
   assert.equal(statusTone('running'), 'accent');
   assert.equal(statusTone('revoked'), 'warning');
+});
+
+test('formatRelativeTime gives a coarse age, and formatCost a cost', () => {
+  const now = Date.parse('2026-11-10T12:00:00Z');
+  const ago = (s: number) => new Date(now - s * 1000).toISOString();
+  assert.equal(formatRelativeTime(ago(5), now), 'just now');
+  assert.equal(formatRelativeTime(ago(12 * 60), now), '12m ago');
+  assert.equal(formatRelativeTime(ago(3 * 3600), now), '3h ago');
+  assert.equal(formatRelativeTime(ago(2 * 86400), now), '2d ago');
+  assert.equal(formatRelativeTime(ago(45 * 86400), now), '1mo ago');
+  assert.equal(formatRelativeTime(ago(400 * 86400), now), '1y ago');
+  assert.equal(formatRelativeTime(ago(-30), now), 'just now', 'never a future age');
+  assert.equal(formatRelativeTime('', now), '');
+  assert.equal(formatRelativeTime('not-a-date', now), 'not-a-date');
+
+  assert.equal(formatCost(undefined), '');
+  assert.equal(formatCost({ cost_usd: 0 }), '$0.00');
+  assert.equal(formatCost({ input_tokens: 100 }), '', 'tokens alone are no cost');
+  assert.equal(formatCost({ cost_usd: 1.239 }), '$1.24');
 });
 
 function stubFetch(ok: boolean, body: unknown) {

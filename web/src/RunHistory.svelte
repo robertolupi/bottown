@@ -1,8 +1,8 @@
 <script lang="ts">
   // Run history (§4.2): ended and live runs grouped into threads, flows
-  // and discussions, filtered, in a table whose flow rows expand. Its
-  // state is App's RunHistoryState, which lasts across views and follows
-  // the expanded flow as runs start and end.
+  // and discussions, filtered, in a table of five columns — target,
+  // actors, state, duration and cost, last activity. A row opens its
+  // page. Its state is App's RunHistoryState, which lasts across views.
   import type { ActorDetail, HistoryThread } from './types';
   import type { RunHistoryState } from './history.svelte';
   import { filterHistoryThreads } from './state';
@@ -51,24 +51,19 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th>Flow / Target</th>
-              <th>Kind</th>
+              <th>Target</th>
               <th>Actors</th>
-              <th>Status</th>
-              <th>Outcome</th>
-              <th>Duration</th>
-              <th>Usage</th>
-              <th>Summary</th>
-              <th>Last Activity</th>
-              <th>Actions</th>
+              <th>State</th>
+              <th>Duration · cost</th>
+              <th>Last activity</th>
             </tr>
           </thead>
           <tbody>
             {#each filteredThreads as thread (thread.key)}
               {#if thread.kind === 'discuss'}
-                <DiscussThreadRow {thread} />
+                <DiscussThreadRow {thread} {now} />
               {:else}
-                <FlowThreadRow {thread} />
+                <FlowThreadRow {thread} {now} />
               {/if}
             {/each}
           </tbody>
@@ -79,13 +74,28 @@
 </section>
 
 <style>
+  /* The view fills the window's height instead of a fixed panel height:
+     the table scrolls inside the card, so the head stays and the rows
+     scroll, with no sideways scroll. */
+  .card.full-width {
+    height: calc(100vh - 160px);
+    height: calc(100dvh - 160px);
+    min-height: 320px;
+  }
+
+  .card-body {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   .table-container {
     overflow-x: auto;
   }
 
   .history-table-container {
-    max-height: var(--panel-max-height);
-    max-block-size: var(--panel-max-height);
+    flex: 1;
+    min-height: 0;
     overflow: auto;
   }
 
@@ -106,16 +116,27 @@
     border-collapse: separate;
     border-spacing: 0;
     font-size: 13px;
+    table-layout: fixed;
   }
 
   .data-table :global(th), .data-table :global(td) {
     padding: 8px 12px;
     text-align: left;
     border-bottom: 1px solid var(--border);
+    box-sizing: border-box;
+    vertical-align: top;
   }
 
   .data-table :global(th) {
     color: var(--text-muted);
     font-weight: 500;
   }
+
+  /* Fixed widths keep the row inside the view's width: the target takes
+     the room the four narrow columns leave. */
+  .data-table :global(th:nth-child(1)) { width: 46%; }
+  .data-table :global(th:nth-child(2)) { width: 12%; }
+  .data-table :global(th:nth-child(3)) { width: 18%; }
+  .data-table :global(th:nth-child(4)) { width: 13%; }
+  .data-table :global(th:nth-child(5)) { width: 11%; }
 </style>

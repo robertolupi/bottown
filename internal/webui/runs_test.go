@@ -1201,23 +1201,28 @@ func TestEndpoints_RunsAndActions(t *testing.T) {
 }
 
 func TestHistoryTableScrollStyles(t *testing.T) {
-	// The built bundle is not tracked (dist/ui), so check the source.
+	// The built bundle is not tracked (dist/ui), so check the source. The
+	// History table fills the view's height (not the shared
+	// --panel-max-height), its head stays as its rows scroll, and its
+	// fixed layout keeps it from scrolling sideways.
 	data, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "RunHistory.svelte"))
 	if err != nil {
 		t.Fatalf("read RunHistory.svelte: %v", err)
 	}
 	src := string(data)
-	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "max-height: var(--panel-max-height)", "max-block-size: var(--panel-max-height)", "overflow: auto", "position: sticky"} {
+	for _, want := range []string{`class="table-container history-table-container"`, ".history-table-container {", "height: calc(100dvh - 160px)", "overflow: auto", "position: sticky", "table-layout: fixed"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("expected RunHistory.svelte to contain %q", want)
 		}
 	}
+	if strings.Contains(src, "max-height: var(--panel-max-height)") {
+		t.Errorf("RunHistory.svelte must fill the view's height, not the panel's max height")
+	}
 }
 
 func TestOwnerInboxScrollStyles(t *testing.T) {
-	// The Owner Inbox scrolls at the same maximum height as the run
-	// history, both from the shared --panel-max-height. The built bundle is
-	// not tracked, so check the source.
+	// The Owner Inbox scrolls at the shared --panel-max-height. The built
+	// bundle is not tracked, so check the source.
 	inbox, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "OwnerInbox.svelte"))
 	if err != nil {
 		t.Fatalf("read OwnerInbox.svelte: %v", err)
