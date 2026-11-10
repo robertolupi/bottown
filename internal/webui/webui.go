@@ -97,6 +97,7 @@ type Server struct {
 	lastOriginErr       string
 	activityCache       activity.Cache // ComputeActivity's comment and closed PR reads
 	diffs               diffCache      // ComputeStats' merged-PR diffstat reads
+	liveInbox           liveInboxCache // Live's inbox counts, between polls
 }
 
 // NewServer creates a new web UI server bound to 127.0.0.1.
@@ -186,6 +187,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	mux.HandleFunc("GET /api/inbox", s.handleGetInbox)
 	mux.HandleFunc("GET /api/milestones", s.handleGetMilestones)
+	mux.HandleFunc("GET /api/live", s.handleGetLive)
 	mux.HandleFunc("GET /api/runs", s.handleGetRuns)
 	mux.HandleFunc("GET /api/timeline", s.handleGetTimeline)
 	mux.HandleFunc("GET /api/stats", s.handleGetStats)
@@ -363,6 +365,34 @@ func (s *Server) handleGetInbox(w http.ResponseWriter, r *http.Request) {
 		inbox = []InboxItem{}
 	}
 	writeJSON(w, http.StatusOK, inbox)
+}
+
+// handleGetLive serves Live; ?tail=N asks for each item's last N lines.
+func (s *Server) handleGetLive(w http.ResponseWriter, r *http.Request) {
+	n, err := liveTailParam(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	live, err := s.Live(r.Context(), n)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, live)
+}
+
+// liveTailParam is GET /api/live's ?tail=N: 0 (the default) without one.
+func liveTailParam(r *http.Request) (int, error) {
+	v := r.URL.Query().Get("tail")
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("tail must be a positive number of lines, not %q", v)
+	}
+	return n, nil
 }
 
 func (s *Server) handleGetMilestones(w http.ResponseWriter, r *http.Request) {

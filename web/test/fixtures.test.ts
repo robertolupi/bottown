@@ -32,5 +32,8 @@ for (const { name, fx } of fixtures) {
     assertUnique(name, 'live run', (fx.live_runs ?? []).map((r: any) => r.id));
     assertUnique(name, 'active flow', (fx.active_flows ?? []).map((f: any) => f.issue));
     assertUnique(name, 'inbox item', (fx.inbox ?? []).map((i: any) => i.id));
+    assertUnique(name, 'live item', (fx.live?.items ?? []).map((i: any) => i.id));
+    assertUnique(name, 'live row', (fx.live?.rows ?? []).map((r: any) => r.key));
+    assertUnique(name, 'ended thread', (fx.live?.ended ?? []).map((e: any) => e.key));
   });
 }

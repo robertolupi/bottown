@@ -3,7 +3,8 @@
   // runs, holds the state the views and dialogs share, and posts the
   // owner's actions. The views and dialogs are their own components.
   import { onMount } from 'svelte';
-  import type { UIStatusResponse, IssueTimeline, TimelineFlowLane, TimelineRun } from './types';
+  import type { Live, UIStatusResponse, IssueTimeline, TimelineFlowLane, TimelineRun } from './types';
+  import { emptyLive } from './now';
   import { lifecycleChange } from './lifecycle';
   import { buildMilestoneRunPayload, postAction, type FlowForm, type MilestoneRunForm, type RunForm } from './actions';
   import { RunHistoryState } from './history.svelte';
@@ -40,6 +41,8 @@
   let { pollInterval }: { pollInterval?: number } = $props();
 
   let status = $state<UIStatusResponse | null>(null);
+  // Now's live view, as the server makes it (GET /api/live).
+  let liveView = $state<Live>(emptyLive());
   // When status was last requested (ms), for the live poll's periodic reload.
   let statusLoadedAt = 0;
   let loading = $state<boolean>(true);
@@ -156,6 +159,14 @@
       loading = false;
       refreshing = false;
     }
+  }
+
+  // loadLive reads the live view; a failure throws, for the poll to show
+  // on the freshness chip.
+  async function loadLive() {
+    const res = await fetch('/api/live');
+    if (!res.ok) throw new Error(`live poll: ${res.status} ${res.statusText}`);
+    liveView = await res.json();
   }
 
   async function handleRefresh() {
@@ -324,6 +335,7 @@
 
     loadStatus();
     loadHistory();
+    loadLive().catch(() => {});
 
     const timerInterval = setInterval(() => {
       nowTime = Date.now();
@@ -335,7 +347,9 @@
     async function poll() {
       if (destroyed) return;
       try {
-        const res = await fetch('/api/runs?state=live');
+        // Now shows the server's live view; History reconciles its threads
+        // with the live runs and flows.
+        const [res] = await Promise.all([fetch('/api/runs?state=live'), loadLive()]);
         if (!res.ok) throw new Error(`live poll: ${res.status} ${res.statusText}`);
         {
           const data = await res.json();
@@ -475,11 +489,7 @@
           />
 
           <LiveRuns
-            liveRuns={status.live_runs}
-            liveChecks={status.live_checks}
-            activeFlows={status.active_flows}
-            historyRuns={runHistory.runs}
-            threads={historyThreads}
+            live={liveView}
             now={nowTime}
             onStartFlow={() => (showFlowModal = true)}
             onStartRun={() => (showRunModal = true)}

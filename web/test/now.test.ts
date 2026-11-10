@@ -1,4 +1,5 @@
-// Now (monitor-ui design §3): the tiles and rows of Live, each tile's last
+// Now (monitor-ui design §3): Live laid out from the server's live view (the
+// fixture's `live` section, as GET /api/live answers it), each tile's last
 // output and quiet, Needs you's counts and its remembered expansion, and the
 // header's health, upstream and freshness chips.
 import test from 'node:test';
@@ -9,42 +10,33 @@ import { reactiveProps } from '../testing/props.svelte.js';
 import AppHeader from '../src/AppHeader.svelte';
 import LiveRuns from '../src/LiveRuns.svelte';
 import OwnerInbox from '../src/OwnerInbox.svelte';
+import * as nowModule from '../src/now.ts';
 import {
+  emptyLive,
+  endedHref,
   formatSpan,
   freshness,
   healthProblems,
   inboxCounts,
-  justEnded,
-  lastOutputStatus,
-  nowRows,
-  nowTiles,
-  quietAfterMs,
+  lastOutputText,
+  rowHref,
+  rowText,
+  tileMeta,
   upstreamText,
 } from '../src/now.ts';
-import type { HistoryThread, LiveCheckInfo, LiveRunInfo, UIStatusResponse } from '../src/types.ts';
+import type { Live, LiveItem, UIStatusResponse } from '../src/types.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/default.json', import.meta.url), 'utf8'));
+const live = fixture.live as Live;
 
-const t0 = Date.parse('2026-11-10T12:00:00Z');
-const iso = (offsetMs: number) => new Date(t0 + offsetMs).toISOString();
+const t0 = Date.parse('2026-11-02T10:43:40Z');
 const min = 60 * 1000;
 
-function run(id: string, created: number, extra: Partial<LiveRunInfo> = {}): LiveRunInfo {
-  return {
-    id, target: `#${id.length}`, target_url: '', kind: 'implement', actor: 'claude', family: 'anthropic', harness: 'claude',
-    interactive: false, created: iso(created), expires: iso(created + 60 * min), elapsed: '', timeout: '60m',
-    log_tail: [{ kind: 'text', text: `line of ${id}` }], denials: [], ...extra,
-  };
-}
-
-function check(id: string, created: number, extra: Partial<LiveCheckInfo> = {}): LiveCheckInfo {
-  return { id, group: 'e2e', issue: 56, sha: '7c1d2e3f4a', commands: ['make e2e'], created: iso(created), elapsed: '', log_tail: [], ...extra };
-}
-
 const liveProps = (p: Record<string, unknown>) => ({
-  liveRuns: [], liveChecks: [], activeFlows: [], historyRuns: [], threads: [], now: t0,
-  onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {}, ...p,
+  live, now: t0, onStartFlow: () => {}, onStartRun: () => {}, onGC: () => {}, ...p,
 });
+
+const byId = (root: Element, id: string) => root.querySelector<HTMLElement>(`.now-tile[data-id="${id}"]`)!;
 
 test('formatSpan shows hours past an hour', () => {
   assert.equal(formatSpan(4000), '4s');
@@ -53,90 +45,112 @@ test('formatSpan shows hours past an hour', () => {
   assert.equal(formatSpan(-5), '0s');
 });
 
-test('one tile per batch run and check group, in start order', () => {
-  const runs = [run('r-late', -1 * min), run('r-early', -30 * min), run('r-inter', -20 * min, { interactive: true })];
-  const checks = [check('flow-56-a.e2e', -10 * min)];
-  assert.deepEqual(nowTiles(runs, checks).map((t) => t.id), ['r-early', 'flow-56-a.e2e', 'r-late']);
+test('Now groups nothing: the live view comes from the server', () => {
+  for (const gone of ['nowTiles', 'nowRows', 'justEnded', 'quietAfterMs', 'lastOutputStatus']) {
+    assert.equal(gone in nowModule, false, `now.ts still exports ${gone}`);
+  }
+});
 
-  const view = render(LiveRuns, liveProps({ liveRuns: runs, liveChecks: checks }));
+test('one tile per item, in the order the server gives', () => {
+  const view = render(LiveRuns, liveProps({}));
   try {
     const tiles = [...view.target.querySelectorAll<HTMLElement>('.now-tile')];
-    assert.deepEqual(tiles.map((t) => t.dataset.id), ['r-early', 'flow-56-a.e2e', 'r-late']);
-    assert.match(tiles[0].textContent!, /implement · claude · 30m\/1h 0m/);
-    assert.match(tiles[1].textContent!, /checks e2e · 7c1d2e3/);
+    assert.deepEqual(tiles.map((t) => t.dataset.id), live.items.map((i) => i.id));
+    assert.deepEqual(tiles.map((t) => t.dataset.id), ['r-1a2b3c4d', 'land-59', 'r-9c8d7e6f', 'flow-56-7c1d2e3f4a.e2e', 'flow-64-9e8d7c6b5a.check']);
+    assert.match(byId(view.target, 'r-1a2b3c4d').textContent!, /#42\s*Retry webhook deliveries with backoff/);
+    assert.match(byId(view.target, 'r-1a2b3c4d').textContent!, /implement 1\/3 · claude · 12m\/1h 0m/);
+    assert.match(byId(view.target, 'r-9c8d7e6f').textContent!, /verify 2\/3 · kimi · 4m\/1h 0m/);
+    assert.match(byId(view.target, 'r-9c8d7e6f').textContent!, /1 denied/);
+    assert.match(byId(view.target, 'land-59').textContent!, /land · bottown · 5m/);
+    assert.match(byId(view.target, 'flow-56-7c1d2e3f4a.e2e').textContent!, /checks e2e · !62 · 7c1d2e3/);
+    assert.match(byId(view.target, 'flow-64-9e8d7c6b5a.check').textContent!, /checks · !65 · 9e8d7c6/);
     // No filter bar: the tail is LogLineView lines only.
     assert.equal(view.target.querySelector('.log-follow-btn'), null);
-    tiles[2].click();
-    assert.equal(location.hash, '#/run/r-late');
+    tiles[1].click();
+    assert.equal(location.hash, '#/run/land-59');
   } finally { view.unmount(); location.hash = ''; }
 });
 
-test('last output for a fresh, a quiet and a log-less item, and the quiet class at the threshold', () => {
-  const fresh = run('r-fresh', -20 * min, { last_output: iso(-4000) });
-  const quiet = run('r-quiet', -20 * min, { last_output: iso(-6 * min) });
-  const logless = check('flow-1-b.check', -2 * min);
-  assert.deepEqual(lastOutputStatus(fresh, t0), { text: '4s', quiet: false });
-  assert.deepEqual(lastOutputStatus(quiet, t0), { text: 'no output for 6m', quiet: true });
-  assert.deepEqual(lastOutputStatus(logless, t0), { text: '2m', quiet: false }, 'counts from the start');
-  const edge = run('r-edge', -20 * min, { last_output: iso(-quietAfterMs) });
-  assert.equal(lastOutputStatus(edge, t0).quiet, true, 'quiet at the threshold');
-  assert.equal(lastOutputStatus(edge, t0 - 1000).quiet, false, 'not a second before');
+test('a tile shows the last lines of its tail', () => {
+  const tail = Array.from({ length: 12 }, (_, i) => ({ kind: 'text', text: `line ${i + 1}` }));
+  const items = live.items.map((i) => (i.id === 'r-1a2b3c4d' ? { ...i, tail } : i));
+  const view = render(LiveRuns, liveProps({ live: { ...live, items } }));
+  try {
+    const lines = [...byId(view.target, 'r-1a2b3c4d').querySelectorAll('.tile-tail .log-line')].map((l) => l.textContent!.trim());
+    assert.equal(lines.length, 8);
+    assert.equal(lines.at(-1), 'line 12');
+    assert.equal(byId(view.target, 'land-59').querySelector('.tile-empty')?.textContent, 'No output yet.');
+  } finally { view.unmount(); }
+});
 
-  const props = reactiveProps(liveProps({ liveRuns: [fresh, quiet, edge], liveChecks: [logless] }));
+test('quiet is the server\'s: the warning border, "no output for", and the summary', () => {
+  const props = reactiveProps(liveProps({}));
   const view = render(LiveRuns, props);
   try {
-    const byId = (id: string) => view.target.querySelector<HTMLElement>(`.now-tile[data-id="${id}"]`)!;
-    assert.ok(!byId('r-fresh').classList.contains('quiet'));
-    assert.match(byId('r-fresh').querySelector('.tile-last')!.textContent!, /^4s$/);
-    assert.ok(byId('r-quiet').classList.contains('quiet'));
-    assert.equal(byId('r-quiet').querySelector('.tile-last')!.textContent, 'no output for 6m');
-    assert.ok(byId('r-edge').classList.contains('quiet'));
-    assert.ok(!byId('flow-1-b.check').classList.contains('quiet'));
-    assert.match(view.target.querySelector('.live-summary')!.textContent!, /4 running · 2 quiet/);
-    // As time passes the fresh tile turns quiet, in place.
-    props.now = t0 + quietAfterMs;
+    const quiet = byId(view.target, 'r-9c8d7e6f');
+    assert.ok(quiet.classList.contains('quiet'));
+    assert.equal(quiet.querySelector('.tile-last')!.textContent, 'no output for 2m');
+    // Old output is not quiet unless the server says so.
+    const old = byId(view.target, 'r-1a2b3c4d');
+    assert.ok(!old.classList.contains('quiet'));
+    assert.equal(old.querySelector('.tile-last')!.textContent, '44s');
+    assert.equal(view.target.querySelector('.live-summary')!.textContent!.replace(/\s+/g, ' ').trim(), '5 running · 1 quiet · 1 waiting · 1 interactive');
+
+    // The next poll says #42's run went quiet: it turns in place.
+    const next: Live = {
+      ...live,
+      items: live.items.map((i) => (i.id === 'r-1a2b3c4d' ? { ...i, quiet: true } : i)),
+      summary: { ...live.summary, quiet: 2 },
+    };
+    props.live = next;
+    props.now = t0 + 5 * min;
     flushSync();
-    assert.ok(byId('r-fresh').classList.contains('quiet'));
-    assert.deepEqual([...view.target.querySelectorAll<HTMLElement>('.now-tile')].map((t) => t.dataset.id), ['r-edge', 'r-fresh', 'r-quiet', 'flow-1-b.check']);
+    assert.ok(byId(view.target, 'r-1a2b3c4d').classList.contains('quiet'));
+    assert.equal(byId(view.target, 'r-1a2b3c4d').querySelector('.tile-last')!.textContent, 'no output for 5m');
+    assert.deepEqual([...view.target.querySelectorAll<HTMLElement>('.now-tile')].map((t) => t.dataset.id), live.items.map((i) => i.id));
+    assert.match(view.target.querySelector('.live-summary')!.textContent!, /5 running · 2 quiet/);
   } finally { view.unmount(); }
 });
 
-test('a waiting flow and an interactive run are rows, not tiles', () => {
-  const runs = [run('r-flow', -4 * min, { flow: { issue: 42, round: 1, max_rounds: 3, step: 'implementing with claude', label: '' } }),
-    run('r-inter', -9 * min, { interactive: true, target: '#61', issue_title: 'Rename the export flag' })];
-  const flows = [
-    { issue: 42, implement: 'claude', verify: 'kimi', round: 1, max_rounds: 3, step: 'implementing with claude', label: '', waiting: false },
-    { issue: 53, implement: 'agy', verify: 'claude', round: 1, max_rounds: 3, step: 'waiting for a run slot', label: '', waiting: true },
-  ];
-  const history = [{ id: 'r-old', issue: 53, issue_title: 'Usage dashboard endpoint', ended: iso(-6 * min) } as any];
-  const rows = nowRows(flows, runs, [], history);
-  assert.deepEqual(rows.map((r) => [r.key, r.href]), [['flow-53', '#/flow/53'], ['r-inter', '#/run/r-inter']]);
+test('last output counts from the start for an item that wrote nothing', () => {
+  const logless: LiveItem = { id: 'flow-1-b.check', kind: 'check', target: '#1', started: new Date(t0 - 2 * min).toISOString(), quiet: false, tail: [], denials: 0 };
+  assert.equal(lastOutputText(logless, t0), '2m');
+  assert.equal(lastOutputText({ ...logless, quiet: true }, t0 + 4 * min), 'no output for 6m');
+  assert.equal(tileMeta(logless, t0), 'checks · 2m');
+  assert.equal(tileMeta({ ...logless, kind: 'verify', actor: 'kimi', limit: 3600, flow: { issue: 1 } }, t0), 'verify · kimi · 2m/1h 0m');
+});
 
-  const view = render(LiveRuns, liveProps({ liveRuns: runs, activeFlows: flows, historyRuns: history }));
+test('a waiting flow and an interactive run are rows, linking to their pages', () => {
+  assert.deepEqual(live.rows.map((r) => [r.key, rowHref(r)]), [['flow-53', '#/flow/53'], ['r-0f1e2d3c', '#/run/r-0f1e2d3c']]);
+  assert.equal(rowText({ key: 'flow-9', kind: 'flow', target: '#9', issue: 9, what: '' }, t0), 'flow');
+  const view = render(LiveRuns, liveProps({}));
   try {
-    assert.deepEqual([...view.target.querySelectorAll<HTMLElement>('.now-tile')].map((t) => t.dataset.id), ['r-flow']);
     const lines = [...view.target.querySelectorAll('.now-row')].map((r) => r.textContent!.replace(/\s+/g, ' ').trim());
     assert.deepEqual(lines, [
-      '#53 Usage dashboard endpoint · flow 1/3 · waiting for a run slot · 6m',
-      '#61 Rename the export flag · implement · claude · interactive · 9m',
+      '#53 Usage dashboard endpoint · flow 1/3 · waiting for actor · agy has another live batch run (r-2b3c4d5e) · 6m',
+      '#44 Should exports stream CSV or build it in memory? · discuss · codex · interactive · 23m',
     ]);
-    assert.match(view.target.querySelector('.live-summary')!.textContent!, /1 running · 1 waiting · 1 interactive/);
+    assert.deepEqual([...view.target.querySelectorAll<HTMLAnchorElement>('.now-row a')].map((a) => a.getAttribute('href')), ['#/flow/53', '#/run/r-0f1e2d3c']);
   } finally { view.unmount(); }
 });
 
-test('just ended names up to five threads that ended in the past hour, each a link', () => {
-  const thread = (key: string, issue: number, endedAgo: number, active = false): HistoryThread => ({
-    key, kind: 'flow', issue, issue_title: `Issue ${issue}`, active, status: 'succeeded', run_count: 1, last_activity: '',
-    actors: [], duration: '', summary: '', total_denials: 0, runs: [{ id: `r-${issue}`, ended: iso(-endedAgo) } as any],
-  });
-  const threads = [1, 2, 3, 4, 5, 6].map((n) => thread(`t${n}`, n, n * min));
-  threads.push(thread('old', 7, 2 * 60 * min), thread('live', 8, min, true));
-  const ended = justEnded(threads, t0);
-  assert.deepEqual(ended.map((e) => e.label), ['#1', '#2', '#3', '#4', '#5']);
-  const view = render(LiveRuns, liveProps({ threads }));
+test('just ended links each thread the server names to its page', () => {
+  assert.deepEqual(live.ended.map(endedHref), ['#/flow/62', '#/flow/52?pr=58', '#/run/r-3e4f5a6b']);
+  const view = render(LiveRuns, liveProps({}));
   try {
     const links = [...view.target.querySelectorAll<HTMLAnchorElement>('.just-ended a')];
-    assert.deepEqual(links.map((a) => a.getAttribute('href')), ['#/flow/1', '#/flow/2', '#/flow/3', '#/flow/4', '#/flow/5']);
+    assert.deepEqual(links.map((a) => a.getAttribute('href')), ['#/flow/62', '#/flow/52?pr=58', '#/run/r-3e4f5a6b']);
+    assert.equal(links[0].textContent, '#62 Retry webhook deliveries with jitter');
+    assert.equal(links[2].textContent, 'retro');
+  } finally { view.unmount(); }
+});
+
+test('an empty live view is one idle line', () => {
+  const view = render(LiveRuns, liveProps({ live: emptyLive() }));
+  try {
+    assert.equal(view.target.querySelector('.live-idle')?.textContent, 'Nothing running in this repository.');
+    assert.equal(view.target.querySelector('.live-summary')!.textContent!.trim(), '0 running');
+    assert.equal(view.target.querySelector('.just-ended'), null);
   } finally { view.unmount(); }
 });
 

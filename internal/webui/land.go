@@ -98,7 +98,9 @@ func (s *Server) stopLanding(id string) (string, error) {
 	return fmt.Sprintf("Landing !%d stopped", n), nil
 }
 
-func (s *Server) liveLandings() []LiveRunInfo {
+// liveLandings are the UI-started landings still running, each with its
+// log's last lines rendered.
+func (s *Server) liveLandings(lines int) []LiveRunInfo {
 	paths, _ := filepath.Glob(filepath.Join(s.cfg.RepoTop, ".bottown", "runs", "land-*.json"))
 	live := []LiveRunInfo{}
 	for _, path := range paths {
@@ -112,14 +114,7 @@ func (s *Server) liveLandings() []LiveRunInfo {
 		}
 		id := fmt.Sprintf("land-%d", n)
 		b, _ := runs.ReadLog(s.landingPath(n, ".log"))
-		tail := runs.RenderLog("", b)
-		if len(tail) > 25 {
-			tail = tail[len(tail)-25:]
-		}
-		if tail == nil {
-			tail = []runs.LogLine{}
-		}
-		live = append(live, LiveRunInfo{ID: id, Target: fmt.Sprintf("!%d", n), TargetURL: fmt.Sprintf("%s/%s/pulls/%d", s.cfg.Instance.ForgejoURL(), s.cfg.FullRepo, n), PR: n, Issue: rec.Issue, Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(time.Since(rec.StartedAt)), LogTail: tail, LastOutput: lastOutput(s.landingPath(n, ".log")), Denials: []Denial{}})
+		live = append(live, LiveRunInfo{ID: id, Target: fmt.Sprintf("!%d", n), TargetURL: fmt.Sprintf("%s/%s/pulls/%d", s.cfg.Instance.ForgejoURL(), s.cfg.FullRepo, n), PR: n, Issue: rec.Issue, Kind: "land", Actor: "bottown", Created: rec.StartedAt, Elapsed: formatDuration(time.Since(rec.StartedAt)), LogTail: tail(runs.RenderLog("", b), lines), LastOutput: lastOutput(s.landingPath(n, ".log")), Denials: []Denial{}})
 	}
 	return live
 }

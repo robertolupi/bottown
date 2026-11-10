@@ -265,8 +265,8 @@ makes it once.
 
 ### 7.1 `Live`
 
-`internal/webui` gains `(*Server).Live(ctx) (Live, error)`, served as
-`GET /api/live` and called in-process by the terminal view (§8):
+`internal/webui` gains `(*Server).Live(ctx, tail) (Live, error)`, served as
+`GET /api/live?tail=N` and called in-process by the terminal view (§8):
 
 ```
 Live

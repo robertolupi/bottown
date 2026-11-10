@@ -629,6 +629,103 @@
       "waiting": true
     }
   ],
+  "live": {
+    "items": [
+      {
+        "id": "r-1a2b3c4d",
+        "kind": "implement",
+        "target": "#42",
+        "target_url": "http://127.0.0.1:3030/bottown/demo/issues/42",
+        "issue": 42,
+        "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/42",
+        "title": "Retry webhook deliveries with backoff",
+        "flow": {
+          "issue": 42,
+          "round": 1,
+          "max_rounds": 3,
+          "step": "implementing"
+        },
+        "actor": "claude",
+        "family": "anthropic",
+        "spec": "opus",
+        "started": "2026-11-02T10:31:00Z",
+        "limit": 3600,
+        "quiet": false,
+        "tail": [],
+        "denials": 0
+      },
+      {
+        "id": "r-9c8d7e6f",
+        "kind": "verify",
+        "target": "!57",
+        "target_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+        "issue": 51,
+        "issue_url": "http://127.0.0.1:3030/bottown/demo/issues/51",
+        "pr": 57,
+        "pr_url": "http://127.0.0.1:3030/bottown/demo/pulls/57",
+        "title": "Rate-limit the public API",
+        "flow": {
+          "issue": 51,
+          "round": 2,
+          "max_rounds": 3,
+          "step": "verifying"
+        },
+        "actor": "kimi",
+        "family": "moonshot",
+        "started": "2026-11-02T10:39:30Z",
+        "limit": 3600,
+        "quiet": true,
+        "tail": [],
+        "denials": 1
+      }
+    ],
+    "rows": [
+      {
+        "key": "flow-53",
+        "kind": "flow",
+        "target": "#53",
+        "target_url": "http://127.0.0.1:3030/bottown/demo/issues/53",
+        "issue": 53,
+        "title": "Usage dashboard endpoint",
+        "flow": {
+          "issue": 53,
+          "round": 1,
+          "max_rounds": 3,
+          "step": "waiting for actor"
+        },
+        "what": "waiting for actor",
+        "detail": "agy has another live batch run (r-2b3c4d5e)",
+        "since": "2026-11-02T10:37:00Z"
+      },
+      {
+        "key": "r-0f1e2d3c",
+        "kind": "interactive",
+        "id": "r-0f1e2d3c",
+        "target": "#44",
+        "target_url": "http://127.0.0.1:3030/bottown/demo/issues/44",
+        "issue": 44,
+        "title": "Should exports stream CSV or build it in memory?",
+        "what": "interactive",
+        "detail": "discuss · codex",
+        "since": "2026-11-02T10:20:00Z"
+      }
+    ],
+    "ended": [],
+    "summary": {
+      "running": 2,
+      "quiet": 1,
+      "waiting": 1,
+      "interactive": 1,
+      "inbox": {
+        "ready_to_land": 6,
+        "conflicts_with_base": 5,
+        "stopped_flow": 5,
+        "broken_run": 5,
+        "discuss_answer": 5,
+        "actor_filed_issue": 5
+      }
+    }
+  },
   "history": [
     {
       "id": "r-5e6f7a8b",

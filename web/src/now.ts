@@ -1,24 +1,9 @@
-// The Now view's data (monitor-ui design §3): the live tiles and one-line
-// rows, each tile's last output and quiet, the inbox's counts, the header
-// chips and the threads that just ended. Pure functions of the state the
-// app already holds, so the view only lays them out.
-import type {
-  ActiveFlowInfo,
-  HealthChecklist,
-  HistoryRunInfo,
-  HistoryThread,
-  InboxItem,
-  InboxItemKind,
-  LiveCheckInfo,
-  LiveRunInfo,
-  UIStatusResponse,
-} from './types';
+// The Now view's text (monitor-ui design §3): how a tile, a row and a
+// thread that just ended read, the inbox's counts and the header chips.
+// What is live, how it groups and what is quiet are the server's (GET
+// /api/live); these only word it.
+import type { HealthChecklist, InboxItem, InboxItemKind, Live, LiveEnded, LiveItem, LiveRow, UIStatusResponse } from './types';
 import { flowRouteHash, runRouteHash } from './routes';
-
-// A tile is quiet when its run or check group has written nothing for this
-// long (design §7.2). The one place the threshold is set; the live-view
-// step moves it to the server.
-export const quietAfterMs = 5 * 60 * 1000;
 
 // After this long without a successful live poll the freshness chip reads
 // stale.
@@ -39,80 +24,56 @@ function ms(iso: string | undefined): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-// One tile: a live batch run or a live check group.
-export type NowTile =
-  | { kind: 'run'; id: string; created: string; run: LiveRunInfo }
-  | { kind: 'check'; id: string; created: string; check: LiveCheckInfo };
-
-// The tiles: every live batch run and live check group, by start time, so
-// the grid keeps its order while the owner watches.
-export function nowTiles(liveRuns: LiveRunInfo[] | undefined, liveChecks: LiveCheckInfo[] | undefined): NowTile[] {
-  const tiles: NowTile[] = [
-    ...(liveRuns ?? []).filter((r) => !r.interactive).map((run) => ({ kind: 'run' as const, id: run.id, created: run.created, run })),
-    ...(liveChecks ?? []).map((check) => ({ kind: 'check' as const, id: check.id, created: check.created, check })),
-  ];
-  return tiles.sort((a, b) => ms(a.created) - ms(b.created) || a.id.localeCompare(b.id));
-}
-
 // What a tile says about its last output: the time since it last wrote
-// (since its start when it has written nothing yet), and whether that
-// makes it quiet.
-export function lastOutputStatus(item: { created: string; last_output?: string }, now: number): { text: string; quiet: boolean } {
-  const since = now - (ms(item.last_output) || ms(item.created));
-  if (since >= quietAfterMs) return { text: `no output for ${formatSpan(since)}`, quiet: true };
-  return { text: formatSpan(since), quiet: false };
+// (since its start when it has written nothing yet), as "no output for 6m"
+// when the server counts it quiet.
+export function lastOutputText(item: Pick<LiveItem, 'started' | 'last_output' | 'quiet'>, now: number): string {
+  const span = formatSpan(now - (ms(item.last_output) || ms(item.started)));
+  return item.quiet ? `no output for ${span}` : span;
 }
 
-// One line under the grid: a flow with nothing live, or an interactive run.
-export interface NowRow {
-  key: string;
-  href: string;
-  label: string;
-  title?: string;
-  detail: string;
-  since?: string; // when it started waiting, or the run started
+// A flow's round, "1/3", or nothing when it has not reported one.
+function roundText(flow: LiveItem['flow']): string {
+  return flow?.round ? `${flow.round}/${flow.max_rounds || '?'}` : '';
 }
 
-// The rows: active flows with no live run or check, with what they wait
-// for and since when (the latest end of a run on their issue, when history
-// has one), then interactive runs, each by start time.
-export function nowRows(
-  activeFlows: ActiveFlowInfo[] | undefined,
-  liveRuns: LiveRunInfo[] | undefined,
-  liveChecks: LiveCheckInfo[] | undefined,
-  historyRuns: HistoryRunInfo[] | undefined,
-): NowRow[] {
-  const runs = liveRuns ?? [];
-  const checks = liveChecks ?? [];
-  const rows: NowRow[] = [];
-  for (const f of activeFlows ?? []) {
-    const live = runs.some((r) => (r.flow?.issue ?? r.issue) === f.issue) || checks.some((c) => c.issue === f.issue);
-    if (live) continue;
-    const ended = (historyRuns ?? [])
-      .filter((h) => h.issue === f.issue && h.ended)
-      .map((h) => h.ended!)
-      .sort((a, b) => ms(b) - ms(a))[0];
-    const title = (historyRuns ?? []).find((h) => h.issue === f.issue && h.issue_title)?.issue_title;
-    rows.push({
-      key: `flow-${f.issue}`,
-      href: flowRouteHash(f.issue),
-      label: `#${f.issue}`,
-      title,
-      detail: `flow ${f.round}/${f.max_rounds} · ${f.step}`,
-      since: ended,
-    });
+// A tile's second header line: the kind with the flow's round ("verify
+// 2/3"), or a check group's PR and head; the actor; elapsed time against
+// the limit.
+export function tileMeta(item: LiveItem, now: number): string {
+  const parts: string[] = [];
+  if (item.kind === 'check' || item.kind === 'e2e') {
+    parts.push(item.kind === 'check' ? 'checks' : 'checks e2e');
+    if (item.pr) parts.push(`!${item.pr}`);
+    if (item.sha) parts.push(item.sha.slice(0, 7));
+  } else {
+    parts.push([item.kind, roundText(item.flow)].filter(Boolean).join(' '));
+    if (item.actor) parts.push(item.actor);
   }
-  for (const r of [...runs].filter((r) => r.interactive).sort((a, b) => ms(a.created) - ms(b.created))) {
-    rows.push({
-      key: r.id,
-      href: runRouteHash(r.id),
-      label: r.target,
-      title: r.issue_title || r.pr_title,
-      detail: `${r.kind} · ${r.actor} · interactive`,
-      since: r.created,
-    });
-  }
-  return rows;
+  const elapsed = formatSpan(now - ms(item.started));
+  parts.push(item.limit ? `${elapsed}/${formatSpan(item.limit * 1000)}` : elapsed);
+  return parts.join(' · ');
+}
+
+// Where a row links: a flow's page, or the interactive run's.
+export function rowHref(row: LiveRow): string {
+  return row.kind === 'flow' && row.issue ? flowRouteHash(row.issue) : runRouteHash(row.id ?? row.key);
+}
+
+// A row's text after its target and title: "flow 1/3 · waiting for actor ·
+// <detail> · 6m", or "implement · claude · interactive · 9m".
+export function rowText(row: LiveRow, now: number): string {
+  const since = row.since ? formatSpan(now - ms(row.since)) : '';
+  const parts =
+    row.kind === 'flow'
+      ? [['flow', roundText(row.flow)].filter(Boolean).join(' '), row.what, row.detail, since]
+      : [row.detail, row.what, since];
+  return parts.filter(Boolean).join(' · ');
+}
+
+// Where a thread that just ended links: its flow's page, or its last run's.
+export function endedHref(e: LiveEnded): string {
+  return e.kind === 'flow' && e.issue ? flowRouteHash(e.issue, e.pr) : runRouteHash(e.run_id);
 }
 
 // The inbox's kinds, in the order the Needs-you line names them, with the
@@ -194,33 +155,10 @@ export function freshness(lastOk: number, now: number): { text: string; stale: b
   return { text: `live · ${formatSpan(since)} ago`, stale: false };
 }
 
-// One thread that just ended, as a link.
-export interface EndedThread {
-  key: string;
-  href: string;
-  label: string;
-  title?: string;
-  ended: string;
-}
-
-// Up to max threads whose last run ended in the past hour, newest first;
-// a thread still active has not ended.
-export function justEnded(threads: HistoryThread[] | undefined, now: number, max = 5): EndedThread[] {
-  const out: EndedThread[] = [];
-  for (const t of threads ?? []) {
-    if (t.active || t.runs.length === 0 || t.runs.some((r) => !r.ended)) continue;
-    const ended = t.runs.map((r) => r.ended!).sort((a, b) => ms(b) - ms(a))[0];
-    const age = now - ms(ended);
-    if (age < 0 || age > 60 * 60 * 1000) continue;
-    const last = t.runs[t.runs.length - 1];
-    const flow = t.kind === 'flow' && t.issue;
-    out.push({
-      key: t.key,
-      href: flow ? flowRouteHash(t.issue!, t.pr) : runRouteHash(last.id),
-      label: t.issue ? `#${t.issue}` : t.pr ? `!${t.pr}` : last.target,
-      title: t.issue_title || t.pr_title,
-      ended,
-    });
-  }
-  return out.sort((a, b) => ms(b.ended) - ms(a.ended)).slice(0, max);
-}
+// emptyLive is the live view before the first poll answers.
+export const emptyLive = (): Live => ({
+  items: [],
+  rows: [],
+  ended: [],
+  summary: { running: 0, quiet: 0, waiting: 0, interactive: 0, inbox: {} },
+});

@@ -108,6 +108,8 @@ type LiveCheckInfo struct {
 	LogTail    []runs.LogLine `json:"log_tail"`
 	// LastOutput is its log's modification time; nil before it has one.
 	LastOutput *time.Time `json:"last_output,omitempty"`
+	// expires is the record's deadline, for Live's limit; zero without one.
+	expires time.Time
 }
 
 // lastOutput is the newest modification time among the files a live
@@ -263,6 +265,12 @@ func (s *Server) getActiveFlow(issue int64) *FlowRecord {
 
 // ComputeLiveRuns calculates active runs with flow grouping and readable log tails.
 func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
+	return s.computeLiveRuns(ctx, liveTailLines)
+}
+
+// computeLiveRuns is ComputeLiveRuns with each batch run's (and
+// landing's) last n rendered log lines.
+func (s *Server) computeLiveRuns(ctx context.Context, n int) ([]LiveRunInfo, error) {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
 
@@ -278,7 +286,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 		return nil, fmt.Errorf("fetch live runs: %w", err)
 	}
 	if len(serverRuns) == 0 {
-		return s.liveLandings(), nil
+		return s.liveLandings(n), nil
 	}
 	denials := s.fetchDenials(ctx)
 
@@ -323,7 +331,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 	}
 
 	now := time.Now().UTC()
-	live := s.liveLandings()
+	live := s.liveLandings(n)
 
 	for _, sr := range serverRuns {
 		act := actorMap[sr.Actor]
@@ -345,12 +353,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", sr.ID+".log")
 			lastOut = lastOutput(logPath, strings.TrimSuffix(logPath, ".log")+runs.LiveTranscriptSuffix)
 			if logBytes, err := runs.ReadLog(logPath); err == nil {
-				parsed := runs.RenderLog(harness, logBytes)
-				if len(parsed) > 25 {
-					logTail = parsed[len(parsed)-25:]
-				} else {
-					logTail = parsed
-				}
+				logTail = tail(runs.RenderLog(harness, logBytes), n)
 			}
 		}
 		if logTail == nil {
@@ -586,6 +589,11 @@ func (s *Server) liveCheckRecords() []runs.CheckRecord {
 // ComputeLiveChecks returns the flows' post-implement checks while they
 // run, each with the tail of its log, as a live run has (§4.2).
 func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
+	return s.computeLiveChecks(ctx, liveTailLines)
+}
+
+// computeLiveChecks is ComputeLiveChecks with each group's last n lines.
+func (s *Server) computeLiveChecks(ctx context.Context, n int) []LiveCheckInfo {
 	org, repo := s.orgAndRepo()
 	forgeURL := s.cfg.Instance.ForgejoURL()
 	now := time.Now().UTC()
@@ -617,10 +625,11 @@ func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
 		}
 		if c.Expires.After(c.Started) {
 			info.Timeout = formatDuration(c.Expires.Sub(c.Started))
+			info.expires = c.Expires
 		}
 		logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", c.ID+".log")
 		if b, err := runs.ReadLog(logPath); err == nil {
-			info.LogTail = tail(runs.RenderLog("", b), liveTailLines)
+			info.LogTail = tail(runs.RenderLog("", b), n)
 		}
 		info.LastOutput = lastOutput(logPath)
 		live = append(live, info)
