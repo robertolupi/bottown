@@ -61,7 +61,10 @@ type LiveRunInfo struct {
 	Timeout     string               `json:"timeout"` // e.g. "60m"
 	Flow        *FlowInfo            `json:"flow,omitempty"`
 	LogTail     []runs.LogLine       `json:"log_tail"`
-	Denials     []Denial             `json:"denials"`
+	// LastOutput is when the run last wrote what its tail is read from
+	// (lastOutput); nil before it wrote either file.
+	LastOutput *time.Time `json:"last_output,omitempty"`
+	Denials    []Denial   `json:"denials"`
 }
 
 // Denial is an operation the server's policy refused a run, from
@@ -103,6 +106,27 @@ type LiveCheckInfo struct {
 	Elapsed    string         `json:"elapsed"`
 	Timeout    string         `json:"timeout,omitempty"` // the flow's --check-timeout
 	LogTail    []runs.LogLine `json:"log_tail"`
+	// LastOutput is its log's modification time; nil before it has one.
+	LastOutput *time.Time `json:"last_output,omitempty"`
+}
+
+// lastOutput is the newest modification time among the files a live
+// tail is read from, paths (a run's log and its live transcript, which
+// runs.ReadLog appends and runs.FollowTranscript rewrites only when it
+// changes; a check group's own log), or nil when none exists yet. The
+// Now view counts a tile's quiet from it (monitor-ui design §7.2).
+func lastOutput(paths ...string) *time.Time {
+	var newest time.Time
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+	}
+	if newest.IsZero() {
+		return nil
+	}
+	newest = newest.UTC()
+	return &newest
 }
 
 // ActiveFlowInfo represents an in-progress flow supervising an issue.
@@ -316,8 +340,10 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 
 		// Read log tail from disk if batch run
 		var logTail []runs.LogLine
+		var lastOut *time.Time
 		if !sr.Interactive {
 			logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", sr.ID+".log")
+			lastOut = lastOutput(logPath, strings.TrimSuffix(logPath, ".log")+runs.LiveTranscriptSuffix)
 			if logBytes, err := runs.ReadLog(logPath); err == nil {
 				parsed := runs.RenderLog(harness, logBytes)
 				if len(parsed) > 25 {
@@ -445,6 +471,7 @@ func (s *Server) ComputeLiveRuns(ctx context.Context) ([]LiveRunInfo, error) {
 			Timeout:     timeout,
 			Flow:        flow,
 			LogTail:     logTail,
+			LastOutput:  lastOut,
 			Denials:     orEmpty(denials[sr.ID]),
 		})
 	}
@@ -595,6 +622,7 @@ func (s *Server) ComputeLiveChecks(ctx context.Context) []LiveCheckInfo {
 		if b, err := runs.ReadLog(logPath); err == nil {
 			info.LogTail = tail(runs.RenderLog("", b), liveTailLines)
 		}
+		info.LastOutput = lastOutput(logPath)
 		live = append(live, info)
 	}
 	return live

@@ -25,8 +25,9 @@ for (const key of Object.getOwnPropertyNames(win)) {
   });
 }
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
-// Node has its own Event and EventTarget; the DOM's must be jsdom's.
-for (const key of ['Event', 'EventTarget', 'CustomEvent', 'navigator']) {
+// Node has its own Event and EventTarget, and a localStorage that is
+// undefined without --localstorage-file; the DOM's must be jsdom's.
+for (const key of ['Event', 'EventTarget', 'CustomEvent', 'navigator', 'localStorage']) {
   Object.defineProperty(globalThis, key, { configurable: true, value: win[key] });
 }
 

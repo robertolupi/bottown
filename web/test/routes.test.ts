@@ -205,7 +205,7 @@ async function mountAt(hash: string, props: Record<string, any> = {}, overrides?
   return view;
 }
 
-const nowPanels = ['Live Runs', 'Owner Inbox'];
+const nowPanels = ['Needs you', 'Live'];
 const elsewhere = ['Run History', 'Upstream & Forge', 'Health Checklist'];
 
 test('each route renders its view', async () => {

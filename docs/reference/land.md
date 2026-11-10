@@ -65,8 +65,8 @@ is refused. Conflicts, lost approvals and failed checks stop the landing
 for the owner, without an automatic repair flow.
 
 The worker outlives the UI server. Its record and log are stored as
-`.bottown/runs/land-<PR>.json` and `.log`; Live Runs shows the landing,
-its log and a Stop control. A milestone child's node shows its active
+`.bottown/runs/land-<PR>.json` and `.log`; the web UI's Now view shows the
+landing as a tile with its log, opening its page. A milestone child's node shows its active
 landing like its flow. The log remains available after the worker exits.
 Merging in Forgejo instead skips these checks at the combined tree, as
 the inbox item explains. The old PR-first merge action and
