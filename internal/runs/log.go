@@ -38,6 +38,10 @@ type LogLine struct {
 	toolError bool // for kind error: a failed or denied tool call, not the harness's own error
 }
 
+// Running says the line is a tool call still running, which its result
+// will update in place.
+func (l LogLine) Running() bool { return l.Kind == LineTool && l.State == "running" }
+
 // RenderLog parses a batch log into readable lines (one line per assistant
 // message or tool call), for the live tail in the web UI. Encoded payloads
 // are elided, also from logs written before the launcher redacted them.

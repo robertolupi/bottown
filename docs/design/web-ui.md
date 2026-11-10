@@ -604,9 +604,19 @@ with runs:
   in the page's own scroll (without inner scroll boxes or max-height limits),
   with kind filters, raw log link, and the follow toggle of `LiveLogTail`. When
   the run recorded a failure or revoked reason, the page renders that reason
-  above the log. While the run is live, the log reloads at the live poll interval
-  and auto-scrolls to the bottom when following is on; when the run ends it
-  loads once more, for the lines written after the last reload. Below or alongside the
+  above the log. While the run is live, the page polls the log at the live
+  poll interval for what may have changed: every response carries `stable`,
+  the length of the rendered log's stable prefix (the lines before the first
+  running tool call, or before a live log's last line; an ended run's whole
+  log), and `stable_sum`, its digest. A poll sends them back as
+  `after=N&sum=S`, gets the lines from position N on, keeps its first N and
+  replaces the rest; when the server's first N lines have another digest
+  (the log is rendered from another source, as when a live transcript is
+  removed), `sum` is missing or N is past the end, the response has
+  `reset: true` and the whole log, which replaces the page's. A check's or
+  landing's log is taken as live, so its last line stays out of the prefix.
+  The page auto-scrolls to the bottom when following is on; when the run ends
+  it loads the whole log once more, without a cursor. Below or alongside the
   log, any policy denials are listed.
 - **Flow page (`#/flow/<issue>`):** offers three tabs: **Log** (displaying the
   live run's log, or the last run's log), **Timeline** (the full flow timeline
