@@ -570,7 +570,7 @@
         "round": 1,
         "max_rounds": 3,
         "step": "implementing with claude",
-        "label": "#42 · round 1/3 · implementing with claude"
+        "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude"
       },
       "log_tail": [],
       "denials": []
@@ -601,7 +601,7 @@
         "round": 2,
         "max_rounds": 3,
         "step": "verifying with kimi",
-        "label": "#51 · round 2/3 · verifying with kimi"
+        "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi"
       },
       "log_tail": [],
       "denials": [
@@ -645,7 +645,7 @@
       "round": 1,
       "max_rounds": 3,
       "step": "implementing with claude",
-      "label": "#42 · round 1/3 · implementing with claude",
+      "label": "#42 \u00b7 round 1/3 \u00b7 implementing with claude",
       "waiting": false
     },
     {
@@ -655,7 +655,7 @@
       "round": 2,
       "max_rounds": 3,
       "step": "verifying with kimi",
-      "label": "#51 · round 2/3 · verifying with kimi",
+      "label": "#51 \u00b7 round 2/3 \u00b7 verifying with kimi",
       "waiting": false
     },
     {
@@ -665,7 +665,7 @@
       "round": 1,
       "max_rounds": 3,
       "step": "waiting for a run slot",
-      "label": "#53 · round 1/3 · waiting for a run slot",
+      "label": "#53 \u00b7 round 1/3 \u00b7 waiting for a run slot",
       "waiting": true
     }
   ],
@@ -746,7 +746,7 @@
         "issue": 44,
         "title": "Should exports stream CSV or build it in memory?",
         "what": "interactive",
-        "detail": "discuss · codex",
+        "detail": "discuss \u00b7 codex",
         "since": "2026-11-02T10:20:00Z"
       }
     ],
@@ -1312,7 +1312,7 @@
       },
       {
         "kind": "status",
-        "text": "result: success · 31 turns · $1.84"
+        "text": "result: success \u00b7 31 turns \u00b7 $1.84"
       }
     ],
     "r-2b3c4d5e": [
@@ -1380,7 +1380,7 @@
       },
       {
         "kind": "tool",
-        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row…",
+        "text": "mcp_bottown_comment: Streaming fits: the writer already flushes per row\u2026",
         "tool": "mcp_bottown_comment",
         "tool_class": "forge"
       },
@@ -1394,7 +1394,7 @@
     "40": {
       "issue": 40,
       "title": "Paginate the export endpoint",
-      "body": "Exports return every row at once. Page them with an opaque cursor.\n\n## Acceptance\n- `GET /export?cursor=…` returns at most 500 rows and a `next` cursor.\n- Rows inserted during a paged read are not skipped.",
+      "body": "Exports return every row at once. Page them with an opaque cursor.\n\n## Acceptance\n- `GET /export?cursor=\u2026` returns at most 500 rows and a `next` cursor.\n- Rows inserted during a paged read are not skipped.",
       "state": "closed",
       "url": "http://127.0.0.1:3030/bottown/demo/issues/40"
     },
@@ -1691,12 +1691,6 @@
           "run_id": "r-ffeeddcc"
         }
       ]
-    }
-  },
-  "actions": {
-    "gc": {
-      "success": true,
-      "output": "removed 2 ended run worktrees (preview)"
     }
   }
 }

@@ -152,13 +152,7 @@ export function actorPair(node: MilestoneNode): string {
   return parts.join(' · ');
 }
 
-// canStartMilestoneRun: an open epic with a plan, and no milestone run the
-// UI started running for it.
+// An open epic with a plan offers the command to copy.
 export function canStartMilestoneRun(group: MilestoneGroup): boolean {
-  return !!group.epic && group.epic.state !== 'closed' && !!group.plan && !group.scheduler;
-}
-
-// schedulerFlows are a group's child flows: its nodes a flow drives.
-export function schedulerFlows(group: Pick<MilestoneGroup, 'nodes'>): MilestoneNode[] {
-  return group.nodes.filter((n) => !n.external && n.flow);
+  return !!group.epic && group.epic.state !== 'closed' && !!group.plan;
 }

@@ -100,7 +100,7 @@
     errorMessage = null;
     statusLoadedAt = Date.now();
     try {
-      const res = await fetch('/api/actions/refresh', { method: 'POST' });
+      const res = await fetch('/api/refresh', { method: 'POST' });
       if (!res.ok) {
         throw new Error(`Failed to refresh status: ${res.statusText}`);
       }

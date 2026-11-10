@@ -581,21 +581,6 @@ export interface MilestoneGroup {
   edges: MilestoneEdge[];
   layers: number;
   error?: string;
-  // The plan's `bottown milestone run` the UI started, while it runs.
-  scheduler?: MilestoneScheduler;
-}
-
-// A running milestone run (internal/webui/milestone_run.go). id is what
-// The scheduler ID is milestone-<slug>. Its child flows are the
-// group's nodes with a flow.
-export interface MilestoneScheduler {
-  id: string;
-  agents: string;
-  pool: string[];
-  parallel: number;
-  started_at: string;
-  elapsed: string;
-  log: string;
 }
 
 // GET /api/timeline (internal/webui/timeline.go): the window's runs laid

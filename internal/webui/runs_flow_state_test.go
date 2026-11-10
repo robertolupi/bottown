@@ -2,7 +2,6 @@ package webui
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -189,10 +188,7 @@ func TestComputeHistoryRuns_FlowState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(top, ".bottown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	flowRec := fmt.Sprintf(`{"issue":70,"implement":"claude","verify":"kimi","rounds":3,"pid":%d}`, os.Getpid())
-	if err := os.WriteFile(filepath.Join(top, ".bottown", "flow-70.json"), []byte(flowRec), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	holdTestFlow(t, top, 70, "claude", "kimi", 3)
 
 	s, err := NewServer(Config{
 		Instance: config.Instance{Name: "prod", ServerPort: port, OwnerLogin: "rlupi"},

@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1745,7 +1744,7 @@ func gcRuns(cmd *cobra.Command, rc *runContext, failed, orphans bool, olderThan 
 	if err != nil {
 		return fmt.Errorf("removed %d runs, purged %d ended runs from the server; listing open PRs: %w", removed, len(purged.Purged), err)
 	}
-	logs := gcFlowLogs(rc.ws, open, olderThan, time.Now(), cmd.ErrOrStderr())
+	logs := gcFlowLogs(rc.ws, rc.repo, open, olderThan, time.Now(), cmd.ErrOrStderr())
 	fmt.Fprintf(cmd.OutOrStdout(), "removed %d runs, purged %d ended runs from the server, removed %d flow logs; .bottown is %s\n",
 		removed, len(purged.Purged), logs, humanBytes(runs.DirSize(rc.ws.Dir)))
 	return nil
@@ -1780,10 +1779,9 @@ func openPRIssues(ctx context.Context, rc *runContext) (map[int64]bool, error) {
 //     flow's logs of a check group for one PR head, once the issue has no open PR (in open), or once it is at least
 //     olderThan old when olderThan is set. While the PR is open the log is
 //     kept: a resumed flow points to it rather than checking again.
-//   - .bottown/flow-<issue>.log, a web UI flow's output, once the flow is
-//     not running: no flow-<issue>.json whose process is alive. A stale
-//     flow-<issue>.json goes with it.
-func gcFlowLogs(ws *runs.Workspace, open map[int64]bool, olderThan time.Duration, now time.Time, warn io.Writer) (removed int) {
+//   - .bottown/flow-<issue>.log, a milestone child flow's output, once
+//     its issue's flow lock is no longer held.
+func gcFlowLogs(ws *runs.Workspace, repo string, open map[int64]bool, olderThan time.Duration, now time.Time, warn io.Writer) (removed int) {
 	remove := func(path string) {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(warn, "warning: %v\n", err)
@@ -1816,15 +1814,8 @@ func gcFlowLogs(ws *runs.Workspace, open map[int64]bool, olderThan time.Duration
 		if err != nil || n <= 0 {
 			continue
 		}
-		info := filepath.Join(ws.Dir, fmt.Sprintf("flow-%d.json", n))
-		if b, err := os.ReadFile(info); err == nil {
-			var rec struct {
-				PID int `json:"pid"`
-			}
-			if json.Unmarshal(b, &rec) == nil && runs.ProcessAlive(rec.PID) {
-				continue
-			}
-			_ = os.Remove(info)
+		if _, held := runs.FlowHolder(ws.RunsDir, repo, n); held {
+			continue
 		}
 		remove(path)
 	}

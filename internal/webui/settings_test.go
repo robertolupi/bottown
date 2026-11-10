@@ -1,8 +1,6 @@
 package webui
 
 import (
-	"bytes"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -114,41 +112,7 @@ func TestRepoSettings_ReadFromMainOnly(t *testing.T) {
 		t.Errorf("health repo_settings = %+v", full.Health.RepoSettings)
 	}
 
-	// Steps from the branch or the checkout are refused, and nothing runs.
-	for _, steps := range [][]string{
-		{"echo branch > from-branch.txt"},
-		{"echo local > from-local.txt"},
-		{"echo main > from-main.txt", "echo branch > from-branch.txt"},
-	} {
-		if _, err := srv.ExecuteAfterPull(ctx, steps); err == nil || !strings.Contains(err.Error(), "changed") {
-			t.Errorf("ExecuteAfterPull(%q) err = %v, want refusal", steps, err)
-		}
-	}
-	for _, f := range []string{"from-branch.txt", "from-local.txt", "from-main.txt"} {
-		if fileExists(filepath.Join(checkout, f)) {
-			t.Errorf("%s was created by a refused run", f)
-		}
-	}
-
-	// main's steps, as confirmed, run in the checkout.
-	out, err := srv.ExecuteAfterPull(ctx, st.AfterPull)
-	if err != nil {
-		t.Fatalf("ExecuteAfterPull: %v\n%s", err, out)
-	}
-	if b, err := os.ReadFile(filepath.Join(checkout, "from-main.txt")); err != nil || string(b) != "main\n" {
-		t.Errorf("from-main.txt = %q, %v", b, err)
-	}
-	if !strings.Contains(out, "$ echo main > from-main.txt") {
-		t.Errorf("output does not show the step:\n%s", out)
-	}
-
-	// main changes after the owner was shown the steps: refused.
-	forge.set(mainSHA, "after_pull = [\"echo new > from-new.txt\"]\n")
-	if _, err := srv.ExecuteAfterPull(ctx, st.AfterPull); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Errorf("stale steps: err = %v, want refusal", err)
-	}
 }
-
 func TestRepoSettings_NoFileAndInvalid(t *testing.T) {
 	srv, forge, _ := newSettingsServer(t)
 	ctx := t.Context()
@@ -159,18 +123,12 @@ func TestRepoSettings_NoFileAndInvalid(t *testing.T) {
 	if st.Error != "" || !st.Checked || st.Found || len(st.AfterPull) != 0 || st.AfterPull == nil || st.MilestonesDir != "docs/milestones" {
 		t.Fatalf("no file: %+v", st)
 	}
-	if _, err := srv.ExecuteAfterPull(ctx, []string{"make install"}); err == nil || !strings.Contains(err.Error(), "no after-pull steps") {
-		t.Errorf("no file: err = %v", err)
-	}
 
 	// An invalid file is reported and declares no steps.
 	forge.set(mainSHA, "after-pull = [\"make install\"]\n")
 	st = srv.LoadRepoSettings(ctx)
 	if !st.Found || st.Error == "" || len(st.AfterPull) != 0 {
 		t.Fatalf("invalid file: %+v", st)
-	}
-	if _, err := srv.ExecuteAfterPull(ctx, []string{"make install"}); err == nil {
-		t.Errorf("invalid file: steps ran")
 	}
 
 	// So is an invalid milestones_dir, which also withholds the steps.
@@ -183,45 +141,5 @@ func TestRepoSettings_NoFileAndInvalid(t *testing.T) {
 	forge.set(mainSHA, "milestones_dir = \"plans\"\n")
 	if st = srv.LoadRepoSettings(ctx); st.Error != "" || st.MilestonesDir != "plans" {
 		t.Fatalf("custom milestones_dir: %+v", st)
-	}
-}
-
-func TestRepoSettings_AfterPullHandler(t *testing.T) {
-	srv, forge, checkout := newSettingsServer(t)
-	forge.set(mainSHA, "after_pull = [\"echo one\", \"false\", \"echo three > three.txt\"]\n")
-
-	post := func(body string) (int, ActionResult) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/api/actions/after-pull", bytes.NewBufferString(body))
-		srv.handleActionAfterPull(rec, req)
-		var res ActionResult
-		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
-			t.Fatalf("decode %q: %v", rec.Body.String(), err)
-		}
-		return rec.Code, res
-	}
-
-	if code, _ := post(`{}`); code != http.StatusBadRequest {
-		t.Errorf("no steps: status %d", code)
-	}
-	if code, _ := post(`not json`); code != http.StatusBadRequest {
-		t.Errorf("bad JSON: status %d", code)
-	}
-
-	// A failing step stops the run, and its output so far is returned.
-	code, res := post(`{"steps": ["echo one", "false", "echo three > three.txt"]}`)
-	if code != http.StatusInternalServerError || res.Success || !strings.Contains(res.Error, "false") {
-		t.Errorf("failing step: %d %+v", code, res)
-	}
-	if !strings.Contains(res.Output, "one") {
-		t.Errorf("output lost: %q", res.Output)
-	}
-	if fileExists(filepath.Join(checkout, "three.txt")) {
-		t.Errorf("a step after the failure ran")
-	}
-
-	forge.set(mainSHA, "after_pull = [\"echo ok\"]\n")
-	if code, res := post(`{"steps": ["echo ok"]}`); code != http.StatusOK || !res.Success || !strings.Contains(res.Output, "ok") {
-		t.Errorf("ok: %d %+v", code, res)
 	}
 }

@@ -7,8 +7,9 @@ failed ones with `--failed`); `bottown flow`'s check logs,
 a check that ran the check group), once the issue has no open PR
 from `issue/<n>`, or with `--older-than` once the log is that old (while the
 PR is open a resumed flow points to the log rather than checking again);
-and the web UI's flow logs, `.bottown/flow-<issue>.log`, once that flow is
-not running, that is, no `flow-<issue>.json` names a live process. Its
+and milestone child flow logs, `.bottown/flow-<issue>.log`, once that flow is
+not running, as determined by the held issue lock
+(`runs.FlowHolder`), rather than a UI process record. Its
 summary line counts the runs and the flow logs it removed. A run's
 `<id>.check.json` is its own file, removed with it, and listing runs does
 not warn about it.

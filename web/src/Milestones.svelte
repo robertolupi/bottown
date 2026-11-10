@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { suggestedCommand } from './commands';
   // The Milestones view (docs/design/milestones.md §2.7): each
   // Implementation Epic, or Forgejo milestone without one, with its
   // progress and its dependency DAG. Inline SVG draws the edges and plain
@@ -8,7 +9,7 @@
   import type { MilestoneGroup, MilestoneNode } from './types';
   import { flowRouteHash } from './routes';
   import IssueReference from './IssueReference.svelte';
-  import { actorPair, canOpenFlow, canStart, canStartMilestoneRun, layoutDag, schedulerFlows, statusBadge } from './milestones';
+  import { actorPair, canOpenFlow, canStart, canStartMilestoneRun, layoutDag, statusBadge } from './milestones';
   import { reloadOn } from './reload.svelte';
 
   interface Props {
@@ -92,7 +93,7 @@
       >!{n.pr.number}{n.pr.state !== 'open' ? ` ${n.pr.state}` : ''}</a>
     {/if}
     {#if canStart(n)}
-      <CommandCopy command={`bottown flow ${n.number} --implement ${n.implement || "ACTOR"} --verify ${n.verify || "ACTOR"}`} />
+      <CommandCopy command={suggestedCommand("flow", { NUMBER: n.number, IMPLEMENT: n.implement || "ACTOR", VERIFY: n.verify || "ACTOR" })} />
     {/if}
   </div>
 {/snippet}
@@ -112,10 +113,8 @@
         {/if}
       </div>
       <div class="card-header-right">
-        {#if g.scheduler}
-          <span class="badge badge-accent">milestone run · running</span>
-        {:else if canStartMilestoneRun(g)}
-          <CommandCopy command={`bottown milestone run ${g.plan} --agents POOL --parallel N`} />
+        {#if canStartMilestoneRun(g)}
+          <CommandCopy command={suggestedCommand("milestone", { SLUG: g.plan || "SLUG", PARALLEL: "N" })} />
         {/if}
         <span class="badge badge-neutral ms-base" title="Base branch for this milestone's issues">base: {g.base}</span>
       </div>
@@ -151,37 +150,6 @@
         <span class="badge badge-warning">{g.counts.blocked} blocked</span>
         <span class="badge badge-error">{g.counts.stopped} stopped</span>
       </div>
-
-      {#if g.scheduler}
-        {@const sc = g.scheduler}
-        {@const flows = schedulerFlows(g)}
-        <div class="ms-scheduler" data-scheduler={sc.id}>
-          <div class="ms-scheduler-head">
-            <strong>Milestone run</strong>
-            <span class="muted">running {sc.elapsed} · parallel {sc.parallel}</span>
-          </div>
-          <div class="ms-scheduler-row">
-            <span class="muted">Pool</span>
-            {#each sc.pool as entry}
-              <code class="ms-pool-entry">{entry}</code>
-            {/each}
-          </div>
-          <div class="ms-scheduler-row">
-            <span class="muted">Flows</span>
-            {#if flows.length === 0}
-              <span class="muted">none in flight</span>
-            {:else}
-              {#each flows as n (n.number)}
-                <span class="ms-flow">
-                  <IssueReference number={n.number} href={n.url} label={`#${n.number}`} title={n.title} />
-                  <span>{n.flow!.implement} → {n.flow!.verify}</span>
-                </span>
-              {/each}
-            {/if}
-          </div>
-          <div class="ms-scheduler-row muted text-sm">Log <code>{sc.log}</code></div>
-        </div>
-      {/if}
 
       {#if g.error}
         <div class="banner banner-error"><span>{g.error}</span></div>
@@ -346,37 +314,6 @@
 
   .ms-removed {
     margin-bottom: 12px;
-  }
-
-  .ms-scheduler {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--accent);
-    border-radius: 8px;
-    font-size: 13px;
-  }
-
-  .ms-scheduler-head,
-  .ms-scheduler-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 10px;
-    min-width: 0;
-  }
-
-  .ms-scheduler-row code {
-    overflow-wrap: anywhere;
-  }
-
-  .ms-flow {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
   }
 
   .banner-warning {
