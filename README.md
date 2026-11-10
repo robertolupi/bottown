@@ -145,7 +145,7 @@ git pull --ff-only bottown main
 
 A repository can declare what to run after pulling in a `.bottown.toml`
 at its root, `after_pull = ["make install"]`; bottown reads it from the
-forge's `main` only. `bottown web ui` shows those steps after its Pull and
+forge's `main` only. `bottown ui` shows those steps after its Pull and
 runs them only when you confirm. The same file can set
 `milestones_dir`, where milestone plan files live (default
 `docs/milestones`).
@@ -191,7 +191,7 @@ has the details.
 | `logs [-f] [--tail N]` | Container logs (Forgejo and bottown). |
 | `down [--purge]` | Stop an instance; `--purge` deletes its data for good. |
 | `image build [--ref COMMIT]` | Build a bottown image without running it. |
-| `web forgejo`, `web ui` | Open Forgejo or the bottown web UI signed in as the owner. |
+| `web forgejo`, `ui` | Open Forgejo signed in as the owner, or serve the bottown web UI and show the live view (`web ui` is an alias). |
 | `credential password` | Print the owner's initial Forgejo web password. |
 | `version` | Print the bottown version. |
 

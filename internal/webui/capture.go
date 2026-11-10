@@ -195,7 +195,7 @@ func linked(fx *Fixture) (issues, prs []int64, logs []string) {
 }
 
 // What a capture drops because it could be a secret: bottown API keys (a
-// run's or the owner's), the one-time logins of `bottown web ui` and
+// run's or the owner's), the logins of `bottown ui` and
 // `bottown web forgejo`, and the credentials in a URL. The replacements
 // have no quotes or backslashes, so JSON stays valid.
 var (

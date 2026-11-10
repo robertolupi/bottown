@@ -38,7 +38,7 @@ func newTestServer(t *testing.T) *Server {
 	return s
 }
 
-func TestSecurity_OneTimeTokenAndCookie(t *testing.T) {
+func TestSecurity_TokenReusableAndCookie(t *testing.T) {
 	s := newTestServer(t)
 
 	client := &http.Client{
@@ -70,46 +70,45 @@ func TestSecurity_OneTimeTokenAndCookie(t *testing.T) {
 		t.Fatalf("expected 401 Unauthorized for bogus token, got %d", resp.StatusCode)
 	}
 
-	// 3. Request with valid one-time token -> 303 See Other with Set-Cookie
-	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /?token=valid: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("expected 303 See Other after valid token, got %d", resp.StatusCode)
-	}
-
-	var sessionCookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == s.cookieName {
-			sessionCookie = c
-			break
+	// 3. The token is accepted on every request while the server runs, and
+	// each such request sets the cookie and redirects without the token.
+	redeem := func() (*http.Response, *http.Cookie) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET /?token=valid: %v", err)
 		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("expected 303 See Other after valid token, got %d", resp.StatusCode)
+		}
+		if loc := resp.Header.Get("Location"); strings.Contains(loc, "token=") {
+			t.Errorf("redirect still carries the token: %q", loc)
+		}
+		var cookie *http.Cookie
+		for _, c := range resp.Cookies() {
+			if c.Name == s.cookieName {
+				cookie = c
+				break
+			}
+		}
+		if cookie == nil {
+			t.Fatalf("expected Set-Cookie %s in response", s.cookieName)
+		}
+		if !cookie.HttpOnly {
+			t.Errorf("cookie must be HttpOnly")
+		}
+		if cookie.SameSite != http.SameSiteStrictMode {
+			t.Errorf("cookie must have SameSite=Strict")
+		}
+		return resp, cookie
 	}
-	if sessionCookie == nil {
-		t.Fatalf("expected Set-Cookie %s in response", s.cookieName)
-	}
-	if !sessionCookie.HttpOnly {
-		t.Errorf("cookie must be HttpOnly")
-	}
-	if sessionCookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("cookie must have SameSite=Strict")
-	}
+	_, sessionCookie := redeem()
+	// Twice: a login URL kept on screen or in scrollback still works.
+	redeem()
 
-	// 4. Try redeeming the same token again -> 401 Unauthorized (one-time use)
-	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.Port(), s.oneTimeToken), nil)
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("GET /?token=valid second time: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 Unauthorized on reused token, got %d", resp.StatusCode)
-	}
-
-	// 5. Subsequent request with session cookie -> 200 OK
+	// 4. Subsequent request with session cookie -> 200 OK
 	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", s.Port()), nil)
 	req.AddCookie(sessionCookie)
 	resp, err = client.Do(req)
