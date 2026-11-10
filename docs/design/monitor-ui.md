@@ -167,12 +167,26 @@ a running call can already be final while the call is not
 (`runs.LineTracker` hands such lines out early, for the terminal's
 scrollback), so a count of final lines is not a position in the log; the
 length of the stable prefix is. Every response carries `stable`, that
-length. With `after=N` the endpoint returns the lines from position N
-on, and the page keeps its first N lines and replaces the rest. N is
-always a `stable` the server returned, so what the page shows after any
-poll equals the full rendered log at that moment. Until this lands (§12,
-step 2) the page reloads the whole log at the live poll's interval while
-it is open.
+length, and `stable_sum`, a digest of those lines. With `after=N` the
+endpoint returns the lines from position N on, and the page keeps its
+first N lines and replaces the rest.
+
+The prefix is stable only while the log is rendered from the same
+source, and that can change under a live page. A harness that prints
+only its final message is followed through a live transcript, which the
+launcher removes before it exports the final transcript into the log
+(`internal/cli/run.go`); in between, and for good if the export fails,
+the same endpoint renders stdout alone, and its first N lines are not
+the ones the page kept. So the page sends the digest back (`sum=`) with
+`after`, and the server compares it with the digest of its own first N
+lines. When they differ, or N is past the end, the response says
+`reset` and carries the whole log, and the page discards what it had.
+The check does not depend on why the prefix changed. When the run ends
+the page loads the whole log once more, without a cursor, so the final
+view never rests on a prefix. What the page shows after any poll
+therefore equals the full rendered log at that moment. Until this lands
+(§12, step 2) the page reloads the whole log at the live poll's interval
+while it is open.
 
 ## 5. The other views, addresses and keys
 

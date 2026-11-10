@@ -444,14 +444,29 @@ depends = ["web-run-page"]
 size = "S"
 ```
 
-`GET /api/runs/ID/log` gains `after=N` and every response gains
-`stable` (design §4). `stable` is the length of the rendered log's
-**stable prefix**: the lines before the first one that can still change
-(a tool call still running, or the last line of a live log); for an
-ended run it is the whole log. With `after=N` the response's `lines` are
-the rendered lines from position N on. The run page loads the log once,
-then polls with `after` set to the last `stable` it received, keeps its
-first N lines and replaces everything after them.
+`GET /api/runs/ID/log` gains `after=N&sum=S`, and every response gains
+`stable` and `stable_sum` (design §4). `stable` is the length of the
+rendered log's **stable prefix**: the lines before the first one that
+can still change (a tool call still running, or the last line of a live
+log); for an ended run it is the whole log. `stable_sum` is a digest of
+those lines as rendered. With `after=N` the response's `lines` are the
+rendered lines from position N on. The run page loads the log once, then
+polls with `after` and `sum` set to the last `stable` and `stable_sum`
+it received, keeps its first N lines and replaces everything after them.
+
+**Reset.** The prefix holds only while the log is rendered from the same
+source. A run followed through a live transcript (a harness that
+implements `runs.Transcriber`, such as Crush's) loses that transcript
+when the launcher removes it before exporting the final one into the log
+(`internal/cli/run.go`, "Before the log gets the transcript"); during
+the gap, and for good if the export fails, the endpoint renders stdout
+alone. An `after` that is still in range then points into different
+lines. So on every request with `after`, the server computes the digest
+of its own first N rendered lines and compares it with `sum`: when they
+differ, when `sum` is missing, or when N is past the end, the response
+has `reset: true` and the whole log, and the page discards its cached
+lines. When the page sees its run leave the live set, it loads the whole
+log once more with no cursor.
 
 Do not use a count of final lines as the cursor. `runs.LineTracker`
 hands out a line as final while an earlier tool call is still running
@@ -469,9 +484,18 @@ append-only cursor would skip it or duplicate what follows.
   unfinished call followed by final text, then the call's completion**
   (`stable` stays at the call until it completes); `after` at the end
   returns no lines; an ended run's `stable` is its length; a check's
-  plain log; an `after` larger than the log is answered as a full load.
-- Frontend test: for the same sequences, the page's lines after every
-  poll equal a full load's.
+  plain log; an `after` larger than the log, and one without `sum`, are
+  answered with `reset` and the whole log.
+- **The transcript handoff**, with the existing renderer: a live
+  transcript that renders three lines with `stable` 2; then the
+  transcript removed and three lines of final stdout in the log, so that
+  `after=2` is still in range; the response is a `reset` with the stdout
+  lines, not the third stdout line attached to two transcript lines.
+  Then the exported transcript appended, and again a correct result.
+- Frontend tests: for the same sequences, the page's lines after every
+  poll equal a full load's; a `reset` replaces the cached lines; when
+  the run ends the page requests the log without `after` and shows
+  exactly that response.
 
 ## `bottown ui`: the server and the live view in one terminal
 
