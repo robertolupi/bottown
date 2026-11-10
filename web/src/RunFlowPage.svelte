@@ -542,27 +542,43 @@
     }
   }
 
-  // Load timeline for flow
-  async function loadTimelineData(issue: number, pr?: number) {
-    timelineLoading = true;
-    timelineError = null;
+  // Load timeline for flow. A refresh (isPoll) keeps the current timeline on
+  // screen and on failure; only the latest request's answer is applied.
+  let timelineSeq = 0;
+  async function loadTimelineData(issue: number, pr?: number, isPoll = false) {
+    const seq = ++timelineSeq;
+    if (!isPoll) {
+      timelineLoading = true;
+      timelineError = null;
+    }
     try {
       const prParam = pr !== undefined ? `?pr=${pr}` : '';
       const res = await fetch(`/api/issues/${issue}/timeline${prParam}`);
+      if (seq !== timelineSeq) return;
       if (!res.ok) {
         if (res.status === 404) {
-          timelineData = null;
+          if (!isPoll) timelineData = null;
           return;
         }
         throw new Error(`Failed to load timeline for #${issue}`);
       }
-      timelineData = await res.json();
+      const data = await res.json();
+      if (seq !== timelineSeq) return;
+      timelineData = data;
+      timelineError = null;
     } catch (e: any) {
-      timelineError = e.message || 'Failed to load timeline';
+      if (!isPoll && seq === timelineSeq) timelineError = e.message || 'Failed to load timeline';
     } finally {
-      timelineLoading = false;
+      if (!isPoll && seq === timelineSeq) timelineLoading = false;
     }
   }
+
+  function refreshTimeline() {
+    if (route.kind === 'flow') void loadTimelineData(route.issue, addressedPr ?? 0, true);
+  }
+
+  // A flow is live while it is active or its selected run is.
+  let isFlowLive = $derived(route.kind === 'flow' && (Boolean(activeFlowInfo) || isRunLive));
 
   // Reactive load on activeRunId change
   $effect(() => {
@@ -584,6 +600,19 @@
     }
   });
 
+  // When the selected run ends, the last log poll may have missed its final
+  // lines (the status poll can see it end first): fetch its log once more.
+  // When a flow stops being live, refresh its timeline for the same reason.
+  let lastLive: { id: string | null; live: boolean; flowLive: boolean } = { id: null, live: false, flowLive: false };
+  $effect(() => {
+    const id = activeRunId;
+    const live = isRunLive;
+    const flowLive = isFlowLive;
+    if (id && id === lastLive.id && lastLive.live && !live) void loadLog(id, true);
+    if (lastLive.flowLive && !flowLive) refreshTimeline();
+    lastLive = { id, live, flowLive };
+  });
+
   onMount(() => {
     window.addEventListener('scroll', handleWindowScroll, { passive: true });
     window.addEventListener('keydown', handleKeydown);
@@ -598,6 +627,9 @@
       if (activeRunId && isRunLive && (route.kind === 'run' || activeFlowTab === 'log')) {
         await loadLog(activeRunId, true);
       }
+      // A live flow's timeline gains reviews, comments, checks and merges
+      // as it goes; the Timeline and Runs tabs both read it.
+      if (!destroyed && isFlowLive) refreshTimeline();
       if (!destroyed) {
         pollTimer = setTimeout(pollLog, interval);
       }

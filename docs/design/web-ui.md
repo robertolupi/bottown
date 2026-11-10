@@ -590,12 +590,15 @@ position. The page shares one unified layout component with runs:
   with kind filters, raw log link, and the follow toggle of `LiveLogTail`. When
   the run recorded a failure or revoked reason, the page renders that reason
   above the log. While the run is live, the log reloads at the live poll interval
-  and auto-scrolls to the bottom when following is on. Below or alongside the
+  and auto-scrolls to the bottom when following is on; when the run ends it
+  loads once more, for the lines written after the last reload. Below or alongside the
   log, any policy denials are listed.
 - **Flow page (`#/flow/<issue>`):** offers three tabs: **Log** (displaying the
   live run's log, or the last run's log), **Timeline** (the full flow timeline
   from `GET /api/issues/{issue}/timeline`), and **Runs** (listing the flow's
-  constituent runs, each linking to `#/run/<id>`).
+  constituent runs, each linking to `#/run/<id>`). While the flow is active
+  or its run is live, the timeline reloads at the live poll interval, and
+  once more when it stops.
 
 The table's header stays at the top of its scroll box as the rows scroll.
 A summary cell, and each line of a failure reason, shows one line, cut

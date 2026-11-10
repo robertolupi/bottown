@@ -89,6 +89,19 @@ test('parseRoute names the view of a fragment', () => {
 let dynamicLogs: Record<string, any[]> = {};
 // The timeline requests since the last stubFetch, path and query.
 let timelineRequests: string[] = [];
+// What the stubbed server answers; set by stubFetch.
+// A run's afterEnd lines are in its log only once a live-runs answer
+// without it has been served: the page learns the run ended before any
+// log request can see them.
+let stub: {
+  history: any[];
+  live_runs: any[];
+  live_checks: any[];
+  active_flows: any[];
+  timelines: Record<string, any>;
+  afterEnd: Record<string, any[]>;
+  endedServed: Set<string>;
+};
 
 function stubFetch(overrides?: {
   history?: any[];
@@ -106,7 +119,8 @@ function stubFetch(overrides?: {
   dynamicLogs = JSON.parse(JSON.stringify({ ...(fx.logs || {}), ...(overrides?.logs ?? {}) }));
   timelineRequests = [];
 
-  const status = { ...fx.status, inbox: fx.inbox, live_runs, live_checks, active_flows };
+  // Tests change stub's fields to change what later polls answer.
+  stub = { history: [...history], live_runs: [...live_runs], live_checks: [...live_checks], active_flows: [...active_flows], timelines, afterEnd: {}, endedServed: new Set() };
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost/');
     const json = (v: unknown, s = 200) => new Response(JSON.stringify(v), { status: s });
@@ -118,7 +132,8 @@ function stubFetch(overrides?: {
       if (id === 'r-notfound') {
         return new Response('Not found', { status: 404 });
       }
-      return json({ id, lines: dynamicLogs[id] || [] });
+      const ended = stub.endedServed.has(id);
+      return json({ id, lines: [...(dynamicLogs[id] || []), ...(ended ? stub.afterEnd[id] ?? [] : [])] });
     }
     const timelineMatch = url.pathname.match(/^\/api\/issues\/(\d+)\/timeline$/);
     if (timelineMatch) {
@@ -127,15 +142,15 @@ function stubFetch(overrides?: {
       timelineRequests.push(url.pathname + url.search);
       if (prParam) {
         const prKey = `${issueNum}:${prParam}`;
-        if (timelines && timelines[prKey]) {
-          return json(timelines[prKey]);
+        if (stub.timelines[prKey]) {
+          return json(stub.timelines[prKey]);
         }
         // The fixtures' issue-keyed timelines are their pre-PR threads,
         // unless a `N:0` key says otherwise.
         if (prParam !== '0') return new Response('Not found', { status: 404 });
       }
-      if (timelines && timelines[issueNum]) {
-        return json(timelines[issueNum]);
+      if (stub.timelines[issueNum]) {
+        return json(stub.timelines[issueNum]);
       }
       return json({ issue: parseInt(issueNum, 10), title: `Issue ${issueNum}`, events: [] });
     }
@@ -145,11 +160,15 @@ function stubFetch(overrides?: {
     }
     switch (url.pathname) {
       case '/api/status':
-        return json(status);
+        return json({ ...fx.status, inbox: fx.inbox, live_runs: stub.live_runs, live_checks: stub.live_checks, active_flows: stub.active_flows });
       case '/api/runs':
-        if (url.searchParams.get('state') === 'live')
-          return json({ live_runs, live_checks, active_flows });
-        return json(history);
+        if (url.searchParams.get('state') === 'live') {
+          for (const id of Object.keys(stub.afterEnd)) {
+            if (!stub.live_runs.some((r) => r.id === id)) stub.endedServed.add(id);
+          }
+          return json({ live_runs: stub.live_runs, live_checks: stub.live_checks, active_flows: stub.active_flows });
+        }
+        return json(stub.history);
       case '/api/milestones':
         return json(fx.milestones);
       case '/api/timeline':
@@ -497,6 +516,57 @@ test('a flow Log tab polls its live run and updates with new lines', async () =>
     const afterCount = root.querySelectorAll('.run-page-log .log-line').length;
     assert.equal(afterCount, initialCount + 1, 'new line rendered after poll on flow log tab');
     assert.ok(root.textContent!.includes('newly polled line on flow log tab'));
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a run page fetches the final log when its run ends between log polls', async () => {
+  const runId = 'r-1a2b3c4d';
+  const view = await mountAt(`#/run/${runId}`, { pollInterval: 20 });
+  try {
+    const root = view.target;
+    assert.ok(root.querySelectorAll('.run-page-log .log-line').length > 0, 'initial log rendered');
+
+    // The run writes its last line and ends; no live poll of its log sees
+    // the line, and the status poll sees the run ended.
+    const live = stub.live_runs.find((r) => r.id === runId);
+    stub.afterEnd[runId] = [{ kind: 'text', text: 'final line written at the end' }];
+    stub.live_runs = stub.live_runs.filter((r) => r.id !== runId);
+    stub.active_flows = stub.active_flows.filter((f) => f.issue !== 42);
+    stub.history = [
+      { ...live, status: 'succeeded', ended: '2026-11-02T11:00:00Z', duration: '29m 0s' },
+      ...stub.history,
+    ];
+
+    await new Promise((r) => setTimeout(r, 120));
+    await settle();
+    assert.ok(root.textContent!.includes('final line written at the end'), 'final log line rendered');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a live flow refreshes its timeline at each poll', async () => {
+  const view = await mountAt('#/flow/42', { pollInterval: 20 });
+  try {
+    const root = view.target;
+    const timelineTab = [...root.querySelectorAll('.flow-tab')].find((t) => t.textContent!.trim() === 'Timeline') as HTMLElement;
+    timelineTab.click();
+    await settle();
+    assert.ok(!root.textContent!.includes('Owner commented on the plan'));
+
+    const tl = stub.timelines['42'];
+    stub.timelines['42'] = {
+      ...tl,
+      events: [...tl.events, { type: 'comment', time: '2026-11-02T10:40:00Z', title: 'Owner commented on the plan', actor: 'owner' }],
+    };
+
+    await new Promise((r) => setTimeout(r, 80));
+    await settle();
+    assert.ok(root.textContent!.includes('Owner commented on the plan'), 'new timeline event rendered');
+    assert.ok(timelineRequests.every((u) => u === '/api/issues/42/timeline?pr=0'), timelineRequests.join());
+    assert.ok(timelineRequests.length > 1, 'timeline polled');
   } finally {
     view.unmount();
   }
