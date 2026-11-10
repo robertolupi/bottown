@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -98,6 +99,19 @@ type Options struct {
 	// SerializeActors is set.
 	ActorWait time.Duration
 	Attended  bool
+	// Status, if set, is called at every step change with what the flow is
+	// doing now: the steps runs.StepImplementing, StepChecks,
+	// StepVerifying, StepWaitingActor and StepBetweenRuns, a wait's detail,
+	// and the run's round. The flow keeps no file knowledge: the caller
+	// writes the status file, and a nil callback (a caller that keeps
+	// none) is a no-op.
+	Status func(runs.FlowStatusView)
+	// OnEnd, if set, is called once when Run returns, before the flow's
+	// lock is released. A caller that keeps a status file removes it here,
+	// so removal happens while the lock is held: a flow that could not
+	// take the lock calls neither Status nor OnEnd, and never touches the
+	// holder's file.
+	OnEnd func()
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -323,6 +337,10 @@ type Supervisor struct {
 	// for a busy actor (tests).
 	now   func() time.Time
 	after func(time.Duration) <-chan time.Time
+
+	// lastStep and lastDetail are the last step reported to Options.Status,
+	// so only a change is reported; Run resets them.
+	lastStep, lastDetail string
 }
 
 // Run executes or resumes a flow. It returns nil only at ready to merge;
@@ -354,6 +372,16 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		}
 		defer release()
 	}
+	if opts.OnEnd != nil {
+		// After release in LIFO order: the callback runs while the flow
+		// still holds its lock.
+		defer opts.OnEnd()
+	}
+	s.lastStep, s.lastDetail = "", ""
+	// The flow holds its lock and is reading the forge, not running: it is
+	// between runs, in its first review round until the PR says otherwise.
+	opts.round = 1
+	s.report(opts, runs.StepBetweenRuns, "")
 	if err := s.checkFamilies(ctx, opts); err != nil {
 		return result, err
 	}
@@ -370,6 +398,11 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		// The flow is reading the forge and deciding, not running anything:
+		// between runs, and with no detail. Reported before the reads, so
+		// the file never claims a run or check that has ended is still
+		// going.
+		s.report(opts, runs.StepBetweenRuns, "")
 		item, open, err := s.API.OpenPR(ctx, opts.Repo, fmt.Sprintf("issue/%d", opts.Issue))
 		if err != nil {
 			return result, err
@@ -606,7 +639,12 @@ func (s *Supervisor) gate(ctx context.Context, opts Options, pr server.PROut) (C
 	if s.Out != nil {
 		fmt.Fprintf(s.Out, "flow #%d: post-implement checks at %s\n", opts.Issue, shortSHA(pr.HeadSHA))
 	}
+	s.report(opts, runs.StepChecks, "")
 	outcome, err := RunCheck(ctx, s.Checker, req, opts.CheckTimeout)
+	// The checks have ended, whether they passed, failed or could not run:
+	// recording their result, and the forge reads that follow, are between
+	// runs, not the checks themselves.
+	s.report(opts, runs.StepBetweenRuns, "")
 	if err != nil {
 		return outcome, err
 	}
@@ -840,6 +878,10 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		after = time.After
 	}
 	var deadline time.Time // of the wait for a busy actor, once one starts
+	step := runs.StepImplementing
+	if req.Kind == policy.Verify {
+		step = runs.StepVerifying
+	}
 	for {
 		// The owner may merge the PR while a run, or the wait for a busy
 		// actor, goes on: then no run is left to start.
@@ -855,11 +897,15 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 			}
 			fmt.Fprintf(s.Out, "flow #%d: %s %s with %s\n", opts.Issue, req.Kind, target, req.Actor)
 		}
+		s.report(opts, step, "")
 		runCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 		err := s.Runner.Run(runCtx, req)
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err == nil {
+			// The run has ended; whatever the flow reads or decides next
+			// is between runs, not the run itself.
+			s.report(opts, runs.StepBetweenRuns, "")
 			return nil
 		}
 		if opts.SerializeActors && errors.Is(err, ErrActorBusy) {
@@ -870,6 +916,8 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 					fmt.Fprintf(s.Out, "flow #%d: waiting up to %s for %s's other batch run to end: %v\n", opts.Issue, opts.ActorWait, req.Actor, err)
 				}
 			}
+			// The refusal names the actor and the run that holds it.
+			s.report(opts, runs.StepWaitingActor, err.Error())
 			if !now.Before(deadline) {
 				return &actorWaitError{actor: req.Actor, wait: opts.ActorWait, err: err}
 			}
@@ -882,6 +930,9 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 			req.Retry = true
 			continue
 		}
+		// The run ended in failure; the flow reads the forge and stops,
+		// which is between runs, not the failed run.
+		s.report(opts, runs.StepBetweenRuns, "")
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -894,6 +945,31 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 		}
 		return err
 	}
+}
+
+// report tells Options.Status what the flow is doing now. It is called
+// often, so it reports only a change of step or detail; a nil callback (a
+// caller that keeps no status file) is a no-op. The flow keeps no file
+// knowledge: the caller writes the file.
+func (s *Supervisor) report(opts Options, step, detail string) {
+	if opts.Status == nil {
+		return
+	}
+	if s.lastStep == step && s.lastDetail == detail {
+		return
+	}
+	s.lastStep, s.lastDetail = step, detail
+	opts.Status(runs.FlowStatusView{
+		PID:       os.Getpid(),
+		Issue:     opts.Issue,
+		Implement: opts.Implement,
+		Verify:    opts.Verify,
+		Rounds:    opts.Rounds,
+		Round:     opts.round,
+		Step:      step,
+		Detail:    detail,
+		Since:     time.Now().UTC(),
+	})
 }
 
 // idleRunError is a batch run whose agent made no tool call, for the

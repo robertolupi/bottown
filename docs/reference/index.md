@@ -27,6 +27,7 @@ only their topic's file.
   - [Critical discuss runs](runs/critical-discuss.md)
   - [Sharing the host](runs/sharing-the-host.md)
   - [One flow per issue](runs/one-flow-per-issue.md)
+  - [A flow's status file](runs/flow-status.md)
   - [Flow stops and exit codes](runs/flow-stops.md)
 - [Harness models](harness-models.md)
 - [The fam guide](fam-guide.md)
