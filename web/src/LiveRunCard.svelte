@@ -28,10 +28,13 @@
           href={run.target_url}
           label={run.target}
           title={run.issue_title}
+          titleHref={`#/run/${run.id}`}
           showTitle
         />
       {:else}
-        <TargetLink href={run.target_url} label={run.target} title={retroWindowTitle(run.window)} />
+        <a href="#/run/{run.id}" class="run-card-target-link">
+          <TargetLink href={run.target_url} label={run.target} title={retroWindowTitle(run.window)} stopPropagation />
+        </a>
         {#if run.window}
           <span class="badge instance-badge" title="The window's start, as the owner gave it">since {run.window.since}</span>
         {/if}

@@ -25,6 +25,7 @@
           href={check.issue_url}
           label={`#${check.issue}`}
           title={check.issue_title}
+          titleHref={`#/run/${check.id}`}
           showTitle
         />
       {/if}

@@ -27,7 +27,9 @@ import {
   parseLivePollSnapshot,
   reconcileExpandedThread,
   resolveInboxAction,
+  resolveItemIssueAndPR,
   retroWindowTitle,
+  runMatchesFlow,
   runOutcome,
   selectDefaultActors,
   standaloneLiveChecks,
@@ -1667,6 +1669,54 @@ test('groupHistoryThreads attaches flow_state to flow threads while keeping stat
   assert.equal(activeFlow?.active_label, '#51 · round 2/3 · verifying with kimi');
   assert.equal(activeFlow?.flow_state?.state, 'in_progress');
   assert.equal(activeFlow?.flow_state?.label, 'In progress');
+});
+
+test('resolveItemIssueAndPR and runMatchesFlow isolate same-issue runs by PR and pre-PR', () => {
+  const prePrRun = {
+    id: 'r-pre',
+    target: '#42',
+    issue: 42,
+    thread_key: 'flow:issue:42',
+  };
+  const pr57Run = {
+    id: 'r-pr57',
+    target: '!57',
+    issue: 42,
+    pr: 57,
+    thread_key: 'flow:issue:42:pr:57',
+  };
+  const pr58Run = {
+    id: 'r-pr58',
+    target: '!58',
+    issue: 42,
+    pr: 58,
+  };
+  const otherIssueRun = {
+    id: 'r-other',
+    target: '#99',
+    issue: 99,
+  };
+
+  assert.deepEqual(resolveItemIssueAndPR(prePrRun), { issue: 42, pr: undefined });
+  assert.deepEqual(resolveItemIssueAndPR(pr57Run), { issue: 42, pr: 57 });
+  assert.deepEqual(resolveItemIssueAndPR(pr58Run), { issue: 42, pr: 58 });
+
+  // Pre-PR flow matches only pre-PR run
+  assert.equal(runMatchesFlow(prePrRun, 42, undefined), true);
+  assert.equal(runMatchesFlow(pr57Run, 42, undefined), false);
+  assert.equal(runMatchesFlow(pr58Run, 42, undefined), false);
+  assert.equal(runMatchesFlow(otherIssueRun, 42, undefined), false);
+
+  // PR 57 flow matches only PR 57 run
+  assert.equal(runMatchesFlow(prePrRun, 42, 57), false);
+  assert.equal(runMatchesFlow(pr57Run, 42, 57), true);
+  assert.equal(runMatchesFlow(pr58Run, 42, 57), false);
+  assert.equal(runMatchesFlow(otherIssueRun, 42, 57), false);
+
+  // PR 58 flow matches only PR 58 run
+  assert.equal(runMatchesFlow(prePrRun, 42, 58), false);
+  assert.equal(runMatchesFlow(pr57Run, 42, 58), false);
+  assert.equal(runMatchesFlow(pr58Run, 42, 58), true);
 });
 
 

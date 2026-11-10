@@ -13,10 +13,11 @@
     href: string;
     label: string;
     title?: string;
+    titleHref?: string;
     showTitle?: boolean;
   }
 
-  let { number, href, label, title = '', showTitle = false }: Props = $props();
+  let { number, href, label, title = '', titleHref, showTitle = false }: Props = $props();
 
   const tooltipID = `issue-tooltip-${++nextTooltipID}`;
   let anchor: HTMLAnchorElement;
@@ -94,8 +95,8 @@
     bind:this={anchor}
     class="pr-badge issue-reference-link"
     {href}
-    target="_blank"
-    rel="noreferrer"
+    target={href.startsWith('#') ? undefined : '_blank'}
+    rel={href.startsWith('#') ? undefined : 'noreferrer'}
     aria-describedby={open ? tooltipID : undefined}
     onclick={(event) => event.stopPropagation()}
     onmouseenter={showFromMouse}
@@ -107,7 +108,15 @@
     {label}
   </a>
   {#if showTitle && displayTitle}
-    <span class="issue-title">{displayTitle}</span>
+    {#if titleHref}
+      <a
+        href={titleHref}
+        class="issue-title issue-title-link"
+        onclick={(event) => event.stopPropagation()}
+      >{displayTitle}</a>
+    {:else}
+      <span class="issue-title">{displayTitle}</span>
+    {/if}
   {/if}
   {#if open}
     <div id={tooltipID} class="issue-popup" role="tooltip" style={popupStyle}>
@@ -156,6 +165,16 @@
   .issue-title {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  .issue-title-link {
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .issue-title-link:hover {
+    text-decoration: underline;
   }
 
   .issue-popup {

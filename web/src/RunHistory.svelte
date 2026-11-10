@@ -20,9 +20,6 @@
   let { history, threads, actors, now }: Props = $props();
 
   let filteredThreads = $derived(filterHistoryThreads(threads, history.filters, now));
-  const onToggleLog = (id: string) => history.toggleLog(id);
-  const onSelectFlow = (thread: HistoryThread) => history.selectFlow(thread);
-  const onShowRun = (thread: HistoryThread, runId: string) => history.showRun(thread, runId);
 </script>
 
 <section class="card full-width">
@@ -69,19 +66,9 @@
           <tbody>
             {#each filteredThreads as thread (thread.key)}
               {#if thread.kind === 'discuss'}
-                <DiscussThreadRow {thread} logState={history.logs[thread.runs[0].id]} {onToggleLog} />
+                <DiscussThreadRow {thread} />
               {:else}
-                <FlowThreadRow
-                  {thread}
-                  expanded={history.expandedThreadKey === thread.key}
-                  timeline={history.timelines[thread.key]}
-                  timelineLoading={history.timelineLoading[thread.key]}
-                  timelineError={history.timelineError[thread.key]}
-                  expandedLogs={history.logs}
-                  onSelect={onSelectFlow}
-                  {onShowRun}
-                  {onToggleLog}
-                />
+                <FlowThreadRow {thread} />
               {/if}
             {/each}
           </tbody>
