@@ -641,7 +641,7 @@ export function aggregateThreadUsage(runs: HistoryRunInfo[]): UsageInfo | undefi
   return hasUsage ? sum : undefined;
 }
 
-function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: number } {
+export function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: number } {
   if (!threadKey) return {};
   const issueMatch = threadKey.match(/(?:^|:)issue:(\d+)(?:$|:)/);
   const prMatch = threadKey.match(/(?:^|:)pr:(\d+)(?:$|:)/);
@@ -653,15 +653,24 @@ function parseThreadKeyIssueAndPR(threadKey?: string): { issue?: number; pr?: nu
   };
 }
 
-function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: number } {
-  const fromKey = parseThreadKeyIssueAndPR(run.thread_key);
-  let issue = run.issue && run.issue > 0 ? run.issue : undefined;
-  let pr = run.pr && run.pr > 0 ? run.pr : undefined;
-  if (!issue && run.target?.startsWith('#')) {
-    issue = parseIssueNumber(run.target) ?? undefined;
+export function resolveItemIssueAndPR(item: {
+  issue?: number;
+  pr?: number;
+  target?: string;
+  thread_key?: string;
+  flow?: { issue?: number };
+}): { issue?: number; pr?: number } {
+  const fromKey = parseThreadKeyIssueAndPR(item.thread_key);
+  let issue = item.issue && item.issue > 0 ? item.issue : undefined;
+  let pr = item.pr && item.pr > 0 ? item.pr : undefined;
+  if (!issue && item.flow?.issue && item.flow.issue > 0) {
+    issue = item.flow.issue;
   }
-  if (!pr && run.target?.startsWith('!')) {
-    pr = parseIssueNumber(run.target) ?? undefined;
+  if (!issue && item.target?.startsWith('#')) {
+    issue = parseIssueNumber(item.target) ?? undefined;
+  }
+  if (!pr && item.target?.startsWith('!')) {
+    pr = parseIssueNumber(item.target) ?? undefined;
   }
   if (!issue && fromKey.issue) {
     issue = fromKey.issue;
@@ -672,17 +681,33 @@ function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: numbe
   return { issue, pr };
 }
 
+// Whether a run or check belongs to the specified flow and optional PR.
+// When expectedPr is undefined, only pre-PR runs (runs with no associated PR) match.
+export function runMatchesFlow(
+  item: {
+    issue?: number;
+    pr?: number;
+    target?: string;
+    thread_key?: string;
+    flow?: { issue?: number };
+  },
+  flowIssue: number,
+  expectedPr: number | undefined
+): boolean {
+  const { issue, pr } = resolveItemIssueAndPR(item);
+  if (issue !== flowIssue) return false;
+  if (expectedPr !== undefined) {
+    return pr === expectedPr;
+  }
+  return !pr;
+}
+
+function resolveRunIssueAndPR(run: HistoryRunInfo): { issue?: number; pr?: number } {
+  return resolveItemIssueAndPR(run);
+}
+
 function liveRunToHistoryRun(lr: LiveRunInfo): HistoryRunInfo {
-  const fromKey = parseThreadKeyIssueAndPR(lr.thread_key);
-  const issue =
-    lr.issue ||
-    lr.flow?.issue ||
-    (lr.target?.startsWith('#') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
-    fromKey.issue;
-  const pr =
-    lr.pr ||
-    (lr.target?.startsWith('!') ? (parseIssueNumber(lr.target) ?? undefined) : undefined) ||
-    fromKey.pr;
+  const { issue, pr } = resolveItemIssueAndPR(lr);
   return {
     id: lr.id,
     target: lr.target || (pr ? `!${pr}` : issue ? `#${issue}` : ''),
@@ -1363,6 +1388,25 @@ export function buildFlowTimeline(
         target_url: existing.target_url || ev.url || '',
       });
       continue;
+    }
+
+    // Do not incorporate runs from another thread's timeline
+    if (issueTimeline?.thread_key && thread.key && issueTimeline.thread_key !== thread.key) {
+      continue;
+    }
+    if (issueTimeline?.pr && thread.pr !== undefined && issueTimeline.pr !== thread.pr) {
+      continue;
+    }
+    if (thread.issue) {
+      if (thread.pr !== undefined) {
+        if (ev.url?.includes('/pulls/') && !ev.url.includes(`/pulls/${thread.pr}`)) {
+          continue;
+        }
+      } else {
+        if (ev.url?.includes('/pulls/') || ev.title?.startsWith('!')) {
+          continue;
+        }
+      }
     }
 
     const kind =

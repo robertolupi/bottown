@@ -5,6 +5,7 @@
   // Log, Timeline and Runs tabs.
   import { onMount } from 'svelte';
   import type {
+    ActiveFlowInfo,
     Denial,
     FailureDescription,
     HistoryRunInfo,
@@ -23,7 +24,9 @@
     formatThreadMainLine,
     groupHistoryThreads,
     parseIssueNumber,
+    resolveItemIssueAndPR,
     retroWindowTitle,
+    runMatchesFlow,
     updateLogTailFollow,
   } from './state';
   import { formatElapsed, formatTime, formatUsage } from './format';
@@ -88,28 +91,66 @@
   );
 
   // For flow route: find matching thread and active flow
-  let activeFlowInfo = $derived(
-    route.kind === 'flow' ? status?.active_flows?.find((f) => f.issue === route.issue) : undefined
+  let flowThread = $derived.by<HistoryThread | null>(() => {
+    if (route.kind !== 'flow') return null;
+    const matching = allThreads.filter((t) => t.kind === 'flow' && t.issue === route.issue);
+    if (matching.length === 0) return null;
+
+    if (route.pr !== undefined) {
+      return matching.find((t) => t.pr === route.pr) || null;
+    }
+
+    // route.pr is undefined:
+    // If there is an explicit pre-PR thread (no PR), match it:
+    const prePr = matching.find((t) => !t.pr);
+    if (prePr) return prePr;
+
+    // Otherwise match the active thread, or the latest thread:
+    const active = matching.find((t) => t.active);
+    if (active) return active;
+
+    return matching[matching.length - 1];
+  });
+
+  let addressedPr = $derived<number | undefined>(
+    route.kind === 'flow'
+      ? (route.pr !== undefined ? route.pr : (flowThread?.pr ?? undefined))
+      : undefined
   );
 
-  let flowThread = $derived<HistoryThread | null>(
-    route.kind === 'flow'
-      ? allThreads.find(
-          (t) =>
-            t.kind === 'flow' &&
-            t.issue === route.issue &&
-            (route.pr === undefined || t.pr === route.pr || (!t.pr && route.pr === 0))
-        ) || null
-      : null
-  );
+  let activeFlowInfo = $derived.by<ActiveFlowInfo | undefined>(() => {
+    if (route.kind !== 'flow') return undefined;
+    const flowCandidate = status?.active_flows?.find((f) => f.issue === route.issue);
+    if (!flowCandidate) return undefined;
+
+    // Check if any live run or check exists for this issue
+    const issueLiveRun = status?.live_runs?.find((r) => resolveItemIssueAndPR(r).issue === route.issue);
+    const issueLiveCheck = status?.live_checks?.find((c) => resolveItemIssueAndPR(c).issue === route.issue);
+
+    if (issueLiveRun || issueLiveCheck) {
+      const runMatches = issueLiveRun ? runMatchesFlow(issueLiveRun, route.issue, addressedPr) : false;
+      const checkMatches = issueLiveCheck ? runMatchesFlow(issueLiveCheck, route.issue, addressedPr) : false;
+      return runMatches || checkMatches ? flowCandidate : undefined;
+    }
+
+    // No live runs or checks right now (e.g. flow waiting between runs).
+    if (flowThread?.active) return flowCandidate;
+    if (flowThread && addressedPr === flowThread.pr) {
+      const issueThreads = allThreads.filter((t) => t.kind === 'flow' && t.issue === route.issue);
+      if (issueThreads.length > 0 && issueThreads[issueThreads.length - 1].key === flowThread.key) {
+        return flowCandidate;
+      }
+    }
+    return undefined;
+  });
 
   let fallbackThread = $derived<HistoryThread>(
     route.kind === 'flow'
       ? {
-          key: `flow:issue:${route.issue}${route.pr ? `:pr:${route.pr}` : ''}`,
+          key: `flow:issue:${route.issue}${addressedPr ? `:pr:${addressedPr}` : ''}`,
           kind: 'flow',
           issue: route.issue,
-          pr: route.pr,
+          pr: addressedPr,
           status: 'running',
           runs: [],
           actors: [],
@@ -142,19 +183,25 @@
     route.kind === 'flow' ? buildFlowTimeline(effectiveFlowThread, timelineData) : []
   );
 
-  let flowConstituentRuns = $derived<HistoryRunInfo[]>(
+  let rawFlowConstituentRuns = $derived<HistoryRunInfo[]>(
     route.kind === 'flow' ? buildFlowConstituentRuns(effectiveFlowThread, flowTimelineEntries) : []
+  );
+
+  let flowConstituentRuns = $derived<HistoryRunInfo[]>(
+    route.kind === 'flow'
+      ? rawFlowConstituentRuns.filter((r) => runMatchesFlow(r, route.issue, addressedPr))
+      : []
   );
 
   // Active run ID for log tab:
   // For run route: route.id.
-  // For flow route: live run if any, else last run of flow.
+  // For flow route: live run if any matching this thread, else last run of flow.
   let activeRunId = $derived.by<string | null>(() => {
     if (route.kind === 'run') return route.id;
     if (route.kind === 'flow') {
-      const liveForFlow = status?.live_runs?.find((r) => r.flow?.issue === route.issue || r.issue === route.issue);
+      const liveForFlow = status?.live_runs?.find((r) => runMatchesFlow(r, route.issue, addressedPr));
       if (liveForFlow) return liveForFlow.id;
-      const liveCheckForFlow = status?.live_checks?.find((c) => c.issue === route.issue);
+      const liveCheckForFlow = status?.live_checks?.find((c) => runMatchesFlow(c, route.issue, addressedPr));
       if (liveCheckForFlow) return liveCheckForFlow.id;
       if (flowConstituentRuns.length > 0) {
         return flowConstituentRuns[flowConstituentRuns.length - 1].id;
@@ -245,7 +292,8 @@
       return (
         timelineData?.title ||
         flowThread?.runs.find((r) => r.issue_title)?.issue_title ||
-        status?.live_runs?.find((r) => r.flow?.issue === route.issue)?.issue_title ||
+        currentRunObj?.issue_title ||
+        status?.live_runs?.find((r) => runMatchesFlow(r, route.issue, addressedPr))?.issue_title ||
         ''
       );
     }
@@ -281,6 +329,7 @@
     if (route.kind === 'flow') {
       if (activeFlowInfo) return `${activeFlowInfo.implement} → ${activeFlowInfo.verify}`;
       if (flowThread && flowThread.actors.length > 0) return flowThread.actors.join(', ');
+      if (currentRunObj?.actor) return currentRunObj.actor;
       return null;
     }
     if (resolvedLiveRun) {
@@ -295,31 +344,28 @@
   });
 
   let headerModel = $derived.by<string | null>(() => {
-    if (route.kind === 'run') {
-      return resolvedLiveRun?.spec || resolvedHistoryRun?.spec || null;
-    }
-    return null;
+    return currentRunObj?.spec || null;
   });
 
   let headerMode = $derived.by<string | null>(() => {
-    if (route.kind === 'run') {
-      if (resolvedLiveRun) return resolvedLiveRun.interactive ? 'interactive' : 'batch';
-      if (resolvedHistoryRun) return resolvedHistoryRun.mode || null;
+    if (!currentRunObj) return null;
+    if (typeof currentRunObj.interactive === 'boolean') {
+      return currentRunObj.interactive ? 'interactive' : 'batch';
     }
-    return null;
+    return currentRunObj.mode || null;
   });
 
   let headerElapsed = $derived.by<string | null>(() => {
-    if (resolvedLiveRun) {
-      const elapsed = formatElapsed(resolvedLiveRun.created, now);
-      return resolvedLiveRun.timeout ? `${elapsed} / ${resolvedLiveRun.timeout}` : elapsed;
+    if (!currentRunObj) return null;
+    if (isRunLive && currentRunObj.created) {
+      const elapsed = formatElapsed(currentRunObj.created, now);
+      return currentRunObj.timeout ? `${elapsed} / ${currentRunObj.timeout}` : elapsed;
     }
-    if (resolvedLiveCheck) {
-      const elapsed = formatElapsed(resolvedLiveCheck.created, now);
-      return resolvedLiveCheck.timeout ? `${elapsed} / ${resolvedLiveCheck.timeout}` : elapsed;
+    if (currentRunObj.duration) {
+      return currentRunObj.duration;
     }
-    if (resolvedHistoryRun) {
-      return resolvedHistoryRun.duration || null;
+    if (currentRunObj.elapsed) {
+      return currentRunObj.timeout ? `${currentRunObj.elapsed} / ${currentRunObj.timeout}` : currentRunObj.elapsed;
     }
     return null;
   });
@@ -371,7 +417,7 @@
   });
 
   let prNumber = $derived.by<number | null>(() => {
-    if (route.kind === 'flow') return route.pr ?? flowThread?.pr ?? null;
+    if (route.kind === 'flow') return addressedPr ?? null;
     return runFlowPr ?? null;
   });
 
@@ -504,6 +550,10 @@
       const prParam = pr !== undefined ? `?pr=${pr}` : '';
       const res = await fetch(`/api/issues/${issue}/timeline${prParam}`);
       if (!res.ok) {
+        if (res.status === 404) {
+          timelineData = null;
+          return;
+        }
         throw new Error(`Failed to load timeline for #${issue}`);
       }
       timelineData = await res.json();
@@ -528,7 +578,7 @@
   // Reactive load on flow route change
   $effect(() => {
     if (route.kind === 'flow') {
-      void loadTimelineData(route.issue, route.pr);
+      void loadTimelineData(route.issue, addressedPr);
     }
   });
 
