@@ -155,7 +155,8 @@ func TestCapture(t *testing.T) {
 	}
 	same("/api/issues/0/timeline?pr=77", prTL)
 	done, _, _ := s.ComputeRunLog(ctx, "r-done")
-	same("/api/runs/r-done/log", map[string]any{"id": "r-done", "lines": done})
+	donePage, _ := pageLog("r-done", done, true, nil) // r-done has ended: its whole log is stable
+	same("/api/runs/r-done/log", donePage)
 
 	var st UIStatusResponse
 	c.get("/api/status", &st)

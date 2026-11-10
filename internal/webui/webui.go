@@ -542,41 +542,38 @@ func (s *Server) handleGetRunLog(w http.ResponseWriter, r *http.Request) {
 
 	logPath := filepath.Join(s.cfg.RepoTop, ".bottown", "runs", id+".log")
 	logBytes, err := runs.ReadLog(logPath)
-	if err != nil {
-		if r.URL.Query().Get("raw") == "1" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":    id,
-			"lines": []runs.LogLine{},
-		})
+	raw := r.URL.Query().Get("raw") == "1"
+	switch {
+	case err != nil && raw:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
 		return
-	}
-	if r.URL.Query().Get("raw") == "1" {
+	case raw:
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write(runs.RedactEncoded(logBytes))
 		return
 	}
 
-	lines := s.renderRunLog(r.Context(), id, logBytes)
-	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
-		if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
+	var lines []runs.LogLine
+	var ended bool
+	if err == nil {
+		lines, ended = s.renderRunLog(r.Context(), id, logBytes)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":    id,
-		"lines": lines,
-	})
+	page, err := pageLog(id, lines, ended, r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
-// renderRunLog renders run id's log, read as logBytes, for its harness.
-func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) []runs.LogLine {
+// renderRunLog renders run id's log, read as logBytes, for its harness,
+// and says whether the run has ended. A check's or landing's log, and a
+// run the server does not answer for, are taken as live: that only keeps
+// their last line out of the stable prefix (pageLog).
+func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) (lines []runs.LogLine, ended bool) {
 	if validCheckID.MatchString(id) || strings.HasPrefix(id, "land-") {
-		return runs.RenderLog("", logBytes) // the checks' commands' output: plain lines
+		return runs.RenderLog("", logBytes), false // the checks' commands' output: plain lines
 	}
 	actorMap, _ := s.fetchActorMap(ctx)
 	harness := ""
@@ -586,8 +583,9 @@ func (s *Server) renderRunLog(ctx context.Context, id string, logBytes []byte) [
 		if harness == "" && actorMap[serverRun.Actor] != nil {
 			harness = actorMap[serverRun.Actor].Harness
 		}
+		ended = serverRun.Ended != nil
 	}
-	return runs.RenderLog(harness, logBytes)
+	return runs.RenderLog(harness, logBytes), ended
 }
 
 // ComputeRunLog returns run id's rendered log as GET /api/runs/{id}/log
@@ -600,7 +598,8 @@ func (s *Server) ComputeRunLog(ctx context.Context, id string) ([]runs.LogLine, 
 	if err != nil {
 		return []runs.LogLine{}, false, nil
 	}
-	return s.renderRunLog(ctx, id, logBytes), true, nil
+	lines, _ := s.renderRunLog(ctx, id, logBytes)
+	return lines, true, nil
 }
 
 func (s *Server) handleGetIssueDetails(w http.ResponseWriter, r *http.Request) {

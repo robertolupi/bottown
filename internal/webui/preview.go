@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -368,14 +369,18 @@ func (s *PreviewServer) handleRunLog(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(runs.RedactEncoded([]byte(raw)))
 		return
 	}
-	n, _ := strconv.Atoi(r.URL.Query().Get("tail"))
-	writeJSON(w, http.StatusOK, s.snapshot(func(fx *Fixture) any {
-		lines := fx.Logs[id]
-		if n > 0 {
-			lines = tail(lines, n)
-		}
-		return map[string]any{"id": id, "lines": orEmpty(lines)}
-	}))
+	// A fixture's run has ended unless it is one of its live runs or checks.
+	s.mu.Lock()
+	lines := slices.Clone(s.fx.Logs[id])
+	ended := !slices.ContainsFunc(s.fx.LiveRuns, func(r LiveRunInfo) bool { return r.ID == id }) &&
+		!slices.ContainsFunc(s.fx.LiveChecks, func(c LiveCheckInfo) bool { return c.ID == id })
+	s.mu.Unlock()
+	page, err := pageLog(id, lines, ended, r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *PreviewServer) handleIssue(w http.ResponseWriter, r *http.Request) {

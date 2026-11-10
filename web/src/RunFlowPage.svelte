@@ -30,6 +30,7 @@
     updateLogTailFollow,
   } from './state';
   import { formatElapsed, formatTime, formatUsage } from './format';
+  import { applyLog, logURL, type LogCursor, type LogResponse } from './logcursor';
   import { flowRouteHash, runRouteHash, type Route } from './routes';
   import DenialList from './DenialList.svelte';
   import FailureReason from './FailureReason.svelte';
@@ -513,32 +514,45 @@
     }
   }
 
-  // Load log
-  async function loadLog(id: string, isPoll = false) {
+  // Load log. A poll asks only for the lines after the last stable prefix
+  // (logcursor.ts); full loads the whole log, as when the run has ended.
+  // Only the latest request's answer is applied.
+  let logCursor: { id: string; cursor: LogCursor } | null = null;
+  let logSeq = 0;
+  async function loadLog(id: string, isPoll = false, full = false) {
+    const seq = ++logSeq;
     if (!isPoll) loadingLog = true;
     logError = null;
+    const cursor = logCursor?.id === id ? logCursor.cursor : null;
     try {
-      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/log`);
+      const res = await fetch(logURL(id, cursor, full));
+      if (seq !== logSeq) return;
       if (!res.ok) {
         // Unknown run id shows empty state, not error
         if (res.status === 404 || res.status === 400) {
           logLines = [];
+          logCursor = null;
           return;
         }
         throw new Error(`Failed to load log: ${res.statusText}`);
       }
-      const data = await res.json();
-      const nextLines: LogLine[] = data.lines || [];
-      const hadNewLines = nextLines.length > logLines.length;
-      logLines = nextLines;
+      const data: LogResponse = await res.json();
+      if (seq !== logSeq) return;
+      const next = applyLog(cursor, data, full);
+      const hadNewLines = next.lines.length > logLines.length;
+      logCursor = { id, cursor: next };
+      logLines = next.lines;
       if (isFollowing && (hadNewLines || !isPoll)) {
         setTimeout(scrollToBottom, 20);
       }
     } catch {
       // Keep empty lines on network/other failures for unknown runs
-      if (!isPoll) logLines = [];
+      if (!isPoll && seq === logSeq) {
+        logLines = [];
+        logCursor = null;
+      }
     } finally {
-      if (!isPoll) loadingLog = false;
+      if (seq === logSeq) loadingLog = false;
     }
   }
 
@@ -601,14 +615,15 @@
   });
 
   // When the selected run ends, the last log poll may have missed its final
-  // lines (the status poll can see it end first): fetch its log once more.
+  // lines (the status poll can see it end first): fetch its whole log once
+  // more, without a cursor, so the final view never rests on a prefix.
   // When a flow stops being live, refresh its timeline for the same reason.
   let lastLive: { id: string | null; live: boolean; flowLive: boolean } = { id: null, live: false, flowLive: false };
   $effect(() => {
     const id = activeRunId;
     const live = isRunLive;
     const flowLive = isFlowLive;
-    if (id && id === lastLive.id && lastLive.live && !live) void loadLog(id, true);
+    if (id && id === lastLive.id && lastLive.live && !live) void loadLog(id, true, true);
     if (lastLive.flowLive && !flowLive) refreshTimeline();
     lastLive = { id, live, flowLive };
   });

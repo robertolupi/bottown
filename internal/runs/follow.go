@@ -86,8 +86,7 @@ func (t *LineTracker) Update(lines []LogLine, ended bool) (final, live []LogLine
 		if t.handed[i] {
 			continue
 		}
-		running := l.Kind == LineTool && l.State == "running"
-		if ended || !running && i < len(lines)-1 {
+		if ended || !l.Running() && i < len(lines)-1 {
 			t.handed[i] = true
 			final = append(final, l)
 		} else {

@@ -184,9 +184,7 @@ lines. When they differ, or N is past the end, the response says
 The check does not depend on why the prefix changed. When the run ends
 the page loads the whole log once more, without a cursor, so the final
 view never rests on a prefix. What the page shows after any poll
-therefore equals the full rendered log at that moment. Until this lands
-(§12, step 2) the page reloads the whole log at the live poll's interval
-while it is open.
+therefore equals the full rendered log at that moment.
 
 ## 5. The other views, addresses and keys
 
