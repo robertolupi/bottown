@@ -527,9 +527,9 @@ Below Needs you (§4.1), **Live** lays out the server's live view, `GET
 /api/live` (§7), polled with the live runs: what is live, how it groups,
 its order and what is quiet are decided there, and the browser only words
 them. Live is a summary ("5 running · 1 quiet · 1 waiting · 1
-interactive"), the Start Flow, Start Run and Clean up buttons, and a grid
+interactive"), and a grid
 of **tiles** (`repeat(auto-fill, minmax(420px, 1fr))`, one column on a
-narrow screen), one per item: each live batch run, landing included, and
+narrow screen), one per item: each live batch run and
 each live check group, ordered by start time and never reordered. A tile
 has a two-line header, the target and title, then the kind with the
 flow's round ("verify 2/3"), the actor, elapsed time against the limit
@@ -650,8 +650,7 @@ with runs:
   replaces the rest; when the server's first N lines have another digest
   (the log is rendered from another source, as when a live transcript is
   removed), `sum` is missing or N is past the end, the response has
-  `reset: true` and the whole log, which replaces the page's. A check's or
-  landing's log is taken as live, so its last line stays out of the prefix.
+  `reset: true` and the whole log, which replaces the page's. A check's log is taken as live, so its last line stays out of the prefix.
   The page auto-scrolls to the bottom when following is on; when the run ends
   it loads the whole log once more, without a cursor. Below or alongside the
   log, any policy denials are listed.
@@ -910,7 +909,8 @@ clipboard copy, with text selection when clipboard access is unavailable.
 - Milestones: ready nodes show `bottown flow N --implement A --verify B`
   from their labels, with `ACTOR` placeholders. Clicking a node opens its flow
   page. Plans show `bottown milestone run SLUG --agents POOL --parallel N`;
-  the owner fills in the pool and parallelism.
+  the owner fills in the pool and parallelism. The UI shows the child flows,
+  but has no scheduler status record and does not show its pool or parallelism.
 - Repository: `git pull --ff-only bottown <default>` when behind the forge,
   `git push origin <default>` when ahead of origin, and each declared
   after-pull step. Short SHAs have controls to copy their full values.

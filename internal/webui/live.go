@@ -55,11 +55,11 @@ type LiveFlow struct {
 	Step      string `json:"step,omitempty"`
 }
 
-// LiveItem is one tile: a live batch run (a landing included) or a live
+// LiveItem is one tile: a live batch run or a live
 // check group.
 type LiveItem struct {
 	ID string `json:"id"`
-	// Kind is the run's kind (implement, verify, land, …), or check or e2e
+	// Kind is the run's kind (implement, verify, …), or check or e2e
 	// for a check group.
 	Kind      string    `json:"kind"`
 	Target    string    `json:"target"` // "#42", "!57", or the run's own

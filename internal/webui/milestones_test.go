@@ -6,9 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -146,9 +144,6 @@ func TestComputeMilestones(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	// The CLI started plan demo's milestone run; this process stands in
-	// for it.
-	writeMilestoneRunRecord(t, top, MilestoneRunRecord{Slug: "demo", Agents: "claude=*,agy=1", Parallel: 2, PID: os.Getpid(), StartedAt: now.Add(-3 * time.Minute)})
 
 	groups, err := s.ComputeMilestones(context.Background())
 	if err != nil {
@@ -220,15 +215,7 @@ func TestComputeMilestones(t *testing.T) {
 		t.Errorf("closed node's PR: %+v", n.PR)
 	}
 
-	if sc := g.Scheduler; sc == nil || sc.ID != "milestone-demo" || sc.Parallel != 2 ||
-		!slices.Equal(sc.Pool, []string{"claude=*", "agy=1"}) || sc.Log != ".bottown/milestone-demo.log" || !strings.HasPrefix(sc.Elapsed, "3m") {
-		t.Errorf("scheduler: %+v", sc)
-	}
-
 	loose := groups[1]
-	if loose.Scheduler != nil {
-		t.Errorf("a milestone without an epic has a scheduler: %+v", loose.Scheduler)
-	}
 	if loose.Epic != nil || loose.Base != "main" || len(loose.Nodes) != 2 || loose.Counts.Total != 2 || loose.Counts.Ready != 2 {
 		t.Errorf("milestone without epic: %+v", loose)
 	}

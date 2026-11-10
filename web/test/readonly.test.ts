@@ -57,7 +57,6 @@ test('Repository shows pull, push and each after-pull command, and short SHAs', 
 
 test('ready milestone nodes show labeled commands, placeholders and open the flow page', async () => {
   const group = structuredClone(fixture.milestones[0]);
-  group.scheduler = undefined;
   group.nodes = group.nodes.filter((n: any) => !n.external).slice(0, 2);
   group.edges = [];
   group.nodes.forEach((n: any) => { n.status = 'ready'; n.state = 'open'; n.run = undefined; n.flow = undefined; });
