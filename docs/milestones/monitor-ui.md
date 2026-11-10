@@ -26,7 +26,9 @@ today's server: `web-routes` first, then the run page, then Now and
 History in parallel, then read-only and keys. **The server**
 (`flow-status`, `live-view`, `actions-removed`, `log-increments`) moves
 the live picture into Go and removes the action routes. **The terminal**
-(`term-ui`, `term-follow`) builds on `live-view`. `flow-status` and
+(`term-ui`, `term-follow`) builds on `live-view` and waits for
+`actions-removed`: it makes the login token reusable, which is acceptable
+only for a server with no action routes. `flow-status` and
 `web-routes` are independent and can start together.
 
 Every issue that changes what the UI shows updates
@@ -134,9 +136,12 @@ size = "L"
 Rebuild `#/now` as design §3.
 
 - **Server, one field:** `LiveRunInfo` and `LiveCheckInfo`
-  (`internal/webui/runs.go`) gain `last_output`, the modification time of
-  the run's or check's log, omitted when there is no log yet. Fixtures
-  and the preview server carry it.
+  (`internal/webui/runs.go`) gain `last_output`: the newest modification
+  time among the files the rendered tail is read from, which for a run
+  are its log and its live transcript (`runs.ReadLog` appends the
+  transcript, and `runs.FollowTranscript` rewrites it only when it
+  changes), and for a check group its own log. It is omitted when none
+  exists yet. Fixtures and the preview server carry it.
 - **Tiles:** a grid (`repeat(auto-fill, minmax(420px, 1fr))`) with one
   tile per live batch run and live check group, ordered by start time. A
   tile has a two-line header (target and title; kind, round, actor,
@@ -181,7 +186,9 @@ Rebuild `#/now` as design §3.
 - `bottown web shot` with the default fixture at the wide width: the
   Needs-you strip and every tile's top are within the first viewport
   height, and the page does not overflow sideways at either width.
-- Go tests: `last_output` from a log's mtime, absent without a log.
+- Go tests: `last_output` from a log's mtime; a stale log with a fresh
+  live transcript gives the transcript's time, so the item is not quiet;
+  absent without either file.
 - `docs/design/web-ui.md` §4.1 and §4.2 describe Now.
 
 ## Web: History as its own view, without the sideways scroll
@@ -238,7 +245,9 @@ Remove every action from the frontend and show commands instead (design
 - Milestones: a ready node shows its flow command (from the node's
   implement and verify labels, placeholders otherwise) instead of the
   Flow and Run buttons; a plan that can start shows
-  `bottown milestone run SLUG` instead of Run milestone; the milestone
+  `bottown milestone run SLUG --agents POOL --parallel N` instead of Run
+  milestone (both flags are required and the UI does not know the pool,
+  so `POOL` and `N` are placeholders); the milestone
   run's Stop button goes. A click on a node opens `#/flow/<issue>`.
 - Repository: `git pull --ff-only bottown <default>` when behind the
   forge, `git push origin <default>` when ahead of origin, and each
@@ -402,10 +411,12 @@ Delete what the read-only UI no longer calls (design §9):
 - the tests of all of these.
 
 Add the guard of design §6: export the commands the server can suggest
-(inbox, Milestones, Repository, the run page), each built from sample
-values, and a test in `internal/cli` that resolves every one against the
-CLI's command tree and parses its flags (`git …` commands are checked
-for their fixed shape only).
+(inbox, Milestones, Repository, the run page), each built with concrete
+sample values in place of its placeholders, and a test in `internal/cli`
+that resolves every one against the CLI's command tree, parses its flags
+and validates the required ones (cobra's `ValidateRequiredFlags`), so a
+missing required flag fails as an unknown one does (`git …` commands are
+checked for their fixed shape only).
 
 A landing started with `bottown merge-all` shows on Now through its
 check items; say so where `docs/design/web-ui.md` described the inbox's
@@ -416,8 +427,10 @@ Land.
 - A request to any removed route gets 404; `POST /api/refresh` without a
   matching Origin is refused as before.
 - The suggested-commands test fails when a command names a subcommand or
-  flag the CLI does not have (prove it with a deliberately wrong sample
-  in the test's own table).
+  flag the CLI does not have, and when it leaves out a required flag
+  (prove both with deliberately wrong samples in the test's own table:
+  an unknown flag, and `bottown milestone run SLUG` without `--agents`
+  and `--parallel`).
 - `make lint` reports no dead code left behind.
 - `docs/design/web-ui.md` §5, §7 and §8 describe a UI with one write
   route; `docs/design/merge-queue.md` §8 points at `bottown merge-all`
@@ -431,28 +444,40 @@ depends = ["web-run-page"]
 size = "S"
 ```
 
-`GET /api/runs/ID/log` gains `after=N`: it returns the rendered lines
-after the N-th **final** line, the lines still live after them, and
-`final`, the count of final lines the log now has (design §4). Final and
-live are `runs.LineTracker`'s distinction, the one the terminal tail
-uses. Without `after` the response is as today, plus `final`. The run
-page loads the log once, then polls with `after` while the run is live,
-replacing its live lines and appending the new final ones.
+`GET /api/runs/ID/log` gains `after=N` and every response gains
+`stable` (design §4). `stable` is the length of the rendered log's
+**stable prefix**: the lines before the first one that can still change
+(a tool call still running, or the last line of a live log); for an
+ended run it is the whole log. With `after=N` the response's `lines` are
+the rendered lines from position N on. The run page loads the log once,
+then polls with `after` set to the last `stable` it received, keeps its
+first N lines and replaces everything after them.
+
+Do not use a count of final lines as the cursor. `runs.LineTracker`
+hands out a line as final while an earlier tool call is still running
+(`TestLineTrackerHandsOutFinalLinesOnceInOrder` in
+`internal/runs/follow_test.go`: "A running call
+does not hold back the lines after it"), so when that call completes it
+becomes final at a position before lines the page already has, and an
+append-only cursor would skip it or duplicate what follows.
 
 ### Acceptance criteria
 
-- Go tests: a log that grows between two requests yields exactly the new
-  lines; a tool call that is running in the first response and completed
-  in the second is replaced, not duplicated; `after` beyond the end
-  returns nothing; a check's plain log.
-- Frontend test: the page's lines after two increments equal a full
-  load's.
+- Go tests, each asserting that prefix-plus-response equals the full
+  rendered log after every request: a log that grows; a tool call
+  running in the first response and completed in the second; **an
+  unfinished call followed by final text, then the call's completion**
+  (`stable` stays at the call until it completes); `after` at the end
+  returns no lines; an ended run's `stable` is its length; a check's
+  plain log; an `after` larger than the log is answered as a full load.
+- Frontend test: for the same sequences, the page's lines after every
+  poll equal a full load's.
 
 ## `bottown ui`: the server and the live view in one terminal
 
 ```issue
 key = "term-ui"
-depends = ["live-view"]
+depends = ["live-view", "actions-removed"]
 size = "L"
 ```
 
@@ -483,7 +508,9 @@ and make `bottown web ui` an alias of it.
   request that carries it (today it is refused after its first use), set
   the session cookie and redirect to the address without the token.
   A new token is made at each start; the Host check and the 127.0.0.1
-  listener stay.
+  listener stay. This is why the issue depends on `actions-removed`: a
+  login URL recovered from history or scrollback must reach a server
+  with no action routes.
 - It does not open a browser by default. `--print`, or an output that is
   not a terminal, prints the login URL and serves until interrupted.
   `--once` prints one frame as plain text (the summary, each item's

@@ -160,11 +160,19 @@ Log   Timeline   Runs                                   filter…   ● followin
 
 **Loading the log.** The page loads the rendered log once
 (`GET /api/runs/ID/log`). While the run is live it then asks only for
-what is new: the endpoint gains `after=N`, which returns the lines after
-the N-th final line and the lines still live (`runs.LineTracker` already
-separates the two for the terminal tail). Until that lands (§12, step 2)
-the page reloads the whole log at the live poll's interval while it is
-open.
+what may have changed. A rendered log is a **stable prefix**, the lines
+before the first one that can still change (a running tool call, or the
+last line of a live log), followed by a **mutable suffix**. A line after
+a running call can already be final while the call is not
+(`runs.LineTracker` hands such lines out early, for the terminal's
+scrollback), so a count of final lines is not a position in the log; the
+length of the stable prefix is. Every response carries `stable`, that
+length. With `after=N` the endpoint returns the lines from position N
+on, and the page keeps its first N lines and replaces the rest. N is
+always a `stable` the server returned, so what the page shows after any
+poll equals the full rendered log at that moment. Until this lands (§12,
+step 2) the page reloads the whole log at the live poll's interval while
+it is open.
 
 ## 5. The other views, addresses and keys
 
@@ -219,7 +227,7 @@ PR), the frontend only shows it.
 | Live Runs header | Start Flow, Start Run, Clean up | none: removed |
 | Live run, flow | Stop Run, Stop Flow | none: Ctrl-C in its terminal |
 | Milestones: a ready node | Flow, Run | `bottown flow N --implement A --verify B` from the node's labels |
-| Milestones: a plan not running | Run milestone | `bottown milestone run SLUG` |
+| Milestones: a plan not running | Run milestone | `bottown milestone run SLUG --agents POOL --parallel N` (both flags are required; the UI does not know the owner's pool, so they are placeholders) |
 | Milestones: a milestone run | Stop | none |
 | Repository: behind the forge | Pull | `git pull --ff-only bottown <default>` |
 | Repository: after-pull steps | Run after-pull steps… | each declared step, to copy |
@@ -228,8 +236,9 @@ PR), the frontend only shows it.
 
 The inbox's Land item carries `bottown land !N` today, which is not a
 command; `bottown merge-all N` is. So that it cannot happen again, a test
-builds every command the server can suggest and checks that the CLI's
-command tree resolves it and parses its flags.
+builds every command the server can suggest, with sample values in place
+of its placeholders, and checks that the CLI's command tree resolves it,
+parses its flags and finds every required flag set.
 
 When a pair or a slug is unknown, the command is shown with an upper-case
 placeholder (`--implement ACTOR`), never guessed.
@@ -271,8 +280,12 @@ until that moves too; the Now view and the terminal use only `Live`.
 
 ### 7.2 Last output and quiet
 
-`last_output` is the modification time of the run's log
-(`.bottown/runs/<id>.log`; a check group's own log). `quiet` is
+`last_output` is the newest modification time among the files the
+rendered tail is read from: the run's log (`.bottown/runs/<id>.log`) and,
+while the run writes one, its live transcript, which `runs.ReadLog`
+appends to the log and `runs.FollowTranscript` rewrites only when its
+content changes. For a check group it is the group's own log. A tail that
+visibly moves is therefore never quiet. `quiet` is
 `now − last_output ≥ 5 minutes`, one constant (`quietAfter`) in
 `internal/webui`. An item with no log yet counts from its start. Rows are
 never quiet: a waiting flow says what it waits for, and an interactive
@@ -359,9 +372,10 @@ j/k move · enter log · o open browser · ? keys · q quit
   sets the cookie and redirects to the address without it, as it does
   now. What this gives up: a login URL left in a browser's history or a
   terminal's scrollback stays usable until the command exits, where today
-  it is dead after first use. The server still listens on 127.0.0.1 only,
-  checks the Host header, makes a new token at each start, and after §9
-  can change nothing. With `--port N`, `ssh -L N:127.0.0.1:N host` makes
+  it is dead after first use. That is acceptable only for a server that
+  can change nothing, so the plan builds this after the action routes are
+  removed (§9), never before. The server still listens on 127.0.0.1
+  only, checks the Host header and makes a new token at each start. With `--port N`, `ssh -L N:127.0.0.1:N host` makes
   the link work from the owner's own machine.
 - **Enter** shows the selected run's log full screen, following it, with
   the terminal tail's rendering and colours (`internal/cli/tail.go`,
@@ -430,4 +444,5 @@ The plan builds this in three steps, each usable when it lands:
 2. **The server.** The flow's status file, `Live`, the removal of the
    action routes and executors, log increments.
 3. **The terminal.** `bottown ui` with the live view, then the log
-   follower.
+   follower. It starts only when the action routes are gone, because it
+   makes the login token reusable (§8).
