@@ -872,6 +872,33 @@ for the owner's judgment alone.
 - **Milestone burndown and burnup:** plain SVG, one chart per milestone,
   counting or size-weighted as the labels allow.
 
+### 4.8 Keys
+
+Every view is reachable from the keyboard. The keys are handled in one
+place and ignored while an input, select or textarea has focus or a
+command modifier (Ctrl, Alt or Meta) is held, so text entry and the
+browser's shortcuts win.
+
+| Key | Does |
+|---|---|
+| `1`-`6` | Switch view, in the tabs' order (Now, History, Milestones, Timeline, Stats, Repository) |
+| `j` / `k`, arrows | Move a visible selection among Now's tiles and rows and History's rows |
+| `Enter` | Open the selected item's page |
+| `Esc` | Back (`history.back()`, or to Now when there is nothing to go back to); it closes the `?` panel when that is open |
+| `f` | Follow, or stop following, the log, on a run or flow page |
+| `g` / `G` | The top or the end of the log, on a run or flow page |
+| `/` | Focus History's search |
+| `?` | Show these keys in a small panel |
+
+The selection is visible, scrolls into view, and is reachable by Tab as
+well: tiles and rows are focusable and announce themselves as links. Focus
+decides what `Enter` opens: a focused tile or row wins (Tab reached it),
+any other focused control (a button) keeps `Enter` for itself, and the
+`j`/`k` selection is used only when nothing else has focus. Focusing a
+tile or row also moves the selection there, so `j`/`k` carry on from where
+Tab left off. While a dialog (the `?` panel or a modal) is on screen it
+owns the keyboard: the nav keys and `Esc` are left for it to handle.
+
 ## 5. Read-only UI
 
 The UI is read-only. Refresh reloads status and fetches origin; all other

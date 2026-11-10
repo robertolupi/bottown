@@ -51,7 +51,7 @@
       <ul class="now-rows">
         {#each rows as row (row.key)}
           <li class="now-row" data-key={row.key}>
-            <a href={rowHref(row)}>
+            <a href={rowHref(row)} data-nav={row.key}>
               <strong>{row.target}</strong>
               {#if row.title}<span class="now-row-title">{row.title}</span>{/if}
               <span class="muted">{`· ${rowText(row, now)}`}</span>

@@ -252,5 +252,10 @@ body {
   .spinner { animation-duration: 2.4s; }
 }
 
+/* The keyboard's selection on a tile or a row (design §5). */
+.nav-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 /* Load errors stay visible while reading long pages. */
 .banner-error { position: fixed; bottom: 16px; right: 16px; max-width: min(600px, calc(100vw - 32px)); z-index: 100; }
