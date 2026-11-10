@@ -1146,6 +1146,24 @@ live, as a round) is decided in one place.
   without serving. `bottown web ui` is an alias of it. The terminal view
   calls the server's `Live` in-process, so the browser and the terminal
   read the same view.
+- **The terminal view's keys.** In the panes: `j`/`k` and the arrows move
+  the selection, over the items and then the rows; `Enter` shows the
+  selected item's log full screen; `o` opens the web UI in the browser of
+  the machine the command runs on; `?` lists the keys; `q` and `Ctrl-C`
+  quit and stop the server. A row (a waiting flow, an interactive run) has
+  no log: `Enter` on it does nothing, and the key hint says so.
+- **The full-screen log.** A header line with the item's target, kind,
+  actor, elapsed and last-output age, then the log read from the run's or
+  check's log file (`runs.LogFollower`, polled every second) and rendered
+  with `runs.RenderLog` in the terminal tail's styles, each line cut to the
+  width; a running tool call is replaced by its completed line. It follows
+  the end while the item is live. `f` turns following off and on;
+  `j`/`k`, the arrows, `PgUp`/`PgDn` and `g`/`G` scroll (scrolling up
+  stops following, `G` goes to the end and follows); `Esc` returns to the
+  panes with the same selection; `q` quits. When the item leaves the live
+  view, the log is read once more and the view stays on it, saying how it
+  ended: a run's status and outcome, from the server, or that the checks
+  ended.
 - **Localhost only.** It binds `127.0.0.1` on a random port
   (or `--port`), and checks the `Host` header against it (against DNS
   rebinding). Its one write route, `POST /api/refresh`, refuses requests

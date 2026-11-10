@@ -229,6 +229,21 @@ func TestRuns_LiveRunsAndFlowGrouping(t *testing.T) {
 	if len(r.LogTail) != 2 || r.LogTail[0] != (runs.LogLine{Kind: runs.LineTool, Tool: "Bash", ToolClass: runs.ToolShell, State: "running", Text: "Bash: make check", Parameters: "{\n  \"command\": \"make check\"\n}"}) || r.LogTail[1] != (runs.LogLine{Kind: runs.LineText, Text: "Running checks now"}) {
 		t.Fatalf("unexpected log tail: %+v", r.LogTail)
 	}
+	// The terminal view's full-screen log follows the same file, rendered
+	// for the run's harness; the run has not ended.
+	f, err := s.LogFollower(ctx, "r-verify-1")
+	if err != nil || f.Harness != "kimi" {
+		t.Fatalf("LogFollower = %+v, %v", f, err)
+	}
+	if lines, _ := f.Poll(); fmt.Sprint(lines) != fmt.Sprint(r.LogTail) {
+		t.Fatalf("followed lines = %+v, want %+v", lines, r.LogTail)
+	}
+	if _, _, ok := s.RunEnd(ctx, "r-verify-1"); ok {
+		t.Fatal("RunEnd of a live run is ok")
+	}
+	if _, err := s.LogFollower(ctx, "../x"); err == nil {
+		t.Fatal("LogFollower accepted a bad id")
+	}
 	// The run's refusals outside its repository and with no repository
 	// are its own too.
 	if len(r.Denials) != 3 || r.Denials[0].Rule != "issue-dependencies" ||
@@ -338,6 +353,16 @@ func TestRuns_LiveChecks(t *testing.T) {
 	if err != nil || !ok || fmt.Sprint(lines) != fmt.Sprint(want) {
 		t.Fatalf("check log: %+v, %v, %v", lines, ok, err)
 	}
+	f, err := s.LogFollower(ctx, id)
+	if err != nil || f.Harness != "" {
+		t.Fatalf("check LogFollower = %+v, %v", f, err)
+	}
+	if lines, _ := f.Poll(); fmt.Sprint(lines) != fmt.Sprint(want) {
+		t.Fatalf("followed check log: %+v", lines)
+	}
+	if _, _, ok := s.RunEnd(ctx, id); ok {
+		t.Fatal("RunEnd of a check group is ok")
+	}
 	for _, bad := range []string{"flow-60-1a2b.e2e/../x", "flow-x-1a2b.e2e", "r-1.e2e", "flow-60-1a2b-xyz.e2e", "flow-60-1a2b.lint"} {
 		if _, _, err := s.ComputeRunLog(ctx, bad); err == nil {
 			t.Errorf("log id %q accepted", bad)
@@ -411,6 +436,14 @@ func TestRuns_HistoryRunsAndFilters(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+
+	// The terminal view's full-screen log says how a run ended.
+	if status, outcome, ok := s.RunEnd(ctx, "r-ended-2"); !ok || status != "failed" || outcome != "" {
+		t.Fatalf("RunEnd(r-ended-2) = %q, %q, %v", status, outcome, ok)
+	}
+	if _, _, ok := s.RunEnd(ctx, "r-missing"); ok {
+		t.Fatal("RunEnd of an unknown run is ok")
+	}
 
 	// 1. All history
 	all, err := s.ComputeHistoryRuns(ctx, HistoryFilter{})
