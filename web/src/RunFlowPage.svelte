@@ -575,10 +575,12 @@
     }
   });
 
-  // Reactive load on flow route change
+  // Reactive load on flow route change. An undefined addressedPr is the
+  // pre-PR thread, which the server scopes with pr=0 (no pr means its
+  // latest PR).
   $effect(() => {
     if (route.kind === 'flow') {
-      void loadTimelineData(route.issue, addressedPr);
+      void loadTimelineData(route.issue, addressedPr ?? 0);
     }
   });
 

@@ -87,6 +87,8 @@ test('parseRoute names the view of a fragment', () => {
 
 // Dynamic log store for testing poll increments
 let dynamicLogs: Record<string, any[]> = {};
+// The timeline requests since the last stubFetch, path and query.
+let timelineRequests: string[] = [];
 
 function stubFetch(overrides?: {
   history?: any[];
@@ -102,6 +104,7 @@ function stubFetch(overrides?: {
   const active_flows = overrides?.active_flows ? [...fx.active_flows, ...overrides.active_flows] : fx.active_flows;
   const timelines = { ...fx.timelines, ...(overrides?.timelines ?? {}) };
   dynamicLogs = JSON.parse(JSON.stringify({ ...(fx.logs || {}), ...(overrides?.logs ?? {}) }));
+  timelineRequests = [];
 
   const status = { ...fx.status, inbox: fx.inbox, live_runs, live_checks, active_flows };
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -121,12 +124,15 @@ function stubFetch(overrides?: {
     if (timelineMatch) {
       const issueNum = timelineMatch[1];
       const prParam = url.searchParams.get('pr');
+      timelineRequests.push(url.pathname + url.search);
       if (prParam) {
         const prKey = `${issueNum}:${prParam}`;
         if (timelines && timelines[prKey]) {
           return json(timelines[prKey]);
         }
-        return new Response('Not found', { status: 404 });
+        // The fixtures' issue-keyed timelines are their pre-PR threads,
+        // unless a `N:0` key says otherwise.
+        if (prParam !== '0') return new Response('Not found', { status: 404 });
       }
       if (timelines && timelines[issueNum]) {
         return json(timelines[issueNum]);
@@ -521,6 +527,76 @@ test('a PR-specific flow route does not show another thread live run or active f
     const emptyState = root.querySelector('.empty-state');
     assert.ok(emptyState, 'empty state rendered in log section');
     assert.equal(root.querySelector('.banner-error'), null, 'no error banner rendered');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a pre-PR flow after an older PR loads the pre-PR timeline, not the latest PR', async () => {
+  const run = (id: string, created: string, extra: Record<string, any>) => ({
+    id,
+    target: '#80',
+    issue: 80,
+    issue_title: 'PR then pre-PR',
+    kind: 'implement',
+    actor: 'claude',
+    family: 'anthropic',
+    harness: 'claude',
+    mode: 'batch',
+    status: 'succeeded',
+    duration: '5m 0s',
+    created,
+    summary: id,
+    purged: false,
+    denials: [],
+    ...extra,
+  });
+  const overrides = {
+    history: [
+      run('r-80-pr10', '2026-11-01T08:00:00Z', { pr: 10, target: '!10', thread_key: 'flow:issue:80:pr:10' }),
+      run('r-80-prepr', '2026-11-03T08:00:00Z', { thread_key: 'flow:issue:80' }),
+    ],
+    timelines: {
+      // Without ?pr the server answers with the latest PR's thread.
+      '80': {
+        issue: 80,
+        pr: 10,
+        thread_key: 'flow:issue:80:pr:10',
+        title: 'PR then pre-PR',
+        events: [
+          { type: 'pr_opened', time: '2026-11-01T08:05:00Z', title: 'Pull request !10 opened', url: 'http://forge/pulls/10' },
+        ],
+      },
+      '80:0': {
+        issue: 80,
+        thread_key: 'flow:issue:80',
+        title: 'PR then pre-PR',
+        events: [
+          { type: 'issue_created', time: '2026-11-03T07:00:00Z', title: 'Pre-PR thread started' },
+        ],
+      },
+    },
+    logs: {
+      'r-80-pr10': [{ kind: 'text', text: 'Output from PR 10 run' }],
+      'r-80-prepr': [{ kind: 'text', text: 'Output from pre-PR run' }],
+    },
+  };
+  const view = await mountAt('#/flow/80', {}, overrides);
+  try {
+    const root = view.target;
+    assert.ok(root.textContent?.includes('Output from pre-PR run'), 'log is the pre-PR run');
+    assert.ok(
+      timelineRequests.includes('/api/issues/80/timeline?pr=0'),
+      `requests the pre-PR timeline: ${timelineRequests.join(', ')}`
+    );
+    assert.ok(!timelineRequests.includes('/api/issues/80/timeline'), 'does not request the latest-PR timeline');
+
+    const timelineTab = [...root.querySelectorAll('.flow-tab')].find((t) => t.textContent!.trim() === 'Timeline') as HTMLElement;
+    timelineTab.click();
+    await settle();
+    const section = root.querySelector('.flow-timeline-section')!;
+    assert.ok(section.textContent?.includes('Pre-PR thread started'), 'shows the pre-PR timeline');
+    assert.ok(!section.textContent?.includes('Pull request !10 opened'), 'does not mix in the older PR');
   } finally {
     view.unmount();
   }
