@@ -106,6 +106,12 @@ type Options struct {
 	// writes the status file, and a nil callback (a caller that keeps
 	// none) is a no-op.
 	Status func(runs.FlowStatusView)
+	// OnEnd, if set, is called once when Run returns, before the flow's
+	// lock is released. A caller that keeps a status file removes it here,
+	// so removal happens while the lock is held: a flow that could not
+	// take the lock calls neither Status nor OnEnd, and never touches the
+	// holder's file.
+	OnEnd func()
 
 	round int   // the review round the PR is in, for RunRequest.Round
 	pr    int64 // the flow's PR, once it has one, for landed
@@ -331,6 +337,10 @@ type Supervisor struct {
 	// for a busy actor (tests).
 	now   func() time.Time
 	after func(time.Duration) <-chan time.Time
+
+	// lastStep and lastDetail are the last step reported to Options.Status,
+	// so only a change is reported; Run resets them.
+	lastStep, lastDetail string
 }
 
 // Run executes or resumes a flow. It returns nil only at ready to merge;
@@ -362,6 +372,12 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 		}
 		defer release()
 	}
+	if opts.OnEnd != nil {
+		// After release in LIFO order: the callback runs while the flow
+		// still holds its lock.
+		defer opts.OnEnd()
+	}
+	s.lastStep, s.lastDetail = "", ""
 	if err := s.checkFamilies(ctx, opts); err != nil {
 		return result, err
 	}
@@ -581,6 +597,10 @@ func (s *Supervisor) Run(ctx context.Context, opts Options) (Result, error) {
 				return s.runFailure(ctx, result, err)
 			}
 			resuming = false
+			// The verify run has ended; the flow now polls the forge for
+			// the verifier's verdict, which is time between runs, not
+			// verifying.
+			s.report(opts, runs.StepBetweenRuns, "")
 			after, err := s.waitReview(ctx, opts, pr.Number, head)
 			if err != nil {
 				return result, err
@@ -915,13 +935,18 @@ func (s *Supervisor) runStep(ctx context.Context, opts Options, req RunRequest) 
 	}
 }
 
-// report tells Options.Status what the flow is doing now, at each step
-// change; a nil callback (a caller that keeps no status file) is a no-op.
-// The flow keeps no file knowledge: the caller writes the file.
+// report tells Options.Status what the flow is doing now. It is called
+// often, so it reports only a change of step or detail; a nil callback (a
+// caller that keeps no status file) is a no-op. The flow keeps no file
+// knowledge: the caller writes the file.
 func (s *Supervisor) report(opts Options, step, detail string) {
 	if opts.Status == nil {
 		return
 	}
+	if s.lastStep == step && s.lastDetail == detail {
+		return
+	}
+	s.lastStep, s.lastDetail = step, detail
 	opts.Status(runs.FlowStatusView{
 		PID:       os.Getpid(),
 		Issue:     opts.Issue,

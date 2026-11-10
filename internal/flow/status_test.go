@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -96,5 +97,28 @@ func TestFlowReportsStatus(t *testing.T) {
 		if st.Step != runs.StepWaitingActor && st.Detail != "" {
 			t.Fatalf("%s carries detail %q", st.Step, st.Detail)
 		}
+	}
+}
+
+// TestFlowRefusedLockWritesNothing: a flow that cannot take the lock (a
+// second flow on the issue) neither reports a step nor runs its end
+// cleanup, so it never deletes the holder's status file.
+func TestFlowRefusedLockWritesNothing(t *testing.T) {
+	var statuses, ended int
+	busy := errors.New("another flow is already driving demo#9")
+	s := &Supervisor{
+		API:    &fakeAPI{},
+		Runner: RunnerFunc(func(context.Context, RunRequest) error { return nil }),
+		Lock:   func(string, int64) (func(), error) { return nil, busy },
+	}
+	opts := testOptions()
+	opts.Status = func(runs.FlowStatusView) { statuses++ }
+	opts.OnEnd = func() { ended++ }
+	_, err := s.Run(context.Background(), opts)
+	if !errors.Is(err, busy) {
+		t.Fatalf("Run = %v, want the lock's refusal", err)
+	}
+	if statuses != 0 || ended != 0 {
+		t.Fatalf("a refused flow reported %d statuses and ran its cleanup %d times, want none", statuses, ended)
 	}
 }

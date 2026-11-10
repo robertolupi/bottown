@@ -713,6 +713,10 @@ func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Opt
 		Status: func(st runs.FlowStatusView) {
 			_ = runs.WriteFlowStatus(m.ws.RunsDir, m.repo, issue, st)
 		},
+		// OnEnd runs before the flow releases its lock, so only the flow
+		// that took the lock removes the file; one refused by the lock
+		// leaves the holder's file alone.
+		OnEnd: func() { _ = runs.RemoveFlowStatus(m.ws.RunsDir, m.repo, issue) },
 	}
 }
 
@@ -723,9 +727,6 @@ func (m *mergeAll) repairOptions(issue int64, implement, verify string) flow.Opt
 func repairFlow(m *mergeAll, api flow.API, runner flow.Runner) func(context.Context, int64, string, string) error {
 	sup := m.repairSupervisor(api, runner)
 	return func(ctx context.Context, issue int64, implement, verify string) error {
-		// The status file lives while the flow does; a normal end removes
-		// it, a killed one leaves it stale.
-		defer func() { _ = runs.RemoveFlowStatus(m.ws.RunsDir, m.repo, issue) }()
 		_, err := sup.Run(ctx, m.repairOptions(issue, implement, verify))
 		return err
 	}
