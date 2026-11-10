@@ -869,33 +869,27 @@ for the owner's judgment alone.
 - **Milestone burndown and burnup:** plain SVG, one chart per milestone,
   counting or size-weighted as the labels allow.
 
-## 5. Actions
+## 5. Read-only UI
 
-Each action is a CLI command, and the UI calls the same Go code with the
-same checks. Actions marked "confirm" show what they will do, in full, and
-ask first.
+The UI is read-only. Refresh reloads status and fetches origin; all other
+operations are commands to copy and run in a terminal. Monospace chips offer
+clipboard copy, with text selection when clipboard access is unavailable.
 
-| Action | CLI equivalent | Confirm |
-|---|---|---|
-| Start a flow: implementer, verifier, rounds, timeout | `bottown flow N --implement A --verify B` | no |
-| Start one run: implement, verify, or discuss with a question | `bottown run …` | no |
-| Stop a live run or flow: kill the harness, end the run as failed | `bottown run stop ID` (new) | confirm |
-| Clean up broken runs | `bottown run gc` | confirm |
-| Pull the checkout | `git pull --ff-only bottown main` | no |
-| Run the after-pull steps | the commands in `.bottown.toml` | confirm |
-| Push `main` to origin | `git push origin main` | confirm |
-| Merge the base into a clean, behind PR | answer `y` to the attended flow's prompt | confirm |
-| Queue or unqueue an issue (later, §3.6) | sets or clears the bottown-managed labels | no |
+- Inbox: `bottown merge-all N`, `bottown flow N --implement A --verify B`,
+  and the cleanup or stop command carried by a broken-run item. Unknown actors
+  appear as `ACTOR`.
+- Milestones: ready nodes show `bottown flow N --implement A --verify B`
+  from their labels, with `ACTOR` placeholders. Clicking a node opens its flow
+  page. Plans show `bottown milestone run SLUG --agents POOL --parallel N`;
+  the owner fills in the pool and parallelism.
+- Repository: `git pull --ff-only bottown <default>` when behind the forge,
+  `git push origin <default>` when ahead of origin, and each declared
+  after-pull step. Short SHAs have controls to copy their full values.
+- Run pages: `bottown run show ID`.
 
-Starting a flow or a run picks actors from lists of the instance's actors,
-each with an optional model field: a model given starts the actor as
-`ACTOR:SPEC`, and an empty field leaves the host's `[actor_models]` entry,
-which the field shows as its placeholder, to apply. The UI refuses a same-family verifier before anything starts, as the CLI
-does.
-
-Merging pull requests, editing issues and PRs, reviewing, and milestones are
-not actions here: the UI links to Forgejo for them. The clean base-merge
-action only updates the PR's own branch.
+There are no start, stop, cleanup, pull, push or landing dialogs. Failed
+loads appear in a fixed notice visible while the page scrolls. Server action
+routes remain registered until the separate actions-removed change.
 
 ## 6. Data sources
 

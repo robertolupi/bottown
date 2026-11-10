@@ -510,7 +510,7 @@ export interface MilestoneGroup {
 }
 
 // A running milestone run (internal/webui/milestone_run.go). id is what
-// POST /api/actions/stop takes: milestone-<slug>. Its child flows are the
+// The scheduler ID is milestone-<slug>. Its child flows are the
 // group's nodes with a flow.
 export interface MilestoneScheduler {
   id: string;

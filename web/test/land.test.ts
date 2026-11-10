@@ -6,7 +6,6 @@ import OwnerInbox from '../src/OwnerInbox.svelte';
 import LiveRuns from '../src/LiveRuns.svelte';
 import Milestones from '../src/Milestones.svelte';
 import { flushSync } from '../testing/dom.ts';
-import StopModal from '../src/StopModal.svelte';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/default.json', import.meta.url), 'utf8'));
 
@@ -22,8 +21,8 @@ test('approved behind candidate offers Land and explains the combined checks', (
     assert.match(view.target.textContent!, /skips the checks at the combined tree/);
     const buttons = [...view.target.querySelectorAll('button')];
     assert.ok(!buttons.some((b) => b.textContent?.includes('Merge main')));
-    buttons.find((b) => b.textContent?.trim() === 'Land')!.click();
-    assert.deepEqual(calls, [[56, candidate.head_sha]]);
+    assert.match(view.target.textContent!, /bottown merge-all 56/);
+    assert.deepEqual(calls, []);
   } finally { view.unmount(); }
 });
 
@@ -39,11 +38,7 @@ test('a landing in progress is a tile in Live with its log, opening its page', (
   } finally { view.unmount(); location.hash = ''; }
 });
 
-test('stopping a landing explains that the PR may remain unmerged', () => {
-  const view = render(StopModal, { runId: 'land-56', actionLoading: false, onconfirm: () => {}, onclose: () => {} });
-  try { assert.match(view.target.textContent!, /Stop Landing/); assert.match(view.target.textContent!, /unmerged/); }
-  finally { view.unmount(); }
-});
+
 
 
 test('a milestone child shows its landing on the node', async () => {
