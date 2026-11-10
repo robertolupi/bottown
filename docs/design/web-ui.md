@@ -577,14 +577,24 @@ issue forms a separate thread). `discuss` runs appear as separate entries.
 The main line shows the issue, PR, and milestone name together (omitting the
 milestone when none is assigned), along with latest status, active flow
 highlighting, run count, actors, duration, usage, summary, and last activity.
-Clicking a flow expands it (at most one flow is expanded at a time) to show a
-combined flow **timeline** at the top — covering all runs in the flow with
-clear run boundaries, reviews, comments, and merge events — followed by the
-constituent runs and their individual logs and policy denials. A run's start
-stays compact; its summary appears once, on its completion event, including
-for a failed run when one was recorded. Live activity
-updates statuses, highlighting, and the selected active flow's timeline
-without changing the selected flow.
+Clicking a flow row navigates to its dedicated page at `#/flow/<issue>`
+(optionally `?pr=N`), while a discuss or single-run row navigates to
+`#/run/<id>`. Back returns to the view the owner came from, at its scroll
+position. The page shares one unified layout component with runs:
+- **Header:** target, issue title, kind, active round, actor, model and mode,
+  elapsed time against the limit, and links to the issue and PR in Forgejo.
+  A flow, and any run belonging to one, shows the flow's phase bar
+  (`[ implement ]──[ checks ]──[ verify ]──[ land ]`).
+- **Run page (`#/run/<id>`):** displays the full log from `GET /api/runs/{id}/log`
+  in the page's own scroll (without inner scroll boxes or max-height limits),
+  with kind filters, raw log link, and the follow toggle of `LiveLogTail`. While
+  the run is live, the log reloads at the live poll interval and auto-scrolls to
+  the bottom when following is on. Below or alongside the log, any policy denials
+  are listed.
+- **Flow page (`#/flow/<issue>`):** offers three tabs: **Log** (displaying the
+  live run's log, or the last run's log), **Timeline** (the full flow timeline
+  from `GET /api/issues/{issue}/timeline`), and **Runs** (listing the flow's
+  constituent runs, each linking to `#/run/<id>`).
 
 The table's header stays at the top of its scroll box as the rows scroll.
 A summary cell, and each line of a failure reason, shows one line, cut
@@ -614,9 +624,8 @@ run with neither, such as one from before failures were recorded, or an
 interactive run that exited cleanly and the owner marked failed, says
 "Reason unavailable"; a cause is never guessed from the summary or log.
 A flow row shows its latest run's reason unless the flow is going again.
-Each reason links to the run: View log expands the flow, if needed, and
-the run's log, whose row repeats the reason in full; View details does
-the same for a run that wrote no log, and says so. The timeline's run
+Each reason links to the run: View log or View details navigates to the
+run's page at `#/run/<id>`, which displays the reason and full log. The timeline's run
 ended event carries the reason too.
 
 **Flow-level state.** In addition to execution status and run outcome, flow
@@ -628,7 +637,7 @@ do not imply readiness. Missing or read-failed data remains explicitly neutral
 and screen-reader prefix so it is accessible without color, consistent with
 Inbox and flow stop reasons.
 
-**Denials.** A live run's card and a history row (when expanded) list
+**Denials.** A live run's card and a run's page (`#/run/<id>`) list
 the operations the server's policy refused the run (denied or rejected),
 including those outside its repository: when, the request or operation,
 the rule, and why. History marks a run with denials with a count. They
@@ -760,12 +769,12 @@ window: every run on one time scale, from `GET /api/timeline`
   flow stop until the thread's next run, merge, close or next stop,
   labelled with the stop reason, and **flow overhead**, a dashed line, for
   any other gap between them. Its numbers are the window's share spent on
-  agents, e2e and waiting on the owner. Its label opens the thread's
-  timeline dialog.
+  agents, e2e and waiting on the owner. Its label navigates to the flow page
+  at `#/flow/<issue>`.
 - **Bars** are colored by kind (implement, verify, discuss, plan, other),
   with the outcome glyph at the end; failed and revoked runs are outlined,
-  interactive ones hatched, so the bars read without color. A bar opens a
-  dialog with the run's details and log.
+  interactive ones hatched, so the bars read without color. A bar navigates to
+  the run page at `#/run/<id>`.
 - **Concurrency strip**, above the lanes: how many batch runs were live at
   each moment, with the peak and the mean over the window.
 

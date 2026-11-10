@@ -27,6 +27,7 @@
           href={fg.runs[0]?.issue_url || `${issuesLink}/${fg.flow.issue}`}
           label={`#${fg.flow.issue}`}
           title={fg.runs.find((run) => run.issue_title)?.issue_title}
+          titleHref={`#/flow/${fg.flow.issue}`}
           showTitle
         />
       </span>

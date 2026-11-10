@@ -1,15 +1,13 @@
 <script lang="ts">
   // A flow thread in the run history: one row for the flow (issue, PR,
-  // milestone, actors, status) that expands, one flow at a time, to the
-  // flow's combined timeline and its constituent runs. When its latest run
-  // failed, the summary cell is that run's failure reason.
-  import type { HistoryThread, IssueTimeline, RunLogState } from './types';
-  import { buildFlowConstituentRuns, buildFlowTimeline, describeRunFailure, formatThreadMainLine } from './state';
+  // milestone, actors, status). Clicking it opens the flow page.
+  // When its latest run failed, the summary cell is that run's failure reason.
+  import type { HistoryThread } from './types';
+  import { describeRunFailure, formatThreadMainLine } from './state';
   import { formatTime, formatUsage } from './format';
-  import ConstituentRuns from './ConstituentRuns.svelte';
+  import { flowRouteHash, runRouteHash } from './routes';
   import FailureReason from './FailureReason.svelte';
   import FlowStateBadge from './FlowStateBadge.svelte';
-  import FlowTimeline from './FlowTimeline.svelte';
   import IssueReference from './IssueReference.svelte';
   import OutcomeBadge from './OutcomeBadge.svelte';
   import StatusBadge from './StatusBadge.svelte';
@@ -18,39 +16,32 @@
 
   interface Props {
     thread: HistoryThread;
-    expanded: boolean;
-    timeline: IssueTimeline | undefined;
-    timelineLoading: boolean | undefined;
-    timelineError: string | undefined;
-    expandedLogs: Record<string, RunLogState>;
-    onSelect: (thread: HistoryThread) => void;
-    onShowRun: (thread: HistoryThread, runId: string) => void;
-    onToggleLog: (runId: string) => void;
   }
 
-  let { thread, expanded, timeline, timelineLoading, timelineError, expandedLogs, onSelect, onShowRun, onToggleLog }: Props =
-    $props();
+  let { thread }: Props = $props();
 
   let mainLine = $derived(formatThreadMainLine(thread));
   let lastRun = $derived(thread.runs[thread.runs.length - 1]);
   // A flow whose latest run failed, and that is not going again, leads
   // with why.
   let failure = $derived(thread.active || !lastRun ? null : describeRunFailure(lastRun));
+
+  function navigateToFlow() {
+    location.hash = flowRouteHash(thread.issue ?? 0, thread.pr);
+  }
 </script>
 
 <tr
   class="flow-thread-row"
   class:flow-row-active={thread.active}
-  class:flow-row-expanded={expanded}
-  onclick={() => onSelect(thread)}
+  onclick={navigateToFlow}
 >
   <td>
     <div class="thread-main-line">
-      <span class="thread-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
       {#if mainLine.issueLabel}
         <IssueReference
           number={thread.issue || 0}
-          href={mainLine.issueUrl || lastRun.target_url}
+          href={mainLine.issueUrl || lastRun?.target_url || ''}
           label={mainLine.issueLabel}
           title={mainLine.issueTitle}
         />
@@ -101,7 +92,12 @@
   <td class="muted text-sm">{formatUsage(thread.usage)}</td>
   {#if failure}
     <td class="summary-cell">
-      <FailureReason {failure} onDetails={() => onShowRun(thread, lastRun.id)} />
+      <FailureReason
+        {failure}
+        onDetails={() => {
+          if (lastRun) location.hash = runRouteHash(lastRun.id);
+        }}
+      />
     </td>
   {:else}
     <td class="summary-cell"><SummaryText text={thread.summary} /></td>
@@ -109,43 +105,16 @@
   <td class="muted text-sm">{formatTime(thread.last_activity)}</td>
   <td>
     <div class="row-actions">
-      <button
+      <a
         class="btn btn-sm btn-secondary"
-        aria-expanded={expanded}
-        onclick={(e) => {
-          e.stopPropagation();
-          onSelect(thread);
-        }}
+        href={flowRouteHash(thread.issue ?? 0, thread.pr)}
+        onclick={(e) => e.stopPropagation()}
       >
-        {expanded ? 'Collapse' : `Runs (${thread.run_count})`}
-      </button>
+        Flow ({thread.run_count})
+      </a>
     </div>
   </td>
 </tr>
-
-{#if expanded}
-  {@const entries = buildFlowTimeline(thread, timeline)}
-  {@const constituentRuns = buildFlowConstituentRuns(thread, entries)}
-  <tr class="flow-expand-row">
-    <td colspan="10">
-      <div class="flow-expanded-panel">
-        <!-- 1. Combined Flow Timeline at the top of the expanded flow -->
-        <FlowTimeline
-          {thread}
-          {mainLine}
-          {entries}
-          loading={timelineLoading}
-          error={timelineError}
-          {expandedLogs}
-          {onToggleLog}
-        />
-
-        <!-- 2. Constituent Runs in this Flow -->
-        <ConstituentRuns runs={constituentRuns} {expandedLogs} {onToggleLog} />
-      </div>
-    </td>
-  </tr>
-{/if}
 
 <style>
   .flow-thread-row {
@@ -155,10 +124,6 @@
 
   .flow-thread-row:hover {
     background: rgba(125, 125, 125, 0.06);
-  }
-
-  .flow-row-expanded {
-    background: rgba(37, 99, 235, 0.06);
   }
 
   .flow-row-active {
@@ -174,13 +139,6 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-  }
-
-  .thread-chevron {
-    display: inline-block;
-    width: 14px;
-    color: var(--text-muted);
-    font-size: 12px;
   }
 
   .milestone-badge {
@@ -208,21 +166,5 @@
     display: flex;
     gap: 6px;
     align-items: center;
-  }
-
-  /* Every cell in the expanded panel, the constituent runs' and their log
-     rows' included; tr outranks the history table's cell padding
-     (RunHistory). */
-  tr.flow-expand-row :global(td) {
-    padding: 0;
-    background: rgba(125, 125, 125, 0.03);
-  }
-
-  .flow-expanded-panel {
-    padding: 16px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    border-left: 3px solid var(--accent);
   }
 </style>

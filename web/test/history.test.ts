@@ -45,85 +45,54 @@ function stubFetch(routes: Record<string, unknown>): string[] {
 
 const run = (id: string, extra: Record<string, unknown> = {}) =>
   ({ id, target: '#12', target_url: 'u', kind: 'implement', actor: 'claude', family: 'anthropic', status: 'succeeded', created: '2026-11-02T10:00:00Z', ...extra }) as any;
-const flowThread = (key: string, runs: any[], extra: Record<string, unknown> = {}) =>
-  ({ key, kind: 'flow', issue: 12, active: false, runs, actors: [], ...extra }) as any;
 
-test('toggleLog loads a run log, then collapses it', async () => {
-  const calls = stubFetch({ '/api/runs/r-1/log': { lines: [{ kind: 'text', text: 'hi' }] } });
+test('initial state and filters', () => {
   const h = new RunHistoryState();
-  await h.toggleLog('r-1');
-  assert.deepEqual(calls, ['/api/runs/r-1/log']);
-  assert.deepEqual(h.logs['r-1'], { loading: false, lines: [{ kind: 'text', text: 'hi' }] });
-  await h.toggleLog('r-1');
-  assert.equal(h.logs['r-1'], undefined);
-  assert.equal(calls.length, 1, 'collapsing does not fetch');
+  assert.deepEqual(h.runs, []);
+  assert.equal(h.loading, false);
+  assert.deepEqual(h.filters, { actor: '', kind: '', status: '', date: '', search: '' });
 });
 
-test('toggleLog records a failed load', async () => {
-  stubFetch({ '/api/runs/r-2/log': 500 });
-  const h = new RunHistoryState();
-  await h.toggleLog('r-2');
-  assert.deepEqual(h.logs['r-2'], { loading: false, error: 'Failed to load log' });
-});
-
-test('selectFlow expands one flow, loading its timeline, and collapses it', async () => {
-  const timeline = { issue: 12, title: 't', state: 'open', url: 'u', events: [] };
-  const calls = stubFetch({ '/api/issues/12/timeline?pr=70': timeline });
-  const h = new RunHistoryState();
-  const t = flowThread('flow:issue:12:pr:70', [run('r-1')], { pr: 70 });
-  h.selectFlow(t);
-  assert.equal(h.expandedThreadKey, t.key);
-  assert.equal(h.timelineLoading[t.key], true, 'first load shows the loading note');
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(calls, ['/api/issues/12/timeline?pr=70']);
-  assert.deepEqual(h.timelines[t.key], timeline);
-  assert.equal(h.timelineLoading[t.key], false);
-  h.selectFlow(t);
-  assert.equal(h.expandedThreadKey, null);
-
-  h.selectFlow({ ...t, kind: 'discuss' });
-  assert.equal(h.expandedThreadKey, null, 'discuss threads do not expand');
-});
-
-test('a background timeline load keeps the last error away', async () => {
-  stubFetch({});
-  const h = new RunHistoryState();
-  const t = flowThread('flow:issue:12', [run('r-1')]);
-  await h.loadTimeline(t, true);
-  assert.equal(h.timelineError[t.key], undefined);
-  await h.loadTimeline(t);
-  assert.equal(h.timelineError[t.key], 'Failed to load timeline for #12');
-});
-
-test('reconcile follows a pre-PR flow to its PR thread with its timeline', () => {
-  const h = new RunHistoryState();
-  const timeline = { issue: 12, events: [] };
-  h.expandedThreadKey = 'flow:issue:12';
-  h.timelines = { 'flow:issue:12': timeline };
-  const prev = [flowThread('flow:issue:12', [run('r-1')])];
-  const next = [flowThread('flow:issue:12:pr:70', [run('r-1'), run('r-2')], { pr: 70 })];
-  h.reconcile(prev, next);
-  assert.equal(h.expandedThreadKey, 'flow:issue:12:pr:70');
-  assert.deepEqual(h.timelines['flow:issue:12:pr:70'], timeline);
-});
-
-test('load fetches the ended runs and refreshes the expanded flow in the background', async () => {
+test('load fetches ended runs and handles background loading', async () => {
   const runs = [run('r-1', { issue: 12, ended: '2026-11-02T10:30:00Z' })];
-  const calls = stubFetch({ '/api/runs?state=ended': runs, '/api/issues/12/timeline?pr=0': { issue: 12, events: [] } });
+  const calls = stubFetch({ '/api/runs?state=ended': runs });
   const h = new RunHistoryState();
   const live = () => ({ liveRuns: [], activeFlows: [] });
+
   const loading = h.load(live);
-  assert.equal(h.loading, true, 'a first load shows the loading note');
+  assert.equal(h.loading, true, 'first foreground load shows loading note');
   await loading;
   assert.equal(h.loading, false);
   assert.deepEqual(h.runs, runs);
-  const [thread] = h.threads([], []);
-  assert.equal(calls.length, 1, 'nothing expanded, no timeline');
+  assert.deepEqual(calls, ['/api/runs?state=ended']);
 
-  h.expandedThreadKey = thread.key;
-  const again = h.load(live, true);
-  assert.equal(h.loading, false, 'a background load shows no loading note');
-  await again;
-  assert.equal(h.expandedThreadKey, thread.key);
-  assert.deepEqual(calls.slice(1), ['/api/runs?state=ended', `/api/issues/12/timeline?pr=0`]);
+  const backgroundLoad = h.load(live, true);
+  assert.equal(h.loading, false, 'background load does not set loading note');
+  await backgroundLoad;
+  assert.equal(calls.length, 2);
+});
+
+test('threads groups ended runs with live runs and active flows', () => {
+  const h = new RunHistoryState();
+  h.runs = [run('r-1', { issue: 12, pr: 70 })];
+  const liveRuns = [run('r-2', { issue: 12, pr: 70, status: 'running' })];
+  const activeFlows = [
+    {
+      issue: 12,
+      implement: 'claude',
+      verify: 'kimi',
+      round: 1,
+      max_rounds: 3,
+      step: 'implementing',
+      label: 'round 1',
+      waiting: false,
+    },
+  ];
+
+  const threads = h.threads(liveRuns, activeFlows);
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].kind, 'flow');
+  assert.equal(threads[0].issue, 12);
+  assert.equal(threads[0].run_count, 2);
+  assert.equal(threads[0].active, true);
 });

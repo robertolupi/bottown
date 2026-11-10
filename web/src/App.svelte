@@ -19,14 +19,13 @@
   import PushModal from './PushModal.svelte';
   import RunHistory from './RunHistory.svelte';
   import RunModal from './RunModal.svelte';
+  import RunFlowPage from './RunFlowPage.svelte';
   import Stats from './Stats.svelte';
   import StopModal from './StopModal.svelte';
   import Timeline from './Timeline.svelte';
-  import TimelineModal from './TimelineModal.svelte';
-  import TimelineRunModal from './TimelineRunModal.svelte';
   import UpstreamForge from './UpstreamForge.svelte';
   import ViewTabs from './ViewTabs.svelte';
-  import { parseRoute, type View } from './routes';
+  import { parseRoute, runRouteHash, flowRouteHash, type View, type Route } from './routes';
   import {
     buildFlowActionPayload,
     buildRunActionPayload,
@@ -37,6 +36,8 @@
     selectDefaultActors,
     statusDue,
   } from './state';
+
+  let { pollInterval }: { pollInterval?: number } = $props();
 
   let status = $state<UIStatusResponse | null>(null);
   // When status was last requested (ms), for the live poll's periodic reload.
@@ -53,7 +54,6 @@
   let showStopModal = $state<boolean>(false);
   let showGCModal = $state<boolean>(false);
   let showMilestoneRunModal = $state<boolean>(false);
-  let showTimelineModal = $state<boolean>(false);
   // After-pull confirmation modal (§4.4): the steps from main's .bottown.toml
   let showAfterPullModal = $state<boolean>(false);
   let afterPullOutput = $state<string | null>(null);
@@ -75,27 +75,24 @@
   // Timer & Polling
   let nowTime = $state<number>(Date.now());
 
-  // Run history: runs, filters, the expanded flow and logs
+  // Run history: runs, filters, and threads
   const runHistory = new RunHistoryState();
   const live = () => ({ liveRuns: status?.live_runs, activeFlows: status?.active_flows });
   const loadHistory = (background = false) => runHistory.load(live, background);
   let historyThreads = $derived(runHistory.threads(status?.live_runs, status?.active_flows));
 
-  // Legacy modal timeline state
-  let timelineData = $state<IssueTimeline | null>(null);
-  let timelineLoading = $state<boolean>(false);
-
   let flowSameFamily = $derived(isSameFamilyPair(status?.actors, flowForm.implement, flowForm.verify));
 
-  // Views, addressed by the URL's fragment (routes.ts): a tab is a link,
-  // so Back and Forward, and editing the address, switch the view.
-  let view = $state<View>(parseRoute(location.hash));
+  // Routes: parsed from URL fragment
+  const initialRoute = parseRoute(location.hash);
+  let route = $state<Route>(initialRoute);
+  let previousView = $state<View>(initialRoute.kind === 'view' ? initialRoute.view : 'now');
+  let view = $derived<View>(route.kind === 'view' ? route.view : 'now');
   let milestonesRefresh = $state<number>(0);
   // Bumped when a run or flow starts or ends, to reload the Timeline and
   // the Stats.
   let timelineRefresh = $state<number>(0);
   let statsRefresh = $state<number>(0);
-  let timelineRun = $state<TimelineRun | null>(null);
 
   // The Milestones view starts flows and runs on an issue with the same
   // dialogs as the Live Runs card.
@@ -310,41 +307,14 @@
       await loadHistory();
     });
 
-  // Open an issue's timeline; with pr, that flow thread's (pr 0: before
-  // any PR).
-  async function openTimeline(issueNum: number, pr?: number) {
-    timelineLoading = true;
-    timelineData = null;
-    showTimelineModal = true;
-
-    try {
-      const prParam = pr !== undefined ? `?pr=${pr}` : '';
-      const res = await fetch(`/api/issues/${issueNum}/timeline${prParam}`);
-      if (!res.ok) {
-        throw new Error(`Failed to load timeline for ${issueNum > 0 ? `#${issueNum}` : `!${pr}`}`);
-      }
-      timelineData = await res.json();
-    } catch (e: any) {
-      actionMessage = { type: 'error', text: e.message };
-      showTimelineModal = false;
-    } finally {
-      timelineLoading = false;
-    }
-  }
-
-  function openFlowTimeline(lane: TimelineFlowLane) {
-    openTimeline(lane.issue ?? 0, lane.pr ?? 0);
-  }
-
-  function extractIssueAndOpenTimeline(target: string) {
-    const num = parseIssueNumber(target);
-    if (num !== null) {
-      openTimeline(num);
-    }
-  }
-
   onMount(() => {
-    const onHashChange = () => (view = parseRoute(location.hash));
+    const onHashChange = () => {
+      const nextRoute = parseRoute(location.hash);
+      if (route.kind === 'view') {
+        previousView = route.view;
+      }
+      route = nextRoute;
+    };
     window.addEventListener('hashchange', onHashChange);
 
     loadStatus();
@@ -366,33 +336,17 @@
           const { liveRuns, liveChecks, activeFlows } = parseLivePollSnapshot(data);
 
           if (status) {
-            const prevThreads = runHistory.threads(status.live_runs, status.active_flows);
             const change = lifecycleChange(status.live_runs, status.active_flows, liveRuns, activeFlows);
 
             status.live_runs = liveRuns;
             status.live_checks = liveChecks;
             status.active_flows = activeFlows;
 
-            runHistory.reconcile(prevThreads, runHistory.threads(liveRuns, activeFlows));
-
-            // A run or flow started or ended, or status is due its periodic
-            // reload (the forge changes without one: a milestone run merges
-            // a child's PR after its flow ends): refresh status and history
-            // in the background without altering the expanded flow selection.
             if (change.status || statusDue(statusLoadedAt, Date.now())) await loadStatus(true);
             if (change.status || change.history) {
               timelineRefresh++;
               statsRefresh++;
               await loadHistory(true);
-            }
-
-            // Live-update the selected active flow's timeline.
-            if (runHistory.expandedThreadKey) {
-              const currentThreads = runHistory.threads(status?.live_runs, status?.active_flows);
-              const selected = currentThreads.find((t) => t.key === runHistory.expandedThreadKey);
-              if (selected && selected.kind === 'flow' && (selected.active || change.status || change.history)) {
-                await runHistory.loadTimeline(selected, true);
-              }
             }
           }
         }
@@ -400,13 +354,13 @@
         // Ignore background polling errors
       } finally {
         if (!destroyed) {
-          const delay = nextPollDelayMs(status?.live_runs, status?.active_flows, status?.live_checks);
+          const delay = pollInterval ?? nextPollDelayMs(status?.live_runs, status?.active_flows, status?.live_checks);
           pollTimeout = setTimeout(poll, delay);
         }
       }
     }
 
-    pollTimeout = setTimeout(poll, 2500);
+    pollTimeout = setTimeout(poll, pollInterval ?? 2500);
 
     return () => {
       destroyed = true;
@@ -438,66 +392,89 @@
     </div>
   {/if}
 
-  <ViewTabs {view} />
-
-  {#if view === 'milestones'}
-    <Milestones
-      refreshKey={milestonesRefresh}
-      onFlow={openFlowFor}
-      onRun={openRunFor}
-      onMilestoneRun={openMilestoneRunFor}
-      onMilestoneStop={openStop}
+  {#if route.kind === 'run' || route.kind === 'flow'}
+    <RunFlowPage
+      {route}
+      {status}
+      historyRuns={runHistory.runs}
+      now={nowTime}
+      backLabel={previousView.charAt(0).toUpperCase() + previousView.slice(1)}
+      {pollInterval}
+      onBack={() => {
+        if (typeof window !== 'undefined' && window.history.length > 1) {
+          window.history.back();
+        } else {
+          location.hash = `#/${previousView}`;
+        }
+      }}
     />
-  {:else if view === 'timeline'}
-    <Timeline refreshKey={timelineRefresh} now={nowTime} onRun={(run) => (timelineRun = run)} onFlow={openFlowTimeline} />
-  {:else if view === 'stats'}
-    <Stats refreshKey={statsRefresh} issuesLink={status?.links.issues ?? ''} pullsLink={status?.links.pulls ?? ''} />
-  {:else if loading && !status}
-    <div class="loading-state">Loading status...</div>
-  {:else if status}
-    {#if view === 'history'}
-      <div class="grid">
-        <RunHistory
-          history={runHistory}
-          threads={historyThreads}
-          actors={status.actors}
-          now={nowTime}
-        />
-      </div>
-    {:else if view === 'repo'}
-      <div class="grid">
-        <UpstreamForge
-          {status}
-          {actionLoading}
-          onPull={handlePull}
-          onPush={() => (showPushModal = true)}
-          onAfterPull={openAfterPull}
-        />
+  {:else}
+    <ViewTabs {view} />
 
-        <HealthChecklist health={status.health} />
-      </div>
-    {:else}
-      <div class="grid">
-        <LiveRuns
-          liveRuns={status.live_runs}
-          liveChecks={status.live_checks}
-          activeFlows={status.active_flows}
-          issuesLink={status.links.issues}
-          now={nowTime}
-          onStartFlow={() => (showFlowModal = true)}
-          onStartRun={() => (showRunModal = true)}
-          onGC={() => (showGCModal = true)}
-          onStop={openStop}
-        />
+    {#if view === 'milestones'}
+      <Milestones
+        refreshKey={milestonesRefresh}
+        onFlow={openFlowFor}
+        onRun={openRunFor}
+        onMilestoneRun={openMilestoneRunFor}
+        onMilestoneStop={openStop}
+      />
+    {:else if view === 'timeline'}
+      <Timeline
+        refreshKey={timelineRefresh}
+        now={nowTime}
+        onRun={(run) => { location.hash = runRouteHash(run.id); }}
+        onFlow={(lane) => { location.hash = flowRouteHash(lane.issue ?? 0, lane.pr); }}
+      />
+    {:else if view === 'stats'}
+      <Stats refreshKey={statsRefresh} issuesLink={status?.links.issues ?? ''} pullsLink={status?.links.pulls ?? ''} />
+    {:else if loading && !status}
+      <div class="loading-state">Loading status...</div>
+    {:else if status}
+      {#if view === 'history'}
+        <div class="grid">
+          <RunHistory
+            history={runHistory}
+            threads={historyThreads}
+            actors={status.actors}
+            now={nowTime}
+          />
+        </div>
+      {:else if view === 'repo'}
+        <div class="grid">
+          <UpstreamForge
+            {status}
+            {actionLoading}
+            onPull={handlePull}
+            onPush={() => (showPushModal = true)}
+            onAfterPull={openAfterPull}
+          />
 
-        <OwnerInbox
-          inbox={status.inbox}
-          inboxError={status.inbox_error}
-          onGC={openGC}
-          onStop={openStop}
-          onLand={handleLand}
-        />
-      </div>
+          <HealthChecklist health={status.health} />
+        </div>
+      {:else}
+        <div class="grid">
+          <LiveRuns
+            liveRuns={status.live_runs}
+            liveChecks={status.live_checks}
+            activeFlows={status.active_flows}
+            issuesLink={status.links.issues}
+            now={nowTime}
+            onStartFlow={() => (showFlowModal = true)}
+            onStartRun={() => (showRunModal = true)}
+            onGC={() => (showGCModal = true)}
+            onStop={openStop}
+          />
+
+          <OwnerInbox
+            inbox={status.inbox}
+            inboxError={status.inbox_error}
+            onGC={openGC}
+            onStop={openStop}
+            onLand={handleLand}
+          />
+        </div>
+      {/if}
     {/if}
   {/if}
 </main>
@@ -554,14 +531,6 @@
     onconfirm={handleConfirmGC}
     onclose={() => (showGCModal = false)}
   />
-{/if}
-
-{#if showTimelineModal}
-  <TimelineModal timeline={timelineData} loading={timelineLoading} onclose={() => (showTimelineModal = false)} />
-{/if}
-
-{#if timelineRun}
-  <TimelineRunModal run={timelineRun} now={nowTime} onclose={() => (timelineRun = null)} />
 {/if}
 
 {#if showAfterPullModal}

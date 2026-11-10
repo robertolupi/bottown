@@ -5,6 +5,7 @@
   // DOM the nodes, so every title is escaped text under the page's CSP.
   import { onMount } from 'svelte';
   import type { MilestoneGroup, MilestoneNode } from './types';
+  import { flowRouteHash } from './routes';
   import IssueReference from './IssueReference.svelte';
   import { actorPair, canOpenFlow, canStart, canStartMilestoneRun, layoutDag, schedulerFlows, statusBadge } from './milestones';
   import { reloadOn } from './reload.svelte';
@@ -62,7 +63,7 @@
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      onFlow(node.number);
+      location.hash = flowRouteHash(node.number);
     }
   }
 </script>
@@ -70,7 +71,7 @@
 {#snippet nodeBody(n: MilestoneNode)}
   {@const badge = statusBadge(n)}
   <div class="ms-node-head">
-    <IssueReference number={n.number} href={n.url} label={`#${n.number}`} title={n.title} />
+    <IssueReference number={n.number} href={flowRouteHash(n.number)} label={`#${n.number}`} title={n.title} />
     <span class="badge badge-{badge.tone} ms-status">{badge.label}</span>
   </div>
   <div class="ms-node-title">{n.title}</div>
@@ -244,7 +245,7 @@
                   style="left: {p.x}px; top: {p.y}px; width: {p.width}px; height: {p.height}px"
                   title="Dependency outside this milestone"
                 >
-                  <IssueReference number={n.number} href={n.url} label={`#${n.number}`} title={n.title} />
+                  <IssueReference number={n.number} href={flowRouteHash(n.number)} label={`#${n.number}`} title={n.title} />
                   <span class="ms-pill-title">{n.title}</span>
                   <span class="muted text-sm">{n.state}</span>
                 </div>
@@ -254,8 +255,8 @@
                   style="left: {p.x}px; top: {p.y}px; width: {p.width}px; height: {p.height}px"
                   role="button"
                   tabindex="0"
-                  title="Start a flow on #{n.number}"
-                  onclick={() => onFlow(n.number)}
+                  title="Open flow for #{n.number}"
+                  onclick={() => { location.hash = flowRouteHash(n.number); }}
                   onkeydown={(e) => cardKey(e, n)}
                 >
                   {@render nodeBody(n)}
