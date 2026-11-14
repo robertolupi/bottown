@@ -45,7 +45,8 @@ install:
 	$(BINDIR)/bottown harness setup
 	@main=$$(git rev-parse -q --verify refs/remotes/bottown/main); head=$$(git rev-parse HEAD); \
 	if [ "$(UP)" = 0 ]; then echo "skipping the prod server: UP=0"; \
-	elif [ -z "$$main" ]; then echo "skipping the prod server: no bottown/main (not a fam's main checkout)"; \
+	elif [ -z "$$main" ]; then echo "$(BINDIR)/bottown up -i prod --ref $$head --if-changed --forward-only (not a fam's main checkout)"; \
+	  $(BINDIR)/bottown up -i prod --ref $$head --if-changed --forward-only; \
 	elif [ "$$head" != "$$main" ]; then echo "skipping the prod server: HEAD $$head is not bottown/main $$main"; \
 	else echo "$(BINDIR)/bottown up -i prod --ref $$head --if-changed"; \
 	  $(BINDIR)/bottown up -i prod --ref $$head --if-changed; fi
