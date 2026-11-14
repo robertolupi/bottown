@@ -43,7 +43,12 @@ make install            # writes ~/.local/bin/bottown; put it on your PATH
 `make install` also builds the web UI (`make web`), refreshes the harness
 slash commands (`bottown harness setup`, below) and, in a fam's main
 checkout whose HEAD is `bottown/main`, upgrades the prod server to that
-commit (`bottown up --ref HEAD --if-changed`); `UP=0` skips that step. It refuses to run from a linked
+commit (`bottown up --ref HEAD --if-changed`). In any other checkout, such
+as a fresh clone of this repository, it creates prod from HEAD if there is
+none, and upgrades it only when HEAD descends from the commit prod runs
+(`--forward-only`), so an older or unrelated clone leaves prod alone. Prod
+does not need bottown itself hosted on it. `UP=0` skips that step. It
+refuses to run from a linked
 worktree, such as an actor's. `make build` writes `bin/bottown` instead,
 without replacing the installed binary.
 
@@ -186,7 +191,7 @@ has the details.
 
 | Command | What it does |
 |---|---|
-| `up [--ref COMMIT [--if-changed] \| --image TAG]` | Create or converge an instance: image, container, provisioning. `--if-changed` keeps the current image when the commits differ only in docs. |
+| `up [--ref COMMIT [--if-changed] [--forward-only] \| --image TAG]` | Create or converge an instance: image, container, provisioning. `--if-changed` keeps the current image when the commits differ only in docs; `--forward-only` keeps it unless COMMIT descends from its commit. |
 | `status` | Container and provisioning state. |
 | `logs [-f] [--tail N]` | Container logs (Forgejo and bottown). |
 | `down [--purge]` | Stop an instance; `--purge` deletes its data for good. |

@@ -166,6 +166,54 @@ func TestSameImageSource(t *testing.T) {
 	}
 }
 
+func TestImageBehind(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	src := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-C", src, "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false"}, args...)...)
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(msg string) string {
+		t.Helper()
+		git("commit", "-q", "--allow-empty", "-m", msg)
+		return git("rev-parse", "HEAD")
+	}
+	git("init", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(src, "go.mod"), []byte("module "+modulePath+"\n"), 0o644)
+	git("add", ".")
+	base := commit("base")
+	next := commit("next")
+	git("checkout", "-q", "-b", "side", base)
+	side := commit("side")
+
+	img := func(sha string) string { return "bottown:" + sha[:12] }
+	for _, c := range []struct {
+		image, ref string
+		want       bool
+	}{
+		{img(base), next, true},
+		{img(base), base, true},
+		{img(next), "main", true},
+		{img(next), base, false}, // backwards
+		{img(next), side, false}, // another history
+		{"bottown:prod-wt", next, false},
+		{"other:" + base[:12], next, false},
+		{"bottown:0123456789ab", next, false}, // commit unknown here
+		{img(base), "nosuchref", false},
+	} {
+		if got := imageBehind(src, c.image, c.ref); got != c.want {
+			t.Errorf("imageBehind(%s, %.12s) = %v, want %v", c.image, c.ref, got, c.want)
+		}
+	}
+}
+
 func TestUpDownRefuseInRun(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")

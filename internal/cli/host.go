@@ -79,7 +79,7 @@ func refuseInRun(cmd, instance string) error {
 
 func newUp(g *globals) *cobra.Command {
 	var image, ref, src string
-	var ifChanged bool
+	var ifChanged, forwardOnly bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "up",
@@ -93,7 +93,12 @@ the current working tree.
 With --ref and --if-changed, up keeps the instance's current image when it was
 built from a commit that differs from --ref only in what never reaches the
 image (docs/ and Markdown outside the embedded templates), instead of
-building and switching to a new one. make install uses it.`,
+building and switching to a new one. make install uses it.
+
+With --ref and --forward-only, up keeps the instance's current image unless
+--ref is a descendant of the commit it was built from, so it never moves the
+instance back or onto an unrelated history. An instance without an image yet
+takes --ref. make install uses it outside a fam.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := refuseInRun("up", g.instance); err != nil {
@@ -102,18 +107,22 @@ building and switching to a new one. make install uses it.`,
 			if ifChanged && ref == "" {
 				return errors.New("--if-changed needs --ref")
 			}
-			return up(cmd.Context(), g, cmd.OutOrStdout(), image, ref, src, ifChanged, timeout)
+			if forwardOnly && ref == "" {
+				return errors.New("--forward-only needs --ref")
+			}
+			return up(cmd.Context(), g, cmd.OutOrStdout(), image, ref, src, ifChanged, forwardOnly, timeout)
 		},
 	}
 	cmd.Flags().StringVar(&image, "image", "", "run this local image tag")
 	cmd.Flags().StringVar(&ref, "ref", "", "build the image from this git commit and run it")
 	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "with --ref: keep the current image if the commits differ only in docs")
+	cmd.Flags().BoolVar(&forwardOnly, "forward-only", false, "with --ref: keep the current image unless --ref descends from its commit")
 	cmd.Flags().StringVar(&src, "src", "", "bottown source checkout (default: the git checkout containing the current directory)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "how long to wait for the instance to become healthy, and for the steps that follow")
 	return cmd
 }
 
-func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, ifChanged bool, timeout time.Duration) error {
+func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, ifChanged, forwardOnly bool, timeout time.Duration) error {
 	d := g.docker()
 	if err := d.Ping(ctx); err != nil {
 		return err
@@ -132,6 +141,9 @@ func up(ctx context.Context, g *globals, out io.Writer, image, ref, src string, 
 	case image != "" && ref != "":
 		return errors.New("--image and --ref are mutually exclusive")
 	case image != "":
+	case ref != "" && forwardOnly && inst.Image != "" && !imageBehind(src, inst.Image, ref):
+		image = inst.Image
+		fmt.Fprintf(out, "keeping image %s: %s does not descend from the commit it was built from\n", image, ref)
 	case ref != "" && ifChanged && sameImageSource(src, inst.Image, ref) && hasImage(ctx, d, inst.Image):
 		image = inst.Image
 		fmt.Fprintf(out, "keeping image %s: nothing that goes into it changed up to %s\n", image, ref)
@@ -520,21 +532,43 @@ var imageInputs = []string{".", ":(exclude)docs", ":(exclude,glob)*.md", ":(excl
 // sameImageSource reports whether image is a commit image (bottown:<commit>,
 // as buildImage tags them) built from a commit whose image inputs equal ref's.
 func sameImageSource(src, image, ref string) bool {
+	src, old, sha, ok := imageAndRef(src, image, ref)
+	if !ok {
+		return false
+	}
+	_, err := runs.Git(src, nil, append([]string{"diff", "--quiet", old, sha, "--"}, imageInputs...)...)
+	return err == nil
+}
+
+// imageBehind reports whether image is a commit image built from ref or an
+// ancestor of it: moving to ref is a step forward on the same history.
+func imageBehind(src, image, ref string) bool {
+	src, old, sha, ok := imageAndRef(src, image, ref)
+	if !ok {
+		return false
+	}
+	_, err := runs.Git(src, nil, "merge-base", "--is-ancestor", old, sha)
+	return err == nil
+}
+
+// imageAndRef resolves, in the source checkout, the commit a commit image
+// (bottown:<commit>, as buildImage tags them) was built from, and ref. ok is
+// false when either does not resolve there.
+func imageAndRef(src, image, ref string) (dir, old, sha string, ok bool) {
 	built, ok := strings.CutPrefix(image, "bottown:")
 	if !ok || built == "" {
-		return false
+		return "", "", "", false
 	}
-	src, err := findSource(src)
+	dir, err := findSource(src)
 	if err != nil {
-		return false
+		return "", "", "", false
 	}
-	old, _ := runs.Git(src, nil, "rev-parse", "--verify", "--quiet", built+"^{commit}")
-	sha, _ := runs.Git(src, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	old, _ = runs.Git(dir, nil, "rev-parse", "--verify", "--quiet", built+"^{commit}")
+	sha, _ = runs.Git(dir, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if old == "" || sha == "" || !strings.HasPrefix(old, built) {
-		return false
+		return "", "", "", false
 	}
-	_, err = runs.Git(src, nil, append([]string{"diff", "--quiet", old, sha, "--"}, imageInputs...)...)
-	return err == nil
+	return dir, old, sha, true
 }
 
 func hasImage(ctx context.Context, d hostctl.Docker, image string) bool {

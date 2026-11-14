@@ -75,7 +75,9 @@ Go module `github.com/robertolupi/bottown`; the CLI is `cmd/bottown`.
   `~/.local/bin/bottown`, which the harness commands and credential helpers
   use, runs `bottown harness setup`, and, when HEAD is `bottown/main`, `bottown up -i prod --ref HEAD
   --if-changed` (`UP=0` skips it). `--if-changed` keeps prod's image when
-  the commits differ only in docs.
+  the commits differ only in docs. Outside a fam (no `bottown/main`) it
+  runs `bottown up -i prod --ref HEAD --if-changed --forward-only`, which
+  creates prod or moves it forward only.
 - **Tests:** `make test` runs the Go unit tests under the race detector
   (`go test -race ./...`) and the
   frontend behavioral tests (`cd web && npm test`, after `npm ci` if
